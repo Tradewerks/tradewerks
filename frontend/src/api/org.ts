@@ -39,6 +39,30 @@ export interface OrgSettingsUpdate {
 	field_purchase_second_signoff_threshold?: number | null;
 }
 
+// Kept off /org and OrgSettings on purpose: GET /org carries no permission gate,
+// so anything in that payload reaches every technician.
+export interface OrgCosting {
+	monthly_overhead: string;
+	cost_per_mile: string;
+}
+
+export interface OrgCostingUpdate {
+	monthly_overhead?: number;
+	cost_per_mile?: number;
+}
+
+export const getOrgCosting = async (): Promise<OrgCosting> => {
+	const response = await api.get<ApiResponse<OrgCosting>>("/org/costing");
+	if (!response.data.data) throw new Error("Costing settings not found");
+	return response.data.data;
+};
+
+export const updateOrgCosting = async (data: OrgCostingUpdate): Promise<OrgCosting> => {
+	const response = await api.patch<ApiResponse<OrgCosting>>("/org/costing", data);
+	if (!response.data.data) throw new Error("Failed to update costing settings");
+	return response.data.data;
+};
+
 export const getOrgSettings = async (): Promise<OrgSettings> => {
 	const response = await api.get<ApiResponse<OrgSettings>>("/org");
 	if (!response.data.data) throw new Error("Organization not found");

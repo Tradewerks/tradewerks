@@ -418,6 +418,12 @@ model organization {
   qb_refresh_token      String?
   qb_token_expires_at   DateTime? 
   
+  monthly_overhead        Decimal  @default(0) @db.Decimal(12, 2)
+  // scale 4: published per-mile rates carry 3 decimals (IRS 0.655 in 2023)
+  cost_per_mile           Decimal  @default(0) @db.Decimal(8, 4)
+  // nullable, like cost_rate — 0 would make overhead free. Nothing reads it yet.
+  overhead_rate_per_hour  Decimal? @db.Decimal(10, 4)
+
   clients               client[]
   contacts              contact[]
   technicians           technician[]
@@ -2674,6 +2680,7 @@ model technician {
   coords      Json              @default("{}")
   last_ping_at DateTime?
   hourly_rate Decimal           @default(0) @db.Decimal(10, 2)
+  cost_rate   Decimal?          @db.Decimal(10, 2)
   last_login  DateTime?
   deactivated_at DateTime? // null = active; counts as a technician seat
   password_reset_token       String?   @unique

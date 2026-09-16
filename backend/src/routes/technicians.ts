@@ -33,7 +33,8 @@ import {
     requirePermission,
     requireAnyPermission, 
     requirePermissionOrSelf,
-    requireAnyPermissionOrSelf
+    requireAnyPermissionOrSelf,
+    hasPermission
 } from '../lib/requirePermissions.js';
 import { getUserHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 
@@ -42,7 +43,7 @@ const router = Router();
 router.get("/", requirePermission("view_technicians"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const technicians = await getAllTechnicians(orgId);
+        const technicians = await getAllTechnicians(orgId, hasPermission(req, "manage_technicians"));
         res.json(
             createSuccessResponse(technicians, { count: technicians.length }),
         );
@@ -55,7 +56,7 @@ router.get("/:id", requirePermissionOrSelf("view_technicians"), async (req, res,
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
-        const technician = await getTechnicianById(id, orgId);
+        const technician = await getTechnicianById(id, orgId, hasPermission(req, "manage_technicians"));
 
         if (!technician) {
             return res
@@ -107,6 +108,13 @@ router.post("/:id/ping", requirePermissionOrSelf("manage_technicians"), async (r
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
 
+        // Same self-edit hole as PUT /:id below
+        if (req.body?.cost_rate !== undefined && req.user?.uid === id && !hasPermission(req, "manage_technicians")) {
+            return res
+                .status(403)
+                .json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Cannot edit your own cost rate"));
+        }
+
         // Lazy WrappingUp auto-transition: clear to Available if timer has passed
         const cleared = await checkAndClearWrappingUp(id, orgId);
         if (cleared) {
@@ -147,6 +155,14 @@ router.put("/:id", requirePermissionOrSelf("manage_technicians"), async (req, re
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+
+        // Prevent a technician from changing their own cost rate unless they have the manage_technicians permission (which they shouldn't have)
+        if (req.body?.cost_rate !== undefined && req.user?.uid === id && !hasPermission(req, "manage_technicians")) {
+            return res
+                .status(403)
+                .json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Cannot edit your own cost rate"));
+        }
+
         const result = await updateTechnician(id, req.body, orgId, context);
 
         if (result.err) {

@@ -89,10 +89,15 @@ const TECHNICIAN_SELECT = {
 	},
 } as const;
 
-export const getAllTechnicians = async (organizationId: string) => {
+// cost_rate is pay data, so it rides on manage_technicians rather than the
+// view_technicians gate the rest of the payload sits behind.
+const selectFor = (withCostRate: boolean) =>
+	withCostRate ? { ...TECHNICIAN_SELECT, cost_rate: true } : TECHNICIAN_SELECT;
+
+export const getAllTechnicians = async (organizationId: string, withCostRate = false) => {
 	const sdb = getScopedDb(organizationId);
 	const technicians = await sdb.technician.findMany({
-		select: TECHNICIAN_SELECT,
+		select: selectFor(withCostRate),
 	});
 	const mfaEnabledIds = await getMfaEnabledUserIds(technicians.map((t) => t.id));
 	return technicians.map((t) => ({
@@ -102,11 +107,15 @@ export const getAllTechnicians = async (organizationId: string) => {
 	}));
 };
 
-export const getTechnicianById = async (id: string, organizationId: string) => {
+export const getTechnicianById = async (
+	id: string,
+	organizationId: string,
+	withCostRate = false,
+) => {
 	const sdb = getScopedDb(organizationId);
 	const technician = await sdb.technician.findFirst({
 		where: { id },
-		select: TECHNICIAN_SELECT,
+		select: selectFor(withCostRate),
 	});
 	if (!technician) return null;
 	const permissions: string[] = (technician.organization_role?.permissions as string[] | null) ?? [];
@@ -244,6 +253,7 @@ export const updateTechnician = async (
 			"hire_date",
 			"last_login",
 			"theme",
+			"cost_rate",
 		] as const);
 
 		const updated = await sdb.$transaction(async (tx) => {
