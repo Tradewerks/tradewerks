@@ -34,6 +34,7 @@ const GROSS_COLS: ColumnOption[] = [
 	{ key: "clientName", label: "Client" },
 	{ key: "revenue", label: "Revenue" },
 	{ key: "cogs", label: "Material COGS" },
+	{ key: "costCoverage", label: "Cost Coverage" },
 	{ key: "profit", label: "Profit" },
 	{ key: "margin", label: "Margin" },
 ];
@@ -44,6 +45,7 @@ const NET_COLS: ColumnOption[] = [
 	{ key: "clientName", label: "Client" },
 	{ key: "revenue", label: "Revenue" },
 	{ key: "cogs", label: "Materials" },
+	{ key: "costCoverage", label: "Cost Coverage" },
 	{ key: "laborCost", label: "Labor" },
 	{ key: "travelCost", label: "Travel" },
 	{ key: "overheadCost", label: "Overhead" },
@@ -82,6 +84,7 @@ interface JobProfitabilityRow {
 	clientName: string | null;
 	revenue: number | null;
 	cogs: number | null;
+	costCoverage: string | null;
 	profit: number | null;
 	margin: number | null;
 	// Net mode only 
@@ -93,9 +96,9 @@ interface JobProfitabilityRow {
 interface ProfitSummary {
 	totalProfit?: number;
 	jobCount?: number;
-	// Set when any of the backend's three caps was hit — consumption events,
-	// invoices scanned, or report rows. Event truncation understates material
-	// cost and so overstates profit, which is the case worth warning about.
+	totalRevenue?: number;
+	totalCogs?: number;
+	jobsMissingCostData?: number;
 	truncated?: boolean;
 }
 
@@ -152,9 +155,17 @@ export default function JobProfitabilityPage() {
 			{
 				label: "Total Profit",
 				value: currencyOrDash(summary.totalProfit),
-				hint: "Revenue less consumed material cost — labor is not costed",
+				hint: "Revenue less consumed material cost, labor is not costed",
 			},
 			{ label: "Jobs", value: String(summary.jobCount ?? 0) },
+			{ label: "Revenue", value: currencyOrDash(summary.totalRevenue) },
+			{
+				label: "Material COGS",
+				value: currencyOrDash(summary.totalCogs),
+				hint: summary.jobsMissingCostData
+					? `${summary.jobsMissingCostData} of ${summary.jobCount ?? 0} jobs are not fully costed — this total is a floor`
+					: "Every costed job priced from receipt history",
+			},
 		],
 		[summary],
 	);
@@ -176,6 +187,7 @@ export default function JobProfitabilityPage() {
                     clientName: r.clientName ?? "—",
                     revenue: currencyOrDash(r.revenue),
                     cogs: currencyOrDash(r.cogs),
+                    costCoverage: r.costCoverage ?? "—",
                     profit: currencyOrDash(r.profit),
                     margin: percentOrDash(r.margin),
                 }))
@@ -186,6 +198,7 @@ export default function JobProfitabilityPage() {
                     clientName: r.clientName ?? "—",
                     revenue: currencyOrDash(r.revenue),
                     cogs: currencyOrDash(r.cogs),
+                    costCoverage: r.costCoverage ?? "—",
                     laborCost: currencyOrDash(r.laborCost),
                     travelCost: currencyOrDash(r.travelCost),
                     overheadCost: currencyOrDash(r.overheadCost),
@@ -243,7 +256,7 @@ export default function JobProfitabilityPage() {
 				</div>
 			)}
 
-			<div className="grid grid-cols-2 gap-3 mb-4">
+			<div className="grid grid-cols-4 gap-3 mb-4">
 				{stats.map((card) => (
 					<StatCard key={card.label} {...card} />
 				))}

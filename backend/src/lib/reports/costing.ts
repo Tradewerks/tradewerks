@@ -123,24 +123,27 @@ export async function computeConsumptionCosts(
 				"consumedAt", "reason", "unit", "qtyConsumed",
 				CASE
 					WHEN wac_value IS NOT NULL THEN wac_value
-					WHEN distinct_units > 1 THEN COALESCE(item_current_cost, 0)
-					WHEN item_current_cost IS NOT NULL THEN item_current_cost
-					ELSE 0
+					ELSE COALESCE(item_current_cost, 0)
 				END::float AS "unitCostBasis",
+				-- No current cost outranks the mixed-unit fallback: the basis is 0
+				-- either way, and calling that a price makes it count as costed.
 				CASE
 					WHEN wac_value IS NOT NULL THEN 'wac'
+					WHEN item_current_cost IS NULL THEN 'no_cost_data'
 					WHEN distinct_units > 1 THEN 'fallback_mixed_unit'
-					WHEN item_current_cost IS NOT NULL THEN 'fallback_current_cost'
-					ELSE 'no_cost_data'
+					ELSE 'fallback_current_cost'
 				END AS "costSource"
 			FROM priced
 		)
 		SELECT *, ("qtyConsumed" * "unitCostBasis")::float AS "totalCost"
 		FROM costed
-		ORDER BY "consumedAt" ASC
+		ORDER BY "consumedAt" DESC, "movementId" DESC
 		LIMIT ${ROW_CAP + 1}
 	`;
 
+	// Newest first above so the cap drops the OLDEST events: dropping the newest
+	// stripped cost from the very jobs whose revenue is in the window, which
+	// overstates profit. Flipped back to chronological for callers.
 	const truncated = rows.length > ROW_CAP;
-	return { rows: truncated ? rows.slice(0, ROW_CAP) : rows, truncated };
+	return { rows: (truncated ? rows.slice(0, ROW_CAP) : rows).reverse(), truncated };
 }

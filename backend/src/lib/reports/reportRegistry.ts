@@ -28,7 +28,8 @@ import {
 	getProjectsReportPage,
 	getCogsByItemReport,
 	getCogsByJobReport,
-	getJobProfitabilityReport
+	getJobProfitabilityReport,
+	NO_MATERIALS
 } from "../../controllers/reportsController.js";
 import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
@@ -770,6 +771,12 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		filteredSummary: (rows) => ({
 			totalProfit: round2(rows.reduce((s, r) => s + num(r.profit), 0)),
 			jobCount: rows.length,
+			totalRevenue: round2(rows.reduce((s, r) => s + num(r.revenue), 0)),
+			totalCogs: round2(rows.reduce((s, r) => s + num(r.cogs), 0)),
+			// A job that consumed nothing is fully costed at 0 — not a gap.
+			jobsMissingCostData: rows.filter(
+				(r) => r.costCoverage !== "Full" && r.costCoverage !== NO_MATERIALS,
+			).length,
 		}),
 		// Rows key on jobId, so the default "every key but id" fallback makes job
 		// UUIDs searchable and a search for "500" match a revenue figure. This is

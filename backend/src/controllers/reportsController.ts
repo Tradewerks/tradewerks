@@ -3825,6 +3825,19 @@ const JOB_BILLING_SELECT = {
 	client: { select: { name: true } },
 } as const;
 
+// Coverage for a job that consumed nothing — distinct from "No Cost Data",
+// which means material was consumed and could not be priced.
+export const NO_MATERIALS = "No Materials";
+
+// Share of an invoice's pre-discount subtotal that survives the discount.
+// Clamped to [0,1]: a discount over subtotal would otherwise flip revenue negative.
+export const discountNetFactor = (subtotal: unknown, discountAmount: unknown) => {
+	const base = Number(subtotal ?? 0);
+	const discount = Number(discountAmount ?? 0);
+	if (!(base > 0) || !(discount > 0)) return 1;
+	return Math.max(0, 1 - discount / base);
+};
+
 
 /* 
 *	 missng labor cost
@@ -3837,10 +3850,6 @@ export const getJobProfitabilityReport = async (
 	const sdb = getScopedDb(orgId);
 	const dateFilter = buildDateFilter(startDate, endDate);
 
-	// COGS is job-lifetime on purpose: the period selects which jobs were billed,
-	// then each is costed over its whole life. Its own truncation flag comes from
-	// the 10k consumption-event cap in costing.ts and must be forwarded — dropping
-	// it understates COGS and therefore OVERSTATES profit.
 	const jobCogs = await getCogsByJobReport(undefined, undefined, orgId);
 	const invoices = await sdb.invoice.findMany({
 		where: {
@@ -3849,6 +3858,14 @@ export const getJobProfitabilityReport = async (
 				OR: [{ issue_date: dateFilter }, { issue_date: null, created_at: dateFilter }],
 			}),
 		},
+		// Unordered, the cap returns an arbitrary set and the same query can report
+		// different revenue twice. Newest first, so a truncated run drops the
+		// oldest invoices; id breaks ties, which issue_date alone does not.
+		orderBy: [
+			{ issue_date: { sort: "desc", nulls: "last" } },
+			{ created_at: "desc" },
+			{ id: "asc" },
+		],
 		take: REPORT_ROW_CAP,
 		include: {
 			jobs: {
@@ -3874,17 +3891,21 @@ export const getJobProfitabilityReport = async (
 
 	type BilledJobMeta = (typeof invoices)[number]["jobs"][number]["job"];
 	const jobRevenue = new Map<string, { revenue: number; job: BilledJobMeta }>();
-	const addRevenue = (jobId: string, amount: unknown, job: BilledJobMeta) => {
+	const addRevenue = (jobId: string, amount: number, job: BilledJobMeta) => {
 		const prev = jobRevenue.get(jobId);
 		jobRevenue.set(jobId, {
-			revenue: (prev?.revenue ?? 0) + Number(amount ?? 0),
+			revenue: (prev?.revenue ?? 0) + amount,
 			job: prev?.job ?? job,
 		});
 	};
 
 	for (const i of invoices) {
-		for (const j of i.jobs) addRevenue(j.job_id, j.billed_amount, j.job);
-		for (const v of i.visits) addRevenue(v.visit.job_id, v.billed_amount, v.visit.job);
+		// billed_amount sums line items, which never carry the invoice-level
+		// discount — scale it down or the discount lands in gross profit.
+		const net = discountNetFactor(i.subtotal, i.discount_amount);
+		for (const j of i.jobs) addRevenue(j.job_id, Number(j.billed_amount ?? 0) * net, j.job);
+		for (const v of i.visits)
+			addRevenue(v.visit.job_id, Number(v.billed_amount ?? 0) * net, v.visit.job);
 	}
 
 	// Net margin
@@ -3892,9 +3913,12 @@ export const getJobProfitabilityReport = async (
 
 	const rows = [...jobRevenue.entries()]
 		.map(([jobId, { revenue, job }]) => {
-			const cogs = round2(Number(cogsByJob.get(jobId)?.totalCogs ?? 0));
-			const profit = round2(revenue - cogs);
-			const margin = revenue > 0 ? round2((profit / revenue) * 100) : null;
+			// A null totalCogs means events exist but none could be priced — unknown.
+			// No events at all means nothing was consumed, which is a real 0.
+			const cogRow = cogsByJob.get(jobId);
+			const cogs = cogRow && cogRow.totalCogs == null ? "-" : round2(Number(cogRow?.totalCogs ?? 0));
+			const profit = cogs === "-" ? "-" : round2(revenue - cogs);
+			const margin = revenue > 0 && profit !== "-" ? round2((profit / revenue) * 100) : null;
 			return {
 				jobId,
 				jobNumber: job.job_number,
@@ -3902,6 +3926,8 @@ export const getJobProfitabilityReport = async (
 				clientName: job.client?.name ?? null,
 				revenue: round2(revenue),
 				cogs,
+				// Anything but Full means the COGS beside it is soft, so profit is too.
+				costCoverage: cogRow?.costCoverage ?? NO_MATERIALS,
 				profit,
 				margin,
 			};
