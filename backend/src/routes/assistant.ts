@@ -13,6 +13,7 @@ import { READ_ONLY_POLICY, WRITE_POLICY } from "../agent/policy.js";
 import { describeTools } from "../agent/registry.js";
 import type { AgentContext } from "../agent/types.js";
 import { getScopedDb } from "../lib/context.js";
+import { consumeQuota } from "../lib/entitlements/quota.js";
 import { log } from "../services/appLogger.js";
 import { assistantApprovals } from "../services/metricsService.js";
 import { createErrorResponse, createSuccessResponse, ErrorCodes } from "../types/responses.js";
@@ -270,6 +271,25 @@ router.post("/stream", async (req, res, next) => {
 				createErrorResponse(
 					ErrorCodes.TOO_MANY_REQUESTS,
 					"You already have the maximum number of assistant replies in flight. Wait for one to finish.",
+				),
+			);
+	}
+
+	let quota;
+	try {
+		quota = await consumeQuota(ctx.organizationId, "ai_calls_month");
+	} catch (err) {
+		releaseStream(ctx.userId);
+		return next(err);
+	}
+	if (!quota.allowed) {
+		releaseStream(ctx.userId);
+		return res
+			.status(429)
+			.json(
+				createErrorResponse(
+					ErrorCodes.QUOTA_EXCEEDED,
+					"Monthly AI assistant limit reached. It resets on the 1st (UTC).",
 				),
 			);
 	}

@@ -309,7 +309,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 
 			if (parsed.tech_ids && parsed.tech_ids.length > 0) {
 				const existingTechs = await tx.technician.findMany({
-					where: { id: { in: parsed.tech_ids } },
+					where: { id: { in: parsed.tech_ids }, deactivated_at: null },
 					select: { id: true },
 				});
 				const existingIds = new Set(existingTechs.map((t) => t.id));
@@ -318,7 +318,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				);
 				if (missing.length > 0) {
 					throw new Error(
-						`Technicians not found: ${missing.join(", ")}`,
+						`Technicians not found or deactivated: ${missing.join(", ")}`,
 					);
 				}
 			}

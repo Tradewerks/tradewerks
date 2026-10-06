@@ -128,7 +128,7 @@ const mintAccessToken = async (userId: string, role: string): Promise<string> =>
     const user = role === "technician"
         ? await db.technician.findUnique({ where: { id: userId } })
         : await db.dispatcher.findUnique({ where: { id: userId } });
-    if (!user) throw new OAuthError(OAuthErrorCodes.INVALID_GRANT, "User no longer exists", 400);
+    if (!user || user.deactivated_at) throw new OAuthError(OAuthErrorCodes.INVALID_GRANT, "User no longer exists", 400);
 
     let orgTimezone: string | null = null;
     if (user.organization_id) {

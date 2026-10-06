@@ -20,6 +20,7 @@ export interface Dispatcher {
   title: string;
   description: string;
   last_login: string;
+  deactivated_at: string | null;
   email_verified_at: Date | null;
   email_verification_token: string | null;
   role_id: string | null;

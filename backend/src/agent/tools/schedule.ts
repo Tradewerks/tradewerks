@@ -138,7 +138,7 @@ export const getTechnicianAvailability = defineTool({
 		// reaching it via the (scoped) technician keeps tenancy intact without
 		// relying on a filter someone has to remember to write.
 		const techs = await db.technician.findMany({
-			where: input.technician_id ? { id: input.technician_id } : {},
+			where: input.technician_id ? { id: input.technician_id, deactivated_at: null } : { deactivated_at: null },
 			select: {
 				id: true,
 				name: true,

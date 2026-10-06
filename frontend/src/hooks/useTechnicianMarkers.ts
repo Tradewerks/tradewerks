@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
-import { useAllTechniciansQuery } from "../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../hooks/useTechnicians";
 import type { Technician } from "../types/technicians";
 import { socket } from "../lib/socket";
 
 export function useLiveTechnicians() {
 	const [technicians, setTechnicians] = useState<Technician[]>([]);
-	const { data: initialData, isLoading } = useAllTechniciansQuery();
+	const { data: initialData, isLoading } = useActiveTechniciansQuery();
 
 	useEffect(() => {
 		if (initialData) setTechnicians(initialData);

@@ -59,6 +59,10 @@ export const ErrorCodes = {
 	MODULE_DISABLED: 'MODULE_DISABLED',
 	MODULE_NOT_IN_PLAN: 'MODULE_NOT_IN_PLAN',
 	ENTITLEMENTS_UNAVAILABLE: 'ENTITLEMENTS_UNAVAILABLE',
+	// Caps. Separate codes because the fix is a subscription change (or freeing
+	// a seat), not a retry or a role change.
+	SEAT_LIMIT_REACHED: 'SEAT_LIMIT_REACHED',
+	QUOTA_EXCEEDED: 'QUOTA_EXCEEDED',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

@@ -5,7 +5,7 @@ import {
 	useRevokeFieldPurchaseGrant,
 	useUpsertFieldPurchaseGrant,
 } from "../../hooks/useFieldPurchases";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useToast } from "../ui/useToast";
 import { errorMessage } from "../../util/util";
 import EmptyState from "../ui/EmptyState";
@@ -27,7 +27,7 @@ export default function FieldPurchaseGrantsPanel() {
 		data: technicians = [],
 		isLoading: techsLoading,
 		isError: techsFailed,
-	} = useAllTechniciansQuery();
+	} = useActiveTechniciansQuery();
 	const upsert = useUpsertFieldPurchaseGrant();
 	const revoke = useRevokeFieldPurchaseGrant();
 	const toast = useToast();

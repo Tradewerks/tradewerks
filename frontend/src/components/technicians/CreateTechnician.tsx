@@ -1,10 +1,14 @@
 ﻿import { useState, useEffect, useMemo, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { isAxiosError } from "axios";
 import type { ZodError } from "zod";
 import { CreateTechnicianSchema, type CreateTechnicianInput } from "../../types/technicians";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import PasswordSetField from "../ui/forms/PasswordSetField";
 import DatePicker from "../ui/DatePicker";
 import { useOrgRolesQuery } from "../../hooks/useOrgRoles";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 
 interface CreateTechnicianProps {
 	isModalOpen: boolean;
@@ -45,6 +49,9 @@ const CreateTechnician = ({
 		}
 	}, [isModalOpen, technicianRoles]);
 
+	const [submitError, setSubmitError] = useState<string | null>(null);
+	const [seatLimit, setSeatLimit] = useState(false);
+
 	const resetForm = useCallback(() => {
 		setName("");
 		setEmail("");
@@ -56,6 +63,8 @@ const CreateTechnician = ({
 		setPassword("");
 		setChoosePassword(false);
 		setOrganizationRoleId(null);
+		setSubmitError(null);
+		setSeatLimit(false);
 	}, []);
 
 	useEffect(() => {
@@ -87,13 +96,16 @@ const CreateTechnician = ({
 		}
 
 		setErrors(null);
+		setSubmitError(null);
+		setSeatLimit(false);
 		setIsLoading(true);
 		try {
 			await createTechnician(newTechnician);
 			setIsModalOpen(false);
 			resetForm();
 		} catch (error) {
-			console.error("Failed to create technician:", error);
+			setSubmitError(errorMessage(error, "Couldn't add the technician. Try again."));
+			setSeatLimit(isAxiosError(error) && error.response?.data?.error?.code === "SEAT_LIMIT_REACHED");
 		} finally {
 			setIsLoading(false);
 		}
@@ -132,6 +144,15 @@ const CreateTechnician = ({
 	const formContent = useMemo(
 		() => (
 			<div className="space-y-2 lg:space-y-3 xl:space-y-4 min-w-0">
+				<FormErrorBanner message={submitError} className="mb-2" />
+				{seatLimit && (
+					<Link
+						to="/dispatch/admin?tab=entitlements"
+						className="mb-2 inline-block text-sm text-primary hover:underline"
+					>
+						View subscription
+					</Link>
+				)}
 				{/* Name */}
 				<div className="min-w-0">
 					<label className={LABEL}>Full Name *</label>
@@ -244,7 +265,7 @@ const CreateTechnician = ({
 				/>
 			</div>
 		),
-		[name, email, phone, title, description, hireDate, isLoading, errors, choosePassword, password, organizationRoleId, technicianRoles]
+		[name, email, phone, title, description, hireDate, isLoading, errors, choosePassword, password, organizationRoleId, technicianRoles, submitError, seatLimit]
 	);
 
 	return (

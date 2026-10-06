@@ -2672,6 +2672,7 @@ model technician {
   last_ping_at DateTime?
   hourly_rate Decimal           @default(0) @db.Decimal(10, 2)
   last_login  DateTime?
+  deactivated_at DateTime? // null = active; counts as a technician seat
   password_reset_token       String?   @unique
   password_reset_token_expires_at DateTime?
   theme       String            @default("system")
@@ -2749,6 +2750,7 @@ model dispatcher {
   title       String
   description String
   last_login  DateTime?
+  deactivated_at DateTime? // null = active; counts as a dispatcher seat
   email_verified_at         DateTime?
   email_verification_token  String?   @unique
   password_reset_token       String?   @unique
@@ -3580,4 +3582,15 @@ model org_entitlement {
   module_grants         Json          @default("{}")
   limit_overrides       Json          @default("{}")
   updated_at            DateTime      @updatedAt
+}
+
+model usage_counter {
+  id              String    @id @default(uuid())
+  organization_id String
+  meter           String    // a METER_KEYS value
+  period_start    DateTime  @db.Date // first day of the UTC month
+  count           Int       @default(0)
+  warned_at       DateTime? // 80 % notification claimed
+
+  @@unique([organization_id, meter, period_start])
 }

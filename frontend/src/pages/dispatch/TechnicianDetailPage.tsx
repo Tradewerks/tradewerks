@@ -22,12 +22,18 @@ import {
 	useArmedConfirm,
 } from "../../components/technicians/technicianActions";
 import { NO_PERMISSION } from "../../components/lifecycle/actionBuilder";
-import { useTechnicianByIdQuery, useDeleteTechnicianMutation } from "../../hooks/useTechnicians";
+import {
+	useTechnicianByIdQuery,
+	useDeleteTechnicianMutation,
+	useDeactivateTechnicianMutation,
+	useReactivateTechnicianMutation,
+} from "../../hooks/useTechnicians";
 import { useResetMfaMutation } from "../../hooks/useMfa";
 import { usePermission } from "../../hooks/usePermission";
 import { useToast } from "../../components/ui/useToast";
 import { requestPasswordResetCall } from "../../api/authenticate";
 import { TechnicianStatusColors, TechnicianStatusLabels } from "../../types/technicians";
+import { errorMessage } from "../../util/util";
 
 type TechTab = "overview" | "schedule" | "vehicle" | "access" | "activity";
 
@@ -79,6 +85,8 @@ export default function TechnicianDetailsPage() {
 		refetch,
 	} = useTechnicianByIdQuery(technicianId);
 	const deleteTechnician = useDeleteTechnicianMutation();
+	const deactivateMutation = useDeactivateTechnicianMutation();
+	const reactivateMutation = useReactivateTechnicianMutation();
 	const { mutateAsync: resetMFA, isPending: resettingMfa } = useResetMfaMutation();
 
 	if (isLoading) return <PageSkeleton />;
@@ -118,11 +126,13 @@ export default function TechnicianDetailsPage() {
 		canManage,
 		mfaEnabled: !!technician.mfaEnabled,
 		activeVisitCount: countActiveVisits(technician.visit_techs ?? []),
+		deactivated: !!technician.deactivated_at,
 		armed,
 		pending: {
 			resetPassword: sendingReset,
 			resetMfa: resettingMfa,
 			delete: deleteTechnician.isPending,
+			toggleActive: deactivateMutation.isPending || reactivateMutation.isPending,
 		},
 		on: {
 			edit: () => setIsEditOpen(true),
@@ -158,6 +168,24 @@ export default function TechnicianDetailsPage() {
 					);
 				}
 			}),
+			deactivate: confirm("deactivate", async () => {
+				try {
+					await deactivateMutation.mutateAsync(technician.id);
+					toast.success(
+						`${technician.name} deactivated. Signed out within 30 seconds and removed from scheduling; history is kept.`
+					);
+				} catch (e) {
+					toast.error(errorMessage(e, "Couldn't deactivate"));
+				}
+			}),
+			reactivate: async () => {
+				try {
+					await reactivateMutation.mutateAsync(technician.id);
+					toast.success(`${technician.name} reactivated.`);
+				} catch (e) {
+					toast.error(errorMessage(e, "Couldn't reactivate"));
+				}
+			},
 			// Navigate only on success so a failed delete leaves the dispatcher here with the error.
 			delete: confirm("delete", async () => {
 				try {
@@ -182,6 +210,11 @@ export default function TechnicianDetailsPage() {
 	if (armedItem?.disabled) disarm();
 
 	const hired = formatHireDate(technician.hire_date);
+	const assignBlocked = canManage
+		? technician.deactivated_at
+			? "Inactive technicians can't be scheduled."
+			: null
+		: NO_PERMISSION;
 
 	return (
 		<div className="pb-4 text-text-primary md:pb-6">
@@ -256,7 +289,7 @@ export default function TechnicianDetailsPage() {
 											Scorecard
 										</Link>
 									)}
-									{canManage ? (
+									{!assignBlocked ? (
 										<Link
 											to={`/dispatch/technicians/${technician.id}/assign`}
 											className={
@@ -302,7 +335,7 @@ export default function TechnicianDetailsPage() {
 												className="mt-0.5 text-xs text-text-muted"
 											>
 												{
-													NO_PERMISSION
+													assignBlocked
 												}
 											</span>
 										</div>
@@ -315,6 +348,14 @@ export default function TechnicianDetailsPage() {
 						/>
 					</div>
 				</div>
+				{technician.deactivated_at && (
+					<div
+						role="status"
+						className="rounded border border-border bg-surface-inset px-3 py-2 text-sm text-text-secondary"
+					>
+						Inactive — this technician can&apos;t sign in or be scheduled.
+					</div>
+				)}
 				{/* The armed label changes inside an open menu, which a screen reader
 				    doesn't re-read on its own. */}
 				<p aria-live="polite" className="sr-only">

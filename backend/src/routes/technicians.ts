@@ -14,7 +14,9 @@ import {
     returnFromBreak,
     changeTechnicianPassword,
     returnFromJob,
-    markAvailable
+    markAvailable,
+    deactivateTechnician,
+    reactivateTechnician
 } from "../controllers/techniciansController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
@@ -254,6 +256,38 @@ router.delete("/:id", requirePermission("manage_technicians"), async (req, res, 
                 id,
             }),
         );
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post("/:id/deactivate", requirePermission("manage_technicians"), async (req, res, next) => {
+    try {
+        const result = await deactivateTechnician(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.BAD_REQUEST, result.err));
+        }
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post("/:id/reactivate", requirePermission("manage_technicians"), async (req, res, next) => {
+    try {
+        const result = await reactivateTechnician(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.BAD_REQUEST, result.err));
+        }
+        res.json(createSuccessResponse(result.item));
     } catch (err) {
         next(err);
     }

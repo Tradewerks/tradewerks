@@ -77,3 +77,19 @@ export const changeDispatcherPassword = async (id: string, data: { current_passw
         throw new Error(message);
     }
 }
+
+export const deactivateDispatcher = async (id: string): Promise<Dispatcher> => {
+	const response = await api.post<ApiResponse<Dispatcher>>(`/dispatchers/${id}/deactivate`);
+	if (!response.data.success || !response.data.data) {
+		throw new Error(response.data.error?.message || "Failed to deactivate dispatcher");
+	}
+	return response.data.data;
+};
+
+export const reactivateDispatcher = async (id: string): Promise<Dispatcher> => {
+	const response = await api.post<ApiResponse<Dispatcher>>(`/dispatchers/${id}/reactivate`);
+	if (!response.data.success || !response.data.data) {
+		throw new Error(response.data.error?.message || "Failed to reactivate dispatcher");
+	}
+	return response.data.data;
+};

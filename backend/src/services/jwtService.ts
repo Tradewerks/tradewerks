@@ -207,14 +207,14 @@ export const refreshAccessToken = async (refreshToken: string) => {
 			user.role === "technician"
 				? await db.technician.findUnique({
 						where: { id: user.id },
-						select: { email: true, organization_id: true, organization_role_id: true },
+						select: { email: true, organization_id: true, organization_role_id: true, deactivated_at: true },
 					})
 				: await db.dispatcher.findUnique({
 						where: { id: user.id },
-						select: { email: true, organization_id: true, organization_role_id: true, role: true },
+						select: { email: true, organization_id: true, organization_role_id: true, role: true, deactivated_at: true },
 					});
 
-		if (!dbUser) {
+		if (!dbUser || dbUser.deactivated_at) {
 			return createErrorResponse(ErrorCodes.INVALID_TOKEN, "User no longer exists");
 		}
 

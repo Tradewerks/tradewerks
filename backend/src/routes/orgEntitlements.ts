@@ -13,8 +13,23 @@ import {
 	setModuleChoices,
 } from "../services/entitlementService.js";
 import type { ResolvedEntitlements } from "../lib/entitlements/resolve.js";
+import { getUsageSummary, type UsageSummary } from "../lib/entitlements/quota.js";
+import { log } from "../services/appLogger.js";
 
 const router = Router();
+
+// Every signed-in UI loads this endpoint; a usage read must not take module state down with it.
+async function usageFor(
+	orgId: string,
+	limits: Record<string, number | null>,
+): Promise<UsageSummary | null> {
+	try {
+		return await getUsageSummary(orgId, limits);
+	} catch (err) {
+		log.warn({ err, orgId }, "usage summary unavailable");
+		return null;
+	}
+}
 
 const present = (e: ResolvedEntitlements) => ({
 	plan: {
@@ -37,12 +52,16 @@ const present = (e: ResolvedEntitlements) => ({
 // No permission: every signed-in user's UI needs the module state.
 router.get("/", async (req, res, next) => {
 	try {
+		const orgId = req.user!.organization_id as string;
+		const ent = await getEntitlements(orgId);
+		const canSeeUsage =
+			req.user!.role === "admin" ||
+			(req.user!.permissions ?? []).includes("manage_organization");
 		res.json(
-			createSuccessResponse(
-				present(
-					await getEntitlements(req.user!.organization_id as string),
-				),
-			),
+			createSuccessResponse({
+				...present(ent),
+				usage: canSeeUsage ? await usageFor(orgId, ent.limits) : null,
+			}),
 		);
 	} catch (err) {
 		next(err);

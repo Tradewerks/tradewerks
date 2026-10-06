@@ -1,5 +1,15 @@
 export type ModuleState = "on" | "off_by_org" | "not_in_plan";
 
+export interface UsageMeter {
+	used: number;
+	limit: number | null;
+}
+
+export interface UsageSummary {
+	period_start: string;
+	meters: Record<"dispatchers" | "technicians" | "ai_calls_month" | "tax_lookups_month", UsageMeter>;
+}
+
 export interface EntitlementsData {
 	plan: { key: string; version: number; trialActive: boolean };
 	modules: {
@@ -12,6 +22,7 @@ export interface EntitlementsData {
 	}[];
 	permissionMap: Record<string, { module: string; access: "read" | "write" }>;
 	limits: Record<string, number | null>;
+	usage: UsageSummary | null;
 }
 
 // Undefined means "not loaded". The backend enforces regardless, so the UI
@@ -42,3 +53,8 @@ export function isPermissionOffered(permission: string, ent: EntitlementsData | 
 
 // Fired when a request is refused for a module reason: the cached state is out of date.
 export const ENTITLEMENTS_STALE_EVENT = "entitlements:stale";
+
+export const isActiveUser = (u: { deactivated_at?: string | null }): boolean => !u.deactivated_at;
+
+export const activeOnly = <T extends { deactivated_at?: string | null }>(list: T[]): T[] =>
+	list.filter(isActiveUser);

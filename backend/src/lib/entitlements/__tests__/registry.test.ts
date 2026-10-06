@@ -4,6 +4,8 @@ import {
 	PERMISSION_MAP,
 	assertRegistry,
 	getModule,
+	LIMIT_KEYS,
+	METER_KEYS,
 } from "../registry.js";
 import { getAllPermissions } from "../../permissionCatalogs.js";
 
@@ -41,5 +43,21 @@ describe("entitlement registry", () => {
 			access: "write",
 		});
 		expect(PERMISSION_MAP.stock_own_vehicle.module).toBe("vehicle_stock");
+	});
+});
+
+describe("limit keys (build plan 2)", () => {
+	it("names the four limit keys the seed and spec use", () => {
+		expect([...LIMIT_KEYS].sort()).toEqual([
+			"ai_calls_month",
+			"dispatchers",
+			"tax_lookups_month",
+			"technicians",
+		]);
+	});
+
+	it("meters are the monthly subset", () => {
+		expect([...METER_KEYS].sort()).toEqual(["ai_calls_month", "tax_lookups_month"]);
+		for (const m of METER_KEYS) expect(LIMIT_KEYS).toContain(m);
 	});
 });

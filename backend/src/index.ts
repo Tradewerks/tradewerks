@@ -81,6 +81,7 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 import { handleCallback, QB_ENABLED } from "./services/quickbooksService.js";
 import { handleQBWebhook } from "./services/qb/qbWebhook.js"
 import { handlePostmarkWebhook } from "./services/postmarkWebhook.js";
+import { isUserActive } from "./services/userActiveCache.js";
 import { assertRegistry } from "./lib/entitlements/registry.js";
 import { requireModule } from "./lib/entitlements/requireModule.js";
 import { registerEntitlementBlockers } from "./lib/entitlements/blockers.js";
@@ -174,7 +175,7 @@ const notFoundHandler = (req: Request, res: Response) => {
 	);
 };
 
-const verifyToken = (req: Request, res: Response, next: NextFunction) => {
+const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
 	if (req.method === "OPTIONS") return next();
 
 	const token = req.headers.authorization?.split(" ")[1];
@@ -199,6 +200,11 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 						"Invalid or expired token",
 					),
 				);
+		}
+		if (!(await isUserActive(decoded.uid, decoded.role))) {
+			return res
+				.status(401)
+				.json(createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid or expired token"));
 		}
 		req.user = { ...decoded, permissions: decoded.permissions ?? null };
 		next();
@@ -303,11 +309,12 @@ rearmWrappingUpTimers().catch((e) =>
 
 // Reject sockets without a valid JWT; room membership must come from verified
 // claims, never from client-supplied handshake query params.
-io.use((socket, next) => {
+io.use(async (socket, next) => {
 	const token = socket.handshake.auth?.["token"] as string | undefined;
 	if (!token) return next(new Error("Unauthorized"));
 	try {
 		const claims = verifyAccessToken(token);
+		if (!(await isUserActive(claims.uid, claims.role))) return next(new Error("Unauthorized"));
 		socket.data.orgId = claims.organization_id ?? undefined;
 		socket.data.techId = claims.role === "technician" ? claims.uid : undefined;
 		socket.data.dispatcherId =

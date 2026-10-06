@@ -71,6 +71,9 @@ export const login = async (res: Response, email: string, password: string) => {
 				"Invalid credentials",
 			);
 		}
+		if (user.deactivated_at) {
+			return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid credentials");
+		}
 		// if dispatcher, use role from db (admin or dispatch)
 		const effectiveRole = "role" in user ? user.role : "technician";
 
@@ -191,8 +194,8 @@ export const issueAuthTokens = async (
 							id: userId,
 						},
 					});
-		if (!user) {
-			return createErrorResponse(ErrorCodes.NOT_FOUND, "User not found");
+		if (!user || user.deactivated_at) {
+			return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid credentials");
 		}
 
 		// if last login is null, force password reset and generate reset token
@@ -350,7 +353,7 @@ export const requestPasswordReset = async (email: string, role: string) => {
 				? await db.technician.findUnique({ where: { email } })
 				: await db.dispatcher.findUnique({ where: { email } });
 
-		if (!user) {
+		if (!user || user.deactivated_at) {
 			// for security, don't reveal if email exists or not
 			return { err: "" };
 		}

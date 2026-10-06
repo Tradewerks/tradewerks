@@ -1,4 +1,4 @@
-import type { EntitlementsData } from "./permissionAccess";
+import type { EntitlementsData, UsageMeter } from "./permissionAccess";
 
 export type Module = EntitlementsData["modules"][number];
 
@@ -62,3 +62,23 @@ export const BLOCKER_LINKS: Record<string, { to: string; label: string }> = {
 };
 
 export const SUBSCRIPTION_PATH = "/dispatch/admin?tab=entitlements";
+
+export function meterTone(m: UsageMeter): "normal" | "warning" | "full" {
+	if (m.limit === null) return "normal";
+	if (m.used >= m.limit) return "full";
+	return m.used >= m.limit * 0.8 ? "warning" : "normal";
+}
+
+const fmt = new Intl.NumberFormat("en-US");
+
+export function meterText(m: UsageMeter): string {
+	return m.limit === null
+		? `${fmt.format(m.used)} · Unlimited`
+		: `${fmt.format(m.used)} / ${fmt.format(m.limit)}`;
+}
+
+export function resetLabel(periodStart: string): string {
+	const [y, mo] = periodStart.split("-").map(Number);
+	const next = new Date(Date.UTC(y!, mo!, 1));
+	return `Resets ${next.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`;
+}

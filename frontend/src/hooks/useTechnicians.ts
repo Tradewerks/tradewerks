@@ -12,6 +12,8 @@ import type {
 } from "../types/technicians";
 import * as technicianApi from "../api/technicians";
 import { getDeviceCoords } from "../lib/geolocation";
+import { activeOnly } from "../lib/permissionAccess";
+import { ENTITLEMENTS_QUERY_KEY } from "./useEntitlements";
 
 export const useAllTechniciansQuery = (): UseQueryResult<Technician[], Error> => {
 	return useQuery({
@@ -194,3 +196,26 @@ export const useReturnFromJobMutation = (): UseMutationResult<Technician, Error,
 	});
 };
 
+export const useActiveTechniciansQuery = (): UseQueryResult<Technician[], Error> =>
+	useQuery({
+		queryKey: ["technicians"],
+		queryFn: technicianApi.getAllTechnicians,
+		select: activeOnly,
+	});
+
+const useTechnicianStatusMutation = (fn: (id: string) => Promise<Technician>) => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: fn,
+		onSuccess: async (_, id) => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ["technicians"] }),
+				queryClient.invalidateQueries({ queryKey: ["technicians", id] }),
+				queryClient.invalidateQueries({ queryKey: ENTITLEMENTS_QUERY_KEY }),
+			]);
+		},
+	});
+};
+
+export const useDeactivateTechnicianMutation = () => useTechnicianStatusMutation(technicianApi.deactivateTechnician);
+export const useReactivateTechnicianMutation = () => useTechnicianStatusMutation(technicianApi.reactivateTechnician);

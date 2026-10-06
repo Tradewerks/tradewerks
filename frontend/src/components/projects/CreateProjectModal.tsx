@@ -10,7 +10,7 @@ import {
 import { type Priority, PriorityValues, PriorityLabels } from "../../types/common";
 import type { GeocodeResult } from "../../types/location";
 import { useAllClientsQuery } from "../../hooks/useClients";
-import { useAllDispatchersQuery } from "../../hooks/useDispatchers";
+import { useActiveDispatchersQuery } from "../../hooks/useDispatchers";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 import DatePicker from "../ui/DatePicker";
@@ -86,7 +86,7 @@ export default function CreateProjectModal({
     const [submitError, setSubmitError] = useState("");
 
     const { data: clients } = useAllClientsQuery();
-    const { data: dispatchers } = useAllDispatchersQuery();
+    const { data: dispatchers } = useActiveDispatchersQuery();
 
     const {
         currentStep,

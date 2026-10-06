@@ -288,3 +288,55 @@ describe("refreshAccessToken — role/permissions are re-read from the DB (revie
 		expect(fake.dispatcher.findUnique).not.toHaveBeenCalled();
 	});
 });
+
+describe("deactivated users (build plan 2)", () => {
+	it("login refuses a deactivated dispatcher with the generic message", async () => {
+		fake.technician.findUnique.mockResolvedValue(null);
+		fake.dispatcher.findUnique.mockResolvedValue({
+			id: "disp-1",
+			email: "d@x.com",
+			organization_id: "org-1",
+			role: "dispatcher",
+			password: "hashed(pw)",
+			last_login: new Date(),
+			deactivated_at: new Date(),
+		});
+		const result = await login({ cookie: vi.fn() } as never, "d@x.com", "pw");
+		expect(result).toMatchObject({
+			success: false,
+			error: { code: "INVALID_CREDENTIALS", message: "Invalid credentials" },
+		});
+		expect(fake.jwt_refresh_token.create).not.toHaveBeenCalled();
+	});
+
+	it("password reset request is a silent no-op for a deactivated user", async () => {
+		fake.dispatcher.findUnique.mockResolvedValue({
+			id: "disp-1",
+			organization_id: "org-1",
+			email: "d@x.com",
+			deactivated_at: new Date(),
+		});
+		const result = await requestPasswordReset("d@x.com", "dispatcher");
+		expect(result).toEqual({ err: "" });
+		expect(fake.dispatcher.update).not.toHaveBeenCalled();
+		expect(sendPasswordResetEmail).not.toHaveBeenCalled();
+	});
+});
+
+describe("isUserActive (build plan 2)", () => {
+	it("is false for a deactivated or missing user and caches the answer", async () => {
+		const { isUserActive } = await import("../../services/userActiveCache.js");
+		fake.technician.findUnique.mockResolvedValueOnce({ deactivated_at: new Date() });
+		expect(await isUserActive("tech-x", "technician")).toBe(false);
+		expect(await isUserActive("tech-x", "technician")).toBe(false);
+		expect(fake.technician.findUnique).toHaveBeenCalledTimes(1);
+		fake.dispatcher.findUnique.mockResolvedValueOnce(null);
+		expect(await isUserActive("gone", "dispatcher")).toBe(false);
+	});
+
+	it("falls back to active when the lookup fails and nothing is cached", async () => {
+		const { isUserActive } = await import("../../services/userActiveCache.js");
+		fake.dispatcher.findUnique.mockRejectedValueOnce(new Error("db down"));
+		expect(await isUserActive("never-seen", "dispatcher")).toBe(true);
+	});
+});

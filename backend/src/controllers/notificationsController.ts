@@ -134,6 +134,7 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	invoice_paid: "view_invoices",
 	quote_accepted: "view_quotes",
 	quote_declined: "view_quotes",
+	usage_limit_warning: "manage_organization",
 };
 
 // Notify every dispatcher in the org who can see this type and hasn't muted it
@@ -146,6 +147,7 @@ export const notifyDispatchers = async (
 	const permission = DISPATCHER_NOTIFICATION_PERMISSIONS[input.type];
 	const recipients = await sdb.dispatcher.findMany({
 		where: {
+			deactivated_at: null,
 			NOT: { muted_notification_types: { has: input.type } },
 			OR: [{ role: "admin" }, { organization_role: { permissions: { has: permission } } }],
 			...(excludeDispatcherId && { id: { not: excludeDispatcherId } }),

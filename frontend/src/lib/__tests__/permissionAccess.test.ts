@@ -1,9 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { isPermissionEffective, moduleState, type EntitlementsData } from "../permissionAccess";
+import {
+	activeOnly,
+	isActiveUser,
+	isPermissionEffective,
+	moduleState,
+	type EntitlementsData,
+} from "../permissionAccess";
 import {
 	groupModules,
 	joinLabels,
+	meterText,
+	meterTone,
 	relationsOf,
+	resetLabel,
 	sentence,
 	stateLabel,
 	type Module,
@@ -25,6 +34,7 @@ const ent = (states: Record<string, "on" | "off_by_org" | "not_in_plan">): Entit
 		view_jobs: { module: "core", access: "read" },
 	},
 	limits: {},
+	usage: null,
 });
 
 describe("isPermissionEffective", () => {
@@ -119,5 +129,43 @@ describe("moduleGroups", () => {
 		expect(joinLabels(["A", "B", "C"])).toBe("A, B and C");
 		expect(sentence("2 purchases not yet received")).toBe("2 purchases not yet received.");
 		expect(sentence("Already closed.")).toBe("Already closed.");
+	});
+});
+
+describe("active users (build plan 2)", () => {
+	it("treats null or missing deactivated_at as active", () => {
+		expect(isActiveUser({ deactivated_at: null })).toBe(true);
+		expect(isActiveUser({})).toBe(true);
+		expect(isActiveUser({ deactivated_at: "2026-10-06T00:00:00Z" })).toBe(false);
+	});
+
+	it("activeOnly keeps order and drops deactivated", () => {
+		const list = [
+			{ id: "a", deactivated_at: null },
+			{ id: "b", deactivated_at: "2026-10-06T00:00:00Z" },
+			{ id: "c", deactivated_at: null },
+		];
+		expect(activeOnly(list).map((u) => u.id)).toEqual(["a", "c"]);
+	});
+});
+
+describe("usage meter helpers (build plan 2)", () => {
+	it("tone: under 80 % normal, 80–99 % warning, at/over limit full, unlimited normal, limit 0 full", () => {
+		expect(meterTone({ used: 79, limit: 100 })).toBe("normal");
+		expect(meterTone({ used: 80, limit: 100 })).toBe("warning");
+		expect(meterTone({ used: 100, limit: 100 })).toBe("full");
+		expect(meterTone({ used: 7, limit: 5 })).toBe("full");
+		expect(meterTone({ used: 9999, limit: null })).toBe("normal");
+		expect(meterTone({ used: 0, limit: 0 })).toBe("full");
+	});
+
+	it("text", () => {
+		expect(meterText({ used: 1200, limit: 2000 })).toBe("1,200 / 2,000");
+		expect(meterText({ used: 4, limit: null })).toBe("4 · Unlimited");
+	});
+
+	it("reset label is the first of next month, UTC", () => {
+		expect(resetLabel("2026-10-01")).toBe("Resets Nov 1");
+		expect(resetLabel("2026-12-01")).toBe("Resets Jan 1");
 	});
 });

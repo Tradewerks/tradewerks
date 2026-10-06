@@ -1,9 +1,13 @@
 ﻿import { useState, useEffect, useMemo, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { isAxiosError } from "axios";
 import type { ZodError } from "zod";
 import { CreateDispatcherSchema, type CreateDispatcherInput } from "../../types/dispatchers";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import PasswordSetField from "../ui/forms/PasswordSetField";
 import { useOrgRolesQuery } from "../../hooks/useOrgRoles";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 
 interface CreateDispatcherProps {
 	isModalOpen: boolean;
@@ -42,6 +46,9 @@ const CreateDispatcher = ({
         }
     }, [isModalOpen, dispatcherRoles, organizationRoleId]);
 
+    const [submitError, setSubmitError] = useState<string | null>(null);
+    const [seatLimit, setSeatLimit] = useState(false);
+
     const resetForm = useCallback(() => {
         setName("");
         setEmail("");
@@ -52,6 +59,8 @@ const CreateDispatcher = ({
         setPassword("");
         setChoosePassword(false);
         setOrganizationRoleId(null);
+        setSubmitError(null);
+        setSeatLimit(false);
     }, []);
 
 	useEffect(() => {
@@ -81,13 +90,16 @@ const CreateDispatcher = ({
 		}
 
 		setErrors(null);
+		setSubmitError(null);
+		setSeatLimit(false);
 		setIsLoading(true);
 		try {
 			await createDispatcher(newDispatcher);
 			setIsModalOpen(false);
 			resetForm();
 		} catch (error) {
-			console.error("Failed to create dispatcher:", error);
+			setSubmitError(errorMessage(error, "Couldn't add the dispatcher. Try again."));
+			setSeatLimit(isAxiosError(error) && error.response?.data?.error?.code === "SEAT_LIMIT_REACHED");
 		} finally {
 			setIsLoading(false);
 		}
@@ -126,6 +138,15 @@ const CreateDispatcher = ({
 	const formContent = useMemo(
 		() => (
 			<div className="space-y-2 lg:space-y-3 xl:space-y-4 min-w-0">
+				<FormErrorBanner message={submitError} className="mb-2" />
+				{seatLimit && (
+					<Link
+						to="/dispatch/admin?tab=entitlements"
+						className="mb-2 inline-block text-sm text-primary hover:underline"
+					>
+						View subscription
+					</Link>
+				)}
 				{/* Name */}
 				<div className="min-w-0">
 					<label className={LABEL}>Full Name *</label>
@@ -236,6 +257,8 @@ const CreateDispatcher = ({
 			organizationRoleId,
 			dispatcherRoles,
 			ErrorDisplay,
+			submitError,
+			seatLimit,
 		]
 	);
 

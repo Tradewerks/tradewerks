@@ -82,11 +82,22 @@ describe("notifyDispatchers", () => {
 
 		const where = mockDb.dispatcher.findMany.mock.calls[0]![0]!.where;
 		expect(where).toEqual({
+			deactivated_at: null,
 			NOT: { muted_notification_types: { has: "job_finished" } },
 			OR: [{ role: "admin" }, { organization_role: { permissions: { has: "view_jobs" } } }],
 			id: { not: "disp-3" },
 		});
 		const ids = mockDb.dispatcher_notification.create.mock.calls.map((c) => c[0].data.dispatcher_id);
 		expect(ids).toEqual(["disp-1", "disp-2"]);
+	});
+});
+
+describe("notifyDispatchers recipients (build plan 2)", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	it("never selects deactivated dispatchers", async () => {
+		mockDb.dispatcher.findMany.mockResolvedValue([] as never);
+		await notifyDispatchers({ type: "usage_limit_warning", title: "t", body: "b" }, "org-1");
+		expect(mockDb.dispatcher.findMany.mock.calls[0]![0]!.where).toMatchObject({ deactivated_at: null });
 	});
 });

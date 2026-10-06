@@ -296,3 +296,18 @@ export function assertRegistry(): void {
 	if (problems.length)
 		throw new Error(`Entitlement registry invalid: ${problems.join("; ")}`);
 }
+
+// Adding a meter is a code change; changing a limit value is data (spec §3.1).
+export const LIMIT_KEYS = [
+	"dispatchers",
+	"technicians",
+	"tax_lookups_month",
+	"ai_calls_month",
+] as const;
+export type LimitKey = (typeof LIMIT_KEYS)[number];
+
+export const METER_KEYS = [
+	"ai_calls_month",
+	"tax_lookups_month",
+] as const satisfies readonly LimitKey[];
+export type MeterKey = (typeof METER_KEYS)[number];

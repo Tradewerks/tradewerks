@@ -121,6 +121,7 @@ export interface Technician {
 	status: TechnicianStatus;
 	hire_date: Date;
 	last_login: Date | null;
+	deactivated_at: string | null;
 	last_ping_at?: string | null;
 	current_vehicle_id: string | null;
 	current_vehicle?: { id: string; name: string; type: string; license_plate: string | null; color: string | null; notes: string | null; stored_at_coords?: Coordinates | null } | null;

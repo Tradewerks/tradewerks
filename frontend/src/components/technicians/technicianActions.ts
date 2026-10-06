@@ -1,9 +1,15 @@
 import { createElement, useCallback, useRef, useState } from "react";
-import { Edit, KeyRound, RotateCcw, Trash2 } from "lucide-react";
+import { Edit, KeyRound, RotateCcw, Trash2, UserCheck, UserX } from "lucide-react";
 import type { DetailMenuGroup, DetailMenuItem } from "../detail/DetailHeader";
 import { NO_PERMISSION } from "../lifecycle/actionBuilder";
 
-export type TechnicianActionId = "edit" | "reset-password" | "reset-mfa" | "delete";
+export type TechnicianActionId =
+	| "edit"
+	| "reset-password"
+	| "reset-mfa"
+	| "deactivate"
+	| "reactivate"
+	| "delete";
 export type ArmedConfirm = Exclude<TechnicianActionId, "edit"> | null;
 
 export interface TechnicianActionContext {
@@ -11,11 +17,13 @@ export interface TechnicianActionContext {
 	canManage: boolean;
 	mfaEnabled: boolean;
 	activeVisitCount: number;
+	deactivated: boolean;
 	armed: ArmedConfirm;
 	pending: {
 		resetPassword: boolean;
 		resetMfa: boolean;
 		delete: boolean;
+		toggleActive: boolean;
 	};
 	on: Record<TechnicianActionId, () => void>;
 }
@@ -69,6 +77,32 @@ export function technicianMenuGroups(ctx: TechnicianActionContext): DetailMenuGr
 			keepOpen: true,
 			onSelect: ctx.on["reset-mfa"],
 		},
+		ctx.deactivated
+			? {
+					id: "reactivate",
+					label: ctx.pending.toggleActive ? "Reactivating…" : "Reactivate",
+					icon: icon(UserCheck),
+					disabled: !!perm || ctx.pending.toggleActive,
+					disabledReason: perm,
+					onSelect: ctx.on.reactivate,
+				}
+			: {
+					id: "deactivate",
+					label: ctx.pending.toggleActive
+						? "Deactivating…"
+						: ctx.armed === "deactivate"
+							? "Press again: signs out, removes from scheduling"
+							: "Deactivate",
+					icon: icon(UserX),
+					disabled: !!perm || ctx.activeVisitCount > 0 || ctx.pending.toggleActive,
+					disabledReason:
+						perm ??
+						(ctx.activeVisitCount > 0
+							? `${ctx.name} has ${ctx.activeVisitCount} active ${plural}. Complete or reassign them first.`
+							: undefined),
+					keepOpen: true,
+					onSelect: ctx.on.deactivate,
+				},
 		{
 			id: "delete",
 			label: ctx.pending.delete
@@ -98,6 +132,7 @@ export function armedAnnouncement(armed: ArmedConfirm, name: string): string {
 	if (armed === "reset-password") return `Press again to send ${name} a password reset email`;
 	if (armed === "reset-mfa") return `Press again to reset MFA for ${name}`;
 	if (armed === "delete") return `Press again to delete ${name}`;
+	if (armed === "deactivate") return `Press again to deactivate ${name}`;
 	return "";
 }
 

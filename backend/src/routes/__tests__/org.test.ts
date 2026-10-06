@@ -21,9 +21,27 @@ vi.mock("../../lib/upload.js", () => ({
 	},
 }));
 
+vi.mock("../../services/entitlementService.js", () => ({
+	getEntitlements: vi.fn(async () => ({
+		planKey: "pro",
+		planVersion: 1,
+		trialActive: false,
+		modules: {},
+		limits: { ai_calls_month: 500 },
+	})),
+	previewDisable: vi.fn(),
+	setModuleChoices: vi.fn(),
+	isModuleOn: vi.fn(async () => true),
+}));
+const summary = vi.hoisted(() => ({ period_start: "2026-10-01", meters: {} }));
+vi.mock("../../lib/entitlements/quota.js", () => ({ getUsageSummary: vi.fn(async () => summary) }));
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import orgRouter from "../org.js";
+import orgEntitlementsRouter from "../orgEntitlements.js";
+import { callRoute } from "./harness.js";
+import { getUsageSummary } from "../../lib/entitlements/quota.js";
 import { db } from "../../db.js";
 
 const mockDb = vi.mocked(db, true);
@@ -254,5 +272,31 @@ describe("org routes — field purchase second sign-off threshold", () => {
 			unknown
 		>;
 		expect(data).not.toHaveProperty("field_purchase_second_signoff_threshold");
+	});
+});
+
+describe("GET /org/entitlements usage (build plan 2)", () => {
+	it("includes usage for admins", async () => {
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
+		});
+		expect(r.body.data.usage).toEqual(summary);
+	});
+
+	it("is null for a user without manage_organization", async () => {
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "d", role: "dispatcher", organization_id: "org-1", permissions: ["view_jobs"] },
+		});
+		expect(r.body.data.usage).toBeNull();
+	});
+
+	it("still answers with module states when the usage summary fails", async () => {
+		vi.mocked(getUsageSummary).mockRejectedValueOnce(new Error("db down"));
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
+		});
+		expect(r.status).toBe(200);
+		expect(r.body.data.usage).toBeNull();
+		expect(r.body.data.limits).toEqual({ ai_calls_month: 500 });
 	});
 });

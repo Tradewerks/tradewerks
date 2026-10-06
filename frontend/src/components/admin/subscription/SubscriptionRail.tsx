@@ -1,6 +1,7 @@
 import { Check, Lock } from "lucide-react";
 import type { EntitlementsData } from "../../../lib/permissionAccess";
 import { stateLabel } from "../../../lib/moduleGroups";
+import UsageMeters from "./UsageMeters";
 
 const sectionLabel = "text-[11px] font-medium uppercase tracking-wide text-text-tertiary";
 
@@ -35,6 +36,7 @@ export default function SubscriptionRail({ data }: { data: EntitlementsData }) {
 					support.
 				</p>
 			</div>
+			{data.usage && <UsageMeters usage={data.usage} />}
 			{features.length > 0 && (
 				<div className="border-t border-border-subtle p-4">
 					<h3 className={sectionLabel}>Subscription features</h3>

@@ -37,6 +37,7 @@ export type DispatcherNotificationType =
 	| "invoice_paid"
 	| "quote_accepted"
 	| "quote_declined"
+	| "usage_limit_warning"
 
 export interface DispatcherNotification {
 	id: string;
@@ -50,7 +51,7 @@ export interface DispatcherNotification {
 }
 
 // Display order of the preference groups
-export const DISPATCHER_NOTIFICATION_GROUPS = ["Jobs", "Purchases", "Vehicles & inventory", "Sales & billing"] as const;
+export const DISPATCHER_NOTIFICATION_GROUPS = ["Jobs", "Purchases", "Vehicles & inventory", "Sales & billing", "Subscription"] as const;
 
 export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	type: DispatcherNotificationType;
@@ -76,4 +77,5 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "followup_email_opened", group: "Sales & billing", permission: "view_followups", label: "Follow-up opens", description: "A client opened a follow-up email" },
 	{ type: "invoice_paid", group: "Sales & billing", permission: "view_invoices", label: "Invoice payments", description: "A payment was recorded on an invoice" },
 	{ type: "dispute_opened", group: "Sales & billing", permission: "resolve_disputes", label: "Disputes", description: "A dispute was opened on a document" },
+	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },
 ];

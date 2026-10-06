@@ -4,9 +4,14 @@ import { MoreHorizontal } from "lucide-react";
 import { useEffect, useState, useRef } from "react";
 import { requestPasswordResetCall } from "../../api/authenticate"
 import { usePermission } from "../../hooks/usePermission";
-import { useDeleteDispatcherMutation } from "../../hooks/useDispatchers";
+import {
+  useDeleteDispatcherMutation,
+  useDeactivateDispatcherMutation,
+  useReactivateDispatcherMutation,
+} from "../../hooks/useDispatchers";
 import { useResetMfaMutation } from "../../hooks/useMfa";
 import { useToast } from "../ui/useToast";
+import { errorMessage } from "../../util/util";
 
 interface DispatcherCardProps {
   dispatcher: Dispatcher;
@@ -67,6 +72,11 @@ export function DispatcherCard({ dispatcher, onClick, onEdit, onAssignRole, view
             <ShieldCheck size={12} /> MFA
         </span>
     ) : null;
+    const inactiveBadge = dispatcher.deactivated_at ? (
+        <span className="rounded-full border border-border px-2 py-0.5 text-xs font-medium text-text-tertiary">
+            Inactive
+        </span>
+    ) : null;
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [confirmResetMFA, setConfirmResetMFA] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -75,6 +85,9 @@ export function DispatcherCard({ dispatcher, onClick, onEdit, onAssignRole, view
     const [isResettingPassword, setIsResettingPassword] = useState(false);
     const { mutateAsync: deleteDispatcher, isPending: isDeleting } = useDeleteDispatcherMutation();
     const { mutateAsync: resetMFA, isPending: isResetingMFA } = useResetMfaMutation();
+    const [deactivateConfirm, setDeactivateConfirm] = useState(false);
+    const { mutateAsync: deactivateDispatcher, isPending: isDeactivating } = useDeactivateDispatcherMutation();
+    const { mutateAsync: reactivateDispatcher, isPending: isReactivating } = useReactivateDispatcherMutation();
     const toast = useToast();
 
     //permissions
@@ -95,6 +108,34 @@ export function DispatcherCard({ dispatcher, onClick, onEdit, onAssignRole, view
 			console.error("Failed to delete dispatcher:", error);
 		}
 	};
+
+    const handleDeactivate = async () => {
+        if (!MANAGE_DISPATCHER) return;
+        if (!deactivateConfirm) {
+            setDeactivateConfirm(true);
+            return;
+        }
+        try {
+            await deactivateDispatcher(dispatcher.id);
+            setDeactivateConfirm(false);
+            setDropdownOpen(false);
+            toast.success(`${displayName} deactivated. Signed out within 30 seconds; history is kept.`);
+        } catch (error) {
+            setDeactivateConfirm(false);
+            toast.error(errorMessage(error, "Couldn't deactivate"));
+        }
+    };
+
+    const handleReactivate = async () => {
+        if (!MANAGE_DISPATCHER) return;
+        try {
+            await reactivateDispatcher(dispatcher.id);
+            setDropdownOpen(false);
+            toast.success(`${displayName} reactivated.`);
+        } catch (error) {
+            toast.error(errorMessage(error, "Couldn't reactivate"));
+        }
+    };
 
     const handleResetPassword = async () => {
 		if (!MANAGE_DISPATCHER || !dispatcher) return;
@@ -210,6 +251,32 @@ export function DispatcherCard({ dispatcher, onClick, onEdit, onAssignRole, view
                                         : "Reset MFA"}
                             </button>
                         )}
+                        {MANAGE_DISPATCHER && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (dispatcher.deactivated_at) handleReactivate();
+                                    else handleDeactivate();
+                                }}
+                                onMouseLeave={() => setDeactivateConfirm(false)}
+                                disabled={isDeactivating || isReactivating}
+                                className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
+                                    deactivateConfirm
+                                        ? "bg-error hover:bg-error-strong text-on-primary"
+                                        : "text-text-primary hover:bg-surface-raised"
+                                } disabled:opacity-40 disabled:cursor-not-allowed`}
+                            >
+                                {dispatcher.deactivated_at
+                                    ? isReactivating
+                                        ? "Reactivating…"
+                                        : "Reactivate"
+                                    : isDeactivating
+                                        ? "Deactivating…"
+                                        : deactivateConfirm
+                                            ? "Press again: signs out"
+                                            : "Deactivate"}
+                            </button>
+                        )}
                         {/* Admins have all permissions */}
                         {dispatcher.role !== "admin"  && (
                             <>
@@ -282,6 +349,7 @@ export function DispatcherCard({ dispatcher, onClick, onEdit, onAssignRole, view
                             {dispatcher.role.charAt(0).toUpperCase() + dispatcher.role.slice(1)}
                         </span>
                         {mfaBadge}
+                        {inactiveBadge}
                     </div>
                     {dispatcher.organization_role && (
                         <span className="text-xs text-text-tertiary truncate">{dispatcher.organization_role.name}</span>
@@ -348,6 +416,7 @@ export function DispatcherCard({ dispatcher, onClick, onEdit, onAssignRole, view
                             {dispatcher.role.charAt(0).toUpperCase() + dispatcher.role.slice(1)}
                         </span>
                         {mfaBadge}
+                        {inactiveBadge}
                         {dispatcher.organization_role && (
                             <span className="text-xs text-text-tertiary">{dispatcher.organization_role.name}</span>
                         )}

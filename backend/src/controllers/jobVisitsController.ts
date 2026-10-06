@@ -408,7 +408,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 
 		if (parsed.tech_ids && parsed.tech_ids.length > 0) {
 			const existingTechs = await sdb.technician.findMany({
-				where: { id: { in: parsed.tech_ids } },
+				where: { id: { in: parsed.tech_ids }, deactivated_at: null },
 				select: { id: true },
 			});
 			const existingIds = new Set(existingTechs.map((t) => t.id));
@@ -417,7 +417,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 			);
 			if (missing.length > 0) {
 				return {
-					err: `Technicians not found: ${missing.join(", ")}`,
+					err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 				};
 			}
 		}
@@ -1127,17 +1127,24 @@ export const assignTechniciansToVisit = async (
 			return { err: "Job visit not found" };
 		}
 
-		const existingTechs = await sdb.technician.findMany({
-			where: { id: { in: techIds } },
-			select: { id: true, name: true },
+		const currentlyAssigned = await sdb.job_visit_technician.findMany({
+			where: { visit_id: visitId },
+			select: { tech_id: true },
 		});
+		const keep = new Set(currentlyAssigned.map((r) => r.tech_id));
+		const existingTechs = (
+			await sdb.technician.findMany({
+				where: { id: { in: techIds } },
+				select: { id: true, name: true, deactivated_at: true },
+			})
+		).filter((t) => t.deactivated_at === null || keep.has(t.id));
 
 		const existingIds = new Set(existingTechs.map((t) => t.id));
 		const missing = techIds.filter((id) => !existingIds.has(id));
 
 		if (missing.length > 0) {
 			return {
-				err: `Technicians not found: ${missing.join(", ")}`,
+				err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 			};
 		}
 
