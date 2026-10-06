@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { XCircle, Loader2 } from "lucide-react";
 import { useQBStatusQuery, useQBConnectMutation, useQBDisconnectMutation } from "../../hooks/useQuickbooks";
 import { usePermission } from "../../hooks/usePermission";
+import { useModule } from "../../hooks/useEntitlements";
 
 export default function QBWidget() {
 	const navigate = useNavigate();
@@ -11,6 +12,7 @@ export default function QBWidget() {
 	const disconnectMutation = useQBDisconnectMutation();
 	const canManage = usePermission("manage_organization");
 	const [disconnectError, setDisconnectError] = useState<string | null>(null);
+	const quickbooksOn = useModule("quickbooks") === "on";
 
 	const handleDisconnect = async () => {
 		setDisconnectError(null);
@@ -20,6 +22,8 @@ export default function QBWidget() {
 			setDisconnectError("Failed to disconnect. Please try again.");
 		}
 	};
+
+	if (!quickbooksOn) return null;
 
 	return (
 		<div className="bg-base border border-border-subtle rounded-xl h-full flex items-center px-4 gap-3">

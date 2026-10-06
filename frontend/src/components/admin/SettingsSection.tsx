@@ -79,7 +79,6 @@ function OrgSettingsSection() {
 		website: "",
 		mfa_required: false,
 		brand_color: DEFAULT_BRAND_COLOR,
-		followups_enabled: false,
 	});
 
 	useEffect(() => {
@@ -95,7 +94,6 @@ function OrgSettingsSection() {
 				measurement_system: org.measurement_system,
 				mfa_required: org.mfa_required,
 				brand_color: org.brand_color ?? DEFAULT_BRAND_COLOR,
-				followups_enabled: org.followups_enabled,
 			});
 			setThreshold(org.field_purchase_second_signoff_threshold ?? "");
 			setLogoImgError(false);
@@ -182,7 +180,6 @@ function OrgSettingsSection() {
 					: {}),
 				mfa_required: !!form.mfa_required,
 				brand_color: form.brand_color || null,
-				followups_enabled: form.followups_enabled ?? false,
 				field_purchase_second_signoff_threshold: parsedThreshold,
 			});
 			setSaveSuccess(true);
@@ -594,40 +591,6 @@ function OrgSettingsSection() {
 					)}
 				</div>
 
-				{/* Automated Client Followups */}
-				<div className="mt-5">
-					<label
-						className="flex cursor-pointer items-start gap-2.5"
-						onClick={() =>
-							setForm((prev) => ({
-								...prev,
-								followups_enabled: !prev.followups_enabled,
-							}))
-						}
-					>
-						<div
-							className={`relative mt-0.5 h-4 w-7 flex-shrink-0 rounded-full border transition-colors ${
-								form.followups_enabled
-									? "border-primary bg-primary"
-									: "border-border bg-surface-inset"
-							}`}
-						>
-							<span
-								className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${
-									form.followups_enabled ? "translate-x-3" : "translate-x-0.5"
-								}`}
-							/>
-						</div>
-						<span>
-							<span className="block text-xs font-medium text-text-primary">
-								Automated Client Followups
-							</span>
-							<span className="block text-xs text-text-muted">
-								Enable scheduled follow-up email sequences for quotes, invoices, and requests.
-							</span>
-						</span>
-					</label>
-				</div>
 
 				{/* Field purchase second sign-off */}
 				<div className="mt-5">

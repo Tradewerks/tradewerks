@@ -8,7 +8,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import {
 	AssistantStreamError,
 	getAssistantStatus,
@@ -19,6 +20,8 @@ import {
 	streamAssistantTurn,
 } from "../api/assistant";
 import type { AssistantEvent, PendingApproval, StoredMessage, UiMessage, UiToolCall } from "../types/assistant";
+
+const useQuery = moduleQuery("ai_assistant");
 
 const assistantRoot = ["assistant"] as const;
 

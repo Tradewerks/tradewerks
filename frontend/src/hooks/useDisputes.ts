@@ -1,9 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { getDisputes, getOpenDisputes, openDispute, resolveDispute } from "../api/disputes";
 import { useAuthStore } from "../auth/authStore";
 import { qk } from "../lib/queryKeys";
 import { DISPUTE_VIEW_PERMISSIONS, hasAnyPermission } from "../lib/permissionGates";
 import type { DisputeKind, OpenDisputeInput, ResolveDisputeInput } from "../types/disputes";
+
+const useQuery = moduleQuery("disputes");
 
 const disputeKey = (kind: DisputeKind, documentId: string) => ["disputes", kind, documentId];
 const documentQueryKey = (kind: DisputeKind) => (kind === "quote" ? "quotes" : "invoices");

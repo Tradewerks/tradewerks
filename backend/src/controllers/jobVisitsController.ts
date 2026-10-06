@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { ZodError } from "zod";
 import { Prisma } from "../../generated/prisma/client.js";
 import type { tech_visit_status, technician_status, pause_reason_type } from "../../generated/prisma/client.js";
@@ -934,7 +935,8 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		if (
 			parsed.status === "Completed" &&
 			existingVisit.status !== "Completed" &&
-			existingVisit.job.recurring_plan_id
+			existingVisit.job.recurring_plan_id &&
+			(await isModuleOn(organizationId, "recurring_plans"))
 		) {
 			const planId = existingVisit.job.recurring_plan_id;
 			const schedule = await sdb.invoice_schedule.findFirst({

@@ -35,6 +35,7 @@ import LinkQBItemModal from "../../components/quickbooks/LinkQBItemModal";
 import LabelQueueToast from "../../components/inventory/labels/LabelQueueToast";
 import LabelQueueButton from "../../components/inventory/labels/LabelQueueButton";
 import { useInventoryViewMode } from "../../hooks/useInventoryViewMode";
+import UntrackedStockNotice from "../../components/entitlements/UntrackedStockNotice";
 
 const SORT_OPTIONS: { value: InventorySortOption; label: string }[] = [
 	{ value: "name", label: "Name A-Z" },
@@ -255,6 +256,7 @@ export default function InventoryPage() {
 		<div className="flex h-full text-text-primary">
 			{/* Main content */}
 			<div className="flex-1 overflow-y-auto p-4 mr-7">
+				<UntrackedStockNotice module="inventory" />
 				<PageHeader title="Inventory">
 						<LabelQueueButton />
 						{/* Value-carrying, and absent entirely when there is nothing

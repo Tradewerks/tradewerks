@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-	useMutation,
-	useQuery,
-	useQueryClient,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { invalidate, qk } from "../lib/queryKeys";
 import * as api from "../api/fieldPurchases";
 import type {
@@ -28,6 +23,8 @@ import type {
 	MyFieldPurchaseAuthority,
 	SubmitResult,
 } from "../types/fieldPurchases";
+
+const useQuery = moduleQuery("field_purchases");
 
 // ── Grants ───────────────────────────────────────────────────────────────────
 

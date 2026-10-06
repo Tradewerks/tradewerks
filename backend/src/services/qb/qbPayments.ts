@@ -1,3 +1,4 @@
+import { isModuleOn } from "../entitlementService.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { getScopedDb } from "../../lib/context.js";
 import { qbFetch, getOrgRealmId } from "../quickbooksService.js";
@@ -55,6 +56,7 @@ export interface QBPaymentResponse {
 const inFlightPushes = new Map<string, Promise<void>>();
 
 export async function pushPaymentToQB(paymentId: string, organizationId: string) {
+	if (!(await isModuleOn(organizationId, "quickbooks"))) return;
     const prior = inFlightPushes.get(paymentId) ?? Promise.resolve();
 	const run = prior.catch(() => {}).then(() => doPushPaymentToQB(paymentId, organizationId));
 	inFlightPushes.set(paymentId, run);
@@ -152,6 +154,7 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
 }
 
 export async function deleteQBPayment(qbPaymentId: string, organizationId: string) {
+	if (!(await isModuleOn(organizationId, "quickbooks"))) return;
     try {
         const existing = (await qbFetch(organizationId, "GET", `/payment/${qbPaymentId}`)) as QBPaymentResponse;
         await qbFetch(organizationId, "POST", "/payment?operation=delete", {

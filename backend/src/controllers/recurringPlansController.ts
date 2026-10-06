@@ -8,6 +8,7 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { getScopedDb } from "../lib/context.js";
+import { getClosedWindows } from "../services/moduleWindowService.js";
 import {
 	assertInventoryItemsInOrg,
 	assertDispositionVehiclesInOrg,
@@ -203,6 +204,50 @@ async function generateOccurrencesForPlan(
 		start_date: startDate,
 		end_date: generationEndDate,
 	};
+}
+
+// Dates the rule would have produced while the org had Recurring Plans switched
+// off and that were never generated. Generation never looks backwards, so these
+// are gone for good; the plan page lists them so the gap is visible.
+export async function getSkippedDatesForJob(jobId: string, orgId: string): Promise<Date[]> {
+	const sdb = getScopedDb(orgId);
+	const job = await sdb.job.findFirst({
+		where: { id: jobId },
+		select: { recurring_plan_id: true },
+	});
+	if (!job?.recurring_plan_id) return [];
+	const plan = await sdb.recurring_plan.findFirst({
+		where: { id: job.recurring_plan_id },
+		include: { rules: { include: { by_weekday: true } } },
+	});
+	if (!plan || plan.rules.length === 0) return [];
+
+	const windows = await getClosedWindows(orgId, "recurring_plans");
+	const planEnd = plan.ends_at ? new Date(plan.ends_at) : null;
+	const candidates: Date[] = [];
+	for (const w of windows) {
+		const end = planEnd && planEnd < w.on ? planEnd : w.on;
+		if (end <= w.off) continue;
+		for (const d of calculateOccurrenceDates(
+			plan.rules[0],
+			new Date(plan.starts_at),
+			w.off,
+			end,
+			plan.timezone ?? "UTC",
+		)) {
+			// The rule works in whole days; keep only starts inside the window itself.
+			if (d.start >= w.off && d.start <= end) candidates.push(d.start);
+		}
+	}
+	if (candidates.length === 0) return [];
+	const existing = await sdb.recurring_occurrence.findMany({
+		where: { recurring_plan_id: plan.id, occurrence_start_at: { in: candidates } },
+		select: { occurrence_start_at: true },
+	});
+	const have = new Set(existing.map((o) => o.occurrence_start_at.getTime()));
+	return candidates
+		.filter((d) => !have.has(d.getTime()))
+		.sort((a, b) => a.getTime() - b.getTime());
 }
 
 function calculateOccurrenceDates(

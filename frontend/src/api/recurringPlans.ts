@@ -310,3 +310,6 @@ export const deleteRecurringPlanNote = async (
 
 	return response.data.data || { message: "Recurring plan note deleted successfully" };
 };
+
+export const getSkippedDates = async (jobId: string): Promise<string[]> =>
+	(await api.get(`/jobs/${jobId}/recurring-plan/skipped-dates`)).data.data.dates;

@@ -405,11 +405,11 @@ model organization {
   // signer before anything moves. Null disables the second sign-off entirely.
   field_purchase_second_signoff_threshold Decimal? @db.Decimal(10, 2)
   mfa_required        Boolean @default(false) // Require MFA for all users in this org
+  entitlement         org_entitlement?
 
   logo_key String?
 
   brand_color       String?  @default("#1e3a5f")
-  followups_enabled Boolean  @default(false)
 
   // quickbooks integration fields
   qb_realm_id           String?
@@ -3528,4 +3528,56 @@ model timesheet_week {
 
   @@unique([technician_id, week_start])
   @@index([organization_id, week_start])
+}
+
+// ============================================================================
+// Entitlements
+// ============================================================================
+
+model plan {
+  key               String    @id
+  label             String
+  assignable        Boolean   @default(true)
+  is_signup_default Boolean   @default(false)
+  is_trial_default  Boolean   @default(false)
+  archived_at       DateTime?
+
+  versions plan_version[]
+}
+
+// Immutable: editing a plan inserts a new version so orgs already on it never
+// change underneath themselves.
+model plan_version {
+  id            String   @id @default(uuid())
+  plan_key      String
+  plan          plan     @relation(fields: [plan_key], references: [key], onDelete: Restrict)
+  version       Int
+  modules       String[]
+  limits        Json     @default("{}")
+  note          String?
+  created_by_id String?
+  created_at    DateTime @default(now())
+
+  entitlements       org_entitlement[] @relation("EntitlementPlan")
+  trial_entitlements org_entitlement[] @relation("EntitlementTrialPlan")
+
+  @@unique([plan_key, version])
+}
+
+model org_entitlement {
+  organization_id       String        @id
+  organization          organization  @relation(fields: [organization_id], references: [id])
+  plan_version_id       String
+  plan_version          plan_version  @relation("EntitlementPlan", fields: [plan_version_id], references: [id], onDelete: Restrict)
+  plan_source           String
+  template_key          String        @default("general")
+  trial_plan_version_id String?
+  trial_plan_version    plan_version? @relation("EntitlementTrialPlan", fields: [trial_plan_version_id], references: [id], onDelete: Restrict)
+  trial_ends_at         DateTime?
+  trial_warned_3d_at    DateTime?
+  trial_warned_end_at   DateTime?
+  module_choices        Json          @default("{}")
+  module_grants         Json          @default("{}")
+  limit_overrides       Json          @default("{}")
+  updated_at            DateTime      @updatedAt
 }

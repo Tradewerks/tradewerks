@@ -8,6 +8,12 @@ import { Prisma } from "../../../generated/prisma/client.js";
 import { deductInventoryForVisit } from "../inventoryController.js";
 import { plannedLineItemFields, dispositionFields } from "../../lib/inventory.js";
 
+// Module gating is not under test here: every module reads as on.
+vi.mock("../../services/entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
+
 vi.mock("../../db.js", () => {
 	const $extends = vi.fn();
 	const mockDb = {

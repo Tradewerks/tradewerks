@@ -1,4 +1,5 @@
-import { useQuery, useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import * as vehicleApi from "../api/vehicles";
 import type {
 	VehicleStockItem,
@@ -23,6 +24,8 @@ import type {
 import type { VisitLineItem } from "../types/jobs";
 import { qk, invalidate } from "../lib/queryKeys";
 
+const useQuery = moduleQuery("vehicle_stock");
+
 // ── Vehicle stock queries ──────────────────────────────────────────────────────
 
 export const useVehicleStockQuery = (vehicleId: string | null | undefined): UseQueryResult<VehicleStockItem[], Error> => {
@@ -34,12 +37,13 @@ export const useVehicleStockQuery = (vehicleId: string | null | undefined): UseQ
 	});
 };
 
-export const useVehicleStockConflictsQuery = () =>
-	useQuery<VehicleStockConflict[]>({
+export const useVehicleStockConflictsQuery = () => {
+	return useQuery<VehicleStockConflict[]>({
 		queryKey: qk.vehicles.stockConflicts,
 		queryFn: vehicleApi.getStockConflicts,
 		staleTime: 30_000,
 	});
+};
 
 export const useMaintenanceAlertsQuery = () =>
 	useQuery<VehicleMaintenanceAlert[]>({

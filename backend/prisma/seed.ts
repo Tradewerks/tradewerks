@@ -82,6 +82,12 @@ function padTo(
 }
 
 async function main() {
+	// The seed creates demo accounts with known passwords and dev-only tiers.
+	if (process.env.NODE_ENV === "production") {
+		console.error("Refusing to seed: NODE_ENV is production.");
+		process.exit(1);
+	}
+
 	console.log("Seeding database...");
 
 	// ============================================================================
@@ -124,6 +130,53 @@ async function main() {
 			// purchase. Set below John Smith's 750 per-transaction ceiling so a single
 			// purchase can be under his own limit and still need a second signer.
 			field_purchase_second_signoff_threshold: 500.0,
+		},
+	});
+
+	// Dev-only tier fixtures. Production gets only the Legacy tier, from the
+	// migration; real tier contents are undecided.
+	const OPTIONAL_MODULES = [
+		"quotes", "recurring_plans", "projects", "inventory", "fleet", "vehicle_stock",
+		"purchasing", "field_purchases", "followups", "disputes",
+	];
+	const PRO_MODULES = [...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto", "ai_assistant"];
+	await db.plan.createMany({
+		data: [
+			{ key: "starter", label: "Starter", assignable: true, is_signup_default: true, is_trial_default: false },
+			{ key: "pro", label: "Pro", assignable: true, is_signup_default: false, is_trial_default: false },
+			{ key: "enterprise", label: "Enterprise", assignable: true, is_signup_default: false, is_trial_default: true },
+		],
+	});
+	await db.plan_version.createMany({
+		data: [
+			{
+				id: "pv_starter_1", plan_key: "starter", version: 1, note: "seed",
+				modules: OPTIONAL_MODULES,
+				limits: { dispatchers: 3, technicians: 5, tax_lookups_month: 0, ai_calls_month: 0 },
+			},
+			{
+				id: "pv_pro_1", plan_key: "pro", version: 1, note: "seed",
+				modules: PRO_MODULES,
+				limits: { dispatchers: 10, technicians: 25, tax_lookups_month: 2000, ai_calls_month: 500 },
+			},
+			{
+				id: "pv_enterprise_1", plan_key: "enterprise", version: 1, note: "seed",
+				modules: [...PRO_MODULES, "security_plus"],
+				limits: { dispatchers: null, technicians: null, tax_lookups_month: 20000, ai_calls_month: 5000 },
+			},
+		],
+	});
+	await db.org_entitlement.create({
+		data: {
+			organization_id: org.id,
+			plan_version_id: "pv_legacy_1",
+			plan_source: "migration",
+			template_key: "hvac",
+			module_choices: {
+				quotes: true, recurring_plans: true, projects: true, inventory: true,
+				fleet: true, vehicle_stock: true, purchasing: true, field_purchases: true,
+				disputes: true, followups: true,
+			},
 		},
 	});
 

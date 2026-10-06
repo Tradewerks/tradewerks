@@ -7,7 +7,7 @@ import {
 	onVisitCancelled,
 } from "../followupTriggers.js";
 
-const { scoped, orgFindUnique } = vi.hoisted(() => ({
+const { scoped, isModuleOn } = vi.hoisted(() => ({
 	scoped: {
 		followup_sequence: { findMany: vi.fn() },
 		client: { findFirst: vi.fn() },
@@ -22,17 +22,17 @@ const { scoped, orgFindUnique } = vi.hoisted(() => ({
 			updateMany: vi.fn().mockResolvedValue({ count: 0 }),
 		},
 	},
-	orgFindUnique: vi.fn(),
+	isModuleOn: vi.fn(),
 }));
 
 vi.mock("../../lib/context.js", () => ({ getScopedDb: () => scoped }));
-vi.mock("../../db.js", () => ({ db: { organization: { findUnique: orgFindUnique } } }));
+vi.mock("../entitlementService.js", () => ({ isModuleOn }));
 vi.mock("../appLogger.js", () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 const DAY = 24 * 60 * 60 * 1000;
 
 function enable(on: boolean) {
-	orgFindUnique.mockResolvedValue({ followups_enabled: on });
+	isModuleOn.mockResolvedValue(on);
 }
 function withContact(email: string) {
 	scoped.client.findFirst.mockResolvedValue({ contacts: [{ is_primary: true, contact: { email } }] });

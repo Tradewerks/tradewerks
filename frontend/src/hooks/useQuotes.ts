@@ -1,4 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import {
 	getAllQuotes,
 	getQuoteById,
@@ -28,6 +29,8 @@ import type {
 	CreateQuoteNoteInput,
 	UpdateQuoteNoteInput,
 } from "../types/quotes";
+
+const useQuery = moduleQuery("quotes");
 
 // ============================================================================
 // Queries

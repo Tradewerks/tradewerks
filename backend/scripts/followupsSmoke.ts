@@ -19,7 +19,7 @@ async function main() {
 
 	// ── Seed ────────────────────────────────────────────────────────────────
 	const org = await db.organization.create({
-		data: { name: tag + "-org", followups_enabled: true, brand_color: "#123456" },
+		data: { name: tag + "-org", brand_color: "#123456" },
 	});
 	const client = await db.client.create({
 		data: { name: tag + "-client", address: "1 Test St", coords: {}, organization_id: org.id },

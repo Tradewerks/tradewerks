@@ -1,4 +1,5 @@
 ﻿import { Router } from "express";
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { ErrorCodes, createSuccessResponse, createErrorResponse } from "../types/responses.js";
 import { getUserContext } from "../lib/context.js";
 import { db } from "../db.js";
@@ -82,6 +83,7 @@ router.post("/", requirePermission("manage_vehicles"), async (req, res, next) =>
 
 router.get(
 	"/stock-conflicts",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians", "use_vehicles", "stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -126,6 +128,7 @@ router.get(
 
 router.get(
 	"/readiness",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -147,6 +150,7 @@ router.get(
 
 router.get(
 	"/restock-requests",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -166,6 +170,7 @@ router.get(
 
 router.post(
 	"/restock-requests/:requestId/dismiss",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -192,6 +197,7 @@ router.post(
 
 router.post(
 	"/restock-requests/:requestId/acknowledge",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -229,7 +235,7 @@ router.put("/:id", requirePermission("manage_technicians"), async (req, res, nex
 	}
 });
 
-router.get("/:id/stock", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle", "complete_own_restock"), async (req, res, next) => {
+router.get("/:id/stock", requireModule("vehicle_stock"), requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle", "complete_own_restock"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -243,7 +249,7 @@ router.get("/:id/stock", requireAnyPermission("view_vehicles", "manage_vehicles"
 	}
 });
 
-router.post("/:id/stock", requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
+router.post("/:id/stock", requireModule("vehicle_stock"), requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const context = getUserContext(req);
@@ -261,6 +267,7 @@ router.post("/:id/stock", requireVehiclePermission("stock_own_vehicle"), async (
 
 router.get(
 	"/:id/stock/fill-plan",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -279,6 +286,7 @@ router.get(
 
 router.post(
 	"/:id/stock/fill",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -299,6 +307,7 @@ router.post(
 
 router.get(
 	"/:id/usage-today",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians", "use_inventory"),
 	async (req, res, next) => {
 		try {
@@ -317,6 +326,7 @@ router.get(
 
 router.get(
 	"/:id/tomorrow-requirements",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -335,6 +345,7 @@ router.get(
 
 router.post(
 	"/:id/restock",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("complete_own_restock"),
 	async (req, res, next) => {
 		try {
@@ -361,6 +372,7 @@ router.post(
 
 router.get(
 	"/:id/restock/today",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_inventory", "manage_technicians", "use_inventory"),
 	async (req, res, next) => {
 		try {
@@ -386,6 +398,7 @@ const ADJUST_TYPE_PERMS: Partial<Record<VehicleAdjustmentType, string>> = {
 
 router.post(
 	"/:id/stock/adjust",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -427,6 +440,7 @@ router.post(
 
 router.get(
 	"/:id/restock/history",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_inventory", "manage_technicians", "use_inventory", "stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -445,6 +459,7 @@ router.get(
 
 router.get(
 	"/:id/stock/adjustments",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_inventory", "manage_technicians", "use_inventory", "stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -463,6 +478,7 @@ router.get(
 
 router.get(
 	"/:id/readiness",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -483,6 +499,7 @@ router.get(
 
 router.post(
 	"/:id/readiness",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -506,6 +523,7 @@ router.post(
 
 router.delete(
 	"/:id/readiness/:date",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -520,7 +538,7 @@ router.delete(
 	}
 );
 
-router.put("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
+router.put("/:id/stock/:itemId", requireModule("vehicle_stock"), requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
 	try {
 		const { id, itemId } = req.params as { id: string; itemId: string };
 		const context = getUserContext(req);
@@ -536,7 +554,7 @@ router.put("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"), 
 	}
 });
 
-router.delete("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
+router.delete("/:id/stock/:itemId", requireModule("vehicle_stock"), requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
 	try {
 		const { id, itemId } = req.params as { id: string; itemId: string };
 		const context = getUserContext(req);
@@ -552,7 +570,7 @@ router.delete("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"
 	}
 });
 
-router.post("/:id/stock/:itemId/restock-request", requireVehiclePermission("view_vehicles"), async (req, res, next) => {
+router.post("/:id/stock/:itemId/restock-request", requireModule("vehicle_stock"), requireVehiclePermission("view_vehicles"), async (req, res, next) => {
 	try {
 		const { id, itemId } = req.params as { id: string; itemId: string };
 		const orgId = req.user!.organization_id as string;
@@ -574,7 +592,7 @@ router.post("/:id/stock/:itemId/restock-request", requireVehiclePermission("view
 	}
 });
 
-router.post("/:id/restock-requests/bulk", requireVehiclePermission("view_vehicles"), async (req, res, next) => {
+router.post("/:id/restock-requests/bulk", requireModule("vehicle_stock"), requireVehiclePermission("view_vehicles"), async (req, res, next) => {
 	try {
 		const vehicleId = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -592,7 +610,7 @@ router.post("/:id/restock-requests/bulk", requireVehiclePermission("view_vehicle
 	}
 });
 
-router.get("/:id/restock-requests", requireAnyPermission("stock_own_vehicle", "use_inventory", "manage_inventory"), async (req, res, next) => {
+router.get("/:id/restock-requests", requireModule("vehicle_stock"), requireAnyPermission("stock_own_vehicle", "use_inventory", "manage_inventory"), async (req, res, next) => {
 	try {
 		const vehicleId = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -610,7 +628,7 @@ router.get("/:id/restock-requests", requireAnyPermission("stock_own_vehicle", "u
 	}
 });
 
-router.get("/:id/movements", requireAnyPermission("view_inventory", "manage_technicians"), async (req, res, next) => {
+router.get("/:id/movements", requireModule("vehicle_stock"), requireAnyPermission("view_inventory", "manage_technicians"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const id = req.params.id as string;

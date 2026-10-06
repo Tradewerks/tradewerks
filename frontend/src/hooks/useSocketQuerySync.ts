@@ -2,6 +2,9 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { socket } from "../lib/socket";
 import { qk, invalidate } from "../lib/queryKeys";
+import { ENTITLEMENTS_STALE_EVENT } from "../lib/permissionAccess";
+import { ENTITLEMENTS_QUERY_KEY } from "./useEntitlements";
+import { useToastStore } from "../stores/toastStore";
 import type {
 	FieldPurchaseEvent,
 	FieldPurchaseGrantRequestedEvent,
@@ -18,6 +21,9 @@ import type {
 const JOB_VISITS_KEY = ["jobVisits"] as const;
 const TECHNICIANS_KEY = ["technicians"] as const;
 const DISPUTE_ACTIVITY = /^(quote|invoice)\.dispute_(opened|resolved)$/;
+
+// Several writes refused in one burst should produce one message.
+let lastModuleRefusalToastAt = 0;
 
 // Single canonical event→invalidation map — mounted once in DispatchLayout and
 // TechnicianLayout so every socket-driven cache update lives in one place.
@@ -88,6 +94,28 @@ export function useSocketQuerySync(): void {
 			}
 		};
 
+		const onEntitlementsChanged = () => {
+			qc.invalidateQueries({ queryKey: ENTITLEMENTS_QUERY_KEY });
+		};
+		const onModuleRefused = (event: Event) => {
+			onEntitlementsChanged();
+			const detail = (event as CustomEvent<{ code?: string; method?: string }>).detail;
+			if (!detail?.method || detail.method.toLowerCase() === "get") return;
+			const now = Date.now();
+			if (now - lastModuleRefusalToastAt < 5000) return;
+			lastModuleRefusalToastAt = now;
+			useToastStore
+				.getState()
+				.push(
+					"warning",
+					detail.code === "MODULE_NOT_IN_PLAN"
+						? "That isn't part of your subscription. Nothing was changed."
+						: "That module is turned off for your organization. Nothing was changed.",
+				);
+		};
+
+		socket.on("entitlements:changed", onEntitlementsChanged);
+		window.addEventListener(ENTITLEMENTS_STALE_EVENT, onModuleRefused);
 		socket.on("inventory:updated", onInventoryUpdated);
 		socket.on("job_visit:status_changed", onJobVisitChanged);
 		socket.on("job_visit:updated", onJobVisitChanged);
@@ -104,6 +132,8 @@ export function useSocketQuerySync(): void {
 		socket.on("activity-event", onActivity);
 
 		return () => {
+			socket.off("entitlements:changed", onEntitlementsChanged);
+			window.removeEventListener(ENTITLEMENTS_STALE_EVENT, onModuleRefused);
 			socket.off("inventory:updated", onInventoryUpdated);
 			socket.off("job_visit:status_changed", onJobVisitChanged);
 			socket.off("job_visit:updated", onJobVisitChanged);

@@ -260,3 +260,19 @@ export const pushQBEmployee = async (technicianId: string) => {
     if (response.data.error) throw new Error(response.data.error?.message || "Failed to push QB employee");
     return response.data.data!;
 }
+
+export interface QBUnsyncedDoc {
+	type: "invoice" | "purchase" | "field_purchase" | "payment";
+	id: string;
+	label: string;
+	status: "not_synced" | "failed";
+	updated_at: string;
+}
+export interface QBSyncNowResult {
+	synced: number;
+	failed: { type: string; id: string; label: string; message: string }[];
+}
+export const getQBUnsynced = async (): Promise<QBUnsyncedDoc[]> =>
+	(await api.get("/integrations/quickbooks/unsynced")).data.data;
+export const syncQBUnsynced = async (): Promise<QBSyncNowResult> =>
+	(await api.post("/integrations/quickbooks/unsynced/sync")).data.data;

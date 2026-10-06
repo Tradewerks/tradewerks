@@ -3,6 +3,9 @@ import { X, ChevronRight } from "lucide-react";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import type { OrganizationRole } from "../../types/organizations";
 import { PERMISSION_CATALOGS } from "../../lib/permissionCatalogs";
+import { isPermissionOffered } from "../../lib/permissionAccess";
+import { useEntitlements } from "../../hooks/useEntitlements";
+import HiddenModulePermissionsNote from "./HiddenModulePermissionsNote";
 
 interface EditRoleProps {
 	isModalOpen: boolean;
@@ -44,7 +47,21 @@ const EditRole = ({ isModalOpen, setIsModalOpen, role, updateRole }: EditRolePro
 		}
 	}, [isModalOpen, resetForm]);
 
-	const activeCatalog = PERMISSION_CATALOGS[baseTier];
+	// Display only: `permissions` keeps what the role already holds from a module that
+	// is off, so switching the module back on restores it.
+	const { data: entitlements } = useEntitlements();
+	const activeCatalog = useMemo(
+		() =>
+			PERMISSION_CATALOGS[baseTier]
+				.map((group) => ({
+					...group,
+					permissions: group.permissions.filter((p) =>
+						isPermissionOffered(p.id, entitlements),
+					),
+				}))
+				.filter((group) => group.permissions.length > 0),
+		[baseTier, entitlements],
+	);
 
 	const handleTierChange = (tier: "dispatcher" | "technician") => {
 		setBaseTier(tier);
@@ -154,6 +171,7 @@ const EditRole = ({ isModalOpen, setIsModalOpen, role, updateRole }: EditRolePro
 				<p className="text-xs text-text-muted border border-border-subtle bg-surface rounded px-3 py-2">
 					Permission changes can take up to 15 minutes to apply to users.
 				</p>
+				<HiddenModulePermissionsNote baseTier={baseTier} entitlements={entitlements} keeps />
 
 				{/* Permissions — transfer list */}
 				<div className="min-w-0">
@@ -251,7 +269,7 @@ const EditRole = ({ isModalOpen, setIsModalOpen, role, updateRole }: EditRolePro
 				</div>
 			</div>
 		);
-	}, [name, baseTier, activeCatalog, permissions, isDefault, isLoading, nameError]);
+	}, [name, baseTier, activeCatalog, entitlements, permissions, isDefault, isLoading, nameError]);
 
 	return (
 		<FormWizardContainer

@@ -1,7 +1,10 @@
-import { useQuery, useMutation, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import * as purchaseApi from "../api/purchases";
 import { qk } from "../lib/queryKeys";
 import type { Purchase } from "../types/purchases";
+
+const useQuery = moduleQuery("purchasing");
 
 
 // ============================================================

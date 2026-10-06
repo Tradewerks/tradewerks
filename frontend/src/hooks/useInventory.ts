@@ -1,14 +1,5 @@
-import {
-	useInfiniteQuery,
-	useMutation,
-	useQuery,
-	useQueryClient,
-	keepPreviousData,
-	type InfiniteData,
-	type UseInfiniteQueryResult,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient, keepPreviousData, type InfiniteData, type UseInfiniteQueryResult, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 
 import type {
 	InventoryItem,
@@ -30,6 +21,8 @@ import type { ItemOrigin, ReconcileSort } from "../api/inventory";
 import * as orgApi from "../api/org";
 import { qk, invalidate } from "../lib/queryKeys";
 import { useScanDispatcher } from "./useScanDispatcher";
+
+const useQuery = moduleQuery("inventory");
 
 // ============================================================================
 // INVENTORY QUERIES

@@ -2,18 +2,20 @@
 import { AlertTriangle, ChevronRight, Package } from "lucide-react";
 import { useLowStockInventoryQuery, useProvisionalItemsQuery } from "../../hooks/useInventory";
 import { usePermission } from "../../hooks/usePermission";
+import { useModule } from "../../hooks/useEntitlements";
 
 export default function LowStockWidget({ className }: { className?: string }) {
 	const navigate = useNavigate();
 	const { data: lowStockItems = [] } = useLowStockInventoryQuery();
 	const canManageInventory = usePermission("manage_inventory");
 	const { data: pendingParts = [] } = useProvisionalItemsQuery(canManageInventory);
+	const inventoryOn = useModule("inventory") === "on";
 
 	const outOfStock = lowStockItems.filter((i) => i.quantity === 0).length;
 	const lowStock = lowStockItems.length - outOfStock;
 	const pendingCount = pendingParts.length;
 
-	if (lowStockItems.length === 0 && pendingCount === 0) return null;
+	if (!inventoryOn || (lowStockItems.length === 0 && pendingCount === 0)) return null;
 
 	return (
 		<div

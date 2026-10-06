@@ -1,3 +1,4 @@
+import { isModuleOn } from "./entitlementService.js";
 import OAuthClient from "intuit-oauth";
 import { getScopedDb } from "../lib/context.js";
 import { db } from "../db.js";
@@ -120,6 +121,9 @@ export async function handleCallback(
 	orgId: string,
 	realmId: string,
 ): Promise<void> {
+	// Public route, so no gate ran: refuse to store tokens for an org without the module.
+	if (!(await isModuleOn(orgId, "quickbooks")))
+		throw new Error("QuickBooks is not available for this organization");
 	const client = makeOAuthClient();
 	const authResponse = await client.createToken(fullCallbackUrl);
 	const token = authResponse.getJson() as {

@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import * as XLSX from "xlsx";
 import { z, ZodError } from "zod";
 import { getScopedDb, type UserContext } from "../lib/context.js";
@@ -1271,6 +1272,12 @@ export const deductInventoryForVisit = async (
 	organizationId: string,
 	context?: UserContext,
 ): Promise<{ lowStockItemIds: string[] }> => {
+	if (!(await isModuleOn(organizationId, "inventory"))) {
+		log.debug({ organizationId, visitId }, "stock deduction skipped: inventory module is off");
+		return { lowStockItemIds: [] };
+	}
+	// With Vehicle Stock off the truck is not a stock location, so intake lands in the warehouse.
+	const vehicleStockOn = await isModuleOn(organizationId, "vehicle_stock");
 	// Lines already consumed from vehicle stock (fulfillment_status "used") are
 	// skipped — their warehouse impact happened at restock. NULL must be matched
 	// explicitly: Prisma `not` excludes NULL rows (SQL semantics).
@@ -1330,7 +1337,9 @@ export const deductInventoryForVisit = async (
 			// Vehicle deleted since (FK is SET NULL): the stock did arrive somewhere,
 			// so land it in the warehouse rather than fail the completion.
 			const toVehicleId =
-				r.disposition_location === "vehicle" ? r.disposition_vehicle_id : null;
+				vehicleStockOn && r.disposition_location === "vehicle"
+					? r.disposition_vehicle_id
+					: null;
 			const unitCost = receiveCosts.get(r.inventory_item_id);
 			movements.push({
 				inventory_item_id: r.inventory_item_id,

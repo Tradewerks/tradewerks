@@ -1,3 +1,4 @@
+import { isModuleOn } from "../entitlementService.js";
 import { getScopedDb } from "../../lib/context.js";
 import { db } from "../../db.js";
 import { Prisma } from "../../../generated/prisma/client.js";
@@ -333,6 +334,7 @@ export const importQBInvoices = async (orgId: string, qbInvoiceIds: string[]) =>
 };
 
 export async function pushInvoice(invoiceId: string, orgId: string): Promise<void> {
+	if (!(await isModuleOn(orgId, "quickbooks"))) return;
 	const prior = inFlightPushes.get(invoiceId) ?? Promise.resolve();
 	const run = prior.then(() => doPushInvoice(invoiceId, orgId));
 	// The caller handles run's rejection; a promise derived from it and parked
@@ -520,6 +522,7 @@ export async function mirrorInvoiceVoidToQuickBooks(
 ): Promise<void> {
 	// Never synced, so there is nothing in QuickBooks to void.
 	if (!qbInvoiceId) return;
+	if (!(await isModuleOn(orgId, "quickbooks"))) return;
 	try {
 		if (!(await isQBConnected(orgId))) return;
 		await voidQBInvoice(orgId, qbInvoiceId);

@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from 'express';
 import { ZodError } from 'zod';
 import {
@@ -201,7 +202,7 @@ router.post("/overlap-check", requirePermission("create_invoices"), async (req, 
 
 // ── Pipeline: generate invoice from recurring plan ────────────────────────────
 
-router.post("/generate", requirePermission("create_invoices"), async (req, res, next) => {
+router.post("/generate", requireModule("recurring_plans"), requirePermission("create_invoices"), async (req, res, next) => {
     try {
         const parsed = generateInvoiceSchema.parse(req.body);
         const orgId = req.user!.organization_id as string;
@@ -487,7 +488,7 @@ router.post("/:invoiceId/refunds", requirePermission("refund_invoices"), async (
 
 // ── Disputes ─────────────────────────────────────────────────────────────────
 
-router.get("/:invoiceId/disputes", requirePermission("view_invoices"), async (req, res, next) => {
+router.get("/:invoiceId/disputes", requireModule("disputes"), requirePermission("view_invoices"), async (req, res, next) => {
     try {
         const invoiceId = req.params.invoiceId as string;
         const list = await listDisputes("invoice", invoiceId, req);
@@ -500,7 +501,7 @@ router.get("/:invoiceId/disputes", requirePermission("view_invoices"), async (re
 // view_invoices ahead of the dispute grant: both doors' refusals can echo the
 // document's status and amount_paid (DW-65), and open_disputes/resolve_disputes
 // alone say nothing about whether this caller may see that.
-router.post("/:invoiceId/disputes", requirePermission("view_invoices"), requirePermission("open_disputes"), async (req, res, next) => {
+router.post("/:invoiceId/disputes", requireModule("disputes"), requirePermission("view_invoices"), requirePermission("open_disputes"), async (req, res, next) => {
     try {
         const invoiceId = req.params.invoiceId as string;
         const result = await postDispute("invoice", invoiceId, req);
@@ -516,6 +517,7 @@ router.post("/:invoiceId/disputes", requirePermission("view_invoices"), requireP
 
 router.post(
     "/:invoiceId/disputes/:disputeId/resolve",
+    requireModule("disputes"),
     requirePermission("view_invoices"),
     requirePermission("resolve_disputes"),
     async (req, res, next) => {

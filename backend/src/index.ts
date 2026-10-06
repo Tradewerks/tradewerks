@@ -81,6 +81,11 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 import { handleCallback, QB_ENABLED } from "./services/quickbooksService.js";
 import { handleQBWebhook } from "./services/qb/qbWebhook.js"
 import { handlePostmarkWebhook } from "./services/postmarkWebhook.js";
+import { assertRegistry } from "./lib/entitlements/registry.js";
+import { requireModule } from "./lib/entitlements/requireModule.js";
+import { registerEntitlementBlockers } from "./lib/entitlements/blockers.js";
+import orgEntitlementsRouter from "./routes/orgEntitlements.js";
+import moduleNoticesRouter from "./routes/moduleNotices.js";
 
 const errorHandler = (
 	err: any,
@@ -243,6 +248,9 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 // ============================================
 
 const app = express();
+
+assertRegistry();
+registerEntitlementBlockers();
 
 app.use(
 	express.json({
@@ -544,7 +552,7 @@ app.use("/requests", verifyToken, requestsRouter);
 // ============================================
 // QUOTE ROUTES
 // ============================================
-app.use("/quotes", verifyToken, quotesRouter);
+app.use("/quotes", verifyToken, requireModule("quotes"), quotesRouter);
 
 // ============================================
 // JOBS
@@ -559,18 +567,18 @@ app.use("/job-visits", verifyToken, jobVisitsRouter);
 // ============================================
 // RECURRING PLANS
 // ============================================
-app.use("/recurring-plans", verifyToken, recurringPlansRouter);
+app.use("/recurring-plans", verifyToken, requireModule("recurring_plans"), recurringPlansRouter);
 
 // ============================================
 // OCCURRENCE ROUTES
 // ============================================
-app.use("/occurrences", verifyToken, occurrencesRouter);
+app.use("/occurrences", verifyToken, requireModule("recurring_plans"), occurrencesRouter);
 
 // ============================================
 // INVOICE ROUTES
 // ============================================
 app.use("/invoices", verifyToken, invoicesRouter);
-app.use("/disputes", verifyToken, disputesRouter);
+app.use("/disputes", verifyToken, requireModule("disputes"), disputesRouter);
 
 // ============================================
 // TECHNICIANS
@@ -593,17 +601,30 @@ app.use("/email", verifyToken, emailRouter);
 // ============================================
 // INVENTORY
 // ============================================
-app.use("/inventory", verifyToken, inventoryRouter);
+app.use("/inventory", verifyToken, requireModule("inventory"), inventoryRouter);
 
 // ============================================
 // SUPPLIERS (vendor origin for purchased stock)
 // ============================================
-app.use("/suppliers", verifyToken, suppliersRouter);
-app.use("/supplier-items", verifyToken, supplierItemsRouter);
-app.use("/field-purchases", verifyToken, fieldPurchasesRouter);
-app.use("/purchases", verifyToken, purchasesRouter);
+app.use("/suppliers", verifyToken, requireModule("inventory"), suppliersRouter);
+app.use("/supplier-items", verifyToken, requireModule("inventory"), supplierItemsRouter);
+app.use(
+	"/field-purchases",
+	verifyToken,
+	requireModule("field_purchases", undefined, { readOnlyPaths: [/^\/limit-check$/] }),
+	fieldPurchasesRouter,
+);
+app.use("/purchases", verifyToken, requireModule("purchasing"), purchasesRouter);
 
 // ── Org settings ─────────────────────────────────────────────────────────────
+// Above /org on purpose: that router would otherwise take the path.
+app.use(
+	"/org/entitlements/notices",
+	verifyToken,
+	requireModule("inventory", "read"),
+	moduleNoticesRouter,
+);
+app.use("/org/entitlements", verifyToken, orgEntitlementsRouter);
 app.use("/org", verifyToken, orgRouter);
 
 // ============================================
@@ -614,7 +635,14 @@ app.use("/reports", verifyToken, reportsRouter);
 // ============================================
 // VEHICLES
 // ============================================
-app.use("/vehicles", verifyToken, vehiclesRouter);
+app.use(
+	"/vehicles",
+	verifyToken,
+	requireModule("fleet", undefined, {
+		readOnlyPaths: [/^\/[^/]+\/maintenance\/purchase-lines$/],
+	}),
+	vehiclesRouter,
+);
 
 // ============================================
 // TAX RATES & GROUPS
@@ -624,22 +652,22 @@ app.use("/tax", verifyToken, taxRouter);
 // ============================================
 // QUICKBOOKS
 // ============================================
-app.use("/integrations/quickbooks", verifyToken, quickbooksRouter);
+app.use("/integrations/quickbooks", verifyToken, requireModule("quickbooks"), quickbooksRouter);
 
 // ============================================
 // AUTOMATED FOLLOWUPS
 // ============================================
-app.use("/followups", verifyToken, followupsRouter);
+app.use("/followups", verifyToken, requireModule("followups"), followupsRouter);
 
 // ============================================
 // PROJECTS
 // ============================================
-app.use("/projects", verifyToken, projectsRouter);
+app.use("/projects", verifyToken, requireModule("projects"), projectsRouter);
 
 // ============================================
 // AI ASSISTANT
 // ============================================
-app.use("/assistant", verifyToken, assistantRouter);
+app.use("/assistant", verifyToken, requireModule("ai_assistant"), assistantRouter);
 
 // ============================================
 // CROSS-ENTITY SEARCH

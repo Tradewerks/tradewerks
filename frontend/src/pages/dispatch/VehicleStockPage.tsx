@@ -23,6 +23,7 @@ import StockHistorySection from "../../components/vehicles/StockHistorySection";
 import { unitLabel } from "../../lib/units";
 import MaintenanceTab from "../../components/vehicles/maintenance/MaintenanceTab";
 import ChangeHistory from "../../components/activity/ChangeHistory";
+import UntrackedStockNotice from "../../components/entitlements/UntrackedStockNotice";
 
 type Tab = "stock" | "restock" | "alerts" | "maintenance" | "activity";
 
@@ -698,6 +699,7 @@ export default function VehicleStockPage() {
 
 	return (
 		<div className="flex flex-col h-full text-text-primary">
+			<UntrackedStockNotice module="vehicle_stock" className="mx-5 mt-4" />
 			{/* Vehicle header */}
 			<div className="px-5 pt-4 border-b border-border">
 				<div className="flex items-start justify-between pb-3">

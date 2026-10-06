@@ -1,10 +1,5 @@
-import {
-	useMutation,
-	useQuery,
-	useQueryClient,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import * as savedReportsApi from "../api/savedReports";
 import type {
 	SavedReport,
@@ -13,6 +8,8 @@ import type {
 	ReportFavorite,
 	CreateFavoriteInput,
 } from "../types/reports";
+
+const useQuery = moduleQuery("advanced_reporting");
 
 export const useSavedReportsQuery = (): UseQueryResult<SavedReport[], Error> => {
 	return useQuery({

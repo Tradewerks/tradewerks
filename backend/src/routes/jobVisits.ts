@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from 'express';
 import {
     ErrorCodes,
@@ -393,7 +394,7 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
     }
 });
 
-router.post("/:id/parts-used", requireAnyPermission("edit_jobs", "use_inventory"), async (req, res, next) => {
+router.post("/:id/parts-used", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
@@ -410,7 +411,7 @@ router.post("/:id/parts-used", requireAnyPermission("edit_jobs", "use_inventory"
     }
 });
 
-router.patch("/:id/parts-used/:lineItemId", requireAnyPermission("edit_jobs", "use_inventory"), async (req, res, next) => {
+router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const lineItemId = req.params.lineItemId as string;

@@ -1,3 +1,4 @@
+import { getEntitlements } from "../services/entitlementService.js";
 import { z, ZodError } from "zod";
 import { db } from "../db.js";
 import bcrypt from "bcryptjs";
@@ -110,7 +111,14 @@ export const login = async (res: Response, email: string, password: string) => {
 				where: { id: user.organization_id },
 				select: { mfa_required: true },
 			});
-			if (org?.mfa_required) {
+			// Enforced two-step login belongs to Security+; without it the flag is inert.
+			// A failed lookup keeps enforcing: an outage must not relax a login control.
+			const securityPlusOff =
+				!!org?.mfa_required &&
+				(await getEntitlements(user.organization_id)
+					.then((e) => e.modules.security_plus !== "on")
+					.catch(() => false));
+			if (org?.mfa_required && !securityPlusOff) {
 				return {
 					data: {
 						challenge: "enroll",

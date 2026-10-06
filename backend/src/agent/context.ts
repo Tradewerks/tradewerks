@@ -8,6 +8,8 @@
  */
 
 import { db } from "../db.js";
+import { getEntitlements } from "../services/entitlementService.js";
+import { isPermissionEffective, type ModuleState } from "../lib/entitlements/resolve.js";
 import { actorTypeForRole, resolveAgentPermissions } from "./policy.js";
 import type { AgentContext, AgentSurface } from "./types.js";
 
@@ -48,11 +50,20 @@ export async function buildAgentContext(
 	// safe to scope to, so refuse rather than fall back to an unscoped client.
 	if (!claims.organization_id) throw new AgentContextError("Agent access requires an organization");
 
+	// Tools decide what they offer from `permissions`, per record type as well as
+	// per tool, so dropping the permissions of modules the org cannot use here
+	// closes those tools on the assistant and on MCP, which passes no route gate.
+	const modules = await getEntitlements(claims.organization_id)
+		.then((e) => e.modules)
+		.catch((): Record<string, ModuleState> => ({ core: "on" }));
+
 	return {
 		userId: claims.uid,
 		role: claims.role,
 		organizationId: claims.organization_id,
-		permissions: resolveAgentPermissions(claims.role, claims.permissions),
+		permissions: resolveAgentPermissions(claims.role, claims.permissions).filter((p) =>
+			isPermissionEffective(p, modules),
+		),
 		actorType: actorTypeForRole(claims.role),
 		surface,
 		userName: await resolveUserName(claims.uid, claims.role),

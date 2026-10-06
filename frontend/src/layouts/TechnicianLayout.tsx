@@ -11,6 +11,7 @@ import { usePermission } from "../hooks/usePermission";
 import TechnicianUserMenu from "../components/nav/TechnicianUserMenu";
 import ToastViewport from "../components/ui/ToastViewport";
 import { useToast } from "../components/ui/useToast";
+import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
 
 export default function TechnicianLayout() {
 	const { user } = useAuthStore();
@@ -163,7 +164,9 @@ export default function TechnicianLayout() {
 
 				<main className="flex-1 overflow-y-auto overscroll-contain bg-canvas">
 					<div className="p-4 pb-20 md:px-6 md:pt-6 min-h-full">
-						<Outlet />
+						<ModuleRouteGuard home="/technician">
+							<Outlet />
+						</ModuleRouteGuard>
 					</div>
 				</main>
 			</div>

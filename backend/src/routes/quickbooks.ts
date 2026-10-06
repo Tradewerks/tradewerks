@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from "express";
 import { requirePermission } from "../lib/requirePermissions.js";
 import { createSuccessResponse, createErrorResponse, ErrorCodes } from "../types/responses.js";
@@ -8,7 +9,9 @@ import {
 	getQBStatus,
 	getOrgRealmId,
 	QB_ENABLED,
+	isQBConnected,
 } from "../services/quickbooksService.js";
+import { isModuleOn } from "../services/entitlementService.js";
 import { 
 	pushInvoice,
 	sendInvoiceEmail,
@@ -54,6 +57,7 @@ import { queryProfitAndLossQBReport, queryQBReport } from "../services/qb/qbRepo
 import type { ProfitAndLossQuery } from "../services/qb/qbReports.js";
 import { pushPurchase, queryQBPurchaseOrders, getQBPurchaseOrderAsPDF, pushFieldPurchase } from "../services/qb/qbPurchases.js";
 import { pushTimesheet } from "../services/qb/qbTimeActivity.js";
+import { pushPaymentToQB } from "../services/qb/qbPayments.js";
 
 const router = Router();
 
@@ -98,6 +102,147 @@ router.delete("/connection", requirePermission("manage_organization"), async (re
 		const orgId = req.user!.organization_id!;
 		await disconnectOrg(orgId);
 		res.json(createSuccessResponse(null));
+	} catch (err) {
+		next(err);
+	}
+});
+
+const UNSYNCED = { in: ["not_synced", "failed"] as ("not_synced" | "failed")[] };
+
+// Each filter is the set of documents its push function accepts; anything else
+// would only fail on Sync now and sit in the list for good.
+async function listUnsynced(orgId: string) {
+	const sdb = getScopedDb(orgId);
+	const [invoices, purchases, fieldPurchases, payments] = await Promise.all([
+		sdb.invoice.findMany({
+			where: { qb_sync_status: UNSYNCED, status: { not: "Void" } },
+			select: { id: true, invoice_number: true, qb_sync_status: true, updated_at: true },
+		}),
+		// Modules the org cannot use are left out: their push routes are closed too.
+		(await isModuleOn(orgId, "purchasing"))
+			? sdb.purchase.findMany({
+					where: {
+						qb_sync_status: UNSYNCED,
+						kind: "purchase",
+						OR: [
+							{ status: { in: ["ordered", "partially_received", "received"] } },
+							{ status: "cancelled", submitted_at: { not: null } },
+						],
+					},
+					select: {
+						id: true,
+						purchase_number: true,
+						qb_sync_status: true,
+						updated_at: true,
+					},
+				})
+			: [],
+		(await isModuleOn(orgId, "field_purchases"))
+			? sdb.field_purchase.findMany({
+					where: { qb_sync_status: UNSYNCED, kind: "purchase", status: "approved" },
+					select: { id: true, qb_sync_status: true, updated_at: true },
+				})
+			: [],
+		// Payments carry no sync status; one without a QuickBooks id was never pushed.
+		// Refunds are negative rows and are never pushed. The model has no org column,
+		// so the org is pinned through the invoice.
+		db.invoice_payment.findMany({
+			where: {
+				qb_payment_id: null,
+				amount: { gt: 0 },
+				invoice: { organization_id: orgId, status: { not: "Void" } },
+			},
+			select: {
+				id: true,
+				created_at: true,
+				invoice: { select: { invoice_number: true } },
+			},
+		}),
+	]);
+	return [
+		...invoices.map((d) => ({
+			type: "invoice" as const,
+			id: d.id,
+			label: d.invoice_number,
+			status: d.qb_sync_status,
+			updated_at: d.updated_at,
+		})),
+		...purchases.map((d) => ({
+			type: "purchase" as const,
+			id: d.id,
+			label: d.purchase_number,
+			status: d.qb_sync_status,
+			updated_at: d.updated_at,
+		})),
+		...fieldPurchases.map((d) => ({
+			type: "field_purchase" as const,
+			id: d.id,
+			label: `Field purchase ${d.id.slice(0, 8)}`,
+			status: d.qb_sync_status,
+			updated_at: d.updated_at,
+		})),
+		...payments.map((d) => ({
+			type: "payment" as const,
+			id: d.id,
+			label: `payment on ${d.invoice.invoice_number}`,
+			status: "not_synced" as const,
+			updated_at: d.created_at,
+		})),
+	].sort((a, b) => b.updated_at.getTime() - a.updated_at.getTime());
+}
+
+router.get("/unsynced", requirePermission("manage_organization"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		res.json(
+			createSuccessResponse((await isQBConnected(orgId)) ? await listUnsynced(orgId) : []),
+		);
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Explicit and sequential: re-enabling QuickBooks must never start a burst on its
+// own, and QuickBooks rate-limits parallel writes.
+router.post("/unsynced/sync", requirePermission("manage_organization"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const failed: { type: string; id: string; label: string; message: string }[] = [];
+		let synced = 0;
+		const all = (await isQBConnected(orgId)) ? await listUnsynced(orgId) : [];
+		// Payments last: each one links to its invoice in QuickBooks.
+		const docs = [
+			...all.filter((d) => d.type !== "payment"),
+			...all.filter((d) => d.type === "payment"),
+		];
+		const sdb = getScopedDb(orgId);
+		for (const doc of docs) {
+			try {
+				if (doc.type === "invoice") await pushInvoice(doc.id, orgId);
+				else if (doc.type === "purchase") await pushPurchase(doc.id, orgId);
+				else if (doc.type === "payment") await pushPaymentToQB(doc.id, orgId);
+				else await pushFieldPurchase(doc.id, orgId);
+				synced++;
+			} catch (err) {
+				// Same mark the single-document routes leave, so the list shows it as failed.
+				const where = { where: { id: doc.id }, data: { qb_sync_status: "failed" as const } };
+				if (doc.type !== "payment")
+					await (
+						doc.type === "invoice"
+							? sdb.invoice.updateMany(where)
+							: doc.type === "purchase"
+								? sdb.purchase.updateMany(where)
+								: sdb.field_purchase.updateMany(where)
+					).catch(() => {});
+				failed.push({
+					type: doc.type,
+					id: doc.id,
+					label: doc.label,
+					message: err instanceof Error ? err.message : "Sync failed",
+				});
+			}
+		}
+		res.json(createSuccessResponse({ synced, failed }));
 	} catch (err) {
 		next(err);
 	}
@@ -189,7 +334,7 @@ router.post("/customers/:clientId/sync", requirePermission("edit_clients"), asyn
 	}
 })
 
-router.get("/items", requirePermission("view_inventory"), async (req, res, next) => {
+router.get("/items", requireModule("inventory"), requirePermission("view_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const response = await getQBItems(orgId);
@@ -200,7 +345,7 @@ router.get("/items", requirePermission("view_inventory"), async (req, res, next)
 	}
 });
 
-router.get("/items/mappings", requirePermission("view_inventory"), async (req, res, next) => {
+router.get("/items/mappings", requireModule("inventory"), requirePermission("view_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const response = await getMappedQBItems(orgId);
@@ -212,7 +357,7 @@ router.get("/items/mappings", requirePermission("view_inventory"), async (req, r
 });
 
 // Create an item mapping
-router.post("/item-mappings", requirePermission("manage_inventory"), async (req, res, next) => {
+router.post("/item-mappings", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const parsed = linkQBItemSchema.safeParse(req.body);
@@ -230,7 +375,7 @@ router.post("/item-mappings", requirePermission("manage_inventory"), async (req,
 });
 
 // Remove an item mapping 
-router.delete("/item-mappings/:inventoryItemId", requirePermission("manage_inventory"), async (req, res, next) => {
+router.delete("/item-mappings/:inventoryItemId", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const inventoryItemId = req.params.inventoryItemId as string;
@@ -242,7 +387,7 @@ router.delete("/item-mappings/:inventoryItemId", requirePermission("manage_inven
 });
 
 // Import a QB item (:id) into this org's inventory
-router.post("/items/:id/import", requirePermission("manage_inventory"), async (req, res, next) => {
+router.post("/items/:id/import", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try{
 		const orgId = req.user!.organization_id as string;
 		const qbItemId = req.params.id as string;
@@ -257,7 +402,7 @@ router.post("/items/:id/import", requirePermission("manage_inventory"), async (r
 	}
 });
 
-router.post("/items/:id/push", requirePermission("manage_inventory"), async (req, res, next) => {
+router.post("/items/:id/push", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const itemId = req.params.id as string;
@@ -273,7 +418,7 @@ router.post("/items/:id/push", requirePermission("manage_inventory"), async (req
 // accounting setting, and the people receiving stock are the ones who notice a
 // vendor is missing.
 
-router.get("/vendors", requirePermission("view_inventory"), async (req, res, next) => {
+router.get("/vendors", requireModule("inventory"), requirePermission("view_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		res.json(createSuccessResponse(await getQBVendors(orgId)));
@@ -282,7 +427,7 @@ router.get("/vendors", requirePermission("view_inventory"), async (req, res, nex
 	}
 });
 
-router.get("/vendors/mappings", requirePermission("view_inventory"), async (req, res, next) => {
+router.get("/vendors/mappings", requireModule("inventory"), requirePermission("view_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		res.json(createSuccessResponse(await getMappedQBVendors(orgId)));
@@ -291,7 +436,7 @@ router.get("/vendors/mappings", requirePermission("view_inventory"), async (req,
 	}
 });
 
-router.post("/vendor-mappings", requirePermission("manage_inventory"), async (req, res, next) => {
+router.post("/vendor-mappings", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const parsed = linkQBVendorSchema.safeParse(req.body);
@@ -314,6 +459,7 @@ router.post("/vendor-mappings", requirePermission("manage_inventory"), async (re
 
 router.delete(
 	"/vendor-mappings/:supplierId",
+	requireModule("inventory"),
 	requirePermission("manage_inventory"),
 	async (req, res, next) => {
 		try {
@@ -328,6 +474,7 @@ router.delete(
 
 router.post(
 	"/vendors/:id/import",
+	requireModule("inventory"),
 	requirePermission("manage_inventory"),
 	async (req, res, next) => {
 		try {
@@ -341,7 +488,7 @@ router.post(
 );
 
 // `:id` here is OUR supplier id, matching /items/:id/push.
-router.post("/vendors/:id/push", requirePermission("manage_inventory"), async (req, res, next) => {
+router.post("/vendors/:id/push", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const qbVendorId = await pushVendor(orgId, req.params.id as string);
@@ -417,7 +564,7 @@ router.post("/employees/:id/push", requirePermission("manage_technicians"), asyn
 	}
 });
 
-router.get("/purchase-orders", requirePermission("manage_inventory"), async (req, res, next) => {
+router.get("/purchase-orders", requireModule("inventory"), requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const qbPurchaseOrders = await queryQBPurchaseOrders(orgId);
@@ -427,7 +574,7 @@ router.get("/purchase-orders", requirePermission("manage_inventory"), async (req
 	}
 })
 
-router.post("/purchases/:id/push", requirePermission("manage_purchases"), async (req, res, next) => {
+router.post("/purchases/:id/push", requireModule("purchasing"), requirePermission("manage_purchases"), async (req, res, next) => {
     const purchaseId = req.params.id as string;
     const orgId = req.user!.organization_id as string;
     try {
@@ -449,7 +596,7 @@ router.post("/timesheets/:id/push", requirePermission("manage_timesheet"), async
 	}
 });
 
-router.post("/field-purchases/:id/push", requirePermission("review_field_purchases"), async (req, res, next) => {
+router.post("/field-purchases/:id/push", requireModule("field_purchases"), requirePermission("review_field_purchases"), async (req, res, next) => {
 	const purchaseId = req.params.id as string;
     const orgId = req.user!.organization_id as string;
     try {
@@ -461,7 +608,7 @@ router.post("/field-purchases/:id/push", requirePermission("review_field_purchas
     }
 })
 
-router.get("/purchases/:id/pdf", requirePermission("view_purchases"), async (req, res, next) => {
+router.get("/purchases/:id/pdf", requireModule("purchasing"), requirePermission("view_purchases"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const purchaseId = req.params.id as string;
@@ -565,7 +712,7 @@ router.post("/invoices/import", requirePermission("create_invoices"), async (req
 	}
 });
 
-router.get("/reports/profit-and-loss", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/reports/profit-and-loss", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const query = req.query as ProfitAndLossQuery;

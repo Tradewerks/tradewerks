@@ -17,6 +17,7 @@ import { useToast } from "../ui/useToast";
 import { useTechnicianByIdQuery } from "../../hooks/useTechnicians";
 import { useAuthStore } from "../../auth/authStore";
 import { usePermission } from "../../hooks/usePermission";
+import { useModule } from "../../hooks/useEntitlements";
 import ExistingUnitPicker from "../vehicles/ExistingUnitPicker";
 import ExistingBatchPicker from "../vehicles/ExistingBatchPicker";
 import type { VehicleStockItem, AddPartsUsedInput } from "../../types/vehicles";
@@ -470,7 +471,9 @@ export default function PartsUsedSection({
 }) {
 	const runningTotal = lineItems.reduce((sum, li) => sum + Number(li.quantity) * Number(li.unit_price), 0);
 	const { user } = useAuthStore();
-	const canUseInventory = usePermission("use_inventory");
+	// Using parts from the truck is a Vehicle Stock write, not just an Inventory one.
+	const vehicleStockOn = useModule("vehicle_stock") === "on";
+	const canUseInventory = usePermission("use_inventory") && vehicleStockOn;
 	const { data: techProfile } = useTechnicianByIdQuery(user?.userId ?? null);
 	const vehicleId = techProfile?.current_vehicle_id ?? null;
 	const { data: stockItems = [] } = useVehicleStockQuery(vehicleId);

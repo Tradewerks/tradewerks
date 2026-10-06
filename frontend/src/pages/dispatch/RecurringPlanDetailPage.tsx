@@ -29,6 +29,7 @@ import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import RecurringPlanNoteManager from "../../components/recurringPlans/RecurringPlanNoteManager";
 import EditRecurringPlan from "../../components/recurringPlans/EditRecurringPlan";
+import SkippedDatesCard from "../../components/recurringPlans/SkippedDatesCard";
 import BalancedOverviewGrid from "../../components/detail/BalancedOverviewGrid";
 import DetailHeader, { type DetailMenuGroup } from "../../components/detail/DetailHeader";
 import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
@@ -1027,6 +1028,7 @@ export default function RecurringPlanDetailPage() {
 						{upcomingOccurrencesCard}
 						{serviceHistoryCard}
 					</div>
+					<SkippedDatesCard jobId={jobContainerId || undefined} />
 				</div>
 			)}
 

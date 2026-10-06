@@ -65,6 +65,23 @@ export const registerOrganization = async (data: unknown) => {
 				},
 			});
 
+			// Until signup plans and trials exist (entitlements Plan 4), a new org
+			// gets what every org has today. Without a row it would fall back to
+			// no paid modules and lose QuickBooks, reports and the assistant.
+			await tx.org_entitlement.create({
+				data: {
+					organization_id: org.id,
+					plan_version_id: "pv_legacy_1",
+					plan_source: "signup",
+					template_key: "general",
+					module_choices: {
+						quotes: true, recurring_plans: true, projects: true, inventory: true,
+						fleet: true, vehicle_stock: true, purchasing: true, field_purchases: true,
+						disputes: true, followups: false,
+					},
+				},
+			});
+
 			// default organization roles — full access derived from catalog
 			await tx.organization_role.createMany({
 				data: [

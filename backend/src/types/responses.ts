@@ -54,6 +54,11 @@ export const ErrorCodes = {
 	// Separate from EMAIL_SEND_FAILED so a typo does not send them to an
 	// administrator.
 	EMAIL_RECIPIENT_REJECTED: 'EMAIL_RECIPIENT_REJECTED',
+	// Module gating. Separate from FORBIDDEN because the fix is not a role
+	// change: MODULE_DISABLED is the org's own switch, MODULE_NOT_IN_PLAN is the plan.
+	MODULE_DISABLED: 'MODULE_DISABLED',
+	MODULE_NOT_IN_PLAN: 'MODULE_NOT_IN_PLAN',
+	ENTITLEMENTS_UNAVAILABLE: 'ENTITLEMENTS_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

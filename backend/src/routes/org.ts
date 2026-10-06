@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { Router } from "express";
 import { imageUpload } from "../lib/upload.js";
 import {
@@ -38,7 +39,6 @@ const orgSelect = {
 	measurement_system: true,
 	mfa_required: true,
 	brand_color: true,
-	followups_enabled: true,
 	// null disables the control entirely - see the second sign-off routing in
 	// fieldPurchasesController.
 	field_purchase_second_signoff_threshold: true,
@@ -105,7 +105,6 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 			measurement_system: z.enum(["imperial", "metric"]).optional(),
 			mfa_required: z.boolean().optional(),
 			brand_color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a hex color like #1e3a5f").nullable().optional(),
-			followups_enabled: z.boolean().optional(),
 			field_purchase_second_signoff_threshold: z
 				.number()
 				.nonnegative()
@@ -123,6 +122,16 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 						parsed.error.issues[0].message,
 					),
 				);
+		if (parsed.data.mfa_required === true && !(await isModuleOn(orgId, "security_plus"))) {
+			return res
+				.status(403)
+				.json(
+					createErrorResponse(
+						ErrorCodes.MODULE_NOT_IN_PLAN,
+						"Required two-step login needs Security+, which is not included in your plan",
+					),
+				);
+		}
 		const { coords, ...rest } = parsed.data;
 		const org = await db.organization.update({
 			where: { id: orgId },
