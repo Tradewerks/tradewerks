@@ -9,7 +9,8 @@ export interface ConfirmDialogProps {
 	tone?: "primary" | "destructive";
 	pending?: boolean;
 	error?: string | null;
-	onConfirm: () => void;
+	/** May return a promise; the button stays guarded until it settles. */
+	onConfirm: () => unknown;
 	onCancel: () => void;
 }
 
@@ -47,7 +48,12 @@ export default function ConfirmDialog({
 	const handleConfirmClick = () => {
 		if (isSubmittingRef.current || pending) return;
 		isSubmittingRef.current = true;
-		onConfirm();
+		// Also release when onConfirm settles: one that refuses (e.g. a too-short
+		// reason) never makes `pending` go true, so the effect above would not
+		// clear the guard and every later click would be ignored.
+		void Promise.resolve(onConfirm()).finally(() => {
+			isSubmittingRef.current = false;
+		});
 	};
 
 	return (

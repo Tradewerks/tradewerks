@@ -92,6 +92,7 @@ const PurchasePage = lazy(() => import("./pages/dispatch/PurchasePage"));
 const PurchaseDetailsPage = lazy(() => import("./pages/dispatch/PurchaseDetailsPage"));
 const DispatcherNotificationPage = lazy(() => import("./pages/dispatch/DispatcherNotificationPage"));
 const TimesheetPage = lazy(() => import("./pages/dispatch/Timesheet"))
+const PlatformRoutes = lazy(() => import("./platform/PlatformRoutes"));
 
 function RequireAuth({ children }: { children: JSX.Element }) {
 	const { user, logout } = useAuthStore();
@@ -267,6 +268,7 @@ export default function AppRoutes() {
 				<Route path="purchases/:purchaseId" element={<RequirePermission permission="request_field_purchase"><TechnicianPurchaseDetailPage /></RequirePermission>} />
 			</Route>
 
+				<Route path="/platform/*" element={<PlatformRoutes />} />
 				<Route path="*" element={<Navigate to="/login" replace />} />
 			</Routes>
 		</Suspense>

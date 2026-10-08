@@ -260,6 +260,13 @@ export type ModuleKey = (typeof MODULE_KEYS)[number];
 export const getModule = (key: string): ModuleDef | undefined =>
 	MODULES.find((m) => m.key === key);
 
+export const moduleCatalog = () =>
+	MODULES.filter((m) => m.kind !== "core").map((m) => ({
+		key: m.key,
+		label: m.label,
+		kind: m.kind,
+	}));
+
 export const PERMISSION_MAP: Record<
 	string,
 	{ module: string; access: Access }
@@ -303,11 +310,13 @@ export const LIMIT_KEYS = [
 	"technicians",
 	"tax_lookups_month",
 	"ai_calls_month",
+	"receipt_scans_month",
 ] as const;
 export type LimitKey = (typeof LIMIT_KEYS)[number];
 
 export const METER_KEYS = [
 	"ai_calls_month",
 	"tax_lookups_month",
+	"receipt_scans_month",
 ] as const satisfies readonly LimitKey[];
 export type MeterKey = (typeof METER_KEYS)[number];

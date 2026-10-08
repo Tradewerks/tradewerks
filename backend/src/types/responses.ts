@@ -63,6 +63,8 @@ export const ErrorCodes = {
 	// a seat), not a retry or a role change.
 	SEAT_LIMIT_REACHED: 'SEAT_LIMIT_REACHED',
 	QUOTA_EXCEEDED: 'QUOTA_EXCEEDED',
+	REQUEST_OPEN: 'REQUEST_OPEN',
+	REQUEST_CLOSED: 'REQUEST_CLOSED',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

@@ -4,6 +4,7 @@ import { socket } from "../lib/socket";
 import { qk, invalidate } from "../lib/queryKeys";
 import { ENTITLEMENTS_STALE_EVENT } from "../lib/permissionAccess";
 import { ENTITLEMENTS_QUERY_KEY } from "./useEntitlements";
+import { UPGRADE_REQUESTS_QUERY_KEY } from "./useUpgradeRequests";
 import { useToastStore } from "../stores/toastStore";
 import type {
 	FieldPurchaseEvent,
@@ -96,6 +97,7 @@ export function useSocketQuerySync(): void {
 
 		const onEntitlementsChanged = () => {
 			qc.invalidateQueries({ queryKey: ENTITLEMENTS_QUERY_KEY });
+			qc.invalidateQueries({ queryKey: UPGRADE_REQUESTS_QUERY_KEY });
 		};
 		const onModuleRefused = (event: Event) => {
 			onEntitlementsChanged();

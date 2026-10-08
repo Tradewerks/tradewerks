@@ -137,7 +137,7 @@ export default function EntitlementsSection() {
 					</section>
 				))}
 			</div>
-			<SubscriptionRail data={data} />
+			<SubscriptionRail data={data} canManage={canManage} />
 		</div>
 	);
 }

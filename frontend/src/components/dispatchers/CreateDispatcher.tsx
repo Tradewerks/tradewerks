@@ -8,6 +8,7 @@ import PasswordSetField from "../ui/forms/PasswordSetField";
 import { useOrgRolesQuery } from "../../hooks/useOrgRoles";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { errorMessage } from "../../util/util";
+import { usePermission } from "../../hooks/usePermission";
 
 interface CreateDispatcherProps {
 	isModalOpen: boolean;
@@ -48,6 +49,7 @@ const CreateDispatcher = ({
 
     const [submitError, setSubmitError] = useState<string | null>(null);
     const [seatLimit, setSeatLimit] = useState(false);
+    const canRequestSeats = usePermission("manage_organization");
 
     const resetForm = useCallback(() => {
         setName("");
@@ -139,12 +141,12 @@ const CreateDispatcher = ({
 		() => (
 			<div className="space-y-2 lg:space-y-3 xl:space-y-4 min-w-0">
 				<FormErrorBanner message={submitError} className="mb-2" />
-				{seatLimit && (
+				{seatLimit && canRequestSeats && (
 					<Link
-						to="/dispatch/admin?tab=entitlements"
+						to="/dispatch/admin?tab=entitlements&request=dispatchers"
 						className="mb-2 inline-block text-sm text-primary hover:underline"
 					>
-						View subscription
+						Request more seats
 					</Link>
 				)}
 				{/* Name */}
@@ -259,6 +261,7 @@ const CreateDispatcher = ({
 			ErrorDisplay,
 			submitError,
 			seatLimit,
+			canRequestSeats,
 		]
 	);
 

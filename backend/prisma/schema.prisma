@@ -471,6 +471,7 @@ model organization {
   assistant_conversations assistant_conversation[]
   document_disputes document_dispute[]
   timesheet_weeks   timesheet_week[]
+  upgrade_requests  upgrade_request[]
 }
 
 model saved_report {
@@ -3536,6 +3537,8 @@ model timesheet_week {
 // Entitlements
 // ============================================================================
 
+// At most one signup default and one trial default: partial unique indexes in
+// migration 20261007120000 (Prisma's DSL cannot express them).
 model plan {
   key               String    @id
   label             String
@@ -3593,4 +3596,44 @@ model usage_counter {
   warned_at       DateTime? // 80 % notification claimed
 
   @@unique([organization_id, meter, period_start])
+}
+
+// One open request per organization: partial unique index "upgrade_request_one_open" in
+// migration 20261008120000 (Prisma's DSL cannot express it).
+model upgrade_request {
+  id                 String       @id @default(uuid())
+  organization_id    String
+  organization       organization @relation(fields: [organization_id], references: [id])
+  requested_by_id    String
+  requested_by_name  String
+  requested_plan_key String?
+  requested_modules  String[]     @default([])
+  note               String?
+  status             String       @default("open") // open | approved | declined | withdrawn
+  resolved_by_id     String?
+  resolved_at        DateTime?
+  resolution_note    String?
+  created_at         DateTime     @default(now())
+
+  @@index([status, created_at])
+  @@index([organization_id, created_at])
+}
+
+// Tradewerks back-office accounts. MFA lives in mfa_credential / mfa_recovery_code
+// with role = "platform_staff"; there is no organization.
+model platform_staff {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  name              String
+  password          String?   // null until the invite is accepted
+  status            String    @default("invited") // "invited" | "active" | "disabled"
+  invite_token_hash String?   @unique // sha256 of the emailed token
+  invite_expires_at DateTime?
+  invited_by_id     String?
+  failed_attempts   Int       @default(0)
+  locked_until      DateTime?
+  disabled_at       DateTime?
+  last_login        DateTime?
+  sessions_valid_after DateTime? // staff tokens issued before this are refused
+  created_at        DateTime  @default(now())
 }

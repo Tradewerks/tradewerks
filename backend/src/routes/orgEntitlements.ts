@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import {
 	ErrorCodes,
@@ -11,10 +11,19 @@ import {
 	getEntitlements,
 	previewDisable,
 	setModuleChoices,
+	tierLabel,
 } from "../services/entitlementService.js";
 import type { ResolvedEntitlements } from "../lib/entitlements/resolve.js";
 import { getUsageSummary, type UsageSummary } from "../lib/entitlements/quota.js";
 import { log } from "../services/appLogger.js";
+import { db } from "../db.js";
+import { upgradeRequestLimiter } from "../platform/rateLimit.js";
+import {
+	fileRequest,
+	listOwnRequests,
+	requestableTiers,
+	withdrawRequest,
+} from "../platform/upgradeRequestService.js";
 
 const router = Router();
 
@@ -31,9 +40,10 @@ async function usageFor(
 	}
 }
 
-const present = (e: ResolvedEntitlements) => ({
+const present = (e: ResolvedEntitlements, label: string) => ({
 	plan: {
 		key: e.planKey,
+		label,
 		version: e.planVersion,
 		trialActive: e.trialActive,
 	},
@@ -59,7 +69,7 @@ router.get("/", async (req, res, next) => {
 			(req.user!.permissions ?? []).includes("manage_organization");
 		res.json(
 			createSuccessResponse({
-				...present(ent),
+				...present(ent, await tierLabel(ent.planKey)),
 				usage: canSeeUsage ? await usageFor(orgId, ent.limits) : null,
 			}),
 		);
@@ -115,7 +125,101 @@ router.patch(
 					type: "dispatcher",
 				},
 			);
-			res.json(createSuccessResponse(present(updated)));
+			res.json(
+				createSuccessResponse(
+					present(updated, await tierLabel(updated.planKey)),
+				),
+			);
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+const fileRequestBody = z.object({
+	planKey: z.string().min(1).max(40).optional(),
+	modules: z.array(z.string().min(1).max(40)).max(20).optional(),
+	note: z.string().max(1000).optional(),
+});
+const requester = async (req: Request) => {
+	const user = req.user!;
+	const dispatcher = await db.dispatcher.findFirst({
+		where: {
+			id: user.uid,
+			organization_id: user.organization_id as string,
+		},
+		select: { name: true },
+	});
+	return { id: user.uid, name: dispatcher?.name ?? user.email ?? "" };
+};
+const orgOf = (req: Request) => req.user!.organization_id as string;
+
+router.get(
+	"/upgrade-requests",
+	requirePermission("manage_organization"),
+	async (req, res, next) => {
+		try {
+			res.json(createSuccessResponse(await listOwnRequests(orgOf(req))));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+router.post(
+	"/upgrade-requests",
+	requirePermission("manage_organization"),
+	upgradeRequestLimiter,
+	async (req, res, next) => {
+		try {
+			const parsed = fileRequestBody.safeParse(req.body);
+			if (!parsed.success)
+				return res
+					.status(400)
+					.json(
+						createErrorResponse(
+							ErrorCodes.VALIDATION_ERROR,
+							parsed.error.issues[0].message,
+						),
+					);
+			res.status(201).json(
+				createSuccessResponse(
+					await fileRequest(
+						orgOf(req),
+						await requester(req),
+						parsed.data,
+					),
+				),
+			);
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+router.post(
+	"/upgrade-requests/:id/withdraw",
+	requirePermission("manage_organization"),
+	async (req, res, next) => {
+		try {
+			await withdrawRequest(
+				orgOf(req),
+				req.params.id as string,
+				await requester(req),
+			);
+			res.json(createSuccessResponse(null));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+router.get(
+	"/tiers",
+	requirePermission("manage_organization"),
+	async (req, res, next) => {
+		try {
+			res.json(createSuccessResponse(await requestableTiers(orgOf(req))));
 		} catch (err) {
 			next(err);
 		}

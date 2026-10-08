@@ -42,7 +42,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shadow
       - name: Quota concurrency test (real Postgres)
-        run: npx vitest run src/lib/entitlements/__tests__/quota.test.ts
+        run: npx vitest run src/lib/entitlements/__tests__/quota.test.ts src/platform/__tests__/platformAuth.test.ts src/platform/__tests__/upgradeRequestConcurrency.pg.test.ts
         env:
           QUOTA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shadow
     services:

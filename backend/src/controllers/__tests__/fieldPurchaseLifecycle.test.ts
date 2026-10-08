@@ -116,6 +116,11 @@ vi.mock("../notificationsController.js", () => ({
 	notifyDispatchers: vi.fn().mockResolvedValue([]),
 }));
 
+const mockConsume = vi.fn();
+vi.mock("../../lib/entitlements/quota.js", () => ({
+	consumeQuota: (...args: unknown[]) => mockConsume(...args),
+}));
+
 const ORG = "org-1";
 const TECH = "tech-1";
 const DISPATCHER = "disp-1";
@@ -223,6 +228,7 @@ const verified = (over: Partial<Line> = {}): Line => ({
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockConsume.mockResolvedValue({ allowed: true, used: 1, limit: null });
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	mockDb.$transaction.mockImplementation(async (cb: any) => cb(tx));
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -685,6 +691,68 @@ describe("receipt upload", () => {
 		// The re-read status must resolve to something other than "pending" -
 		// otherwise a skipped extraction leaves the row stuck forever.
 		expect(tx.field_purchase.update.mock.calls[0][0].data.ocr_status).toBe("succeeded");
+		expect(mockConsume).not.toHaveBeenCalled();
+	});
+
+	describe("receipt scan meter", () => {
+		const loadFresh = () =>
+			mockDb.field_purchase.findFirst
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				.mockResolvedValueOnce(purchase() as any) // loadEditable
+				.mockResolvedValueOnce(null); // no hash clash
+
+		it("charges one scan and starts the read", async () => {
+			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockExtract.mockReturnValue(new Promise(() => {}));
+			loadFresh();
+			const res = await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+			expect(res.err).toBeUndefined();
+			expect(mockConsume).toHaveBeenCalledWith(ORG, "receipt_scans_month");
+			expect(tx.field_purchase.update.mock.calls[0][0].data.ocr_status).toBe("pending");
+		});
+
+		it("keeps the receipt but skips the read once the month's scans are used up", async () => {
+			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockConsume.mockResolvedValue({ allowed: false, used: 300, limit: 300 });
+			loadFresh();
+			const res = await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+			expect(res.err).toBeUndefined();
+			const data = tx.field_purchase.update.mock.calls[0][0].data;
+			expect(data.receipt_image_url).toBe("https://bucket/receipts/r.jpg");
+			expect(data.ocr_status).toBe("skipped");
+			expect(data.ocr_error).toBe(
+				"This month's receipt scans are used up. Enter the lines by hand; scanning resumes on the 1st (UTC).",
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			expect(mockExtract).not.toHaveBeenCalled();
+		});
+
+		it("charges nothing when no reader is configured", async () => {
+			mockProvider.mockReturnValue(null);
+			loadFresh();
+			await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+			expect(mockConsume).not.toHaveBeenCalled();
+		});
+
+		it("charges nothing for an image too large to read", async () => {
+			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockDb.field_purchase.update.mockResolvedValue({} as never); // the "too large" failure stamp
+			loadFresh();
+			const big = { ...file, buffer: Buffer.alloc(16 * 1024 * 1024) };
+			await uploadReceipt(ORG, PURCHASE, big, {}, { techId: TECH });
+			expect(mockConsume).not.toHaveBeenCalled();
+		});
+
+		it("charges nothing for a receipt already on another purchase", async () => {
+			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockDb.field_purchase.findFirst
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				.mockResolvedValueOnce(purchase() as any)
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				.mockResolvedValueOnce({ id: "fp-old", technician: { name: "Dana" } } as any);
+			await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+			expect(mockConsume).not.toHaveBeenCalled();
+		});
 	});
 });
 
@@ -1591,6 +1659,18 @@ describe("retryOcr", () => {
 		expect(mockGetBuffer).not.toHaveBeenCalled();
 	});
 
+	it("refuses to read again once the month's scans are used up, leaving the row alone", async () => {
+		mockProvider.mockReturnValue({ name: "fixture", extract: mockExtract });
+		mockConsume.mockResolvedValue({ allowed: false, used: 300, limit: 300 });
+		mockGetBuffer.mockResolvedValue({ buffer: Buffer.from("x"), contentType: "image/jpeg" });
+		const res = await retryOcr(ORG, PURCHASE, { techId: TECH } as never);
+		expect(res.err).toBe(
+			"This month's receipt scans are used up. Enter the lines by hand; scanning resumes on the 1st (UTC).",
+		);
+		expect(mockDb.field_purchase.update).not.toHaveBeenCalled();
+		expect(mockExtract).not.toHaveBeenCalled();
+	});
+
 	it("reports a storage failure as a message rather than throwing a 500", async () => {
 		mockProvider.mockReturnValue({ name: "fixture", extract: mockExtract });
 		mockGetBuffer.mockRejectedValue(new Error("wasabi timeout"));
@@ -1611,6 +1691,7 @@ describe("retryOcr", () => {
 		const res = await retryOcr(ORG, PURCHASE, { techId: TECH } as never);
 
 		expect(res.started).toBe(true);
+		expect(mockConsume).toHaveBeenCalledWith(ORG, "receipt_scans_month");
 		expect(mockGetBuffer).toHaveBeenCalledWith("https://bucket/receipts/r.jpg");
 		expect(mockDb.field_purchase.update).toHaveBeenCalledWith(
 			expect.objectContaining({

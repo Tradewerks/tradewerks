@@ -20,6 +20,10 @@ export const SECRET_FIELD_OMIT = {
 		password_reset_token_expires_at: true,
 		hourly_rate: true,
 	},
+	platform_staff: {
+		password: true,
+		invite_token_hash: true,
+	},
 } as const;
 
 const createClient = () =>

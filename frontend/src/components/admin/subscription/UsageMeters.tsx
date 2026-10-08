@@ -8,6 +8,7 @@ const ROWS: { key: keyof UsageSummary["meters"]; label: string; monthly: boolean
 	{ key: "technicians", label: "Technicians", monthly: false },
 	{ key: "ai_calls_month", label: "AI assistant requests", monthly: true },
 	{ key: "tax_lookups_month", label: "Tax lookups", monthly: true },
+	{ key: "receipt_scans_month", label: "Receipt scans", monthly: true },
 ];
 
 const BAR: Record<ReturnType<typeof meterTone>, string> = {
@@ -64,7 +65,8 @@ export default function UsageMeters({ usage }: { usage: UsageSummary }) {
 		<div className="border-t border-border-subtle p-4">
 			<h3 className={sectionLabel}>Usage</h3>
 			<ul className="mt-2 space-y-3">
-				{ROWS.map((r) => (
+				{/* The frontend can run ahead of the backend; a meter it does not send yet is skipped. */}
+				{ROWS.filter((r) => usage.meters[r.key]).map((r) => (
 					<Row
 						key={r.key}
 						label={r.label}

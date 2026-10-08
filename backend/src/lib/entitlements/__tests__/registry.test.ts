@@ -47,17 +47,22 @@ describe("entitlement registry", () => {
 });
 
 describe("limit keys (build plan 2)", () => {
-	it("names the four limit keys the seed and spec use", () => {
+	it("names the five limit keys the seed and spec use", () => {
 		expect([...LIMIT_KEYS].sort()).toEqual([
 			"ai_calls_month",
 			"dispatchers",
+			"receipt_scans_month",
 			"tax_lookups_month",
 			"technicians",
 		]);
 	});
 
 	it("meters are the monthly subset", () => {
-		expect([...METER_KEYS].sort()).toEqual(["ai_calls_month", "tax_lookups_month"]);
+		expect([...METER_KEYS].sort()).toEqual([
+			"ai_calls_month",
+			"receipt_scans_month",
+			"tax_lookups_month",
+		]);
 		for (const m of METER_KEYS) expect(LIMIT_KEYS).toContain(m);
 	});
 });

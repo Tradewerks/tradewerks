@@ -68,6 +68,7 @@ const ROUTES: RouteCase[] = [
 	{ path: "/reset-password", url: "/reset-password", page: "ResetPasswordPage" },
 	{ path: "/quickbooks/callback", url: "/quickbooks/callback", page: "QBCallbackPage" },
 	{ path: "/auth/sso/complete", url: "/auth/sso/complete", page: "SSOCompletePage" },
+	{ path: "/platform/*", url: "/platform/login", page: "PlatformRoutes" },
 	// dispatch shell
 	{ path: "/dispatch/*", url: "/dispatch", page: "DispatchLayout" },
 	{ path: null, url: "/dispatch", page: "DashboardPage" },

@@ -3,8 +3,10 @@ import {
 	resolveEntitlements,
 	isPermissionEffective,
 	isAccessAllowed,
+	type ResolvedEntitlements,
 } from "../resolve.js";
 import { offWindows } from "../windows.js";
+import { diffResolved } from "../change.js";
 
 const now = new Date("2026-10-05T12:00:00Z");
 const plan = (modules: string[], limits = {}) => ({
@@ -221,5 +223,42 @@ describe("offWindows", () => {
 			"quotes",
 		);
 		expect(w).toEqual([{ off: at("2026-01-01T00:00:00Z"), on: at("2026-01-05T00:00:00Z") }]);
+	});
+});
+
+describe("diffResolved", () => {
+	const base = (over: Partial<ResolvedEntitlements> = {}): ResolvedEntitlements => ({
+		planKey: "pro",
+		planVersion: 1,
+		trialActive: false,
+		modules: { quickbooks: "on", ai_assistant: "on", fleet: "off_by_org" },
+		limits: { technicians: 10, dispatchers: null, ai_calls_month: 500 },
+		...over,
+	});
+
+	it("reports modules that stop being on, not ones the org had off", () => {
+		const d = diffResolved(
+			base(),
+			base({ modules: { quickbooks: "not_in_plan", ai_assistant: "on", fleet: "not_in_plan" } }),
+		);
+		expect(d.lost).toEqual(["quickbooks"]);
+		expect(d.gained).toEqual([]);
+	});
+
+	it("treats unlimited → number and a smaller number as lowered", () => {
+		const d = diffResolved(
+			base(),
+			base({ limits: { technicians: 5, dispatchers: 3, ai_calls_month: 900 } }),
+		);
+		expect(d.lowered).toEqual([
+			{ key: "technicians", from: 10, to: 5 },
+			{ key: "dispatchers", from: null, to: 3 },
+		]);
+		expect(d.raised).toEqual([{ key: "ai_calls_month", from: 500, to: 900 }]);
+	});
+
+	it("a limit missing on one side counts as unlimited", () => {
+		const d = diffResolved(base({ limits: {} }), base({ limits: { technicians: 0 } }));
+		expect(d.lowered).toEqual([{ key: "technicians", from: null, to: 0 }]);
 	});
 });

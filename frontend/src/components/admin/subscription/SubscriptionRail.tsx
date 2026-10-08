@@ -1,14 +1,51 @@
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Check, Lock } from "lucide-react";
 import type { EntitlementsData } from "../../../lib/permissionAccess";
 import { stateLabel } from "../../../lib/moduleGroups";
 import UsageMeters from "./UsageMeters";
+import RequestChangeDialog from "./RequestChangeDialog";
+import RequestStatus from "./RequestStatus";
+import ConfirmDialog from "../../ui/ConfirmDialog";
+import { useUpgradeRequests, useWithdrawUpgradeRequest } from "../../../hooks/useUpgradeRequests";
+import { requestErrorMessage } from "../../../lib/upgradeRequests";
 
 const sectionLabel = "text-[11px] font-medium uppercase tracking-wide text-text-tertiary";
 
-// The API returns the key only; a label is a backend follow-up (spec §9, B2).
+// A cached entitlements snapshot can predate `plan.label`.
+const SEAT_NOTES: Record<string, string> = {
+	dispatchers: "We need more dispatcher seats.",
+	technicians: "We need more technician seats.",
+};
+
 const nameOf = (key: string) => key.charAt(0).toUpperCase() + key.slice(1);
 
-export default function SubscriptionRail({ data }: { data: EntitlementsData }) {
+export default function SubscriptionRail({
+	data,
+	canManage,
+}: {
+	data: EntitlementsData;
+	canManage: boolean;
+}) {
+	const requests = useUpgradeRequests(canManage);
+	const withdraw = useWithdrawUpgradeRequest();
+	const hasOpenRequest = (requests.data ?? []).some((r) => r.status === "open");
+	const [dialog, setDialog] = useState<{ modules: string[]; note: string } | null>(null);
+	const [withdrawId, setWithdrawId] = useState<string | null>(null);
+	const [params, setParams] = useSearchParams();
+	const openDialog = (modules: string[], note: string) => setDialog({ modules, note });
+	const locked = data.modules
+		.filter((m) => m.kind === "plan_gated" && m.state === "not_in_plan")
+		.map((m) => ({ key: m.key, label: m.label }));
+	const seatAsk = params.get("request");
+	useEffect(() => {
+		if (!seatAsk || (canManage && !requests.isSuccess)) return;
+		const seatNote = SEAT_NOTES[seatAsk];
+		if (canManage && !hasOpenRequest && seatNote) setDialog({ modules: [], note: seatNote });
+		const next = new URLSearchParams(params);
+		next.delete("request");
+		setParams(next, { replace: true });
+	}, [canManage, seatAsk, requests.isSuccess, hasOpenRequest, params, setParams]);
 	const excludedLast = (state: string) => Number(state === "not_in_plan");
 	const features = data.modules
 		.filter((m) => m.kind === "plan_gated")
@@ -23,7 +60,7 @@ export default function SubscriptionRail({ data }: { data: EntitlementsData }) {
 				<p className={sectionLabel}>Subscription</p>
 				<div className="mt-1 flex flex-wrap items-center gap-2">
 					<p className="break-words text-lg font-semibold text-text-primary">
-						{nameOf(data.plan.key)}
+						{data.plan.label ?? nameOf(data.plan.key)}
 					</p>
 					{data.plan.trialActive && (
 						<span className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-text-secondary">
@@ -31,10 +68,29 @@ export default function SubscriptionRail({ data }: { data: EntitlementsData }) {
 						</span>
 					)}
 				</div>
-				<p className="mt-2 text-xs text-text-muted">
-					Changes to your subscription are handled by TradeWerks
-					support.
-				</p>
+				{canManage ? (
+					<div className="mt-3 space-y-2">
+						<RequestStatus
+							requests={requests.data ?? []}
+							withdrawing={withdraw.isPending}
+							onWithdraw={setWithdrawId}
+						/>
+						{!hasOpenRequest && (
+							<button
+								type="button"
+								onClick={() => openDialog([], "")}
+								className="h-8 rounded-md border border-border px-3 text-sm text-text-primary hover:bg-surface-inset"
+							>
+								Request a change
+							</button>
+						)}
+					</div>
+				) : (
+					<p className="mt-2 text-xs text-text-muted">
+						Changes to your subscription are handled by
+						TradeWerks support.
+					</p>
+				)}
 			</div>
 			{data.usage && <UsageMeters usage={data.usage} />}
 			{features.length > 0 && (
@@ -84,6 +140,24 @@ export default function SubscriptionRail({ data }: { data: EntitlementsData }) {
 												m
 											)}
 										</span>
+										{!included &&
+											canManage &&
+											!hasOpenRequest && (
+												<button
+													type="button"
+													onClick={() =>
+														openDialog(
+															[
+																m.key,
+															],
+															""
+														)
+													}
+													className="mt-0.5 text-xs font-medium text-primary hover:underline"
+												>
+													Request
+												</button>
+											)}
 									</div>
 								</li>
 							);
@@ -91,6 +165,43 @@ export default function SubscriptionRail({ data }: { data: EntitlementsData }) {
 					</ul>
 				</div>
 			)}
+			<RequestChangeDialog
+				open={!!dialog}
+				onClose={() => setDialog(null)}
+				lockedModules={locked}
+				initialModules={dialog?.modules}
+				initialNote={dialog?.note}
+			/>
+			<ConfirmDialog
+				open={!!withdrawId}
+				title="Withdraw your request?"
+				body={
+					<p className="text-sm text-text-secondary">
+						TradeWerks will no longer act on it. You can send a
+						new one afterwards.
+					</p>
+				}
+				confirmLabel="Withdraw"
+				tone="destructive"
+				pending={withdraw.isPending}
+				error={
+					withdraw.error
+						? requestErrorMessage(
+								withdraw.error,
+								"Could not withdraw the request. Please try again."
+							)
+						: null
+				}
+				onConfirm={() =>
+					withdraw.mutate(withdrawId!, {
+						onSuccess: () => setWithdrawId(null),
+					})
+				}
+				onCancel={() => {
+					withdraw.reset();
+					setWithdrawId(null);
+				}}
+			/>
 		</aside>
 	);
 }

@@ -7,11 +7,14 @@ export interface UsageMeter {
 
 export interface UsageSummary {
 	period_start: string;
-	meters: Record<"dispatchers" | "technicians" | "ai_calls_month" | "tax_lookups_month", UsageMeter>;
+	meters: Record<
+		"dispatchers" | "technicians" | "ai_calls_month" | "tax_lookups_month" | "receipt_scans_month",
+		UsageMeter
+	>;
 }
 
 export interface EntitlementsData {
-	plan: { key: string; version: number; trialActive: boolean };
+	plan: { key: string; label?: string; version: number; trialActive: boolean };
 	modules: {
 		key: string;
 		label: string;

@@ -66,6 +66,8 @@ import organizationRolesRouter from "./routes/organizationRoles.js";
 import quickbooksRouter from "./routes/quickbooks.js";
 import oauthRouter from "./routes/oauth.js";
 import mfaRouter from "./routes/mfa.js";
+import platformRouter from "./routes/platform/index.js";
+import { platformProxyWarning, trustProxySetting } from "./platform/staffToken.js";
 import ssoRouter from "./routes/sso.js"
 import followupsRouter from "./routes/followups.js";
 import projectsRouter from "./routes/projects.js";
@@ -254,6 +256,10 @@ const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
 // ============================================
 
 const app = express();
+const trustProxy = trustProxySetting(process.env.TRUST_PROXY);
+if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
+const proxyWarning = platformProxyWarning(process.env);
+if (proxyWarning) log.warn(proxyWarning);
 
 assertRegistry();
 registerEntitlementBlockers();
@@ -267,7 +273,8 @@ app.use(
 		},
 	}),
 );
-app.use(pinoHttp({ logger: log }));
+// Bearer tokens (staff tokens act on every org) must not reach stdout or Loki.
+app.use(pinoHttp({ logger: log, redact: ["req.headers.authorization", "req.headers.cookie"] }));
 app.use(httpMetricsMiddleware);
 
 // Expose Prometheus metrics at /metrics
@@ -530,6 +537,7 @@ app.use("/oauth", oauthRouter);
 // MFA (public mount — the router applies its own per-route auth guards)
 // ================================================================================
 app.use("/mfa", mfaRouter);
+app.use("/platform", platformRouter);
 
 // ================================================================================
 // SSO 

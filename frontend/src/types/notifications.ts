@@ -38,6 +38,8 @@ export type DispatcherNotificationType =
 	| "quote_accepted"
 	| "quote_declined"
 	| "usage_limit_warning"
+	| "subscription_changed"
+	| "upgrade_request_resolved"
 
 export interface DispatcherNotification {
 	id: string;
@@ -78,4 +80,6 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "invoice_paid", group: "Sales & billing", permission: "view_invoices", label: "Invoice payments", description: "A payment was recorded on an invoice" },
 	{ type: "dispute_opened", group: "Sales & billing", permission: "resolve_disputes", label: "Disputes", description: "A dispute was opened on a document" },
 	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },
+	{ type: "subscription_changed", group: "Subscription", permission: "manage_organization", label: "Subscription changes", description: "TradeWerks changed your subscription, modules or limits" },
+	{ type: "upgrade_request_resolved", group: "Subscription", permission: "manage_organization", label: "Subscription requests", description: "TradeWerks approved or declined your request" },
 ];

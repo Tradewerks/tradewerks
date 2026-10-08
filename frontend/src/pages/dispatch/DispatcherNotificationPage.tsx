@@ -1,8 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import {
 	Bell, Clock, CheckCheck, Wrench, MailOpen, Settings, ShoppingCart, Receipt, PenLine, KeyRound,
-	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge,
+	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard,
 } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useDispatcherNotificationsQuery, useMarkDispatcherNotificationReadMutation, useMarkAllDispatcherNotificationsReadMutation } from "../../hooks/useNotifications";
@@ -30,7 +30,8 @@ function getDateGroup(dateStr: string): string {
     return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-function NotificationIcon({ type }: { type: DispatcherNotificationType }) {
+// The explicit return type makes tsc reject a notification type with no icon.
+function NotificationIcon({ type }: { type: DispatcherNotificationType }): ReactElement {
     const cls = "shrink-0 mt-0.5";
     switch (type) {
         case "vehicle_maintenance_due":  return <Wrench size={18} className={`${cls} text-primary-text`} />;
@@ -50,6 +51,8 @@ function NotificationIcon({ type }: { type: DispatcherNotificationType }) {
         case "quote_accepted": return <ThumbsUp size={18} className={`${cls} text-success-text`} />;
         case "quote_declined": return <ThumbsDown size={18} className={`${cls} text-error-text`} />;
         case "usage_limit_warning": return <Gauge size={18} className={`${cls} text-warning-text`} />;
+        case "subscription_changed": return <CreditCard size={18} className={`${cls} text-text-secondary`} />;
+        case "upgrade_request_resolved": return <CreditCard size={18} className={`${cls} text-primary-text`} />;
     }
 }
 

@@ -132,9 +132,12 @@ export const verifyToken = (token: string) => {
 		);
 	}
 
-	const peek = jwt.decode(token) as { stage?: string } | null;
+	const peek = jwt.decode(token) as { stage?: string; kind?: string } | null;
 	if (peek?.stage === "pending_otp") {
 		throw new Error("OTP tokens are not valid for authentication");
+	}
+	if (peek?.kind?.startsWith("staff")) {
+		throw new Error("Staff tokens are not valid for customer routes");
 	}
 
 	return jwt.verify(token, JWT_SECRET) as {

@@ -17,6 +17,14 @@ import {
 } from "../services/receiptOcr/index.js";
 import { remapHeader, type ExtractedHeader } from "../services/receiptOcr/remap.js";
 import type { field_purchase_ocr_status } from "../../generated/prisma/client.js";
+import { consumeQuota } from "../lib/entitlements/quota.js";
+
+const SCANS_USED_UP =
+	"This month's receipt scans are used up. Enter the lines by hand; scanning resumes on the 1st (UTC).";
+
+// Charged before the vendor call, so a read that then fails still counts: the vendor bills it.
+const claimScan = async (orgId: string) =>
+	(await consumeQuota(orgId, "receipt_scans_month")).allowed;
 
 /** One extracted line plus whether it was written onto the purchase. */
 type ExtractedSnapshot = ExtractedLine & { applied: boolean };
@@ -1752,6 +1760,11 @@ export async function uploadReceipt(
 
 		const url = await uploadFile(file.buffer, file.mimetype, file.originalname, "receipts");
 
+		// An oversized image is refused by runReceiptOcr before any vendor call, so it is not charged.
+		const wantsRead = !!provider && !alreadyRead && file.buffer.byteLength <= OCR_MAX_BYTES;
+		const usedUp = wantsRead && !(await claimScan(orgId));
+		const reads = !!provider && !alreadyRead && !usedUp;
+
 		const purchase = await sdb.$transaction(async (tx) => {
 			const row = await tx.field_purchase.update({
 				where: { id: purchaseId },
@@ -1762,9 +1775,14 @@ export async function uploadReceipt(
 					capture_lat: parsed.capture_lat ?? null,
 					capture_lng: parsed.capture_lng ?? null,
 					capture_accuracy_m: parsed.capture_accuracy_m ?? null,
-					ocr_status: !provider ? "skipped" : alreadyRead ? loaded.purchase.ocr_status : "pending",
+					ocr_status:
+						!provider || usedUp
+							? "skipped"
+							: alreadyRead
+								? loaded.purchase.ocr_status
+								: "pending",
 					ocr_provider: provider?.name ?? null,
-					ocr_error: null,
+					ocr_error: usedUp ? SCANS_USED_UP : null,
 				},
 				select: PURCHASE_SELECT,
 			});
@@ -1782,7 +1800,7 @@ export async function uploadReceipt(
 		// Not awaited: a technician on a field connection should not hold the upload
 		// response open for a vendor round-trip, and a failed extraction still leaves
 		// them the manual entry they would have used anyway.
-		if (provider && !alreadyRead) {
+		if (reads) {
 			void runReceiptOcr(orgId, purchaseId, {
 				buffer: file.buffer,
 				mimetype: file.mimetype,
@@ -2064,6 +2082,8 @@ async function startOcrRead(
 	if (!provider) return { err: "Receipt reading is not configured — enter the lines by hand" };
 
 	const stored = await getBuffer(row.receipt_image_url);
+	if (stored.buffer.byteLength <= OCR_MAX_BYTES && !(await claimScan(orgId)))
+		return { err: SCANS_USED_UP };
 	await sdb.field_purchase.update({
 		where: { id: purchaseId },
 		data: { ocr_status: "pending", ocr_provider: provider.name, ocr_error: null },

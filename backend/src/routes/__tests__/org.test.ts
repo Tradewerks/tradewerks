@@ -6,6 +6,7 @@ import type { Request, Response, NextFunction, Router } from "express";
 vi.mock("../../db.js", () => ({
 	db: {
 		organization: { findUnique: vi.fn(), update: vi.fn() },
+		plan: { findUnique: vi.fn(async () => ({ label: "Pro" })) },
 	},
 }));
 
@@ -32,6 +33,7 @@ vi.mock("../../services/entitlementService.js", () => ({
 	previewDisable: vi.fn(),
 	setModuleChoices: vi.fn(),
 	isModuleOn: vi.fn(async () => true),
+	tierLabel: vi.fn(async () => "Pro"),
 }));
 const summary = vi.hoisted(() => ({ period_start: "2026-10-01", meters: {} }));
 vi.mock("../../lib/entitlements/quota.js", () => ({ getUsageSummary: vi.fn(async () => summary) }));
@@ -298,5 +300,12 @@ describe("GET /org/entitlements usage (build plan 2)", () => {
 		expect(r.status).toBe(200);
 		expect(r.body.data.usage).toBeNull();
 		expect(r.body.data.limits).toEqual({ ai_calls_month: 500 });
+	});
+
+	it("GET / includes the tier label", async () => {
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
+		});
+		expect(r.body.data.plan).toMatchObject({ key: "pro", label: "Pro" });
 	});
 });

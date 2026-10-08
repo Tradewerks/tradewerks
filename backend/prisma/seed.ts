@@ -152,17 +152,17 @@ async function main() {
 			{
 				id: "pv_starter_1", plan_key: "starter", version: 1, note: "seed",
 				modules: OPTIONAL_MODULES,
-				limits: { dispatchers: 3, technicians: 5, tax_lookups_month: 0, ai_calls_month: 0 },
+				limits: { dispatchers: 3, technicians: 5, tax_lookups_month: 0, ai_calls_month: 0, receipt_scans_month: 0 },
 			},
 			{
 				id: "pv_pro_1", plan_key: "pro", version: 1, note: "seed",
 				modules: PRO_MODULES,
-				limits: { dispatchers: 10, technicians: 25, tax_lookups_month: 2000, ai_calls_month: 500 },
+				limits: { dispatchers: 10, technicians: 25, tax_lookups_month: 2000, ai_calls_month: 500, receipt_scans_month: 300 },
 			},
 			{
 				id: "pv_enterprise_1", plan_key: "enterprise", version: 1, note: "seed",
 				modules: [...PRO_MODULES, "security_plus"],
-				limits: { dispatchers: null, technicians: null, tax_lookups_month: 20000, ai_calls_month: 5000 },
+				limits: { dispatchers: null, technicians: null, tax_lookups_month: 20000, ai_calls_month: 5000, receipt_scans_month: 3000 },
 			},
 		],
 	});
