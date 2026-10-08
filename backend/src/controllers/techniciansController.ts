@@ -65,6 +65,7 @@ const TECHNICIAN_SELECT = {
 	status: true,
 	hire_date: true,
 	coords: true,
+	last_ping_at: true,
 	last_login: true,
 	theme: true,
 	organization_role_id: true,
@@ -339,7 +340,8 @@ export const checkAndClearWrappingUp = async (
 	}
 };
 
-// Live GPS ping: coords only, no activity log (fires every ~15s while on shift)
+// Live GPS ping: coords + last_ping_at only, no activity log (fires every ~15s while
+// on shift, plus a heartbeat while stationary)
 export const updateTechnicianLocation = async (
 	id: string,
 	data: unknown,
@@ -354,7 +356,10 @@ export const updateTechnicianLocation = async (
 			return { err: "Technician not found" };
 		}
 
-		const updated = await sdb.technician.update({ where: { id }, data: { coords } });
+		const updated = await sdb.technician.update({
+			where: { id },
+			data: { coords, last_ping_at: new Date() },
+		});
 		return { err: "", item: updated };
 	} catch (e) {
 		if (e instanceof ZodError) {

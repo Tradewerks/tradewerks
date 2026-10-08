@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { StaticMarker } from "../../../types/location";
-import { Users, Wrench } from "lucide-react";
+import { Building2, MapPin, Users, Wrench } from "lucide-react";
 
 const iconStyles = "m-auto h-full text-white";
 
@@ -18,6 +18,18 @@ const CreateMarker = (m: StaticMarker) => {
 		case "TECHNICIAN": {
 			bgColor = " [background-color:var(--color-orange)] ";
 			icon = <Wrench className={iconStyles} size={20} />;
+			break;
+		}
+
+		case "SITE": {
+			bgColor = " bg-primary ";
+			icon = <MapPin className={iconStyles} size={20} />;
+			break;
+		}
+
+		case "WAREHOUSE": {
+			bgColor = " bg-neutral ";
+			icon = <Building2 className={iconStyles} size={18} />;
 			break;
 		}
 	}

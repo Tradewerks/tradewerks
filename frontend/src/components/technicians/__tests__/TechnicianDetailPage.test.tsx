@@ -47,6 +47,10 @@ vi.mock("../../../hooks/useFieldPurchases", () => ({
 vi.mock("../../../hooks/useReports", () => ({
 	useTimesheetsReportQuery: () => ({ data: [], isLoading: false }),
 }));
+// The location card reads the socket-fed list; an empty list falls back to the fetched tech.
+vi.mock("../../../hooks/useTechnicianMarkers", () => ({
+	useLiveTechnicians: () => ({ technicians: [], isLoading: false }),
+}));
 vi.mock("../../ui/useToast", () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }));
 vi.mock("../../roles/AccessCard", () => ({ default: () => <div data-testid="access-card" /> }));
 vi.mock("../../activity/ChangeHistory", () => ({ default: () => <div data-testid="history" /> }));

@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 export interface DetailTabDef<T extends string> {
 	id: T;
 	label: string;
+	/** Something on this tab is happening right now, e.g. a tech en route. */
+	live?: boolean;
 }
 
 interface DetailTabsProps<T extends string> {
@@ -74,6 +76,16 @@ export default function DetailTabs<T extends string>({
 					}`}
 				>
 					{tab.label}
+					{tab.live && (
+						<>
+							{" "}
+							<span
+								aria-hidden="true"
+								className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-success align-middle"
+							/>
+							<span className="sr-only">(live)</span>
+						</>
+					)}
 				</button>
 			))}
 		</div>

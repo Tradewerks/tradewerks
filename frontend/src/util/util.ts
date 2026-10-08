@@ -56,6 +56,22 @@ export const formatDate = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
 	});
 };
 
+// Rail rows are one line wide; the year only earns its space when it differs.
+export function formatShortDate(
+	date: Date | string,
+	tz = FALLBACK_TIMEZONE,
+	now: Date = new Date(),
+): string {
+	const d = new Date(date);
+	const year = (x: Date) => x.toLocaleDateString("en-US", { year: "numeric", timeZone: tz });
+	return d.toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		...(year(d) === year(now) ? {} : { year: "numeric" }),
+		timeZone: tz,
+	});
+}
+
 /**
  * Whole days from now to `date` — negative once it is in the past. Compared on
  * the calendar-day boundary rather than the millisecond, so a document expiring

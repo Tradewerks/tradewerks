@@ -2,11 +2,11 @@ import { useMemo, useState } from "react";
 import { useAllClientsQuery } from "./useClients";
 import { useLiveTechnicians } from "./useTechnicianMarkers";
 import { useTechRoutes } from "./useTechRoutes";
-import type { StaticMarker, TechRouteData, Coordinates } from "../types/location";
+import type { StaticMarker, TechRouteData } from "../types/location";
 import type { Technician } from "../types/technicians";
-import { TechnicianStatusDotColors } from "../types/technicians";
 import type { Client } from "../types/clients";
 import type { MapFilters } from "../components/ui/maps/MapPanel";
+import { buildTechMarker, hasValidCoords } from "../lib/mapMarkers";
 
 interface UseMapDataResult {
 	markers: StaticMarker[];
@@ -18,26 +18,6 @@ interface UseMapDataResult {
 	isLoading: boolean;
 	filters: MapFilters;
 	setFilters: (next: MapFilters) => void;
-}
-
-function formatEtaShort(seconds: number | null): string {
-	if (seconds === null) return "";
-	const mins = Math.max(1, Math.round(seconds / 60));
-	if (mins < 60) return `~${mins}m`;
-	const hours = Math.floor(mins / 60);
-	const rem = mins % 60;
-	return rem === 0 ? `~${hours}h` : `~${hours}h${rem}m`;
-}
-
-function hasValidCoords(c: Coordinates | null | undefined): boolean {
-	return (
-		!!c &&
-		typeof c.lat === "number" &&
-		typeof c.lon === "number" &&
-		Number.isFinite(c.lat) &&
-		Number.isFinite(c.lon) &&
-		!(c.lat === 0 && c.lon === 0)
-	);
 }
 
 export function useMapData(): UseMapDataResult {
@@ -100,24 +80,12 @@ export function useMapData(): UseMapDataResult {
 				if (filters.hiddenTechIds.has(tech.id)) continue;
 				if (!hasValidCoords(tech.coords)) continue;
 
-				const route = drivingRouteById.get(tech.id);
-				const isDriving = !!route;
-				const showEta =
-					isDriving &&
-					filters.showETAs &&
-					!filters.hiddenETAIds.has(tech.id) &&
-					route!.etaSeconds !== null;
-				const etaSuffix = showEta ? ` · ${formatEtaShort(route!.etaSeconds)}` : "";
-
-				out.push({
-					id: `tech-${tech.id}`,
-					coords: isDriving ? route!.current : tech.coords,
-					type: "TECHNICIAN",
-					label: `${tech.name}${etaSuffix}`,
-					color: isDriving ? route!.color : undefined,
-					statusDotColor: TechnicianStatusDotColors[tech.status],
-					variant: isDriving ? "default" : "dimmed",
-				});
+				out.push(
+					buildTechMarker(tech, {
+						route: drivingRouteById.get(tech.id) ?? null,
+						showEta: filters.showETAs && !filters.hiddenETAIds.has(tech.id),
+					}),
+				);
 			}
 		}
 

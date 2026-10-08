@@ -4,10 +4,8 @@ import {
 	Edit2,
 	Calendar,
 	CalendarCheck,
-	MapPin,
 	Clock,
 	Users,
-	Map as MapIcon,
 	Plus,
 	DollarSign,
 	ChevronRight,
@@ -25,6 +23,9 @@ import {
 	useCancelJobVisitMutation,
 } from "../../hooks/useJobs";
 import { useInvoicesByJobIdQuery } from "../../hooks/useInvoices";
+import JobMapTab from "../../components/jobs/JobMapTab";
+import { isClosedVisit } from "../../lib/jobMapVisits";
+import { useActiveTechCount } from "../../hooks/useRecordMapData";
 import JobNoteManager from "../../components/jobs/JobNoteManager";
 import JobFieldPurchases from "../../components/fieldPurchases/JobFieldPurchases";
 import Card from "../../components/ui/Card";
@@ -77,9 +78,12 @@ import ChangeHistory from "../../components/activity/ChangeHistory";
 // A tab per body of work someone opens the page to do. Scheduling a crew,
 // chasing the money and reading what happened are separate, and none is context
 // for the others.
-const JOB_TABS: readonly DetailTabDef<"overview" | "visits" | "financials" | "activity">[] = [
+const JOB_TABS: readonly DetailTabDef<
+	"overview" | "visits" | "map" | "financials" | "activity"
+>[] = [
 	{ id: "overview", label: "Overview" },
 	{ id: "visits", label: "Visits" },
+	{ id: "map", label: "Map" },
 	{ id: "financials", label: "Financials" },
 	{ id: "activity", label: "Activity" },
 ];
@@ -211,6 +215,19 @@ export default function JobDetailPage() {
 	} = useInvoicesByJobIdQuery(jobId!);
 
 	const [activeTab, setActiveTab] = useDetailTab(JOB_TABS);
+	// Ruling B2: closed visits never light the dot (mirrors the visit page's gate).
+	const activeTechCount = useActiveTechCount(
+		visits
+			.filter((v) => !isClosedVisit(v))
+			.map((v) => v.id),
+	);
+	const tabs = useMemo(
+		() =>
+			JOB_TABS.map((t) =>
+				t.id === "map" ? { ...t, live: activeTechCount > 0 } : t,
+			),
+		[activeTechCount],
+	);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [isCreateVisitModalOpen, setIsCreateVisitModalOpen] = useState(false);
 	const [isCreateInvoiceOpen, setIsCreateInvoiceOpen] = useState(false);
@@ -1219,36 +1236,6 @@ export default function JobDetailPage() {
 		</Card>
 	);
 
-	// A static placeholder, not a mounted map: with no Mapbox instance there is
-	// nothing to mis-measure at zero height in a hidden panel, so the tab guard
-	// below is enough on its own.
-	const technicianLocationCard = (
-		<Card title="Technician Location" className="h-fit">
-			<div className="text-center py-12">
-				<MapIcon size={48} className="mx-auto text-text-faint mb-3" />
-				<h3 className="text-text-tertiary text-lg font-medium mb-2">
-					GPS Tracking
-				</h3>
-				<p className="text-text-muted text-sm max-w-sm mx-auto mb-4">
-					Real-time GPS tracking will display technician locations on
-					an interactive map.
-				</p>
-				<div className="flex items-center justify-center gap-2 text-xs text-text-muted mt-4">
-					<MapPin size={14} />
-					<span>Live GPS tracking coming soon</span>
-				</div>
-				<div className="mt-4 p-3 bg-surface/50 rounded-lg border border-border/50">
-					<p className="text-xs text-text-tertiary">
-						Job Address:{" "}
-						<span className="text-text-primary">
-							{job.address}
-						</span>
-					</p>
-				</div>
-			</div>
-		</Card>
-	);
-
 	return (
 		<div className="text-text-primary pb-4 md:pb-6">
 			<div className="space-y-4">
@@ -1295,7 +1282,7 @@ export default function JobDetailPage() {
 				)}
 
 				<DetailTabs
-					tabs={JOB_TABS}
+					tabs={tabs}
 					activeTab={activeTab}
 					onSelect={setActiveTab}
 					label="Job sections"
@@ -1337,14 +1324,19 @@ export default function JobDetailPage() {
 				>
 					<h2 className="sr-only">Visits</h2>
 					{scheduledVisitsCard}
-					<div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-						<div className="lg:col-span-2">
-							{assignedTechniciansCard}
-						</div>
-						<div className="lg:col-span-1">
-							{technicianLocationCard}
-						</div>
-					</div>
+					{assignedTechniciansCard}
+				</div>
+			)}
+
+			{activeTab === "map" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-map"
+					aria-labelledby="tab-map"
+					className="mt-6"
+				>
+					<h2 className="sr-only">Map</h2>
+					<JobMapTab key={job.id} job={job} visits={visits} />
 				</div>
 			)}
 

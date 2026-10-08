@@ -10,6 +10,12 @@ import DynamicMap from "../../ui/maps/DynamicMap";
 import type { StatCardProps } from "../../ui/StatCard";
 import { normalizeCoords } from "../../../types/location";
 import type { Technician, VisitTechnician } from "../../../types/technicians";
+import { TechnicianStatusDotColors } from "../../../types/technicians";
+import LiveDot from "../../ui/maps/LiveDot";
+import { useLiveTechnicians } from "../../../hooks/useTechnicianMarkers";
+import { useNow } from "../../../hooks/useNow";
+import { useSocketConnected } from "../../../hooks/useSocketConnected";
+import { formatPulseAge, isPingLive } from "../../../lib/livePulse";
 import { useAnyPermission, usePermission } from "../../../hooks/usePermission";
 import { useTimesheetsReportQuery } from "../../../hooks/useReports";
 import { useFieldPurchaseQueue } from "../../../hooks/useFieldPurchases";
@@ -55,9 +61,48 @@ function VisitRelation({
 	);
 }
 
-// `coords` carries no timestamp, so the copy says "last reported", never "current".
-function LocationCard({ technician }: { technician: Technician }) {
+// Header-row stamp: a pulsing dot plus ping age, sized to sit beside the title so the
+// card never grows. Ticks every second on its own so the map above doesn't re-render.
+function PulseStamp({ technician }: { technician: Technician }) {
+	const now = useNow(1_000);
+	const connected = useSocketConnected();
+	const age = formatPulseAge(technician.last_ping_at, now);
+	const label = !connected
+		? "Reconnecting…"
+		: age === null
+			? "No pings yet"
+			: age === "now"
+				? "just now"
+				: age;
+	return (
+		<span
+			title={
+				technician.last_ping_at
+					? `Last pulse ${new Date(technician.last_ping_at).toLocaleString()}`
+					: undefined
+			}
+			className="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-text-tertiary"
+		>
+			<LiveDot
+				status={technician.status}
+				lastPingAt={connected ? technician.last_ping_at : null}
+				dotClassName={TechnicianStatusDotColors[technician.status]}
+			/>
+			<span className="sr-only">Last pulse </span>
+			{label}
+		</span>
+	);
+}
+
+// Coords come from the socket-fed technician list, so the marker follows pings without a
+// refetch. The title only says "live" while pings are arriving; otherwise "last reported".
+function LocationCard({ technician: fetched }: { technician: Technician }) {
 	const ref = useRef<HTMLDivElement>(null);
+	const { technicians } = useLiveTechnicians();
+	const live = technicians.find((t) => t.id === fetched.id);
+	const technician = live ? { ...fetched, ...live } : fetched;
+	const now = useNow(10_000);
+	const isLive = isPingLive(technician.status, technician.last_ping_at, now);
 	const coords = normalizeCoords(technician.coords);
 	const lat = coords?.lat;
 	const lon = coords?.lon;
@@ -78,7 +123,11 @@ function LocationCard({ technician }: { technician: Technician }) {
 		[technician.id, technician.name, lat, lon]
 	);
 	return (
-		<Card className="flex-1" title="Last Reported Location">
+		<Card
+			className="flex-1"
+			title={isLive ? "Live Location" : "Last Reported Location"}
+			headerAction={<PulseStamp technician={technician} />}
+		>
 			{coords ? (
 				// Grows with a stretched rail so both columns end on one line.
 				<div

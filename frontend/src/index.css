@@ -166,6 +166,18 @@ input[type="number"] {
 	}
 }
 
+/* Live-tech ring: expands and fades out behind a status dot */
+@keyframes livePulse {
+	from {
+		transform: scale(1);
+		opacity: 0.6;
+	}
+	to {
+		transform: scale(2.6);
+		opacity: 0;
+	}
+}
+
 @keyframes scanFoundFlash {
 	from {
 		background-color: var(--color-success-bg);

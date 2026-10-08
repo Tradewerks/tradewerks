@@ -2668,6 +2668,7 @@ model technician {
   status      technician_status @default(Offline)
   hire_date   DateTime
   coords      Json              @default("{}")
+  last_ping_at DateTime?
   hourly_rate Decimal           @default(0) @db.Decimal(10, 2)
   last_login  DateTime?
   password_reset_token       String?   @unique

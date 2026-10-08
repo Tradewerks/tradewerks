@@ -40,9 +40,14 @@ export function useSocketQuerySync(): void {
 			// left the queue stale for everyone but the dispatcher who acted.
 			qc.invalidateQueries({ queryKey: qk.inventory.reconcile() });
 		};
-		const onJobVisitChanged = (_event: JobVisitUpdatedEvent | VisitStatusEvent) => {
+		const onJobVisitChanged = (event: JobVisitUpdatedEvent | VisitStatusEvent) => {
 			qc.invalidateQueries({ queryKey: JOB_VISITS_KEY });
 			qc.invalidateQueries({ queryKey: TECHNICIANS_KEY });
+			// The job page reads its visits under ["jobs", id, "visits"], outside the
+			// jobVisits prefix. Only status events name the job.
+			if ("visit" in event && event.visit?.job?.id) {
+				qc.invalidateQueries({ queryKey: ["jobs", event.visit.job.id] });
+			}
 		};
 		const onJobUpdated = (_event: JobUpdatedEvent) => {
 			qc.invalidateQueries({ queryKey: JOB_VISITS_KEY });

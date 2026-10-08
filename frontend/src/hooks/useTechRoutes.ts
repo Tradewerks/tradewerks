@@ -11,6 +11,8 @@ const ROUTE_STALE_MS = 30_000;
 interface DrivingTarget {
 	techId: string;
 	techName: string;
+	visitId: string;
+	jobId: string;
 	current: Coordinates;
 	destination: Coordinates;
 	destinationLabel: string;
@@ -39,6 +41,8 @@ function pickDrivingTarget(tech: Technician): DrivingTarget | null {
 	return {
 		techId: tech.id,
 		techName: tech.name,
+		visitId: visit.id,
+		jobId: visit.job_id,
 		current: tech.coords,
 		destination: dest,
 		destinationLabel: visit.job.client?.name || visit.job.name,
@@ -86,15 +90,29 @@ function useSnappedOrigin(targets: DrivingTarget[]): Map<string, Coordinates> {
 	return snapped;
 }
 
-export function useTechRoutes(technicians: Technician[]): TechRouteData[] {
-	const targets = useMemo<DrivingTarget[]>(() => {
+export function useTechRoutes(
+	technicians: Technician[],
+	scopeTechIds?: ReadonlySet<string>,
+): TechRouteData[] {
+	const allTargets = useMemo<DrivingTarget[]>(() => {
 		return technicians
 			.map(pickDrivingTarget)
 			.filter((t): t is DrivingTarget => t !== null)
 			.sort((a, b) => a.techId.localeCompare(b.techId));
 	}, [technicians]);
 
-	const orderedIds = useMemo(() => targets.map((t) => t.techId), [targets]);
+	// Colors index into the org-wide driving order, so a scoped map paints a tech
+	// the same color the main map does.
+	const orderedIds = useMemo(() => allTargets.map((t) => t.techId), [allTargets]);
+
+	const targets = useMemo(
+		() =>
+			scopeTechIds
+				? allTargets.filter((t) => scopeTechIds.has(t.techId))
+				: allTargets,
+		[allTargets, scopeTechIds],
+	);
+
 	const snappedOrigins = useSnappedOrigin(targets);
 
 	const queries = useQueries({
@@ -126,7 +144,7 @@ export function useTechRoutes(technicians: Technician[]): TechRouteData[] {
 		}
 	}, [targets]);
 
-	return targets.map((target, i) => {
+	const next = targets.map((target, i) => {
 		const result = queries[i].data;
 		if (result) lastResultRef.current.set(target.techId, result);
 		const cached = lastResultRef.current.get(target.techId) ?? null;
@@ -134,6 +152,8 @@ export function useTechRoutes(technicians: Technician[]): TechRouteData[] {
 		return {
 			techId: target.techId,
 			techName: target.techName,
+			visitId: target.visitId,
+			jobId: target.jobId,
 			color: getTechColor(target.techId, orderedIds),
 			current: target.current,
 			destination: target.destination,
@@ -143,4 +163,34 @@ export function useTechRoutes(technicians: Technician[]): TechRouteData[] {
 			distanceMeters: cached?.distanceMeters ?? null,
 		};
 	});
+
+	// Consumers key effects on these references; reuse unchanged elements and the array.
+	const prevRef = useRef<TechRouteData[]>([]);
+	const prev = prevRef.current;
+	const stable = next.map((r, i) => {
+		const p = prev[i];
+		return p && sameRoute(p, r) ? p : r;
+	});
+	const unchanged = stable.length === prev.length && stable.every((r, i) => r === prev[i]);
+	if (unchanged) return prev;
+	prevRef.current = stable;
+	return stable;
+}
+
+function sameRoute(a: TechRouteData, b: TechRouteData): boolean {
+	return (
+		a.techId === b.techId &&
+		a.techName === b.techName &&
+		a.visitId === b.visitId &&
+		a.jobId === b.jobId &&
+		a.color === b.color &&
+		a.current.lat === b.current.lat &&
+		a.current.lon === b.current.lon &&
+		a.destination.lat === b.destination.lat &&
+		a.destination.lon === b.destination.lon &&
+		a.destinationLabel === b.destinationLabel &&
+		a.routeGeoJSON === b.routeGeoJSON &&
+		a.etaSeconds === b.etaSeconds &&
+		a.distanceMeters === b.distanceMeters
+	);
 }

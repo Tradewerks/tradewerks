@@ -15,7 +15,12 @@ export interface StaticMarker {
 	color?: string;
 	statusDotColor?: string;
 	variant?: "default" | "dimmed";
+	/** Drawn, but never part of an automatic or requested fit. */
+	fitIgnore?: boolean;
 }
+
+/** One camera move per new `id`; re-sending the same id is a no-op. */
+export type MapViewRequest = { id: number; target: "fit" | Coordinates };
 
 export type Coordinates = { lat: number; lon: number };
 
@@ -46,6 +51,8 @@ export interface DirectionsResult {
 export interface TechRouteData {
 	techId: string;
 	techName: string;
+	visitId: string;
+	jobId: string;
 	color: string;
 	current: Coordinates;
 	destination: Coordinates;

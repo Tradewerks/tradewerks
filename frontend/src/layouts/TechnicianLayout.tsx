@@ -41,18 +41,24 @@ export default function TechnicianLayout() {
 	const unreadCount = notifications.filter((n) => !n.read_at).length;
 	const noVehicle = techProfile && !techProfile.current_vehicle_id;
 
-	// Live location for the dispatch map while on shift: latest fix sent at most every 15s
+	// Live location for the dispatch map while on shift: latest fix sent at most every 15s.
+	// A stationary tech produces no new fixes, so the last one is re-sent as a heartbeat
+	// once HEARTBEAT_MS passes — the dispatch "pulse" reads last_ping_at to tell live from gone.
 	const onShift = !!techProfile && techProfile.status !== "Offline";
 	useEffect(() => {
 		if (!onShift || !user?.userId || !("geolocation" in navigator)) return;
 		const techId = user.userId;
+		const HEARTBEAT_MS = 60_000;
 		type Coords = { lat: number; lon: number };
 		let latest: Coords | null = null;
 		let sent: Coords | null = null;
+		let sentAt = 0;
 		const flush = () => {
 			// no token = logging out / switching user; a 401 here would refresh the old session back in
-			if (!latest || latest === sent || !localStorage.getItem("accessToken")) return;
+			if (!latest || !localStorage.getItem("accessToken")) return;
+			if (latest === sent && Date.now() - sentAt < HEARTBEAT_MS) return;
 			sent = latest;
+			sentAt = Date.now();
 			pingLocation(techId, latest).catch(() => {});
 		};
 		const watchId = navigator.geolocation.watchPosition(

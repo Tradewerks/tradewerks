@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
 	Edit2,
@@ -62,12 +62,16 @@ import {
 } from "../../util/util";
 import { useAuthStore } from "../../auth/authStore";
 import { usePermission, useAnyPermission } from "../../hooks/usePermission";
+import { useActiveTechCount } from "../../hooks/useRecordMapData";
+import RecordMap from "../../components/ui/maps/RecordMap";
 
 // Overview holds what a dispatcher opens a visit to check: when it is, who is
 // on it, what happened. Financials is a separate body of work, not context for
 // the schedule. Activity is last, as on every detail page.
-const VISIT_TABS: readonly DetailTabDef<"overview" | "financials" | "activity">[] = [
+// Map sits beside Overview: "where is everyone" is the same glance as "who is on it".
+const VISIT_TABS: readonly DetailTabDef<"overview" | "map" | "financials" | "activity">[] = [
 	{ id: "overview", label: "Overview" },
+	{ id: "map", label: "Map" },
 	{ id: "financials", label: "Financials" },
 	{ id: "activity", label: "Activity" },
 ];
@@ -210,6 +214,16 @@ export default function JobVisitDetailPage() {
 	const { data: job, isLoading: jobLoading } = useJobByIdQuery(jobId!);
 
 	const [activeTab, setActiveTab] = useDetailTab(VISIT_TABS);
+	const activeTechCount = useActiveTechCount(visitId ? [visitId] : []);
+	// A stale EnRoute/OnSite in the feed must not light a closed visit's Map tab.
+	const visitOpen = visit?.status !== "Completed" && visit?.status !== "Cancelled";
+	const tabs = useMemo(
+		() =>
+			VISIT_TABS.map((t) =>
+				t.id === "map" ? { ...t, live: visitOpen && activeTechCount > 0 } : t,
+			),
+		[activeTechCount, visitOpen],
+	);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [isCreateInvoiceOpen, setIsCreateInvoiceOpen] = useState(false);
 	const [pendingConfirm, setPendingConfirm] = useState<"complete" | "delay" | null>(null);
@@ -473,6 +487,8 @@ export default function JobVisitDetailPage() {
 		</div>
 	);
 
+	const visitClosed = visit.status === "Completed" || visit.status === "Cancelled";
+
 	// Drive distance is a stat tile and the cancellation reason is the lifecycle
 	// bar's terminal detail, so neither appears here. Constraints are already
 	// carried by constraintLines, which qualifies the Scheduled time.
@@ -692,7 +708,7 @@ export default function JobVisitDetailPage() {
 				)}
 
 				<DetailTabs
-					tabs={VISIT_TABS}
+					tabs={tabs}
 					activeTab={activeTab}
 					onSelect={setActiveTab}
 					label="Visit sections"
@@ -729,6 +745,28 @@ export default function JobVisitDetailPage() {
 						</div>
 						<div className="lg:col-span-1 flex flex-col">{clientCard}</div>
 					</div>
+				</div>
+			)}
+
+			{activeTab === "map" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-map"
+					aria-labelledby="tab-map"
+					className="mt-6"
+				>
+					<h2 className="sr-only">Map</h2>
+					<RecordMap
+						site={{
+							coords: job?.coords ?? visit.job?.coords,
+							label: job?.client?.name ?? job?.name ?? "Job site",
+						}}
+						address={job?.address ?? ""}
+						techIds={visit.visit_techs.map((vt) => vt.tech_id)}
+						focusVisitIds={[visit.id]}
+						hideTechs={visitClosed}
+						hiddenNote={visitClosed ? "Visit closed — live positions hidden." : undefined}
+					/>
 				</div>
 			)}
 

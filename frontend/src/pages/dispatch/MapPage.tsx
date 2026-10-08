@@ -5,6 +5,35 @@ import Card from "../../components/ui/Card";
 import DynamicMap from "../../components/ui/maps/DynamicMap";
 import MapPanel from "../../components/ui/maps/MapPanel";
 import { useMapData } from "../../hooks/useMapData";
+import { useNow } from "../../hooks/useNow";
+import { useSocketConnected } from "../../hooks/useSocketConnected";
+import { formatPulseAge, latestPing } from "../../lib/livePulse";
+import type { Technician } from "../../types/technicians";
+
+// Its own component so the 1s tick re-renders this row, not the map.
+function PulseFooter({ technicians }: { technicians: Technician[] }) {
+	const connected = useSocketConnected();
+	const now = useNow(1_000);
+	const last = latestPing(technicians);
+	const age = formatPulseAge(last, now);
+	return (
+		<div className="flex items-center justify-between text-sm text-text-tertiary">
+			<span className="flex items-center gap-2">
+				<span
+					aria-hidden="true"
+					className={`h-2 w-2 rounded-full ${connected ? "bg-success" : "bg-neutral"}`}
+				/>
+				{connected ? "Live Tracking Active" : "Reconnecting…"}
+			</span>
+			<span
+				className="tabular-nums"
+				title={last ? new Date(last).toLocaleString() : undefined}
+			>
+				Last Pulse: {age ?? "none yet"}
+			</span>
+		</div>
+	);
+}
 
 export default function MapPage() {
 	const nav = useNavigate();
@@ -51,12 +80,7 @@ export default function MapPage() {
 							/>
 						</div>
 
-						<div className="flex items-center justify-between text-sm text-text-tertiary">
-							<span>Live Tracking Active</span>
-							<span>
-								Last Pulse: {new Date().toLocaleTimeString()}
-							</span>
-						</div>
+						<PulseFooter technicians={allTechnicians} />
 					</div>
 				</Card>
 			</div>

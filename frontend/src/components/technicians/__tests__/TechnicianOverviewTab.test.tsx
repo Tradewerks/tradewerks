@@ -41,6 +41,10 @@ const vehicles = vi.hoisted(() => ({ record: null as unknown }));
 vi.mock("../../../hooks/useVehicles", () => ({
 	useVehicleRecord: (id: unknown) => (id ? vehicles.record : null),
 }));
+// The location card reads the socket-fed list; an empty list falls back to the fetched tech.
+vi.mock("../../../hooks/useTechnicianMarkers", () => ({
+	useLiveTechnicians: () => ({ technicians: [], isLoading: false }),
+}));
 vi.mock("../../ui/maps/DynamicMap", () => ({ default: () => <div data-testid="map" /> }));
 // BalancedOverviewGrid measures with ResizeObserver; jsdom lacks it.
 globalThis.ResizeObserver ??= class {

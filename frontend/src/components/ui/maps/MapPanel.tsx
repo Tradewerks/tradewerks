@@ -8,6 +8,7 @@ import type { Client } from "../../../types/clients";
 import { useLiveVisitUpdates } from "../../../hooks/useLiveVisitUpdates";
 import type { FeedEvent } from "../../../types/technicians";
 import { getEventText, getStatusColor, timeAgo } from "./visitFeedUtils";
+import LiveDot from "./LiveDot";
 
 export interface MapFilters {
 	showClients: boolean;
@@ -310,8 +311,10 @@ export default function MapPanel({
 												: "no location"
 										}
 										dot={
-											<span
-												className={`w-2 h-2 rounded-full flex-shrink-0 ${TechnicianStatusDotColors[tech.status]}`}
+											<LiveDot
+												status={tech.status}
+												lastPingAt={tech.last_ping_at}
+												dotClassName={TechnicianStatusDotColors[tech.status]}
 											/>
 										}
 									/>

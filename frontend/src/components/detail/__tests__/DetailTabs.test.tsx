@@ -144,3 +144,21 @@ describe("DetailTabs", () => {
 		);
 	});
 });
+
+describe("DetailTabs live dot", () => {
+	it("a live tab announces itself; others don't", () => {
+		render(
+			<DetailTabs
+				tabs={[
+					{ id: "overview", label: "Overview" },
+					{ id: "map", label: "Map", live: true },
+				]}
+				activeTab="overview"
+				onSelect={() => {}}
+				label="Visit sections"
+			/>,
+		);
+		expect(screen.getByRole("tab", { name: "Map (live)" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Overview" })).toBeInTheDocument();
+	});
+});
