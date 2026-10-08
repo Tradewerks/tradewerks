@@ -21,6 +21,7 @@ import { getOrgRealmId } from "../services/quickbooksService.js";
 import { log } from "../services/appLogger.js";
 import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
 import { computeConsumptionCosts, ConsumptionCostRow } from "../lib/reports/costing.js";
+import { buildShiftSegments } from "./timesheetController.js";
 
 // Upper bound on rows pulled into memory for the in-JS report aggregations
 const REPORT_ROW_CAP = 10000;
@@ -838,6 +839,27 @@ export interface TimesheetReportRow {
 	grossHours: number;
 	breakHours: number;
 	payableHours: number;
+	visitHours: number;
+	driveHours: number;
+	visitCount: number;
+}
+
+type TimeSpan = { start: Date; end: Date };
+type VisitSpan = TimeSpan & { visitId: string };
+
+export function shiftSplitHours(
+	shift: TimeSpan,
+	entries: TimeSpan[],
+	drives: TimeSpan[],
+	breaks: (TimeSpan & { paid: boolean })[],
+) {
+	const tag = <T extends TimeSpan>(s: T) => ({ ...s, label: "", sub: "" });
+	const segments = buildShiftSegments(shift, entries.map(tag), drives.map(tag), breaks.map(tag));
+	const hoursOf = (type: string) =>
+		segments
+			.filter((s) => s.type === type)
+			.reduce((h, s) => h + (s.end.getTime() - s.start.getTime()) / 3_600_000, 0);
+	return { visitHours: hoursOf("job"), driveHours: hoursOf("drive") };
 }
 
 export const getTimesheetReport = async (
@@ -858,20 +880,64 @@ export const getTimesheetReport = async (
 		},
 		include: {
 			tech: { select: { id: true, name: true } },
+			breaks: { select: { started_at: true, ended_at: true, is_paid: true } },
 		},
 		orderBy: { started_at: "desc" },
 	});
 
-	return shifts.map((s) => ({
-		shiftId: s.id,
-		technicianId: s.tech.id,
-		technicianName: s.tech.name,
-		startedAt: s.started_at.toISOString(),
-		endedAt: s.ended_at!.toISOString(),
-		grossHours: Number(s.gross_hours ?? 0),
-		breakHours: Number(s.break_hours ?? 0),
-		payableHours: Number(s.payable_hours),
-	}));
+	const entriesByTech = new Map<string, VisitSpan[]>();
+	const drivesByTech = new Map<string, TimeSpan[]>();
+	const addSpan = <T extends TimeSpan>(map: Map<string, T[]>, techId: string, span: T) =>
+		map.set(techId, [...(map.get(techId) ?? []), span]);
+	if (shifts.length) {
+		const techIds = [...new Set(shifts.map((s) => s.tech_id))];
+		const from = shifts[shifts.length - 1].started_at;
+		const to = new Date(Math.max(...shifts.map((s) => s.ended_at!.getTime())));
+		const [entries, drives] = await Promise.all([
+			sdb.visit_tech_time_entry.findMany({
+				where: {
+					tech_id: { in: techIds },
+					clocked_out_at: { not: null, gt: from },
+					clocked_in_at: { lt: to },
+				},
+				select: { tech_id: true, visit_id: true, clocked_in_at: true, clocked_out_at: true },
+			}),
+			sdb.visit_tech_drive.findMany({
+				where: {
+					tech_id: { in: techIds },
+					ended_at: { not: null, gt: from },
+					started_at: { lt: to },
+				},
+				select: { tech_id: true, started_at: true, ended_at: true },
+			}),
+		]);
+		for (const e of entries)
+			addSpan(entriesByTech, e.tech_id, { start: e.clocked_in_at, end: e.clocked_out_at!, visitId: e.visit_id });
+		for (const d of drives) addSpan(drivesByTech, d.tech_id, { start: d.started_at, end: d.ended_at! });
+	}
+
+	return shifts.map((s) => {
+		const entries = entriesByTech.get(s.tech_id) ?? [];
+		return {
+			shiftId: s.id,
+			technicianId: s.tech.id,
+			technicianName: s.tech.name,
+			startedAt: s.started_at.toISOString(),
+			endedAt: s.ended_at!.toISOString(),
+			grossHours: Number(s.gross_hours ?? 0),
+			breakHours: Number(s.break_hours ?? 0),
+			payableHours: Number(s.payable_hours),
+			...shiftSplitHours(
+				{ start: s.started_at, end: s.ended_at! },
+				entries,
+				drivesByTech.get(s.tech_id) ?? [],
+				s.breaks.map((b) => ({ start: b.started_at, end: b.ended_at ?? s.ended_at!, paid: b.is_paid })),
+			),
+			visitCount: new Set(
+				entries.filter((e) => e.start < s.ended_at! && e.end > s.started_at).map((e) => e.visitId),
+			).size,
+		};
+	});
 };
 
 // ============================================================================

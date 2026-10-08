@@ -209,6 +209,8 @@ export function useTechVisitActions(
 			const msg = err instanceof Error ? err.message : "";
 			if (msg.startsWith("ALREADY_CLOCKED_IN:")) {
 				setClockError("You're already clocked in to another visit — clock out there first.");
+			} else if (msg.startsWith("TIMESHEET_LOCKED")) {
+				setClockError(msg.replace(/^TIMESHEET_LOCKED: /, ""));
 			} else {
 				setClockError("Failed to clock in — try again.");
 			}

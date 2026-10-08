@@ -90,7 +90,8 @@ const ProjectDetailPage = lazy(() => import("./pages/dispatch/ProjectDetailPage"
 const JobProfitabilityPage = lazy(() => import("./pages/dispatch/JobProfitabilityPage"));
 const PurchasePage = lazy(() => import("./pages/dispatch/PurchasePage"));
 const PurchaseDetailsPage = lazy(() => import("./pages/dispatch/PurchaseDetailsPage"));
-const DispatcherNotificationPage = lazy(() => import("./pages/dispatch/DispatcherNotificationPage"))
+const DispatcherNotificationPage = lazy(() => import("./pages/dispatch/DispatcherNotificationPage"));
+const TimesheetPage = lazy(() => import("./pages/dispatch/Timesheet"))
 
 function RequireAuth({ children }: { children: JSX.Element }) {
 	const { user, logout } = useAuthStore();
@@ -234,6 +235,7 @@ export default function AppRoutes() {
 				<Route path="vehicles" element={<RequireAnyPermission permissions={["view_inventory", "manage_technicians"]}><VehiclesPage /></RequireAnyPermission>} />
 				<Route path="vehicles/:id/stock" element={<RequireAnyPermission permissions={["view_inventory", "manage_technicians"]}><VehicleStockPage /></RequireAnyPermission>} />
 				<Route path="notifications" element={<DispatcherNotificationPage />} />
+				<Route path="timesheet" element={<RequirePermission permission="view_timesheet"><TimesheetPage /></RequirePermission>} />
 			</Route>
 
 			<Route

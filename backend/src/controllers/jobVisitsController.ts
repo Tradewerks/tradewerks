@@ -3,6 +3,7 @@ import { Prisma } from "../../generated/prisma/client.js";
 import type { tech_visit_status, technician_status, pause_reason_type } from "../../generated/prisma/client.js";
 import { db } from "../db.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { recordDrive } from "../lib/visitDrive.js";
 import {
 	createJobVisitSchema,
 	updateJobVisitSchema,
@@ -1406,6 +1407,7 @@ export const applyVisitTransition = async (
 								"job_visit:status_changed",
 								buildSecondaryEventPayload(currentVisit, techVisitStatus, context),
 							);
+							await recordDrive(sdb, context.techId, new Date(), action === "drive" ? id : undefined);
 						}
 						return { err: "", item: currentVisit ?? undefined };
 					}
@@ -1496,6 +1498,11 @@ export const applyVisitTransition = async (
 						});
 					}
 				}
+				await recordDrive(tx, context.techId, now, id);
+			}
+			if (action === "arrive" && context?.techId) await recordDrive(tx, context.techId, now);
+			if (action === "delay") {
+				await tx.visit_tech_drive.updateMany({ where: { visit_id: id, ended_at: null }, data: { ended_at: now } });
 			}
 
 			// ── Job status sync ────────────────────────────────────────────────

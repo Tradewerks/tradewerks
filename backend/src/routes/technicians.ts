@@ -310,6 +310,9 @@ router.post("/:id/available", async (req, res, next) => {
 		}
 
 		if (result.err) {
+			if (result.err.startsWith("TIMESHEET_LOCKED")) {
+				return res.status(409).json(createErrorResponse(ErrorCodes.CONFLICT, result.err));
+			}
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
 		getSocket().emit("technician-update", result.item);

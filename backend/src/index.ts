@@ -71,6 +71,7 @@ import followupsRouter from "./routes/followups.js";
 import projectsRouter from "./routes/projects.js";
 import searchRouter from "./routes/search.js";
 import assistantRouter from "./routes/assistant.js";
+import timesheetsRouter from "./routes/timesheets.js";
 
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 
@@ -576,6 +577,7 @@ app.use("/disputes", verifyToken, disputesRouter);
 // ============================================
 app.use("/technicians", verifyToken, techniciansRouter);
 app.use("/technicians", verifyToken, notificationsRouter);
+app.use("/timesheets", verifyToken, timesheetsRouter);
 
 // ============================================
 // DISPATCHERS

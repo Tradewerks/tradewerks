@@ -26,11 +26,17 @@ import {
     unlinkQBVendor,
     importQBVendor,
     pushQBVendor,
+    getQBEmployees,
+    getQBMappedEmployees,
+    linkQBEmployee,
+    unlinkQBEmployee,
+    pushQBEmployee,
     getQBReport,
     syncClientToQB,
     getQBPurchaseOrders,
     pushPurchaseToQB,
     pushFieldPurchaseToQB,
+    pushTimesheetToQB,
 } from "../api/quickbooks";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -146,6 +152,24 @@ export const useQBMappedVendorsQuery = (enabled = true) => {
     });
 };
 
+export const useQBEmployeesQuery = (enabled = true) => {
+    return useQuery({
+        queryKey: ["qbEmployees"],
+        queryFn: getQBEmployees,
+        enabled,
+        retry: false,
+    });
+};
+
+export const useQBMappedEmployeesQuery = (enabled = true) => {
+    return useQuery({
+        queryKey: ["qbMappedEmployees"],
+        queryFn: getQBMappedEmployees,
+        enabled,
+        retry: false,
+    });
+};
+
 const invalidateVendors = (queryClient: ReturnType<typeof useQueryClient>) => {
     queryClient.invalidateQueries({ queryKey: ["qbVendors"] });
     queryClient.invalidateQueries({ queryKey: ["qbMappedVendors"] });
@@ -184,6 +208,35 @@ export const usePushQBVendorMutation = () => {
     });
 };
 
+const invalidateEmployees = (queryClient: ReturnType<typeof useQueryClient>) => {
+    queryClient.invalidateQueries({ queryKey: ["qbEmployees"] });
+    queryClient.invalidateQueries({ queryKey: ["qbMappedEmployees"] });
+};
+
+export const useLinkQBEmployeeMutation = () => {
+    const queryClient = useQueryClient();
+    return useMutation<unknown, Error, { technician_id: string; qb_employee_id: string }>({
+        mutationFn: ({ technician_id, qb_employee_id }) => linkQBEmployee(technician_id, qb_employee_id),
+        onSuccess: () => invalidateEmployees(queryClient),
+    });
+};
+
+export const useUnlinkQBEmployeeMutation = () => {
+    const queryClient = useQueryClient();
+    return useMutation<unknown, Error, string>({
+        mutationFn: (technicianId) => unlinkQBEmployee(technicianId),
+        onSuccess: () => invalidateEmployees(queryClient),
+    });
+};
+
+export const usePushQBEmployeeMutation = () => {
+    const queryClient = useQueryClient();
+    return useMutation<{ pushed: boolean; qb_employee_id: string }, Error, string>({
+        mutationFn: (technicianId) => pushQBEmployee(technicianId),
+        onSuccess: () => invalidateEmployees(queryClient),
+    });
+};
+
 export const usePushPurchaseToQBMutation = () => {
     const queryClient = useQueryClient();
     return useMutation<{ pushed: boolean; qb_purchase_order_id: string }, Error, string>({
@@ -203,6 +256,14 @@ export const usePushFieldPurchaseToQBMutation = () => {
             queryClient.invalidateQueries({ queryKey: qk.fieldPurchases.detail(purchaseId) });
             queryClient.invalidateQueries({ queryKey: ["qbPurchaseOrders"] });
         },
+    });
+};
+
+export const usePushTimesheetToQBMutation = () => {
+    const queryClient = useQueryClient();
+    return useMutation<{ pushed: boolean }, Error, string>({
+        mutationFn: (timesheetId) => pushTimesheetToQB(timesheetId),
+        onSettled: () => queryClient.invalidateQueries({ queryKey: qk.timesheets.all }),
     });
 };
 

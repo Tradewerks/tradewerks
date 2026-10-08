@@ -4,6 +4,7 @@ import type { pause_reason_type, technician_status } from "../../generated/prism
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { getSocket } from "../services/socketService.js";
 import { buildVisitStatusPayload, buildSecondaryEventPayload } from "./jobVisitsController.js";
+import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
 
 const CLOCK_IN_ALLOWED = ["OnSite", "InProgress", "Paused"];
 const CLOCK_IN_AUTO_ADVANCE = ["OnSite", "Paused"];
@@ -45,6 +46,7 @@ export const clockInVisit = async (
 		if (existingOpen) {
 			return { err: `ALREADY_CLOCKED_IN:${existingOpen.visit.id}` };
 		}
+		if (await isWeekLocked(organizationId, techId)) return { err: TIMESHEET_LOCKED };
 
 		const now = new Date();
 		const isPrimaryAdvance = CLOCK_IN_AUTO_ADVANCE.includes(visit.status);

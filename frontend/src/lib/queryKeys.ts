@@ -153,6 +153,11 @@ export const qk = {
 		}) => (opts ? (["purchases", "list", opts] as const) : (["purchases", "list"] as const)),
 		detail: (id: string) => ["purchases", "detail", id] as const,
 	},
+	timesheets: {
+		all: ["timesheets"] as const,
+		week: (date?: string) => ["timesheets", "week", date ?? "current"] as const,
+		technician: (id: string, date?: string) => ["timesheets", "technician", id, date] as const,
+	},
 	fieldPurchases: {
 		all: ["field-purchases"] as const,
 		list: (opts?: {

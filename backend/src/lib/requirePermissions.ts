@@ -28,6 +28,8 @@ import { log } from "../services/appLogger.js";
  *     view_inventory      · manage_inventory
  *   Reports
  *     view_reports        · export_reports
+ *   Timesheets
+ *     view_timesheet      · manage_timesheet   (approve, unapprove, push to QB)
  *   Recurring Plans
  *     view_recurring_plans · manage_recurring_plans
  *   Team

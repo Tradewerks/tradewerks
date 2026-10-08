@@ -217,6 +217,9 @@ export interface TimesheetReportEntry {
 	grossHours: number;
 	breakHours: number;
 	payableHours: number;
+	visitHours: number;
+	driveHours: number;
+	visitCount: number;
 }
 
 // ============================================================================

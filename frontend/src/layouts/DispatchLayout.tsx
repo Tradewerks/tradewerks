@@ -21,6 +21,7 @@ import {
 	Mail,
 	FolderKanban,
 	Bell,
+	Timer,
 } from "lucide-react";
 import SideNavItem from "../components/nav/SideNavItem";
 import GlobalSearch from "../components/nav/GlobalSearch";
@@ -80,6 +81,7 @@ export default function DispatchLayout() {
 	]);
 	const canViewTechnicians = usePermission("view_technicians");
 	const canViewReports = usePermission("view_reports");
+	const canViewTimesheet = usePermission("view_timesheet");
 	const canViewAdmin = useAnyPermission([
 		"view_admin",
 		"manage_organization",
@@ -320,6 +322,16 @@ export default function DispatchLayout() {
 									/>
 								}
 								label="Admin"
+							/>
+						)}
+						{canViewTimesheet && (
+							<SideNavItem
+								expanded={expanded}
+								to="/dispatch/timesheet"
+								icon={
+									<Timer size={ICON_SIZE} />
+								}
+								label="Timesheet"
 							/>
 						)}
 					</nav>

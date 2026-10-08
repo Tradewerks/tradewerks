@@ -73,6 +73,13 @@ export const DISPATCHER_CATALOG = [
 		],
 	},
 	{
+		category: "Timesheets",
+		permissions: [
+			{ id: "view_timesheet", label: "View Timesheets" },
+			{ id: "manage_timesheet", label: "Manage Timesheets" },
+		],
+	},
+	{
 		category: "Recurring Plans",
 		permissions: [
 			{ id: "view_recurring_plans", label: "View Plans" },

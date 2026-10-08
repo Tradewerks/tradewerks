@@ -40,12 +40,20 @@ import {
 	importQBVendor,
 	pushVendor,
 } from "../services/qb/qbVendors.js";
-import { linkQBItemSchema, linkQBVendorSchema, qbReportQuerySchema, qbReportTypeSchema } from "../lib/validate/quickbooks.js"
+import {
+	getQBEmployees,
+	getMappedQBEmployees,
+	linkQBEmployee,
+	unlinkQBEmployee,
+	pushEmployee,
+} from "../services/qb/qbEmployees.js";
+import { linkQBEmployeeSchema, linkQBItemSchema, linkQBVendorSchema, qbReportQuerySchema, qbReportTypeSchema } from "../lib/validate/quickbooks.js"
 import { db } from "../db.js";
 import { getScopedDb } from "../lib/context.js";
 import { queryProfitAndLossQBReport, queryQBReport } from "../services/qb/qbReports.js";
 import type { ProfitAndLossQuery } from "../services/qb/qbReports.js";
 import { pushPurchase, queryQBPurchaseOrders, getQBPurchaseOrderAsPDF, pushFieldPurchase } from "../services/qb/qbPurchases.js";
+import { pushTimesheet } from "../services/qb/qbTimeActivity.js";
 
 const router = Router();
 
@@ -343,6 +351,72 @@ router.post("/vendors/:id/push", requirePermission("manage_inventory"), async (r
 	}
 });
 
+// ── Employees ────────────────────────────────────────────────────────────────
+
+router.get("/employees", requirePermission("view_technicians"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		res.json(createSuccessResponse(await getQBEmployees(orgId)));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.get("/employees/mappings", requirePermission("view_technicians"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		res.json(createSuccessResponse(await getMappedQBEmployees(orgId)));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/employee-mappings", requirePermission("manage_technicians"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const parsed = linkQBEmployeeSchema.safeParse(req.body);
+		if (!parsed.success) {
+			return res
+				.status(400)
+				.json(
+					createErrorResponse(
+						ErrorCodes.VALIDATION_ERROR,
+						parsed.error.issues[0].message,
+					),
+				);
+		}
+		await linkQBEmployee(orgId, parsed.data.technician_id, parsed.data.qb_employee_id);
+		res.status(201).json(createSuccessResponse({ linked: true }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.delete(
+	"/employee-mappings/:technicianId",
+	requirePermission("manage_technicians"),
+	async (req, res, next) => {
+		try {
+			const orgId = req.user!.organization_id as string;
+			await unlinkQBEmployee(orgId, req.params.technicianId as string);
+			res.json(createSuccessResponse({ unlinked: true }));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+// `:id` here is OUR technician id.
+router.post("/employees/:id/push", requirePermission("manage_technicians"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const qbEmployeeId = await pushEmployee(orgId, req.params.id as string);
+		res.json(createSuccessResponse({ pushed: true, qb_employee_id: qbEmployeeId }));
+	} catch (err) {
+		next(err);
+	}
+});
+
 router.get("/purchase-orders", requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
@@ -363,6 +437,16 @@ router.post("/purchases/:id/push", requirePermission("manage_purchases"), async 
         await getScopedDb(orgId).purchase.update({ where: { id: purchaseId }, data: { qb_sync_status: "failed" } }).catch(() => {});
         next(err);
     }
+});
+
+router.post("/timesheets/:id/push", requirePermission("manage_timesheet"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		await pushTimesheet(orgId, req.params.id as string);
+		res.json(createSuccessResponse({ pushed: true }));
+	} catch (err) {
+		next(err);
+	}
 });
 
 router.post("/field-purchases/:id/push", requirePermission("review_field_purchases"), async (req, res, next) => {

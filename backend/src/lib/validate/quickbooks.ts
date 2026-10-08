@@ -11,6 +11,11 @@ export const linkQBVendorSchema = z.object({
 	qb_vendor_id: z.string().min(1),
 });
 
+export const linkQBEmployeeSchema = z.object({
+	technician_id: z.string().uuid(),
+	qb_employee_id: z.string().min(1),
+});
+
 export const qbReportTypeSchema = z.enum(QB_REPORT_TYPES); 
 
 export const qbReportQuerySchema = z.object({

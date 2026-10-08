@@ -469,6 +469,7 @@ model organization {
 
   assistant_conversations assistant_conversation[]
   document_disputes document_dispute[]
+  timesheet_weeks   timesheet_week[]
 }
 
 model saved_report {
@@ -1020,6 +1021,7 @@ model job_visit {
   recurring_occurrence   recurring_occurrence?   @relation("OccurrenceVisit")
   line_items             job_visit_line_item[]
   time_entries           visit_tech_time_entry[]
+  drives                 visit_tech_drive[]
   invoice_visits         invoice_visit[]
   vehicle_stock_usages   vehicle_stock_usage[]
   stock_movements        stock_movement[]
@@ -1117,10 +1119,30 @@ model visit_tech_time_entry {
 
   created_at     DateTime  @default(now())
 
+  qb_time_activity_id String?
+  account_id          String  @default("")
+
   @@index([visit_id])
   @@index([tech_id])
   @@index([visit_id, tech_id])
   @@index([clocked_out_at])
+  @@unique([account_id, qb_time_activity_id])
+}
+
+model visit_tech_drive {
+  id         String     @id @default(uuid())
+
+  visit_id   String
+  visit      job_visit  @relation(fields: [visit_id], references: [id], onDelete: Cascade)
+
+  tech_id    String
+  tech       technician @relation(fields: [tech_id], references: [id])
+
+  started_at DateTime
+  ended_at   DateTime?
+
+  @@index([visit_id])
+  @@index([tech_id, started_at])
 }
 
 model job_note {
@@ -2660,6 +2682,7 @@ model technician {
 
   visit_techs    job_visit_technician[]
   time_entries   visit_tech_time_entry[]
+  drives         visit_tech_drive[]
   notifications  technician_notification[]
   restock_records        vehicle_restock_record[]   @relation("TechnicianRestockRecords")
   stock_adjustments      vehicle_stock_adjustment[] @relation("TechnicianAdjustments")
@@ -2684,16 +2707,32 @@ model technician {
   created_project_notes     project_note[] @relation("ProjectNoteCreator")
   last_edited_project_notes project_note[] @relation("ProjectNoteEditor")
 
-
   shifts       technician_shift[]
   shift_breaks technician_shift_break[]
   provisional_items   inventory_item[] @relation("TechProvisionalItems")
   field_purchase_grants field_purchase_grant[]
   field_purchases       field_purchase[]
+  external_mappings     technician_external_mapping[]
+  timesheet_weeks       timesheet_week[]
 
   @@index([email])
   @@index([status])
   @@index([organization_id])
+}
+
+model technician_external_mapping {
+  id            String @id @default(uuid())
+  technician_id String
+  provider      String
+  account_id    String @default("")
+  external_id   String
+
+  technician technician @relation(fields: [technician_id], references: [id], onDelete: Cascade)
+
+  // One QBO employee per technician and vice versa, per connected company file.
+  @@unique([provider, account_id, external_id])
+  @@unique([provider, technician_id, account_id])
+  @@index([technician_id])
 }
 
 model dispatcher {
@@ -2765,6 +2804,8 @@ model dispatcher {
   
   notifications      dispatcher_notification[]
 
+  approved_timesheet_weeks timesheet_week[] @relation("TimesheetApprover")
+
   @@index([email])
   @@index([organization_id])
 }
@@ -2809,10 +2850,14 @@ model technician_shift {
   payable_hours   Decimal?   @db.Decimal(8, 4)
   breaks          technician_shift_break[]
 
+  qb_time_activity_id String?
+  account_id          String  @default("")
+
   @@index([tech_id])
   @@index([org_id])
   @@index([tech_id, ended_at])
   @@index([org_id, started_at])
+  @@unique([account_id, qb_time_activity_id])
 }
 
 model technician_shift_break {
@@ -3463,3 +3508,22 @@ model assistant_tool_call {
   @@index([tool_name])
 }
 
+model timesheet_week {
+  id                        String         @id @default(uuid())
+  organization_id           String
+  organization              organization   @relation(fields: [organization_id], references: [id])
+  technician_id             String
+  technician                technician     @relation(fields: [technician_id], references: [id])
+
+  week_start                DateTime       @db.Date // Monday in the org's timezone
+  approved_at               DateTime?
+  approved_by_dispatcher_id String?
+  approved_by_dispatcher    dispatcher?    @relation("TimesheetApprover", fields: [approved_by_dispatcher_id], references: [id], onDelete: SetNull)
+
+  qb_sync_status            qb_sync_status @default(not_synced)
+  qb_synced_at              DateTime?
+  qb_error                  String?
+
+  @@unique([technician_id, week_start])
+  @@index([organization_id, week_start])
+}

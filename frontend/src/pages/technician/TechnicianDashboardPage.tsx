@@ -8,7 +8,7 @@ import TechVisitCard from "../../components/technicianComponents/TechVisitCard";
 import AddNotePhotoModal from "../../components/technicianComponents/AddNotePhotoModal";
 import type { NotePhoto } from "../../components/technicianComponents/AddNotePhotoModal";
 import type { JobVisit, VisitStatus } from "../../types/jobs";
-import { formatTime, FALLBACK_TIMEZONE } from "../../util/util";
+import { errorMessage, formatTime, FALLBACK_TIMEZONE } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
 import TechPage from "../../components/technician/TechPage";
 
@@ -275,6 +275,11 @@ export default function TechnicianDashboardPage() {
 					<LogIn size={18} />
 					{goAvailableMutation.isPending ? "Starting…" : "Start Shift"}
 				</button>
+				{goAvailableMutation.isError && (
+					<p className="max-w-xs text-center text-sm text-red-500">
+						{errorMessage(goAvailableMutation.error, "Couldn't start your shift — try again.").replace(/^TIMESHEET_LOCKED: /, "")}
+					</p>
+				)}
 			</TechPage>
 		);
 	}

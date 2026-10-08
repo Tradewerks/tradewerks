@@ -47,6 +47,27 @@ export interface MappedQBVendor {
     external_id: string;
 }
 
+// Mirrors QBEmployeeRow in backend/src/services/qb/qbEmployees.ts.
+export interface QBEmployeeLite {
+    Id: string;
+    DisplayName: string;
+    GivenName?: string;
+    FamilyName?: string;
+    PrimaryPhone?: { FreeFormNumber?: string };
+    PrimaryEmailAddr?: { Address?: string };
+    Active?: boolean;
+    /** Set when this QBO employee already maps to one of our technicians. */
+    linkedTechnicianId: string | null;
+    /** An unlinked technician matching by email, else by name. */
+    suggestedTechnicianId: string | null;
+    suggestedTechnicianName: string | null;
+}
+
+export interface MappedQBEmployee {
+    technician_id: string;
+    external_id: string;
+}
+
 export interface ImportQBItemResult{
     item: InventoryItem;
     warning?: string;

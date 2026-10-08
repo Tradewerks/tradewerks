@@ -251,7 +251,7 @@ router.post("/:id/clock-in", requirePermission("check_in"), async (req, res, nex
         const id = req.params.id as string;
         const result = await clockInVisit(id, tech_id, orgId, getUserContext(req));
         if (result.err) {
-            if (result.err.startsWith("ALREADY_CLOCKED_IN:")) {
+            if (result.err.startsWith("ALREADY_CLOCKED_IN:") || result.err.startsWith("TIMESHEET_LOCKED")) {
                 return res.status(409).json(createErrorResponse(ErrorCodes.CONFLICT, result.err));
             }
             return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));

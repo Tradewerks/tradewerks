@@ -14,6 +14,7 @@ const DISPATCHER_CATALOG = [
 	{ category: "Clients", permissions: ["view_clients", "create_clients", "edit_clients", "delete_clients"] },
 	{ category: "Inventory", permissions: ["view_inventory", "manage_inventory"] },
 	{ category: "Reports", permissions: ["view_reports", "export_reports"] },
+	{ category: "Timesheets", permissions: ["view_timesheet", "manage_timesheet"] },
 	{ category: "Recurring Plans", permissions: ["view_recurring_plans", "manage_recurring_plans"] },
 	{ category: "Team", permissions: ["view_technicians", "manage_technicians", "view_dispatchers", "manage_dispatchers"] },
 	{ category: "Administration", permissions: ["view_admin", "manage_roles", "manage_organization", "manage_taxes"] },

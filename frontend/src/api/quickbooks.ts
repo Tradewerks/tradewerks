@@ -17,7 +17,9 @@ import type {
     QBReportTypeId,
     QBReportQuery,
     QBReportPayload,
-    QBPurchaseOrder
+    QBPurchaseOrder,
+    QBEmployeeLite,
+    MappedQBEmployee,
 } from "../types/quickbooks";
 import type { Supplier } from "../types/suppliers";
  
@@ -162,6 +164,12 @@ export const pushFieldPurchaseToQB = async (purchaseId: string) => {
     return response.data.data!;
 }
 
+export const pushTimesheetToQB = async (timesheetId: string) => {
+    const response = await api.post<ApiResponse<{ pushed: boolean }>>(`integrations/quickbooks/timesheets/${timesheetId}/push`);
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to push timesheet to QB");
+    return response.data.data!;
+}
+
 export const viewQBPurchaseOrderPdf = async (purchaseId: string): Promise<void> => {
     const response = await api.get(`integrations/quickbooks/purchases/${purchaseId}/pdf`, { responseType: "blob" });
     const url = URL.createObjectURL(new Blob([response.data], { type: "application/pdf" }));
@@ -220,5 +228,35 @@ export const getQBProfitAndLossReport = async (query: QBProfitAndLossQuery): Pro
 export const getQBReport = async (reportType: QBReportTypeId, query: QBReportQuery): Promise<QBReportPayload> => {
     const response = await api.get<ApiResponse<QBReportPayload>>(`integrations/quickbooks/reports/${reportType}`, {params: query});
     if (response.data.error) throw new Error(response.data.error?.message || `Failed to get QB ${reportType} report`);
+    return response.data.data!;
+}
+
+export const getQBEmployees = async (): Promise<QBEmployeeLite[]> => {
+    const response = await api.get<ApiResponse<QBEmployeeLite[]>>("integrations/quickbooks/employees");
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to get QB employees");
+    return response.data.data!;
+}
+
+export const getQBMappedEmployees = async (): Promise<MappedQBEmployee[]> => {
+    const response = await api.get<ApiResponse<MappedQBEmployee[]>>("integrations/quickbooks/employees/mappings");
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to get mapped QB employees");
+    return response.data.data!;
+}
+
+export const linkQBEmployee = async (technician_id: string, qb_employee_id: string) => {
+    const response = await api.post<ApiResponse<{linked: boolean}>>("integrations/quickbooks/employee-mappings", {technician_id, qb_employee_id});
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to link QB employee");
+    return response.data.data!;
+}
+
+export const unlinkQBEmployee = async (technicianId: string) => {
+    const response = await api.delete<ApiResponse<{unlinked: boolean}>>(`integrations/quickbooks/employee-mappings/${technicianId}`);
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to unlink QB employee");
+    return response.data.data!;
+}
+
+export const pushQBEmployee = async (technicianId: string) => {
+    const response = await api.post<ApiResponse<{pushed: boolean; qb_employee_id: string}>>(`integrations/quickbooks/employees/${technicianId}/push`);
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to push QB employee");
     return response.data.data!;
 }

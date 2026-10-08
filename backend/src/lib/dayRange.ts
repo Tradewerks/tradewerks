@@ -113,3 +113,14 @@ export function localDateString(
 	const { year, month, day } = localParts(base, timezone);
 	return new Date(Date.UTC(year, month, day + offsetDays)).toISOString().slice(0, 10);
 }
+
+// "YYYY-MM-DD" -> that week's Monday at UTC midnight, matching the @db.Date column.
+export function weekStartOf(date: string): Date {
+	const d = new Date(`${date}T00:00:00.000Z`);
+	d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+	return d;
+}
+
+export function weekRangeIn(weekStart: Date, timezone: string) {
+	return utcDayRange(new Date(weekStart.getTime() + 12 * 3_600_000), 7, timezone);
+}

@@ -6,14 +6,16 @@ import QBClientSyncCard from "./QBClientSyncCard";
 import QBPurchaseOrdersCard from "./QBPurchaseOrdersCard";
 import { useQBStatusQuery } from "../../hooks/useQuickbooks"
 import { QUICKBOOKS_ENABLED } from "../../config/features";
+import QBEmployeeMappingCard from "./QBEmployeeMappingCard";
 
-type QBTab = "clients" | "items" | "tax-codes" | "purchase-orders";
+type QBTab = "clients" | "items" | "tax-codes" | "purchase-orders" | "employees";
 
 const TABS: { id: QBTab; label: string }[] = [
     { id: "clients", label: "Clients" },
     { id: "items", label: "Items" },
     { id: "tax-codes", label: "Tax Codes" },
     { id: "purchase-orders", label: "Purchase Orders" },
+    { id: "employees", label: "Employees"}
 ];
 
 export default function QuickBooksSection() {
@@ -75,6 +77,11 @@ export default function QuickBooksSection() {
                     {activeTab === "purchase-orders" && (
                         <div role="tabpanel" id="qb-tabpanel-purchase-orders" aria-labelledby="qb-tab-purchase-orders">
                             <QBPurchaseOrdersCard />
+                        </div>
+                    )}
+                    {activeTab === "employees" && (
+                        <div role="tabpanel" id="qb-tabpanel-employees" aria-labelledby="qb-tab-employees">
+                            <QBEmployeeMappingCard />
                         </div>
                     )}
                 </div>

@@ -29,6 +29,7 @@ function makeSdb() {
 		technician_shift_break: { findFirst: shiftBreakFindFirst, findMany: vi.fn().mockResolvedValue([]) },
 		technician_shift: { findFirst: shiftFindFirst },
 		technician: { update: technicianUpdate },
+		visit_tech_drive: { updateMany: vi.fn() },
 	};
 	return {
 		technician: { findUnique: techFindUnique },

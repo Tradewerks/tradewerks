@@ -19,6 +19,8 @@ import { getMfaEnabledUserIds, isMfaEnabled } from "../services/mfaService.js";
 import { db } from "../db.js";
 import { utcDayRange } from "../lib/dayRange.js";
 import { fetchRouteDistanceMiles, applyOdometerIncrement } from "../lib/vehicleMileage.js";
+import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
+import { recordDrive } from "../lib/visitDrive.js";
 
 const PAID_BREAK_REASONS = new Set<string>(["Rest", "EquipmentIssue"]);
 const VALID_BREAK_REASONS = new Set<string>([
@@ -436,6 +438,7 @@ export const startShift = async (techId: string, organizationId: string) => {
 		if (!tech) return { err: "Technician not found" };
 		if (tech.status !== "Offline")
 			return { err: "Technician is not Offline" };
+		if (await isWeekLocked(organizationId, techId)) return { err: TIMESHEET_LOCKED };
 
 		const updated = await sdb.$transaction(async (tx) => {
 			await tx.technician_shift.create({
@@ -545,6 +548,9 @@ export const goOffline = async (techId: string, organizationId: string, techCord
 					data: { ended_at: now, duration_hrs: durationHrs },
 				});
 			}
+
+			//doesn't record the Drive time unless the tech signs out when EnRoute
+			await recordDrive(tx, techId, now);
 
 			// Close open shift
 			const openShift = await tx.technician_shift.findFirst({
