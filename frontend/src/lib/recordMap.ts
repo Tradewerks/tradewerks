@@ -130,7 +130,7 @@ export function buildRecordMapModel(input: RecordMapInput): RecordMapModel {
 		.sort((a, b) => a.name.localeCompare(b.name))
 		.map((tech): RecordMapTechRow => {
 			const route = routeByTech.get(tech.id) ?? null;
-			const routeHere = route && focusVisitIds.has(route.visitId) ? route : null;
+			const routeHere = route?.visitId && focusVisitIds.has(route.visitId) ? route : null;
 			const drivingElsewhere = !!route && !routeHere;
 			const activeHere = isTechActiveOn(tech, focusVisitIds);
 			const coords = hasValidCoords(tech.coords) ? tech.coords : null;

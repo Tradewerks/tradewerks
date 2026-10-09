@@ -51,8 +51,8 @@ export interface DirectionsResult {
 export interface TechRouteData {
 	techId: string;
 	techName: string;
-	visitId: string;
-	jobId: string;
+	visitId: string | null;
+	jobId: string | null;
 	color: string;
 	current: Coordinates;
 	destination: Coordinates;

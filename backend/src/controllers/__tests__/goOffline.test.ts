@@ -117,6 +117,15 @@ describe("goOffline — return-leg mileage capture", () => {
 		expect(mockApplyOdometerIncrement).not.toHaveBeenCalled();
 	});
 
+	it("skips when Head back already recorded the last visit's return leg", async () => {
+		jobVisitFindFirst.mockResolvedValue({ ...COMPLETED_VISIT, estimated_return_drive_miles: 4 });
+
+		await goOffline(TECH_ID, ORG_ID, TECH_COORDS);
+
+		expect(mockFetchRouteDistanceMiles).not.toHaveBeenCalled();
+		expect(jobVisitUpdateMany).not.toHaveBeenCalled();
+	});
+
 	it("is a no-op when neither techCoords nor a stored location exist", async () => {
 		const result = await goOffline(TECH_ID, ORG_ID);
 

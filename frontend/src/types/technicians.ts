@@ -10,7 +10,7 @@ import type { JobVisit } from "./jobs";
 // ============================================================================
 
 export const TechnicianStatusValues = [
-	"Available", "Working", "OnSite", "EnRoute", "Paused", "WrappingUp", "Break", "Offline",
+	"Available", "Working", "OnSite", "EnRoute", "Paused", "WrappingUp", "HeadingBack", "Break", "Offline",
 ] as const;
 export type TechnicianStatus = (typeof TechnicianStatusValues)[number];
 
@@ -21,6 +21,7 @@ export const TechnicianStatusLabels: Record<TechnicianStatus, string> = {
 	OnSite:     "On Site",
 	Paused:     "Paused",
 	WrappingUp: "Wrapping Up",
+	HeadingBack: "Heading Back",
 	Break:      "Break",
 	Offline:    "Offline",
 };
@@ -32,6 +33,7 @@ export const TechnicianStatusColors: Record<TechnicianStatus, string> = {
 	OnSite:     "bg-warning/10 text-warning-text border-warning/20",
 	Paused:     "bg-orange/10 text-orange-text border-orange/20",
 	WrappingUp: "bg-teal-400/10 text-teal-300 border-teal-400/20",
+	HeadingBack: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",
 	Break:      "bg-amber-400/10 text-amber-300 border-amber-400/20",
 	Offline:    "bg-neutral/10 text-text-tertiary border-border-strong/20",
 };
@@ -43,6 +45,7 @@ export const TechnicianStatusDotColors: Record<TechnicianStatus, string> = {
 	OnSite:     "bg-warning",
 	Paused:     "bg-orange",
 	WrappingUp: "bg-teal-400",
+	HeadingBack: "bg-indigo-500",
 	Break:      "bg-amber-400",
 	Offline:    "bg-neutral",
 };
@@ -120,7 +123,7 @@ export interface Technician {
 	last_login: Date | null;
 	last_ping_at?: string | null;
 	current_vehicle_id: string | null;
-	current_vehicle?: { id: string; name: string; type: string; license_plate: string | null; color: string | null; notes: string | null } | null;
+	current_vehicle?: { id: string; name: string; type: string; license_plate: string | null; color: string | null; notes: string | null; stored_at_coords?: Coordinates | null } | null;
 	visit_techs?: VisitTechnician[];
 	logs?: unknown[];
 	created_client_notes?: unknown[];
@@ -225,7 +228,8 @@ export type TechStatusChangeType =
 	| "shift_end"
 	| "break_start"
 	| "break_end"
-	| "wrapping_up_cleared";
+	| "wrapping_up_cleared"
+	| "heading_back";
 
 export interface TechStatusEvent {
 	kind: "tech";

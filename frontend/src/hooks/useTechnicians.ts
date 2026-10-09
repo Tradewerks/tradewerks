@@ -182,3 +182,15 @@ export const useMarkDoneMutation = (): UseMutationResult<Technician, Error, stri
 		},
 	});
 };
+
+export const useReturnFromJobMutation = (): UseMutationResult<Technician, Error, string> => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (techId: string) => technicianApi.returnFromJob(techId),
+		onSuccess: (updated) => {
+			queryClient.setQueryData(["technicians", updated.id], updated);
+			queryClient.invalidateQueries({ queryKey: ["technicians"] });
+		},
+	});
+};
+

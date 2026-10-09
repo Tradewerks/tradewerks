@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { Activity, ArrowUpRight, Briefcase, ChevronDown, Clock, Layers, Route, User, Users, Wrench } from "lucide-react";
 import type { Technician } from "../../../types/technicians";
-import { TechnicianStatusDotColors } from "../../../types/technicians";
+import { TechnicianStatusDotColors, TechnicianStatusLabels } from "../../../types/technicians";
 import type { TechRouteData } from "../../../types/location";
 import type { Client } from "../../../types/clients";
 import { useLiveVisitUpdates } from "../../../hooks/useLiveVisitUpdates";
@@ -307,7 +307,7 @@ export default function MapPanel({
 										label={tech.name}
 										sublabel={
 											validCoords
-												? tech.status
+												? TechnicianStatusLabels[tech.status]
 												: "no location"
 										}
 										dot={

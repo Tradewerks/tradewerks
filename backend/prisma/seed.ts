@@ -3525,8 +3525,12 @@ async function main() {
 	// assignment is a reassignable many-to-one pointer (technician.current_vehicle_id).
 	// ============================================================================
 
+	// All vehicles park at the shop; heading-back routes and return miles need this.
+	const shop = { stored_at: org.address, stored_at_coords: { lat: 43.8789, lon: -91.2335 } };
+
 	const van12 = await db.vehicle.create({
 		data: {
+			...shop,
 			organization_id: org.id,
 			name: "Van 12",
 			type: "Van",
@@ -3544,6 +3548,7 @@ async function main() {
 
 	const van8 = await db.vehicle.create({
 		data: {
+			...shop,
 			organization_id: org.id,
 			name: "Van 8",
 			type: "Van",
@@ -3561,6 +3566,7 @@ async function main() {
 
 	const truck4 = await db.vehicle.create({
 		data: {
+			...shop,
 			organization_id: org.id,
 			name: "Truck 4",
 			type: "Truck",

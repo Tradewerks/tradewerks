@@ -72,6 +72,7 @@ const TECH_STATUS_BORDER: Record<TechnicianStatus, string> = {
 	OnSite:     "border-warning",
 	EnRoute:    "border-warning",
 	WrappingUp: "border-warning",
+	HeadingBack: "border-warning",
 	Paused:     "border-reviewing",
 	Break:      "border-reviewing",
 	// Filtered out of this widget, but a square with no signal stays a square.

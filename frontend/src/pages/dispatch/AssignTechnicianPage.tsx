@@ -23,6 +23,7 @@ import {
 import CreateJobVisit from "../../components/jobs/CreateJobVisit";
 import { useMasonry } from "../../hooks/useMasonry";
 import type { Job, JobVisit } from "../../types/jobs";
+import { TechnicianStatusLabels } from "../../types/technicians";
 import type { Priority } from "../../types/common";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import BoxSvg from "../../assets/icons/box.svg?react";
@@ -289,7 +290,7 @@ export default function AssignTechnicianPage() {
 									)}`}
 								/>
 								<span className="text-xs font-medium text-text-primary">
-									{technician.status}
+									{TechnicianStatusLabels[technician.status]}
 								</span>
 							</div>
 						</div>

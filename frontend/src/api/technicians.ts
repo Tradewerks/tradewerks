@@ -108,6 +108,14 @@ export const markDone = async (technicianId: string): Promise<Technician> => {
 	return response.data.data!;
 };
 
+export const returnFromJob = async (technicianId: string): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${technicianId}/head-back`);
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || 'Failed to return');
+	}
+	return response.data.data!;
+}
+
 export const changeTechnicianPassword = async (id: string, data: { current_password: string; new_password: string }): Promise<Technician> => {
 	try {
 		const response = await api.post<ApiResponse<Technician>>(`/technicians/${id}/change-password`, data);

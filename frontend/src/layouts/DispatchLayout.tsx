@@ -304,6 +304,16 @@ export default function DispatchLayout() {
 								label="Reporting"
 							/>
 						)}
+						{canViewTimesheet && (
+							<SideNavItem
+								expanded={expanded}
+								to="/dispatch/timesheet"
+								icon={
+									<Timer size={ICON_SIZE} />
+								}
+								label="Timesheet"
+							/>
+						)}
 						{canViewFollowups && (
 							<SideNavItem
 								expanded={expanded}
@@ -322,16 +332,6 @@ export default function DispatchLayout() {
 									/>
 								}
 								label="Admin"
-							/>
-						)}
-						{canViewTimesheet && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/timesheet"
-								icon={
-									<Timer size={ICON_SIZE} />
-								}
-								label="Timesheet"
 							/>
 						)}
 					</nav>

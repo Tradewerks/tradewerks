@@ -1,9 +1,17 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn } from "lucide-react";
+import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn, MapPin } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useJobVisitsByTechIdQuery, useCreateJobNoteMutation } from "../../hooks/useJobs";
-import { useTechnicianByIdQuery, useGoAvailableMutation, useGoOfflineMutation, useGoOnBreakMutation, useMarkDoneMutation } from "../../hooks/useTechnicians";
+import { 
+	useTechnicianByIdQuery, 
+	useGoAvailableMutation, 
+	useGoOfflineMutation, 
+	useGoOnBreakMutation, 
+	useMarkDoneMutation,
+	useReturnFromJobMutation,
+
+} from "../../hooks/useTechnicians";
 import TechVisitCard from "../../components/technicianComponents/TechVisitCard";
 import AddNotePhotoModal from "../../components/technicianComponents/AddNotePhotoModal";
 import type { NotePhoto } from "../../components/technicianComponents/AddNotePhotoModal";
@@ -59,6 +67,7 @@ export default function TechnicianDashboardPage() {
 	const goOfflineMutation = useGoOfflineMutation();
 	const goOnBreakMutation = useGoOnBreakMutation();
 	const markDoneMutation = useMarkDoneMutation();
+	const returnFromJobMutation = useReturnFromJobMutation();
 
 	const [vehicleBannerDismissed, setVehicleBannerDismissed] = useState(false);
 
@@ -217,10 +226,11 @@ export default function TechnicianDashboardPage() {
 
 	// ── hero type ───────────────────────────────────────────────────────────
 
-	type HeroType = "wrapping-up" | "primary" | "empty";
+	type HeroType = "wrapping-up" | "heading-back" | "primary" | "empty";
 
 	const heroType: HeroType =
 		techProfile?.status === "WrappingUp" ? "wrapping-up"
+		: techProfile?.status === "HeadingBack" ? "heading-back"
 		: primaryHeroVisit                   ? "primary"
 		: "empty";
 
@@ -363,6 +373,16 @@ export default function TechnicianDashboardPage() {
 							Take Break
 						</button>
 					)}
+					{techProfile?.status === "Available" && (
+						<button
+							onClick={() => user?.userId && returnFromJobMutation.mutate(user.userId)}
+							disabled={returnFromJobMutation.isPending}
+							className="flex-1 flex items-center justify-center gap-2 min-h-[44px] py-3 rounded-lg bg-base border border-border-subtle text-sm text-text-secondary hover:bg-surface hover:text-text-primary transition-colors disabled:opacity-50"
+						>
+							<MapPin size={15} />
+							Head back
+						</button>
+					)}
 					{!isClockedInAnywhere && techProfile?.status !== "Break" && (
 						<button
 							onClick={() => {
@@ -432,16 +452,25 @@ export default function TechnicianDashboardPage() {
 			<div className="lg:grid lg:grid-cols-2 lg:gap-8 lg:items-start">
 				{/* ── Hero section: all active visits ──────────────────────────────── */}
 				<div className="mb-6 space-y-3 lg:mb-0">
+					{heroType === "wrapping-up" && (
+						<WrappingUpCard
+							onAvailable={() =>
+								user?.userId && markDoneMutation.mutateAsync(user.userId)
+							}
+							onHeadBack={() =>
+								user?.userId && returnFromJobMutation.mutateAsync(user.userId)
+							}
+							isLoading={markDoneMutation.isPending || returnFromJobMutation.isPending}
+						/>
+					)}
+					{heroType === "heading-back" && (
+						<HeadingBackCard
+							onBack={() => user?.userId && markDoneMutation.mutateAsync(user.userId)}
+							isLoading={markDoneMutation.isPending}
+						/>
+					)}
 					{activeVisits.length === 0 && (
 						<>
-							{heroType === "wrapping-up" && (
-								<WrappingUpCard
-									onAvailable={() =>
-										user?.userId && markDoneMutation.mutateAsync(user.userId)
-									}
-									isLoading={markDoneMutation.isPending}
-								/>
-							)}
 							{primaryHeroVisit ? (
 								<TechVisitCard
 									visit={primaryHeroVisit}
@@ -449,7 +478,7 @@ export default function TechnicianDashboardPage() {
 									tz={tz}
 									showDateTime={true}
 								/>
-							) : heroType !== "wrapping-up" && (
+							) : heroType !== "wrapping-up" && heroType !== "heading-back" && (
 								<div className="rounded-xl border border-border-subtle bg-base px-4 py-6 text-center">
 									<p className="text-sm text-text-faint">
 										No visits scheduled. Check with dispatch.
@@ -745,7 +774,7 @@ export default function TechnicianDashboardPage() {
 
 // ─── sub-components ───────────────────────────────────────────────────────────
 
-function WrappingUpCard({ onAvailable, isLoading }: { onAvailable: () => void; isLoading: boolean }) {
+function WrappingUpCard({ onAvailable, onHeadBack, isLoading }: { onAvailable: () => void; onHeadBack: () => void; isLoading: boolean }) {
 	return (
 		<div
 			style={{
@@ -770,6 +799,45 @@ function WrappingUpCard({ onAvailable, isLoading }: { onAvailable: () => void; i
 					className="w-full py-2.5 rounded-lg bg-gradient-tech-teal/10 border border-gradient-tech-teal/20 text-gradient-tech-teal-text text-sm font-medium hover:bg-gradient-tech-teal/20 transition-colors disabled:opacity-40"
 				>
 					I'm Available
+				</button>
+				<button
+					onClick={onHeadBack}
+					disabled={isLoading}
+					className="w-full py-2.5 rounded-lg border border-border-subtle text-text-primary text-sm font-medium hover:bg-surface-raised bg-surface transition-colors disabled:opacity-40"
+				>
+					Head back
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function HeadingBackCard({ onBack, isLoading }: { onBack: () => void; isLoading: boolean }) {
+	return (
+		<div
+			style={{
+				padding: "1px 1px 1px 3px",
+				background: "linear-gradient(to right, var(--color-action-drive) 0%, var(--color-surface-raised) 45%, var(--color-surface-raised) 100%)",
+				borderRadius: "12px",
+			}}
+		>
+			<div className="rounded-[11px] bg-base px-4 py-4 space-y-3">
+				<div className="flex items-center gap-2">
+					<div className="w-2 h-2 rounded-full bg-action-drive animate-pulse" />
+					<span className="text-[10px] font-bold tracking-[0.1em] uppercase text-primary-text">
+						Heading Back
+					</span>
+				</div>
+				<p className="text-sm text-text-tertiary">
+					Your drive is being logged. Tap when you're back.
+				</p>
+				<button
+					onClick={onBack}
+					disabled={isLoading}
+					className="w-full py-2.5 rounded-lg flex items-center justify-center gap-2 bg-action-drive hover:bg-action-drive-hover text-on-primary text-sm font-medium transition-colors disabled:opacity-40"
+				>
+					<MapPin size={16} />
+					I'm Back
 				</button>
 			</div>
 		</div>

@@ -11,7 +11,9 @@ import {
     goOffline,
     goOnBreak,
     returnFromBreak,
-    changeTechnicianPassword
+    changeTechnicianPassword,
+    returnFromJob,
+    markAvailable
 } from "../controllers/techniciansController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
@@ -397,7 +399,7 @@ router.post("/:id/done", async (req, res, next) => {
 		import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
 			cancelWrappingUpTimer(id);
 		}).catch(() => {});
-		const result = await updateTechnician(id, { status: "Available" }, orgId, getUserContext(req));
+		const result = await markAvailable(id, orgId, getUserContext(req));
 		if (result.err) {
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
@@ -407,6 +409,32 @@ router.post("/:id/done", async (req, res, next) => {
 			techName: result.item!.name,
 			newStatus: "Available",
 			changeType: "wrapping_up_cleared",
+			changedAt: new Date().toISOString(),
+		});
+		res.json(createSuccessResponse(result.item));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Tech explicitly clears WrappingUp → EnRoute (heading back)
+router.post("/:id/head-back", async (req, res, next) => {
+	try {
+		const id = req.params.id as string;
+		const orgId = req.user!.organization_id as string;
+		import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
+			cancelWrappingUpTimer(id);
+		}).catch(() => {});
+		const result = await returnFromJob(orgId, id, getUserContext(req));
+		if (result.err) {
+			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+		}
+		getSocket().emit("technician-update", result.item);
+		getSocket().emit("technician:status_changed", {
+			techId: result.item!.id,
+			techName: result.item!.name,
+			newStatus: "HeadingBack",
+			changeType: "heading_back",
 			changedAt: new Date().toISOString(),
 		});
 		res.json(createSuccessResponse(result.item));

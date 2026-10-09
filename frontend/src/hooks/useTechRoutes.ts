@@ -11,14 +11,27 @@ const ROUTE_STALE_MS = 30_000;
 interface DrivingTarget {
 	techId: string;
 	techName: string;
-	visitId: string;
-	jobId: string;
+	visitId: string | null;
+	jobId: string | null;
 	current: Coordinates;
 	destination: Coordinates;
 	destinationLabel: string;
 }
 
 function pickDrivingTarget(tech: Technician): DrivingTarget | null {
+	if (tech.status === "HeadingBack") {
+		const home = tech.current_vehicle?.stored_at_coords;
+		if (!home || typeof home.lat !== "number" || typeof home.lon !== "number") return null;
+		return {
+			techId: tech.id,
+			techName: tech.name,
+			visitId: null,
+			jobId: null,
+			current: tech.coords,
+			destination: home,
+			destinationLabel: `${tech.current_vehicle!.name} home`,
+		};
+	}
 	// A 2nd tech driving to a visit already OnSite only flips their own tech_status
 	const drivingVisits = (tech.visit_techs ?? [])
 		.filter((vt) => vt.visit.status === "Driving" || vt.tech_status === "EnRoute")

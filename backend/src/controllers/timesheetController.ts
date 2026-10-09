@@ -241,7 +241,7 @@ export async function getTechnicianWeek (orgId: string, technicianId: string, da
     const drives: Span[] = driveRows.map((d) => ({
         start: d.started_at,
         end: d.ended_at ?? now,
-        label: `Drive to ${d.visit.job.job_number}`,
+        label: d.visit ? `Drive to ${d.visit.job.job_number}` : "Drive back",
         sub: "",
     }));
 

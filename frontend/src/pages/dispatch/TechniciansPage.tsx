@@ -35,6 +35,7 @@ const technicianStatusOptions = [
 	{ value: "OnSite", label: "On Site" },
 	{ value: "Paused", label: "Paused" },
 	{ value: "WrappingUp", label: "Wrapping Up" },
+	{ value: "HeadingBack", label: "Heading Back" },
 	{ value: "Break", label: "Break" },
 	{ value: "Offline", label: "Offline" },
 ];
@@ -45,13 +46,14 @@ const STATUS_ORDER: TechnicianStatus[] = [
 	"OnSite",
 	"Paused",
 	"WrappingUp",
+	"HeadingBack",
 	"Available",
 	"Break",
 	"Offline",
 ];
 
 const GROUPS: { id: GroupId; label: string; statuses: TechnicianStatus[] }[] = [
-	{ id: "active", label: "On the job", statuses: ["Working", "EnRoute", "OnSite", "Paused", "WrappingUp"] },
+	{ id: "active", label: "On the job", statuses: ["Working", "EnRoute", "OnSite", "Paused", "WrappingUp", "HeadingBack"] },
 	{ id: "available", label: "Available", statuses: ["Available"] },
 	{ id: "break", label: "On break", statuses: ["Break"] },
 	{ id: "offline", label: "Offline", statuses: ["Offline"] },

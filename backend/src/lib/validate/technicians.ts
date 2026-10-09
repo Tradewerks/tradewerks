@@ -1,7 +1,7 @@
 import z from "zod";
 import { coordsSchema } from "./shared.js";
 
-const technicianStatusEnum = z.enum(["Offline", "Available", "Break", "EnRoute", "OnSite", "Working", "Paused", "WrappingUp"]);
+const technicianStatusEnum = z.enum(["Offline", "Available", "Break", "EnRoute", "OnSite", "Working", "Paused", "WrappingUp", "HeadingBack"]);
 
 export const createTechnicianSchema = z.object({
 	name: z.string().min(1, "Technician name is required"),

@@ -44,6 +44,24 @@ describe("useTechRoutes", () => {
 		expect(result.current[0]).toMatchObject({ techId: "t1", visitId: "v1", jobId: "j1" });
 	});
 
+	test("a tech heading back routes to their vehicle's home", () => {
+		fetchDrivingRoute.mockReset().mockResolvedValue(null);
+		const techs = [{
+			id: "t1",
+			name: "Tech t1",
+			coords: { lat: 43.8, lon: -91.2 },
+			status: "HeadingBack",
+			current_vehicle: { name: "Van 12", stored_at_coords: { lat: 43.7, lon: -91.1 } },
+			visit_techs: [],
+		} as unknown as Technician];
+		const { result } = renderHook(() => useTechRoutes(techs), { wrapper });
+		expect(result.current[0]).toMatchObject({
+			visitId: null,
+			destination: { lat: 43.7, lon: -91.1 },
+			destinationLabel: "Van 12 home",
+		});
+	});
+
 	test("a scope fetches only scoped techs but keeps the org-wide color", async () => {
 		fetchDrivingRoute.mockReset().mockResolvedValue(null);
 		const techs = [drivingTech("t1", "v1", "j1"), drivingTech("t2", "v2", "j2")];

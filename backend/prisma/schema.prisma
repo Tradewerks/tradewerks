@@ -216,6 +216,7 @@ enum technician_status {
   Working
   Paused
   WrappingUp
+  HeadingBack
 }
 
 enum tech_visit_status {
@@ -1132,8 +1133,8 @@ model visit_tech_time_entry {
 model visit_tech_drive {
   id         String     @id @default(uuid())
 
-  visit_id   String
-  visit      job_visit  @relation(fields: [visit_id], references: [id], onDelete: Cascade)
+  visit_id   String?
+  visit      job_visit?  @relation(fields: [visit_id], references: [id], onDelete: Cascade)
 
   tech_id    String
   tech       technician @relation(fields: [tech_id], references: [id])

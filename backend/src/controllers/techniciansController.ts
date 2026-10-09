@@ -38,6 +38,7 @@ const VALID_TECH_STATUSES = new Set<string>([
 	"Working",
 	"Paused",
 	"WrappingUp",
+	"HeadingBack",
 ]);
 
 function toBreakReason(v: string): tech_break_reason | undefined {
@@ -70,7 +71,7 @@ const TECHNICIAN_SELECT = {
 	theme: true,
 	organization_role_id: true,
 	current_vehicle_id: true,
-	current_vehicle: { select: { id: true, name: true } },
+	current_vehicle: { select: { id: true, name: true, stored_at_coords: true } },
 	organization_role: { select: { id: true, name: true, permissions: true } },
 	visit_techs: {
 		include: {
@@ -475,6 +476,48 @@ export const startShift = async (techId: string, organizationId: string) => {
 	}
 };
 
+// Return miles from today's last completed visit to the vehicle home (else fallback coords).
+const recordReturnMiles = async (
+	sdb: ReturnType<typeof getScopedDb>,
+	techId: string,
+	organizationId: string,
+	vehicleId: string | null,
+	fallback?: { lat: number; lon: number },
+) => {
+	const vehicle = vehicleId
+		? await sdb.vehicle.findFirst({ where: { id: vehicleId }, select: { stored_at_coords: true } })
+		: null;
+	const returnTo = (vehicle?.stored_at_coords as { lat: number; lon: number } | null) ?? fallback;
+	if (!returnTo) return;
+
+	const org = await sdb.organization.findFirst({ where: { id: organizationId }, select: { timezone: true } });
+	const { start, end } = utcDayRange(new Date(), 1, org?.timezone ?? "UTC");
+	const lastVisit = await sdb.job_visit.findFirst({
+		where: {
+			status: "Completed",
+			actual_end_at: { not: null },
+			scheduled_start_at: { gte: start, lt: end },
+			visit_techs: { some: { tech_id: techId } },
+		},
+		include: { job: true },
+		orderBy: { actual_end_at: "desc" },
+	});
+	if (!lastVisit || lastVisit.estimated_return_drive_miles != null) return;
+
+	const jobCoords = lastVisit.job.coords as { lat?: number; lon?: number; lng?: number } | null;
+	const jobLon = jobCoords?.lon ?? jobCoords?.lng;
+	const miles = await fetchRouteDistanceMiles(
+		jobCoords?.lat && jobLon ? { lat: jobCoords.lat, lon: jobLon } : null,
+		returnTo,
+	);
+	if (miles === null) return;
+	const claimed = await sdb.job_visit.updateMany({
+		where: { id: lastVisit.id, estimated_return_drive_miles: null },
+		data: { estimated_return_drive_miles: miles },
+	});
+	if (claimed.count) await applyOdometerIncrement(sdb, techId, miles);
+};
+
 export const goOffline = async (techId: string, organizationId: string, techCords?: { lat: number; lon: number }) => {
 	try {
 		const sdb = getScopedDb(organizationId);
@@ -487,44 +530,8 @@ export const goOffline = async (techId: string, organizationId: string, techCord
 		if (openEntry)
 			return { err: "Cannot end shift while clocked into a visit" };
 
-		// calculating the return milage of last job
-		const vehicle = await sdb.vehicle.findFirst({ where: {id: tech.current_vehicle_id ?? "" }, select: {stored_at_coords: true}});
-		// if no stored location for vehicle fall back on tech's location
-		const returnTo = vehicle?.stored_at_coords as {lat: number; lon: number } ?? techCords;
-		if (returnTo) {
-			const org = await sdb.organization.findFirst({ where: { id: organizationId }, select: { timezone: true } });
-			const orgTz = org?.timezone ?? "UTC";
-
-			const { start: startOfToday, end: endOfToday } = utcDayRange(new Date(), 1, orgTz);
-			
-			const lastVisit = await sdb.job_visit.findFirst({
-				where: {
-					status: "Completed",
-					actual_end_at: { not: null },
-					scheduled_start_at: { gte: startOfToday, lt: endOfToday },
-					estimated_return_drive_miles: null,
-					visit_techs: { some: { tech_id: techId } },
-				},
-				include: { job: true },
-				orderBy: { actual_end_at: "desc" },
-			});
-
-			if (lastVisit){
-				const jobCoords = lastVisit.job.coords as { lat?: number; lon?: number; lng?: number } | null;
-				const jobLon = jobCoords?.lon ?? jobCoords?.lng;
-				const miles = await fetchRouteDistanceMiles(
-					jobCoords?.lat && jobLon ? { lat: jobCoords.lat, lon: jobLon } : null,
-					returnTo,
-				);
-				if (miles !== null) {
-					const claimed = await sdb.job_visit.updateMany({
-						where: { id: lastVisit.id, estimated_return_drive_miles: null },
-						data: { estimated_return_drive_miles: miles },
-					});
-					if (claimed.count) await applyOdometerIncrement(sdb, techId, miles);
-				}
-			}
-		}
+		// no-op if Head back already claimed the last visit
+		await recordReturnMiles(sdb, techId, organizationId, tech.current_vehicle_id, techCords);
 
 		// Cancel any pending WrappingUp auto-transition before status changes
 		import("../services/wrappingUpTimer.js")
@@ -809,4 +816,70 @@ export const changeTechnicianPassword = async (
 		});
 	});
 	return { message: "Password updated successfully", err: ""};
+};
+
+export const returnFromJob = async(orgId: string, technicianId: string, context?: UserContext) => {
+	try {
+		const sdb = getScopedDb(orgId);
+		const technician = await sdb.technician.findFirst({
+			where: { id: technicianId, }
+		});
+		if (!technician) return { err: "Technician not found"};
+		const acceptedStatuses = ["WrappingUp", "Available"];
+		if (!acceptedStatuses.includes(technician.status)) return { err: "Technician must be available or wrapping up to return"};
+		const openShift = await sdb.technician_shift.findFirst({ where: { tech_id: technicianId, ended_at: null } });
+		if (!openShift) return { err: "Technician has no open shift" };
+
+		const result = await sdb.$transaction(async (tx) => {
+			await tx.visit_tech_drive.create({
+				data: {
+					tech_id: technicianId,
+					started_at: new Date()
+				}
+			});
+			const result =  await tx.technician.update({
+				where: { id: technicianId},
+				data: {
+					status: "HeadingBack"
+				}
+			});
+
+			await logActivity({
+				event_type: "technician.return",
+				action: "return",
+				entity_type: "technician",
+				entity_id: technicianId,
+				organization_id: orgId,
+				actor_type: context?.techId
+					? "technician"
+					: context?.dispatcherId
+					? "dispatcher"
+					: "system",
+				actor_id: context?.techId || context?.dispatcherId,
+				changes: {
+					status: { old: technician.status, new: result.status },
+				},
+				ip_address: context?.ipAddress,
+				user_agent: context?.userAgent,
+			})
+
+			return result;
+		});
+
+		// no fallback: tech is still at the job, so their coords would give ~0 miles
+		await recordReturnMiles(sdb, technicianId, orgId, technician.current_vehicle_id).catch((err) =>
+			log.error({ err }, "recordReturnMiles failed"),
+		);
+
+		return { item: result, err: ""};
+	} catch (err) {
+		log.error({ err }, "returnFromJob failed");
+		return { err: "Internal server error" };
+	}
+}
+
+export const markAvailable = async (technicianId: string, orgId: string, context?: UserContext) => {
+	const result = await updateTechnician(technicianId, { status: "Available" }, orgId, context);
+	if (!result.err) await recordDrive(getScopedDb(orgId), technicianId, new Date());
+	return result;
 };
