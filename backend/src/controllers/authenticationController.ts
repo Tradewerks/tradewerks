@@ -449,6 +449,14 @@ const findResetTokenOwner = async (token: string, roleHint?: string): Promise<Re
 		: (await lookupDispatcher()) ?? (await lookupTechnician());
 };
 
+export const checkResetToken = async (token: unknown, roleHint?: unknown) => {
+	if (typeof token !== "string" || !token) return "invalid";
+	const owner = await findResetTokenOwner(token, typeof roleHint === "string" ? roleHint : undefined);
+	if (!owner) return "invalid";
+	const expiresAt = owner.user.password_reset_token_expires_at;
+	return !expiresAt || expiresAt < new Date() ? "expired" : "valid";
+};
+
 export const resetPassword = async (
 	token: unknown,
 	newPassword: unknown,

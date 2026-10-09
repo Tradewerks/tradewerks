@@ -21,6 +21,7 @@ import {
 	checkToken,
 	issueAuthTokens,
 	resetPassword,
+	checkResetToken,
 } from "./controllers/authenticationController.js";
 import { verifyOTP } from "./services/otpServce.js";
 import { log } from "./services/appLogger.js";
@@ -429,6 +430,15 @@ app.post("/otp-verify", async (req, res, next) => {
 		}
 
 		return res.json(createSuccessResponse(response.data));
+	} catch (err) {
+		next(err);
+	}
+});
+
+app.post("/reset-password/check", async (req, res, next) => {
+	try {
+		const status = await checkResetToken(req.body?.token, req.body?.role);
+		res.json(createSuccessResponse({ status }));
 	} catch (err) {
 		next(err);
 	}
