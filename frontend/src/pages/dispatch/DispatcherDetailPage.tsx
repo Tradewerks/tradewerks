@@ -373,8 +373,10 @@ const DispatcherDetailPage = () => {
 				</div>
 
 				{/* Info + Change History */}
-				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-					<div className="space-y-6">
+				{/* Stretched; Security absorbs the slack so the left stack ends
+				    level with Change History. */}
+				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+					<div className="flex flex-col gap-6">
 					<Card title="Information">
 						<div className="space-y-4">
 							{[
@@ -411,7 +413,7 @@ const DispatcherDetailPage = () => {
 						</div>
 					</Card>
 
-					<Card title="Security">
+					<Card title="Security" className="flex-1">
 						<div className="space-y-4">
 							{securityRows.map(({ icon: Icon, label, value, ok, hint }) => (
 								<div key={label} className="flex items-center gap-3">

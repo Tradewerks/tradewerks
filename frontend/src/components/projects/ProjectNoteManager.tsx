@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { Plus, Edit2, Trash2, X } from "lucide-react";
 import Card from "../ui/Card";
+import { HEADER_BTN_PRIMARY } from "../ui/headerActions";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import type { ProjectNote, ProjectNotePhoto, UpdateProjectNoteInput } from "../../types/project";
 import type { NotePhoto } from "../../types/jobs";
@@ -145,7 +146,7 @@ export default function ProjectNoteManager({ projectId }: ProjectNoteManagerProp
 						if (!EDIT_NOTES) return;
 						setIsAdding(true);
 					}}
-					className="flex items-center gap-2 px-3 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+					className={HEADER_BTN_PRIMARY}
 				>
 					<Plus size={14} />
 					Add Note

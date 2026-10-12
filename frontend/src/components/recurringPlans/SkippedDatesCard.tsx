@@ -1,4 +1,5 @@
 import { useSkippedDatesQuery } from "../../hooks/useRecurringPlans";
+import Card from "../ui/Card";
 
 const fmt = (iso: string) =>
 	new Date(iso).toLocaleDateString(undefined, {
@@ -12,13 +13,10 @@ export default function SkippedDatesCard({ jobId }: { jobId: string | undefined 
 	const { data: dates = [] } = useSkippedDatesQuery(jobId);
 	if (dates.length === 0) return null;
 	return (
-		<section className="mt-4 rounded-xl border border-border-subtle bg-base p-4">
-			<h3 className="text-sm font-semibold text-text-primary">
-				Dates skipped while Recurring Plans was off
-			</h3>
-			<p className="mt-0.5 text-xs text-text-muted">
-				No visit was created for these dates and none will be. Schedule a
-				visit by hand if one is still needed.
+		<Card title="Skipped Dates">
+			<p className="text-xs text-text-muted">
+				Recurring Plans was off on these dates. No visit was created for them and
+				none will be. Schedule a visit by hand if one is still needed.
 			</p>
 			<ul className="mt-3 flex flex-wrap gap-1.5">
 				{dates.map((d) => (
@@ -30,6 +28,6 @@ export default function SkippedDatesCard({ jobId }: { jobId: string | undefined 
 					</li>
 				))}
 			</ul>
-		</section>
+		</Card>
 	);
 }

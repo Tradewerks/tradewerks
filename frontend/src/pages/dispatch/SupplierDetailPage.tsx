@@ -228,7 +228,7 @@ export default function SupplierDetailPage() {
 
 			<SupplierPriceList supplierId={supplier.id} />
 
-			<div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start">
+			<div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
 				<SupplierMovementList supplierId={supplier.id} />
 				<SupplierBatchesTable supplierId={supplier.id} />
 			</div>

@@ -58,10 +58,13 @@ export default function SegmentedToggle<T extends string>({
 					title={o.title}
 					aria-pressed={value === o.id}
 					onClick={() => onChange(o.id)}
-					// fullWidth targets 40px+ for a gloved thumb; the compact default's
-					// 26px is fine only under a mouse.
+					// fullWidth targets 40px+ for a gloved thumb; the compact default is
+					// fine only under a mouse, and its boxed track comes to 28px so it
+					// fits a Card header like any other header action (ui/headerActions).
 					className={`${
-						fullWidth ? "flex-1 px-3 py-2 text-sm" : "px-2.5 py-1 text-xs"
+						fullWidth
+							? "flex-1 px-3 py-2 text-sm"
+							: "inline-flex h-[22px] items-center px-2.5 text-xs"
 					} font-medium ${
 						variant === "flat" ? "rounded-md" : "rounded-[5px]"
 					} transition-colors ${

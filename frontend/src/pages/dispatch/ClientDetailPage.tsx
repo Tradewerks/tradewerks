@@ -620,7 +620,7 @@ export default function ClientDetailsPage() {
 					{/* RIGHT COLUMN */}
 					<div className="flex flex-col gap-4 lg:gap-5 min-w-0 xl:w-full order-1 xl:order-2">
 						<ClientDisputesCard clientId={client.id} />
-						<Card title="Client Information" className="!p-4">
+						<Card title="Client Information">
 							<div className="space-y-3">
 								<div>
 									<div className="text-[10px] uppercase font-semibold text-text-muted tracking-wide mb-1">

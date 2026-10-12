@@ -7,6 +7,7 @@ import { useAuthStore } from "../../auth/authStore";
 import { FALLBACK_TIMEZONE } from "../../util/util";
 import { ACTION_FILTERS, actionFilterKeyFor, entityLabelFor, formatChange, type RefType } from "./changeFormat";
 import Card from "../ui/Card";
+import { HEADER_BTN_ICON } from "../ui/headerActions";
 import type { ChangeScope } from "../../types/logs";
 import { useClientByIdQuery } from "../../hooks/useClients";
 import { useProjectByIdQuery } from "../../hooks/useProjects";
@@ -124,22 +125,23 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
     const loadedCount = historyLogs.length;
 
     return (
-        <Card>
-            <div>   
-                <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-sm font-semibold text-text-primary">{title ?? "Recent Changes"}</h2>
-                    <button
-                        type="button"
-                        onClick={() => refetchHistory()}
-                        disabled={historyFetching}
-                        title={`Refresh now — refreshes on its own every ${CHANGE_HISTORY_REFETCH_MS / 1000}s`}
-                        aria-label="Refresh change history"
-                        className="p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-raised disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
-                    >
-                        <RefreshCw size={14} className={historyFetching ? "animate-spin" : ""} />
-                    </button>
-                </div>
-                <div className="flex flex-wrap items-center gap-1 px-4 pb-3 mb-1">
+        <Card
+            title={title ?? "Change History"}
+            headerAction={
+                <button
+                    type="button"
+                    onClick={() => refetchHistory()}
+                    disabled={historyFetching}
+                    title={`Refresh now — refreshes on its own every ${CHANGE_HISTORY_REFETCH_MS / 1000}s`}
+                    aria-label="Refresh change history"
+                    className={HEADER_BTN_ICON}
+                >
+                    <RefreshCw size={14} className={historyFetching ? "animate-spin" : ""} />
+                </button>
+            }
+        >
+            <div>
+                <div className="flex flex-wrap items-center gap-1 pb-3 mb-1">
                     {ACTION_FILTERS.map((f) => {
                         const active = activeActions.has(f.key);
                         const Icon = f.icon;

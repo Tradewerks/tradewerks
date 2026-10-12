@@ -779,7 +779,10 @@ export default function JobVisitDetailPage() {
 				>
 					<h2 className="sr-only">Financials</h2>
 					{visitFinancialBlock}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+					{/* Stretched so the pair ends on one line. Field purchases is
+					    absent for a viewer who may not see it; invoices then takes
+					    the whole row instead of half of it. */}
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:[&>:only-child]:col-span-2">
 						<LinkedInvoicesCard
 							invoices={linkedInvoices}
 							isLoading={invoicesLoading}

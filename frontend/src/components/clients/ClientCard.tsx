@@ -1,9 +1,10 @@
-﻿import { MapPin, Clock } from "lucide-react";
+import { Link } from "react-router-dom";
+import { MapPin, Clock, Briefcase } from "lucide-react";
 import type { Client } from "../../types/clients";
 
 interface ClientCardProps {
 	client: Client;
-	onClick?: () => void;
+	to: string;
 	viewMode?: "card" | "list";
 }
 
@@ -41,16 +42,17 @@ function formatLastActivity(raw: unknown) {
 	});
 }
 
-export default function ClientCard({ client, onClick, viewMode = "card" }: ClientCardProps) {
+export default function ClientCard({ client, to, viewMode = "card" }: ClientCardProps) {
 	const displayName = capitalizeWords(client.name);
 	const lastActivityText = formatLastActivity(client.last_activity);
 	const jobsCount = client.jobs?.length ?? 0;
+	const address = client.address || "No address provided";
 
 	if (viewMode === "list") {
 		return (
-			<div
-				className="flex items-center gap-4 w-full px-4 py-3 bg-base border border-border-card rounded-lg hover:border-border-strong cursor-pointer transition-all"
-				onClick={onClick}
+			<Link
+				to={to}
+				className="flex items-center gap-4 w-full px-4 py-3 bg-base border border-border-card rounded-lg hover:border-border-strong transition-colors duration-150 ease-out"
 			>
 				<div
 					className={`shrink-0 w-2 h-2 rounded-full ${
@@ -58,13 +60,18 @@ export default function ClientCard({ client, onClick, viewMode = "card" }: Clien
 					}`}
 				/>
 
-				<h3 className="text-text-primary font-semibold text-sm shrink-0">
+				<h3
+					className="text-text-primary font-semibold text-sm min-w-0 max-w-[40%] truncate"
+					title={displayName}
+				>
 					{displayName}
 				</h3>
 
 				<div className="flex items-center gap-1.5 text-sm text-text-tertiary flex-1 min-w-0">
 					<MapPin size={14} className="shrink-0" />
-					<span className="truncate">{client.address || "No address provided"}</span>
+					<span className="truncate" title={address}>
+						{address}
+					</span>
 				</div>
 
 				<div className="shrink-0 flex items-center gap-4 text-xs text-text-muted">
@@ -74,61 +81,53 @@ export default function ClientCard({ client, onClick, viewMode = "card" }: Clien
 						<span>{lastActivityText}</span>
 					</div>
 				</div>
-			</div>
+			</Link>
 		);
 	}
 
+	// No fixed size: the page's grid sets the width and stretches a row to its
+	// tallest card, so a long name or address wraps instead of being cut to a
+	// few words, and the footer's mt-auto keeps every card's rule on one line.
 	return (
-		<div
-			className="
-				bg-base border border-border-card rounded-lg p-4
-				hover:border-border-strong hover:shadow-lg transition-all cursor-pointer
-				w-60 h-40 flex flex-col justify-between
-			"
-			onClick={onClick}
+		<Link
+			to={to}
+			className="group flex min-w-0 flex-col rounded-lg border border-border-card bg-base p-4 transition-colors duration-150 ease-out hover:border-border-strong hover:bg-surface-raised focus-visible:border-primary"
 		>
-			<div className="flex-1 min-h-0">
-				<h3
-					className="
-						text-text-primary font-semibold text-lg mb-2
-						overflow-hidden text-ellipsis whitespace-nowrap"
-				>
+			<div className="flex items-start justify-between gap-3">
+				<h3 className="min-w-0 break-words line-clamp-2 text-base font-semibold text-text-primary group-hover:text-primary-text transition-colors duration-150 ease-out">
 					{displayName}
 				</h3>
-
-				<div className="flex items-start gap-2 text-sm text-text-tertiary">
-					<MapPin size={16} className="mt-0.5 flex-shrink-0" />
-					<span className="overflow-hidden text-ellipsis whitespace-nowrap">
-						{client.address || "No address provided"}
-					</span>
-				</div>
-
-				<p className="mt-1 text-xs text-text-muted">
-					Jobs: <span className="text-text-secondary">{jobsCount}</span>
-				</p>
-			</div>
-
-			<div className="w-full h-px bg-surface mb-2" />
-
-			<div className="flex items-center justify-between">
 				<span
-					className={`
-						inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium
-						${
-							client.is_active
-								? "bg-success/10 text-success-text border border-success/20"
-								: "bg-surface text-text-tertiary border border-border"
-						}
-					`}
+					className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
+						client.is_active
+							? "bg-success/10 text-success-text border-success/20"
+							: "bg-surface text-text-tertiary border-border"
+					}`}
 				>
 					{client.is_active ? "Active" : "Inactive"}
 				</span>
-
-				<div className="flex items-center text-xs text-text-tertiary">
-					<Clock size={13} className="mr-1 opacity-70" />
-					{lastActivityText}
-				</div>
 			</div>
-		</div>
+
+			<div className="mt-2 flex items-start gap-2 pb-3 text-sm text-text-tertiary">
+				<MapPin size={15} className="mt-0.5 shrink-0" />
+				<span className="min-w-0 break-words line-clamp-2" title={address}>
+					{address}
+				</span>
+			</div>
+
+			<div className="mt-auto flex items-center justify-between gap-3 border-t border-border-subtle pt-3 text-xs text-text-tertiary">
+				<span className="inline-flex items-center gap-1.5">
+					<Briefcase size={13} className="opacity-70" />
+					<span>
+						<span className="tabular-nums text-text-secondary">{jobsCount}</span>{" "}
+						{jobsCount === 1 ? "job" : "jobs"}
+					</span>
+				</span>
+				<span className="inline-flex min-w-0 items-center gap-1.5">
+					<Clock size={13} className="shrink-0 opacity-70" />
+					<span className="truncate">{lastActivityText}</span>
+				</span>
+			</div>
+		</Link>
 	);
 }

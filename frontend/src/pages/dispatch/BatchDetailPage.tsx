@@ -36,6 +36,8 @@ import { INPUT, LABEL } from "../../components/inventory/tracking/BatchCaptureFi
 import QRLabel from "../../components/inventory/labels/QRLabel";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import EmptyState from "../../components/ui/EmptyState";
+import Card from "../../components/ui/Card";
+import { HEADER_BTN_SECONDARY, HEADER_META } from "../../components/ui/headerActions";
 import StatCard from "../../components/ui/StatCard";
 import { useToast } from "../../components/ui/useToast";
 import {
@@ -145,15 +147,12 @@ function LotSerials({
 		id ? (vehicles?.find((v) => v.id === id)?.name ?? "Vehicle") : null;
 
 	return (
-		<div className="bg-surface border border-border-subtle rounded-xl p-4">
-			<div className="flex items-baseline justify-between gap-3 mb-3">
-				<h3 className="font-semibold text-text-primary">Units in this Lot</h3>
-				{rows.length > 0 && (
-					<span className="text-xs text-text-faint tabular-nums">
-						{rows.length} shown
-					</span>
-				)}
-			</div>
+		<Card
+			title="Units in this Lot"
+			headerAction={
+				rows.length > 0 && <span className={HEADER_META}>{rows.length} shown</span>
+			}
+		>
 
 			<div className="flex flex-wrap gap-1.5 mb-3">
 				{LOT_STATUS_FILTERS.map((f) => (
@@ -231,7 +230,7 @@ function LotSerials({
 					{isFetching ? "Loading…" : "Load more"}
 				</button>
 			)}
-		</div>
+		</Card>
 	);
 }
 
@@ -268,10 +267,7 @@ function OverviewTab({
 				<LotSerials itemId={itemId} batchId={batchId} onOpenSerial={onOpenSerial} />
 			)}
 
-			<div className="bg-surface border border-border-subtle rounded-xl p-4">
-				<h3 className="font-semibold text-text-primary mb-3">
-					Per-Vehicle Breakdown
-				</h3>
+			<Card title="Per-Vehicle Breakdown">
 				{remaining.vehicles.length === 0 ? (
 					<p className="text-sm text-text-muted py-4 text-center">
 						No units currently on vehicles.
@@ -297,7 +293,7 @@ function OverviewTab({
 						))}
 					</div>
 				)}
-			</div>
+			</Card>
 		</div>
 	);
 }
@@ -353,16 +349,16 @@ function TraceabilityTab({
 				/>
 			</div>
 
-			<div className="flex items-center justify-between flex-wrap gap-2">
-				<h3 className="font-semibold text-text-primary">
-					Consumption Trace
-				</h3>
+			<Card
+				title="Consumption Trace"
+				flush
+				headerAction={
 				<div className="relative">
 					<button
 						type="button"
 						onClick={onExport}
 						disabled={isExporting}
-						className="flex items-center gap-1.5 h-8 px-3 rounded-md border border-border bg-surface text-sm text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+						className={HEADER_BTN_SECONDARY}
 					>
 						{isExporting ? (
 							<Loader2
@@ -380,9 +376,8 @@ function TraceabilityTab({
 						</div>
 					)}
 				</div>
-			</div>
-
-			<div className="bg-surface border border-border-subtle rounded-xl overflow-hidden">
+				}
+			>
 				{rows.length === 0 ? (
 					<EmptyState
 						icon={<Boxes size={28} />}
@@ -495,7 +490,7 @@ function TraceabilityTab({
 						</div>
 					</div>
 				)}
-			</div>
+			</Card>
 		</div>
 	);
 }
@@ -881,7 +876,7 @@ export default function BatchDetailPage() {
 			{/* Unlike SerialDetailBody's equivalent block, the batch impact payload
 			carries no `received_at` and no note field, so this shows Supplier and
 			Expires instead of Received/Note. */}
-			<div className="bg-surface border border-border-subtle rounded-xl p-4 flex flex-col sm:flex-row items-stretch gap-4">
+			<div className="bg-base border border-border-subtle rounded-xl p-4 flex flex-col sm:flex-row items-stretch gap-4">
 				<div className="flex items-center justify-center sm:justify-start flex-shrink-0">
 					<QRLabel
 						code={batch.code}
@@ -910,10 +905,8 @@ export default function BatchDetailPage() {
 			</div>
 
 			{editing && (
-				<div className="bg-surface border border-border-subtle rounded-xl p-4 space-y-3">
-					<h3 className="text-sm font-semibold text-text-primary">
-						Edit Batch
-					</h3>
+				<Card title="Edit Batch">
+				<div className="space-y-3">
 					<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 						<div>
 							<label className={LABEL}>
@@ -999,6 +992,7 @@ export default function BatchDetailPage() {
 						</button>
 					</div>
 				</div>
+				</Card>
 			)}
 
 			{/* Tabs */}

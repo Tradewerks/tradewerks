@@ -2,6 +2,7 @@ import { useId } from "react";
 import { Link } from "react-router-dom";
 import { Plus, Receipt, TriangleAlert } from "lucide-react";
 import Card from "../ui/Card";
+import { HEADER_BTN_SECONDARY, HEADER_BTN_SECONDARY_INERT } from "../ui/headerActions";
 import { NO_PERMISSION } from "../lifecycle/actionBuilder";
 import {
 	InvoiceStatusColors,
@@ -124,11 +125,7 @@ export default function LinkedInvoicesCard({
 				}}
 				aria-disabled={!canCreate}
 				aria-describedby={canCreate ? undefined : reasonId}
-				className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 min-h-6 text-xs font-medium transition-colors duration-150 ease-out ${
-					canCreate
-						? "border-border text-text-primary hover:bg-surface-raised cursor-pointer"
-						: "border-border-subtle text-text-muted cursor-not-allowed"
-				}`}
+				className={canCreate ? HEADER_BTN_SECONDARY : HEADER_BTN_SECONDARY_INERT}
 			>
 				<Plus size={13} aria-hidden="true" />
 				Create Invoice

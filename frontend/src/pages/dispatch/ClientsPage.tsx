@@ -1,5 +1,5 @@
 ﻿import { useState, useRef, useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { Plus, MoreVertical, Upload, Download } from "lucide-react";
 import { useAllClientsQuery, useCreateClientMutation } from "../../hooks/useClients";
 import CreateClient from "../../components/clients/CreateClient";
@@ -18,7 +18,6 @@ import { usePermission } from "../../hooks/usePermission";
 import PageReportSection from "../../components/reports/PageReportSection";
 
 export default function ClientsPage() {
-	const navigate = useNavigate();
 	const [pageSearchParams, setPageSearchParams] = useSearchParams();
 	const {
 		data: clients,
@@ -226,7 +225,7 @@ export default function ClientsPage() {
 				</div>
 			)}
 
-			{/* Client Cards - Flex Layout */}
+			{/* Client Cards */}
 			{!isFetchLoading &&
 				!fetchError &&
 				filteredClients &&
@@ -234,7 +233,7 @@ export default function ClientsPage() {
 					<div
 						className={
 							viewMode === "card"
-								? "flex flex-wrap gap-4"
+								? "grid gap-4 grid-cols-[repeat(auto-fill,minmax(280px,1fr))]"
 								: "flex flex-col gap-2"
 						}
 					>
@@ -243,11 +242,7 @@ export default function ClientsPage() {
 								key={client.id}
 								client={client}
 								viewMode={viewMode}
-								onClick={() =>
-									navigate(
-										`/dispatch/clients/${client.id}`
-									)
-								}
+								to={`/dispatch/clients/${client.id}`}
 							/>
 						))}
 					</div>

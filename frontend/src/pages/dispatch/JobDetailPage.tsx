@@ -1,5 +1,5 @@
 ﻿import { useMemo, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import {
 	Edit2,
 	Calendar,
@@ -9,6 +9,7 @@ import {
 	Plus,
 	DollarSign,
 	ChevronRight,
+	ArrowRight,
 	Trash2,
 	Repeat,
 	AlertTriangle,
@@ -29,6 +30,7 @@ import { useActiveTechCount } from "../../hooks/useRecordMapData";
 import JobNoteManager from "../../components/jobs/JobNoteManager";
 import JobFieldPurchases from "../../components/fieldPurchases/JobFieldPurchases";
 import Card from "../../components/ui/Card";
+import { HEADER_BTN_PRIMARY } from "../../components/ui/headerActions";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import EditJob from "../../components/jobs/EditJob";
 import CreateJobVisit from "../../components/jobs/CreateJobVisit";
@@ -801,9 +803,9 @@ export default function JobDetailPage() {
 							setIsCreateVisitModalOpen(true);
 						}}
 						disabled={!CREATE_JOB}
-						className="flex items-center gap-2 px-4 py-2 bg-primary-hover rounded-md text-sm font-medium text-on-primary transition-colors hover:enabled:bg-primary-active disabled:opacity-40 disabled:cursor-not-allowed"
+						className={HEADER_BTN_PRIMARY}
 					>
-						<Plus size={16} />
+						<Plus size={13} />
 						Create Visit
 					</button>
 				) : undefined
@@ -839,33 +841,33 @@ export default function JobDetailPage() {
 					</button>
 				</div>
 			) : (
-				<div className="flex flex-wrap gap-3">
+				/* auto-fill grid, not flex-wrap: every card takes one
+				   column width instead of its own content's, so a row of
+				   visits reads as a set and a long title or crew list
+				   wraps inside its card rather than widening it. */
+				<div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(380px,1fr))]">
 					{sortedVisits.map((visit) => (
-						<button
+						/* A real link, not a button + navigate(): a visit is a
+						   page, so middle-click and open-in-new-tab must work.
+						   flex-col so the grid's row stretch lands on the
+						   footer's mt-auto instead of centring the content. */
+						<Link
 							key={visit.id}
-							onClick={() =>
-								navigate(
-									`/dispatch/jobs/${jobId}/visits/${visit.id}`
-								)
-							}
-							/* flex-col, because a <button> taller than its
-							   content vertically centres that content — a UA
-							   behaviour, not a class — and flex-wrap stretches
-							   every card in a row to the tallest one. Together
-							   they floated short cards' content to the middle
-							   while the tall one sat at the top. */
-							className="group flex w-fit cursor-pointer flex-col rounded-lg border border-border bg-surface p-4 text-left transition-colors hover:border-primary hover:bg-surface-raised"
+							to={`/dispatch/jobs/${jobId}/visits/${visit.id}`}
+							className="group flex min-w-0 flex-col rounded-lg border border-border bg-surface p-4 text-left transition-colors duration-150 ease-out hover:border-primary hover:bg-surface-raised focus-visible:border-primary"
 						>
 							{visit.name && (
-								<h4 className="text-text-primary font-semibold text-base mb-2 group-hover:text-primary-text transition-colors">
+								<h4 className="text-text-primary font-semibold text-base mb-2 line-clamp-2 break-words group-hover:text-primary-text transition-colors">
 									{visit.name}
 								</h4>
 							)}
 
-							<div className="flex items-start justify-between gap-4 mb-3">
-								<div className="flex items-center gap-2 flex-wrap">
+							{/* One line that never wraps: badges hold their size and
+							    the time text truncates only as a narrow-screen fallback. */}
+							<div className="mb-3">
+								<div className="flex min-w-0 items-center gap-2">
 									<div
-										className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${
+										className={`inline-flex shrink-0 items-center px-2 py-0.5 rounded text-xs font-medium border ${
 											VisitStatusColors[
 												visit.status as VisitStatus
 											] ||
@@ -898,7 +900,7 @@ export default function JobDetailPage() {
 												visitTotal;
 										return (
 											<span
-												className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-medium ${
+												className={`inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-xs font-medium ${
 													isPartial
 														? "border-warning-border bg-warning-bg text-warning-text"
 														: "border-success-border bg-success-bg text-success-text"
@@ -910,19 +912,17 @@ export default function JobDetailPage() {
 											</span>
 										);
 									})()}
-									<span className="text-text-muted text-sm">
-										•
-									</span>
-									<span className="text-xs text-text-tertiary">
+									<span
+										className="min-w-0 truncate text-xs text-text-tertiary"
+										title={formatVisitTimeConstraints(
+											visit
+										)}
+									>
 										{formatVisitTimeConstraints(
 											visit
 										)}
 									</span>
 								</div>
-								<ChevronRight
-									size={16}
-									className="flex-shrink-0 text-text-tertiary transition-transform group-hover:translate-x-1 group-hover:text-primary-text"
-								/>
 							</div>
 
 							{/* pb-3 rather than a margin on the rule below:
@@ -964,7 +964,7 @@ export default function JobDetailPage() {
 												}
 												className="text-text-tertiary flex-shrink-0"
 											/>
-											<span className="text-text-secondary">
+											<span className="min-w-0 break-words text-text-secondary">
 												{visit.visit_techs
 													.map(
 														(
@@ -997,8 +997,12 @@ export default function JobDetailPage() {
 							    a row of stretched cards ends on one line
 							    rather than wherever each card's content ran
 							    out. A visit that has not run yet says so —
-							    an empty rule reads as a rendering fault. */}
-							<div className="mt-auto border-t border-border pt-3 text-xs text-text-tertiary">
+							    an empty rule reads as a rendering fault.
+							    The "View visit" cue lives here too: the one
+							    row at the same place on every card, so the
+							    way in never moves. */}
+							<div className="mt-auto flex items-center justify-between gap-3 border-t border-border pt-3 text-xs text-text-tertiary">
+								<span className="min-w-0 truncate">
 								{visit.actual_start_at &&
 								visit.actual_end_at ? (
 									<>
@@ -1023,8 +1027,19 @@ export default function JobDetailPage() {
 										Not started
 									</span>
 								)}
+								</span>
+								<span
+									aria-hidden="true"
+									className="inline-flex shrink-0 items-center gap-1 font-medium text-text-secondary transition-colors duration-150 ease-out group-hover:text-primary-text"
+								>
+									View visit
+									<ArrowRight
+										size={13}
+										className="transition-transform duration-150 ease-out group-hover:translate-x-0.5"
+									/>
+								</span>
 							</div>
-						</button>
+						</Link>
 					))}
 				</div>
 			)}
@@ -1349,7 +1364,10 @@ export default function JobDetailPage() {
 				>
 					<h2 className="sr-only">Financials</h2>
 					{financialSummaryCard}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+					{/* Stretched so the pair ends on one line. Field purchases is
+					    absent for a viewer who may not see it; invoices then takes
+					    the whole row instead of half of it. */}
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:[&>:only-child]:col-span-2">
 						<LinkedInvoicesCard
 							invoices={linkedInvoices}
 							isLoading={invoicesLoading}

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { Trash2, Search, X, SlidersHorizontal, LayoutList } from "lucide-react";
+import { Trash2, Search, X, SlidersHorizontal, LayoutList, AlertTriangle } from "lucide-react";
 import { getStockHealth } from "../../lib/stockUtils";
 import { useVehiclesQuery } from "../../hooks/useVehicles";
 import {
@@ -20,6 +20,8 @@ import AdjustStockModal from "../../components/vehicles/AdjustStockModal";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import type { VehicleStockItem, RestockRequest } from "../../types/vehicles";
 import StockHistorySection from "../../components/vehicles/StockHistorySection";
+import Card from "../../components/ui/Card";
+import { HEADER_META } from "../../components/ui/headerActions";
 import { unitLabel } from "../../lib/units";
 import MaintenanceTab from "../../components/vehicles/maintenance/MaintenanceTab";
 import ChangeHistory from "../../components/activity/ChangeHistory";
@@ -470,18 +472,22 @@ function StockTab({ vehicleId, stockItems, isLoading }: {
 
 	return (
 		<div>
-			{unconfiguredCount > 0 && (
-				<div className="mx-5 mt-3 px-3 py-2 bg-warning-bg border border-warning-border rounded-md flex items-center justify-between">
-					<span className="text-xs text-warning-text">
-						<span className="font-semibold">{unconfiguredCount} item{unconfiguredCount !== 1 ? "s" : ""}</span> have no standard or min qty — invisible to EOD and conflict alerts.
-					</span>
-					<span className="text-[10px] text-warning-text/70">Click Standard / Min cells to configure</span>
-				</div>
-			)}
-			<div className="flex items-center justify-end gap-2 px-5 py-2 border-b border-border/10 mt-2">
+			{/* One toolbar row: the unconfigured-items notice shares the line with
+			    Adjust Stock instead of stacking a full-width banner above it. */}
+			<div className="flex items-center gap-3 px-5 py-2 border-b border-border/10 mt-2">
+				{unconfiguredCount > 0 && (
+					<div className="flex min-w-0 items-center gap-2 rounded-md border border-warning-border bg-warning-bg px-2.5 py-1 text-xs text-warning-text">
+						<AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
+						<span className="min-w-0">
+							<span className="font-semibold">{unconfiguredCount} item{unconfiguredCount !== 1 ? "s" : ""}</span>{" "}
+							{unconfiguredCount !== 1 ? "have" : "has"} no standard or min qty — invisible to EOD and conflict alerts.{" "}
+							<span className="text-warning-text/70">Set them in the Standard / Min columns.</span>
+						</span>
+					</div>
+				)}
 				<button
 					onClick={() => setAdjustOpen(true)}
-					className="px-3 py-1.5 text-xs font-semibold bg-surface border border-border rounded-md text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors"
+					className="ml-auto shrink-0 px-3 py-1.5 text-xs font-semibold bg-surface border border-border rounded-md text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors"
 				>
 					Adjust Stock
 				</button>
@@ -530,12 +536,6 @@ function StockTab({ vehicleId, stockItems, isLoading }: {
 					onClose={() => setAdjustOpen(false)}
 				/>
 			)}
-			<div className="border-t border-border/30 mt-2">
-				<div className="px-5 py-2.5">
-					<span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">Stock History</span>
-				</div>
-				<StockHistorySection vehicleId={vehicleId} stockItems={stockItems} />
-			</div>
 		</div>
 	);
 }
@@ -789,8 +789,20 @@ export default function VehicleStockPage() {
 				{activeTab === "restock" && <RestockWorkflow vehicleId={vehicleId} stockItems={stockItems} />}
 				{activeTab === "alerts"  && <AlertsTab vehicleId={vehicleId} />}
 				{activeTab === "maintenance" && <MaintenanceTab vehicleId={vehicleId} />}
+				{/* Stock History lives here, not under the Stock table: it is a
+				    ledger of what happened to the stock, the same kind of record as
+				    the change log, while the Stock tab is the live state to act on. */}
 				{activeTab === "activity" && (
-					<div className="p-4">
+					<div className="p-5 space-y-4">
+						<Card
+							title="Stock History"
+							flush
+							headerAction={
+								<span className={HEADER_META}>Every movement on and off this vehicle</span>
+							}
+						>
+							<StockHistorySection vehicleId={vehicleId} stockItems={stockItems} density="desk" />
+						</Card>
 						<ChangeHistory scope={{ kind: "entity", type: "vehicle", id: vehicleId }} />
 					</div>
 				)}
