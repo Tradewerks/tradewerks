@@ -9,8 +9,14 @@ import {
 	type StaffChange,
 } from "../../services/entitlementService.js";
 import { LIMIT_KEYS, type LimitKey } from "../../lib/entitlements/registry.js";
-import { getOrgDetail, getOrgHistory, listOrgs } from "../../platform/orgsService.js";
-import { actor, param, parse, reason, staff } from "./shared.js";
+import {
+	createOrgByStaff,
+	getOrgDetail,
+	getOrgHistory,
+	listOrgs,
+	resendOrgAdminInvite,
+} from "../../platform/orgsService.js";
+import { actor, email, name, param, parse, reason, staff } from "./shared.js";
 
 const limitKey = z.enum(LIMIT_KEYS as unknown as [string, ...string[]]);
 const override = z.union([
@@ -32,6 +38,16 @@ const changeSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("limit"), key: limitKey, override }),
 ]);
 const orgId = (req: Request) => param(req, "id");
+const createOrgSchema = z.object({
+	name,
+	admin_name: name,
+	admin_email: email,
+	business_type: z.string().min(1, "Choose a business type"),
+	plan_key: z.string().min(1, "Choose a tier"),
+	trial: z
+		.object({ plan_key: z.string().min(1), days: z.number().int().min(1).max(365) })
+		.optional(),
+});
 const changeList = z.array(changeSchema).min(1).max(20);
 const applyOptions = z.object({
 	expectedUpdatedAt: z.string().datetime().optional(),
@@ -63,7 +79,29 @@ export function registerOrgs(router: Router): void {
 			1,
 			Number.parseInt(String(req.query.page ?? "1"), 10) || 1,
 		);
-		res.json(createSuccessResponse(await listOrgs(q, page)));
+		const days = Number.parseInt(String(req.query.trial_ending_within_days ?? ""), 10);
+		const trialEnding = days >= 1 && days <= 30 ? days : undefined;
+		res.json(createSuccessResponse(await listOrgs(q, page, trialEnding)));
+	});
+
+	router.post("/orgs", ...staff, async (req, res) => {
+		const b = parse(createOrgSchema, req.body);
+		res.status(201).json(
+			createSuccessResponse(
+				await createOrgByStaff(actor(req), {
+					name: b.name,
+					adminName: b.admin_name,
+					adminEmail: b.admin_email,
+					businessType: b.business_type,
+					planKey: b.plan_key,
+					trial: b.trial && { planKey: b.trial.plan_key, days: b.trial.days },
+				}),
+			),
+		);
+	});
+
+	router.post("/orgs/:id/admin-invite/resend", ...staff, async (req, res) => {
+		res.json(createSuccessResponse(await resendOrgAdminInvite(actor(req), orgId(req))));
 	});
 
 	router.get("/orgs/:id", ...staff, async (req, res) => {

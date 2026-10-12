@@ -18,3 +18,7 @@ export const updateModuleChoices = async (
 	choices: Record<string, boolean>,
 ): Promise<EntitlementsData> =>
 	(await api.patch("/org/entitlements/modules", { choices })).data.data;
+
+export const markModulesReviewed = async (): Promise<void> => {
+	await api.post("/org/entitlements/modules-reviewed");
+};

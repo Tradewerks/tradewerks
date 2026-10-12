@@ -65,6 +65,8 @@ export const ErrorCodes = {
 	QUOTA_EXCEEDED: 'QUOTA_EXCEEDED',
 	REQUEST_OPEN: 'REQUEST_OPEN',
 	REQUEST_CLOSED: 'REQUEST_CLOSED',
+	// Its own code so the register page shows "paused" rather than a generic failure.
+	SIGNUPS_PAUSED: 'SIGNUPS_PAUSED',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

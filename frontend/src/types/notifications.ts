@@ -40,6 +40,7 @@ export type DispatcherNotificationType =
 	| "usage_limit_warning"
 	| "subscription_changed"
 	| "upgrade_request_resolved"
+	| "trial_ending"
 
 export interface DispatcherNotification {
 	id: string;
@@ -82,4 +83,5 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },
 	{ type: "subscription_changed", group: "Subscription", permission: "manage_organization", label: "Subscription changes", description: "TradeWerks changed your subscription, modules or limits" },
 	{ type: "upgrade_request_resolved", group: "Subscription", permission: "manage_organization", label: "Subscription requests", description: "TradeWerks approved or declined your request" },
+	{ type: "trial_ending", group: "Subscription", permission: "manage_organization", label: "Trial ending", description: "3 days before your trial ends, and on its last day" },
 ];

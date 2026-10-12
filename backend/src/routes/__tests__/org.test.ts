@@ -7,6 +7,8 @@ vi.mock("../../db.js", () => ({
 	db: {
 		organization: { findUnique: vi.fn(), update: vi.fn() },
 		plan: { findUnique: vi.fn(async () => ({ label: "Pro" })) },
+		org_entitlement: { findUnique: vi.fn(async () => null), updateMany: vi.fn() },
+		$executeRaw: vi.fn(),
 	},
 }));
 
@@ -307,5 +309,49 @@ describe("GET /org/entitlements usage (build plan 2)", () => {
 			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
 		});
 		expect(r.body.data.plan).toMatchObject({ key: "pro", label: "Pro" });
+	});
+});
+
+describe("org setup state (build plan 4)", () => {
+	const admin = { uid: "d-1", organization_id: "org-1", role: "admin", permissions: [] };
+	const plain = { uid: "d-2", organization_id: "org-1", role: "dispatcher", permissions: [] };
+	const get = (user: Record<string, unknown>) =>
+		callRoute(orgEntitlementsRouter, "get", "/", { user });
+	const post = (path: string, user: Record<string, unknown>) =>
+		callRoute(orgEntitlementsRouter, "post", path, { user });
+
+	it("GET includes template, review state and the active trial", async () => {
+		mockDb.org_entitlement.findUnique.mockResolvedValueOnce({
+			template_key: "plumbing",
+			modules_reviewed_at: null,
+			trial_ends_at: new Date(Date.now() + 86_400_000),
+			trial_plan_version: { plan: { label: "Enterprise" } },
+		} as never);
+		const r = await get(admin);
+		expect(r.body.data.setup).toEqual({
+			templateKey: "plumbing",
+			modulesReviewed: false,
+			trial: { tierLabel: "Enterprise", endsAt: expect.any(String) },
+		});
+	});
+
+	it("a setup read failure yields setup: null, not a failed payload", async () => {
+		mockDb.org_entitlement.findUnique.mockRejectedValueOnce(new Error("db down"));
+		const r = await get(admin);
+		expect(r.status).toBe(200);
+		expect(r.body.data.setup).toBeNull();
+	});
+
+	it("POST /modules-reviewed marks once with raw SQL", async () => {
+		mockDb.$executeRaw.mockResolvedValueOnce(1 as never);
+		const r = await post("/modules-reviewed", admin);
+		expect(r.status).toBe(200);
+		expect(mockDb.$executeRaw).toHaveBeenCalledTimes(1);
+		expect(mockDb.org_entitlement.updateMany).not.toHaveBeenCalled();
+	});
+
+	it("POST /modules-reviewed is refused without manage_organization", async () => {
+		const r = await post("/modules-reviewed", plain);
+		expect(r.status).toBe(403);
 	});
 });

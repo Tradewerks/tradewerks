@@ -1,6 +1,7 @@
 import axios, { AxiosError } from "axios";
 import { usePlatformAuth } from "./store";
 import type {
+	CreateOrgBody,
 	CatalogModule,
 	HistoryRow,
 	MovePreview,
@@ -98,8 +99,18 @@ export const platform = {
 		data<null>(platformApi.patch(`/platform/staff/${id}`, { status })),
 	resetStaffMfa: (id: string) =>
 		data<null>(platformApi.post(`/platform/staff/${id}/reset-mfa`)),
-	orgs: (q: string, page: number) =>
-		data<OrgListPage>(platformApi.get("/platform/orgs", { params: { q, page } })),
+	orgs: (q: string, page: number, trialEnding = false) =>
+		data<OrgListPage>(
+			platformApi.get("/platform/orgs", {
+				params: { q, page, ...(trialEnding && { trial_ending_within_days: 7 }) },
+			})
+		),
+	createOrg: (b: CreateOrgBody) =>
+		data<{ id: string; inviteUrl: string }>(platformApi.post("/platform/orgs", b)),
+	resendOrgInvite: (orgId: string) =>
+		data<{ inviteUrl: string }>(
+			platformApi.post(`/platform/orgs/${orgId}/admin-invite/resend`)
+		),
 	org: (id: string) => data<OrgDetail>(platformApi.get(`/platform/orgs/${id}`)),
 	orgHistory: (id: string) =>
 		data<HistoryRow[]>(platformApi.get(`/platform/orgs/${id}/history`)),

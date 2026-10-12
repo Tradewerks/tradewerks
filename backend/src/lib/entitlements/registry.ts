@@ -257,6 +257,9 @@ export const MODULES: ModuleDef[] = [
 export const MODULE_KEYS = MODULES.map((m) => m.key);
 export type ModuleKey = (typeof MODULE_KEYS)[number];
 
+// The tab id stays "entitlements"; customers know the tab as Subscription.
+export const SUBSCRIPTION_PATH = "/dispatch/admin?tab=entitlements";
+
 export const getModule = (key: string): ModuleDef | undefined =>
 	MODULES.find((m) => m.key === key);
 

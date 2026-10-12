@@ -35,7 +35,6 @@ const patchSchema = z.union([
 	z.object({ label, reason }).strict(),
 	z.object({ archived: z.boolean(), reason }).strict(),
 	z.object({ signupDefault: z.literal(true), reason }).strict(),
-	z.object({ trialDefault: z.literal(true), reason }).strict(),
 ]);
 
 export function registerTiers(router: Router): void {

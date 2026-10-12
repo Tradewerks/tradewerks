@@ -13,6 +13,7 @@ export const SECRET_FIELD_OMIT = {
 		password_reset_token: true,
 		password_reset_token_expires_at: true,
 		email_verification_token: true,
+		invite_token_hash: true,
 	},
 	technician: {
 		password: true,

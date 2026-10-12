@@ -488,7 +488,11 @@ export const resetPassword = async (
 			if (role === "technician") {
 				await tx.technician.update({ where: { password_reset_token: parsed.token }, data });
 			} else {
-				await tx.dispatcher.update({ where: { password_reset_token: parsed.token }, data });
+				await tx.dispatcher.update({
+					where: { password_reset_token: parsed.token },
+					// A reset proves the inbox; the old invite link must not overwrite this password later.
+					data: { ...data, invite_token_hash: null, invite_expires_at: null },
+				});
 			}
 		});
 		await logActivity({

@@ -2756,6 +2756,8 @@ model dispatcher {
   email_verification_token  String?   @unique
   password_reset_token       String?   @unique
   password_reset_token_expires_at DateTime?
+  invite_token_hash         String?   @unique // sha256 of the emailed set-password token
+  invite_expires_at         DateTime?
   theme       String   @default("system")
   muted_notification_types String[] @default([])
   dashboard_layout Json?
@@ -3537,14 +3539,13 @@ model timesheet_week {
 // Entitlements
 // ============================================================================
 
-// At most one signup default and one trial default: partial unique indexes in
-// migration 20261007120000 (Prisma's DSL cannot express them).
+// At most one signup default: partial unique index in migration 20261007120000
+// (Prisma's DSL cannot express it).
 model plan {
   key               String    @id
   label             String
   assignable        Boolean   @default(true)
   is_signup_default Boolean   @default(false)
-  is_trial_default  Boolean   @default(false)
   archived_at       DateTime?
 
   versions plan_version[]
@@ -3581,6 +3582,7 @@ model org_entitlement {
   trial_ends_at         DateTime?
   trial_warned_3d_at    DateTime?
   trial_warned_end_at   DateTime?
+  modules_reviewed_at   DateTime?     // welcome step done or skipped; null shows it once
   module_choices        Json          @default("{}")
   module_grants         Json          @default("{}")
   limit_overrides       Json          @default("{}")

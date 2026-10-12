@@ -36,7 +36,8 @@ import { useOrgSettings } from "../hooks/useOrg";
 import { useSocketQuerySync } from "../hooks/useSocketQuerySync";
 import { useDispatcherNotificationsQuery } from "../hooks/useNotifications";
 import type { DispatcherNotification } from "../types/notifications";
-import { useModule } from "../hooks/useEntitlements";
+import { useEntitlements, useModule } from "../hooks/useEntitlements";
+import { shouldShowWelcome } from "../lib/welcomeDraft";
 import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
 
 export default function DispatchLayout() {
@@ -104,6 +105,20 @@ export default function DispatchLayout() {
 	]);
 	const canViewFollowups = usePermission("view_followups") && followupsOn;
 	const canViewProjects = usePermission("view_projects") && projectsOn;
+	const { data: entitlements, fromServer: entitlementsFresh } = useEntitlements();
+	const canManageOrg = usePermission("manage_organization");
+	const welcomeChecked = useRef(false);
+	// Once per load, on the first server payload: the stored snapshot shown after a failed
+	// fetch can be stale, and must not use up the check.
+	useEffect(() => {
+		if (welcomeChecked.current || !entitlements || !entitlementsFresh) return;
+		welcomeChecked.current = true;
+		if (shouldShowWelcome(entitlements, canManageOrg) && location.pathname !== "/dispatch/welcome")
+			navigate("/dispatch/welcome", {
+				replace: true,
+				state: { from: location.pathname + location.search + location.hash },
+			});
+	}, [entitlements, entitlementsFresh, canManageOrg, location, navigate]);
 
 	useSocketQuerySync();
 

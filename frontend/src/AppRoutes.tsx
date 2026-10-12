@@ -76,11 +76,13 @@ const FullMapPage = lazy(() => import("./pages/dispatch/FullMapPage"));
 const InvoicesPage = lazy(() => import("./pages/dispatch/InvoicesPage"));
 const InvoiceDetailPage = lazy(() => import("./pages/dispatch/InvoiceDetailPage"));
 const AdminPage = lazy(() => import("./pages/dispatch/AdminPage"));
+const WelcomePage = lazy(() => import("./pages/dispatch/WelcomePage"));
 const FollowupsPage = lazy(() => import("./pages/dispatch/FollowupsPage"));
 const VehiclesPage = lazy(() => import("./pages/dispatch/VehiclesPage"));
 const VehicleStockPage = lazy(() => import("./pages/dispatch/VehicleStockPage"));
 const VerifyEmailPage = lazy(() => import("./pages/dispatch/VerifyEmailPage"));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
+const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
 const MyProfilePage = lazy(() => import("./pages/MyProfilePage"));
 const QBCallbackPage = lazy(() => import("./pages/QBCallbackPage"));
@@ -142,6 +144,7 @@ export default function AppRoutes() {
 			<Route path="/register" element={<RegisterPage />} />
 			<Route path="/verify-email" element={<VerifyEmailPage />} />
 			<Route path="/reset-password" element={<ResetPasswordPage />} />
+			<Route path="/accept-invite" element={<AcceptInvitePage />} />
 			<Route path="/quickbooks/callback" element={<QBCallbackPage />} />
 			<Route path="/auth/sso/complete" element={<SSOCompletePage />} />
 			<Route
@@ -232,6 +235,7 @@ export default function AppRoutes() {
 				<Route path="invoices/:invoiceId" element={<RequirePermission permission="view_invoices"><InvoiceDetailPage /></RequirePermission>} />
 				<Route path="profile" element={<RequireAuth><MyProfilePage /></RequireAuth>} />
 				<Route path="admin" element={<RequireAnyPermission permissions={["view_admin", "manage_organization", "manage_roles"]}><AdminPage /></RequireAnyPermission>} />
+				<Route path="welcome" element={<RequirePermission permission="manage_organization"><WelcomePage /></RequirePermission>} />
 				<Route path="followups" element={<RequirePermission permission="view_followups"><FollowupsPage /></RequirePermission>} />
 				<Route path="vehicles" element={<RequireAnyPermission permissions={["view_inventory", "manage_technicians"]}><VehiclesPage /></RequireAnyPermission>} />
 				<Route path="vehicles/:id/stock" element={<RequireAnyPermission permissions={["view_inventory", "manage_technicians"]}><VehicleStockPage /></RequireAnyPermission>} />

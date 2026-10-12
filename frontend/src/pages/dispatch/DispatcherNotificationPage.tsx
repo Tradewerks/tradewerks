@@ -52,6 +52,7 @@ function NotificationIcon({ type }: { type: DispatcherNotificationType }): React
         case "quote_declined": return <ThumbsDown size={18} className={`${cls} text-error-text`} />;
         case "usage_limit_warning": return <Gauge size={18} className={`${cls} text-warning-text`} />;
         case "subscription_changed": return <CreditCard size={18} className={`${cls} text-text-secondary`} />;
+        case "trial_ending":
         case "upgrade_request_resolved": return <CreditCard size={18} className={`${cls} text-primary-text`} />;
     }
 }

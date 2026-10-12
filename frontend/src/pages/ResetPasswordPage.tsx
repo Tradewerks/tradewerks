@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { resetPasswordCall } from "../api/authenticate";
 import { useAuthStore } from "../auth/authStore";
+import { passwordProblem } from "../lib/passwordRules";
 
 export default function ResetPasswordPage() {
 	const { login } = useAuthStore();
@@ -15,11 +16,8 @@ export default function ResetPasswordPage() {
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 
-		if (newPassword !== confirmPassword) { setErrorMessage("Passwords do not match."); return; }
-		if (newPassword.length < 8) { setErrorMessage("Password must be at least 8 characters."); return; }
-		if (!/[A-Z]/.test(newPassword)) { setErrorMessage("Password must contain at least one capital letter."); return; }
-		if (!/[0-9]/.test(newPassword)) { setErrorMessage("Password must contain at least one number."); return; }
-		if (!/[^A-Za-z0-9]/.test(newPassword)) { setErrorMessage("Password must contain at least one special character."); return; }
+		const problem = passwordProblem(newPassword, confirmPassword);
+		if (problem) { setErrorMessage(problem); return; }
 
 		const token = searchParams.get("token");
 		const role = searchParams.get("role");

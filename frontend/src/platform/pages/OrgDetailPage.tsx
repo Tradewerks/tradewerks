@@ -7,6 +7,7 @@ import { useToast } from "../../components/ui/useToast";
 import { appliedMessage, changedKeys } from "../breakdown";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ChangeDialog from "../components/ChangeDialog";
+import CopyLink from "../components/CopyLink";
 import HistoryList from "../components/HistoryList";
 import LimitsCard from "../components/LimitsCard";
 import PlanCard from "../components/PlanCard";
@@ -16,8 +17,15 @@ import ResolveRequestDialog from "../components/ResolveRequestDialog";
 import { UsageCell } from "../components/UsageCell";
 import { card, cardTitle, chip, shortDate, versionLabel } from "../components/orgDetailUi";
 import { LIMIT_KEYS, LIMIT_LABELS } from "../limits";
+import { shortDateIn } from "../../lib/trialDays";
 import { platformError } from "../api";
-import { useOpenRequestFor, useOrg, useOrgHistory, useTiers } from "../hooks";
+import {
+	useOpenRequestFor,
+	useOrg,
+	useOrgHistory,
+	useResendOrgInvite,
+	useTiers,
+} from "../hooks";
 import { usePlanDraft, type SaveResult } from "../usePlanDraft";
 import { useUnsavedGuard } from "../useUnsavedGuard";
 import type {
@@ -101,6 +109,37 @@ function HistoryTab({ orgId }: { orgId: string }) {
 			error={history.error}
 			eventLabels={ORG_EVENT_LABELS}
 		/>
+	);
+}
+
+function AdminInviteRow({
+	orgId,
+	invite,
+	timeZone,
+}: {
+	orgId: string;
+	invite: { email: string; expiresAt: string };
+	timeZone: string;
+}) {
+	const resend = useResendOrgInvite(orgId);
+	const expired = Date.parse(invite.expiresAt) <= Date.now();
+	return (
+		<div className="space-y-2 rounded-lg border border-border-subtle p-3 text-sm">
+			<p className="text-text-secondary">
+				Admin invite for {invite.email} {expired ? "expired" : "pending, expires"}{" "}
+				{shortDateIn(invite.expiresAt, timeZone, true)} ·{" "}
+				<button
+					type="button"
+					className="font-medium text-primary hover:underline disabled:opacity-50"
+					disabled={resend.isPending}
+					onClick={() => resend.mutate(undefined)}
+				>
+					Resend
+				</button>
+			</p>
+			{resend.error && <FormErrorBanner message={platformError(resend.error)} />}
+			{resend.data && <CopyLink url={resend.data.inviteUrl} />}
+		</div>
 	);
 }
 
@@ -218,7 +257,7 @@ export default function OrgDetailPage() {
 		chips.push(
 			<span key="trial" className={chip}>
 				Trial: {versionLabel(tierList, e.trial_plan_version_id) ?? "tier"}{" "}
-				until {shortDate(e.trial_ends_at)}
+				until {shortDateIn(e.trial_ends_at, detail.org.timezone, true)}
 			</span>
 		);
 	if (e)
@@ -237,6 +276,13 @@ export default function OrgDetailPage() {
 				</h1>
 				<div className="flex flex-wrap gap-2">{chips}</div>
 			</div>
+			{detail.adminInvite && (
+				<AdminInviteRow
+					orgId={detail.org.id}
+					invite={detail.adminInvite}
+					timeZone={detail.org.timezone}
+				/>
+			)}
 			{openRequest && tiers.data && (
 				<RequestBanner
 					request={openRequest}

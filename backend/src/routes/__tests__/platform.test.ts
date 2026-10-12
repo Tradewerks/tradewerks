@@ -31,6 +31,7 @@ vi.mock("../../services/socketService.js", () => ({
 vi.mock("../../services/emailService.js", async (orig) => ({
 	...(await orig<typeof import("../../services/emailService.js")>()),
 	sendStaffInviteEmail: vi.fn(async () => {}),
+	sendOrgAdminInviteEmail: vi.fn(async () => {}),
 	sendStaffSecurityNotice: vi.fn(async () => {}),
 }));
 
@@ -52,7 +53,7 @@ import {
 	type StaffChange,
 } from "../../services/entitlementService.js";
 import { MODULES } from "../../lib/entitlements/registry.js";
-import { sendStaffSecurityNotice } from "../../services/emailService.js";
+import { sendOrgAdminInviteEmail, sendStaffSecurityNotice } from "../../services/emailService.js";
 
 const mockDb = db as any;
 const staffAuth = (id = "s-1") => {
@@ -96,6 +97,8 @@ describe("route table", () => {
 			"PATCH /staff/:id",
 			"POST /staff/:id/reset-mfa",
 			"GET /orgs",
+			"POST /orgs",
+			"POST /orgs/:id/admin-invite/resend",
 			"GET /orgs/:id",
 			"POST /orgs/:id/preview",
 			"POST /orgs/:id/changes/preview",
@@ -1696,5 +1699,135 @@ describe("organization routes", () => {
 				expect.objectContaining({ entity_type: "org_entitlement" }),
 			]),
 		);
+	});
+});
+
+describe("staff create organization (build plan 4)", () => {
+	const call = (method: string, path: string, opts: Record<string, unknown> = {}) =>
+		callRoute(platformRouter, method, path, { headers: staffAuth(), ...opts });
+	const BODY = {
+		name: "Acme Plumbing",
+		admin_name: "Pat",
+		admin_email: "Pat@Acme.test",
+		business_type: "plumbing",
+		plan_key: "pro",
+		trial: { plan_key: "enterprise", days: 14 },
+	};
+	beforeEach(() => {
+		mockDb.dispatcher.findUnique.mockResolvedValue(null);
+		mockDb.plan_version.findFirst.mockImplementation(async ({ where }: any) =>
+			where.plan.key === "pro"
+				? { id: "pv_pro_2" }
+				: where.plan.key === "enterprise"
+					? { id: "pv_ent_1" }
+					: null,
+		);
+		mockDb.organization.create.mockResolvedValue({
+			id: "org-new",
+			name: "Acme Plumbing",
+			timezone: "America/Chicago",
+		});
+		mockDb.org_entitlement.create.mockResolvedValue({});
+		mockDb.organization_role.createMany.mockResolvedValue({});
+		mockDb.organization_role.create.mockResolvedValue({ id: "role-admin" });
+		mockDb.dispatcher.create.mockResolvedValue({ id: "d-new", email: "pat@acme.test" });
+		mockDb.log.create.mockResolvedValue({});
+	});
+
+	it("provisions on the chosen tier with a trial, issues an invite and audits it", async () => {
+		const r = await call("post", "/orgs", { body: BODY });
+		expect(r.status).toBe(201);
+		expect(r.body.data.id).toBe("org-new");
+		expect(r.body.data.inviteUrl).toMatch(/\/accept-invite\?token=/);
+		const ent = mockDb.org_entitlement.create.mock.calls[0][0].data;
+		expect(ent).toMatchObject({
+			plan_version_id: "pv_pro_2",
+			plan_source: "operator",
+			template_key: "plumbing",
+			trial_plan_version_id: "pv_ent_1",
+		});
+		const days = (ent.trial_ends_at.getTime() - Date.now()) / 86_400_000;
+		expect(days).toBeGreaterThan(13.99);
+		const admin = mockDb.dispatcher.create.mock.calls[0][0].data;
+		expect(admin.email).toBe("pat@acme.test");
+		expect(admin.invite_token_hash).toMatch(/^[0-9a-f]{64}$/);
+		expect(admin.last_login).toBeNull();
+		expect(vi.mocked(sendOrgAdminInviteEmail).mock.calls[0][4]).toBe("America/Chicago");
+		expect(mockDb.log.create.mock.calls[0][0].data).toMatchObject({
+			organization_id: "org-new",
+			entity_type: "org_entitlement",
+			entity_id: "org-new",
+			event_type: "organization.created",
+			actor_type: "platform_staff",
+		});
+	});
+
+	it("409 when the admin email is in use", async () => {
+		mockDb.dispatcher.findUnique.mockResolvedValue({ id: "x" });
+		await expect(call("post", "/orgs", { body: BODY })).rejects.toMatchObject({
+			statusCode: 409,
+		});
+	});
+
+	it("409 when the admin email belongs to a technician (login would find the technician first)", async () => {
+		mockDb.technician.findFirst.mockResolvedValueOnce({ id: "t-1" });
+		await expect(call("post", "/orgs", { body: BODY })).rejects.toMatchObject({
+			statusCode: 409,
+		});
+		expect(mockDb.organization.create).not.toHaveBeenCalled();
+	});
+
+	it("409, not 500, when a parallel create takes the email first", async () => {
+		mockDb.dispatcher.create.mockRejectedValueOnce(
+			Object.assign(new Error("unique"), { code: "P2002" }),
+		);
+		await expect(call("post", "/orgs", { body: BODY })).rejects.toMatchObject({
+			statusCode: 409,
+		});
+	});
+
+	it("400 for a tier that is unknown, archived or not assignable", async () => {
+		await expect(
+			call("post", "/orgs", { body: { ...BODY, plan_key: "nope" } }),
+		).rejects.toMatchObject({ statusCode: 400 });
+	});
+
+	it("400 for trial days outside 1–365", async () => {
+		for (const days of [0, 366])
+			await expect(
+				call("post", "/orgs", { body: { ...BODY, trial: { plan_key: "enterprise", days } } }),
+			).rejects.toMatchObject({ statusCode: 400 });
+	});
+
+	it("resend replaces the token, and refuses when nothing is pending", async () => {
+		mockDb.dispatcher.findFirst.mockResolvedValueOnce({
+			id: "d-1",
+			email: "pat@acme.test",
+			organization: { name: "Acme", timezone: "Pacific/Honolulu" },
+		});
+		mockDb.dispatcher.update.mockResolvedValue({});
+		const path = "/orgs/:id/admin-invite/resend";
+		const ok = await call("post", path, { params: { id: "org-1" } });
+		expect(ok.status).toBe(200);
+		// The expiry date in the email is the org's calendar day, not the server's.
+		expect(vi.mocked(sendOrgAdminInviteEmail).mock.calls.at(-1)?.[4]).toBe("Pacific/Honolulu");
+		expect(ok.body.data.inviteUrl).toMatch(/\/accept-invite\?token=/);
+		expect(mockDb.dispatcher.update.mock.calls[0][0].data.invite_token_hash).toMatch(
+			/^[0-9a-f]{64}$/,
+		);
+		mockDb.dispatcher.findFirst.mockResolvedValueOnce(null);
+		await expect(call("post", path, { params: { id: "org-1" } })).rejects.toMatchObject({
+			statusCode: 409,
+		});
+	});
+
+	it("the list filter keeps only active trials ending within N days", async () => {
+		mockDb.organization.count.mockResolvedValue(0);
+		mockDb.organization.findMany.mockResolvedValue([]);
+		await call("get", "/orgs", { query: { trial_ending_within_days: "7" } });
+		const where = mockDb.organization.findMany.mock.calls[0][0].where;
+		expect(where.entitlement.trial_plan_version_id).toEqual({ not: null });
+		expect(where.entitlement.trial_ends_at.gt).toBeInstanceOf(Date);
+		expect(where.entitlement.trial_ends_at.lte).toBeInstanceOf(Date);
 	});
 });

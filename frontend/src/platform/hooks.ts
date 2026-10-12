@@ -2,10 +2,10 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { platform } from "./api";
 import type { RequestResolution, StaffChange } from "./types";
 
-export const useOrgs = (q: string, page: number) =>
+export const useOrgs = (q: string, page: number, trialEnding = false) =>
 	useQuery({
-		queryKey: ["platform", "orgs", q, page],
-		queryFn: () => platform.orgs(q, page),
+		queryKey: ["platform", "orgs", q, page, trialEnding],
+		queryFn: () => platform.orgs(q, page, trialEnding),
 		placeholderData: keepPreviousData,
 	});
 export const useOrg = (id: string) =>
@@ -38,6 +38,16 @@ function useOrgMutation<A, R>(orgId: string, fn: (a: A) => Promise<R>) {
 		},
 	});
 }
+
+export const useCreateOrg = () => {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: platform.createOrg,
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["platform", "orgs"] }),
+	});
+};
+export const useResendOrgInvite = (orgId: string) =>
+	useOrgMutation(orgId, () => platform.resendOrgInvite(orgId));
 
 export const useApplyChange = (orgId: string) =>
 	useOrgMutation(

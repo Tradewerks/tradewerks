@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { db } from "../db.js";
 import { ErrorCodes, httpError } from "../types/responses.js";
 import { log } from "../services/appLogger.js";
@@ -6,7 +5,8 @@ import {
 	sendStaffInviteEmail,
 	sendStaffSecurityNotice,
 } from "../services/emailService.js";
-import { STAFF_ROLE, hashInviteToken } from "./authService.js";
+import { STAFF_ROLE } from "./authService.js";
+import { newInviteToken } from "../lib/inviteToken.js";
 import { forgetStaff } from "./verifyStaffToken.js";
 
 export type StaffActor = { id: string; name: string };
@@ -33,15 +33,7 @@ const select = {
 	created_at: true,
 } as const;
 
-function newInvite() {
-	const token = crypto.randomBytes(32).toString("base64url");
-	const base = process.env.FRONTEND_URL ?? "http://localhost:5173";
-	return {
-		hash: hashInviteToken(token),
-		expires: new Date(Date.now() + INVITE_MS),
-		url: `${base}/platform/invite?token=${token}`,
-	};
-}
+const newInvite = () => newInviteToken("/platform/invite", INVITE_MS);
 
 type Tx = Pick<typeof db, "log">;
 // Written in the action's own transaction: a security change without its audit row must not commit.

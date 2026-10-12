@@ -9,7 +9,6 @@ export const tiers: TierRow[] = [
 		assignable: true,
 		archived_at: null,
 		is_signup_default: false,
-		is_trial_default: false,
 		versions: [
 			{
 				id: "pv-2",
@@ -25,7 +24,8 @@ export const tiers: TierRow[] = [
 	},
 ];
 export const detail = (over: Partial<OrgDetail> = {}): OrgDetail => ({
-	org: { id: "org-1", name: "Acme" },
+	org: { id: "org-1", name: "Acme", timezone: "America/Chicago" },
+	adminInvite: null,
 	entitlement: {
 		plan_version_id: "pv-2",
 		plan_source: "operator",

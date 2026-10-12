@@ -13,6 +13,7 @@ import { startInvoiceSchedulerInterval } from "./services/invoiceScheduler.js";
 import { startFollowupSchedulerInterval } from "./services/followupScheduler.js";
 import { startMaintenanceReminderInterval } from "./services/vehicleMaintenanceScheduler.js";
 import { startLateArrivalInterval } from "./services/lateArrivalScheduler.js";
+import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import multer from "multer";
 import {
@@ -85,6 +86,7 @@ import { handleQBWebhook } from "./services/qb/qbWebhook.js"
 import { handlePostmarkWebhook } from "./services/postmarkWebhook.js";
 import { isUserActive } from "./services/userActiveCache.js";
 import { assertRegistry } from "./lib/entitlements/registry.js";
+import { assertBusinessTypes } from "./lib/entitlements/businessTypes.js";
 import { requireModule } from "./lib/entitlements/requireModule.js";
 import { registerEntitlementBlockers } from "./lib/entitlements/blockers.js";
 import orgEntitlementsRouter from "./routes/orgEntitlements.js";
@@ -262,6 +264,7 @@ const proxyWarning = platformProxyWarning(process.env);
 if (proxyWarning) log.warn(proxyWarning);
 
 assertRegistry();
+assertBusinessTypes();
 registerEntitlementBlockers();
 
 app.use(
@@ -310,6 +313,7 @@ startInvoiceSchedulerInterval();
 startFollowupSchedulerInterval();
 startMaintenanceReminderInterval();
 startLateArrivalInterval();
+startTrialSchedulerInterval();
 rearmWrappingUpTimers().catch((e) =>
 	log.error(e, "Failed to rearm WrappingUp timers"),
 );

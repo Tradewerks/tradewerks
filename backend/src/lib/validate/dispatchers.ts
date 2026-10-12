@@ -22,6 +22,7 @@ export const DispatcherNotificationTypeEnum = z.enum([
 	"usage_limit_warning",
 	"subscription_changed",
 	"upgrade_request_resolved",
+	"trial_ending",
 ]);
 
 const reportLayoutSchema = z.record(

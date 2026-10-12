@@ -2,6 +2,7 @@ import { useState } from "react";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { inputClass, labelClass } from "../components/AuthCard";
+import CopyLink from "../components/CopyLink";
 import { platformError } from "../api";
 import {
 	useInviteStaff,
@@ -104,31 +105,6 @@ function StatusChip({ row }: { row: StaffRow }) {
 	if (row.status === "disabled" && !row.accepted)
 		return <span className={chip}>Invite revoked</span>;
 	return <span className={chip}>{row.status === "active" ? "Active" : "Disabled"}</span>;
-}
-
-function CopyLink({ url }: { url: string }) {
-	const [copied, setCopied] = useState(false);
-	return (
-		<div className="flex gap-2">
-			<input
-				readOnly
-				value={url}
-				aria-label="Invite link"
-				className={`${inputClass} min-w-0`}
-			/>
-			<button
-				type="button"
-				className="h-9 shrink-0 rounded-md border border-border px-3 text-sm text-text-primary hover:bg-surface-inset"
-				onClick={() => {
-					void navigator.clipboard.writeText(url);
-					setCopied(true);
-					setTimeout(() => setCopied(false), 2000);
-				}}
-			>
-				{copied ? "Copied" : "Copy link"}
-			</button>
-		</div>
-	);
 }
 
 export default function StaffPage() {

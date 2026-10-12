@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { ErrorCodes, httpError } from "../types/responses.js";
 import { logActivity } from "../services/logger.js";
+import { hashInviteToken } from "../lib/inviteToken.js";
 import {
 	KEY,
 	buildOtpAuthUri,
@@ -53,8 +54,6 @@ const signInAgain = () =>
 const digest = (s: string) => crypto.createHash("sha256").update(s).digest();
 const safeEqual = (a: string, b: string) =>
 	crypto.timingSafeEqual(digest(a), digest(b));
-export const hashInviteToken = (token: string) =>
-	crypto.createHash("sha256").update(token).digest("hex");
 
 function pending<T>(fn: () => T): T {
 	try {

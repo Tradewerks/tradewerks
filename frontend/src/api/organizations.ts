@@ -89,3 +89,11 @@ export const assignOrgRole = async (input: { user_id: string; user_type: "dispat
 
 	return true;
 };
+export const getBusinessTypes = async () =>
+	(await api.get<ApiResponse<{ key: string; label: string }[]>>("/organizations/business-types")).data.data ?? [];
+
+export const previewOrgInvite = async (token: string) =>
+	(await api.post<ApiResponse<{ company: string; email: string }>>("/organizations/invites/preview", { token })).data.data!;
+
+export const acceptOrgInvite = async (token: string, password: string) =>
+	(await api.post<ApiResponse<{ email: string }>>("/organizations/invites/accept", { token, password })).data.data!;

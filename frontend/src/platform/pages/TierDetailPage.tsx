@@ -84,11 +84,6 @@ export default function TierDetailPage() {
 			text: "Make signup default",
 			show: editable && !tier.is_signup_default,
 		},
-		{
-			id: "trialDefault",
-			text: "Make trial default",
-			show: editable && !tier.is_trial_default,
-		},
 		{ id: "archive", text: "Archive", show: !tier.archived_at && tier.assignable },
 		{ id: "unarchive", text: "Unarchive", show: !!tier.archived_at },
 	];

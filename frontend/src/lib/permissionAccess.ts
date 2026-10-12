@@ -26,6 +26,12 @@ export interface EntitlementsData {
 	permissionMap: Record<string, { module: string; access: "read" | "write" }>;
 	limits: Record<string, number | null>;
 	usage: UsageSummary | null;
+	// Optional: a cached snapshot can predate it.
+	setup?: {
+		templateKey: string;
+		modulesReviewed: boolean;
+		trial: { tierLabel: string; endsAt: string } | null;
+	} | null;
 }
 
 // Undefined means "not loaded". The backend enforces regardless, so the UI

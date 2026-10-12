@@ -67,7 +67,7 @@ describe("resetPassword — role is derived from the token's owner row (review B
 		expect(result).toEqual({ err: "", userId: "disp-1", role: "dispatcher" });
 		expect(fake.dispatcher.update).toHaveBeenCalledWith({
 			where: { password_reset_token: "tok" },
-			data: { password: "hashed(new-password-123)", password_reset_token: null, password_reset_token_expires_at: null },
+			data: { password: "hashed(new-password-123)", password_reset_token: null, password_reset_token_expires_at: null, invite_token_hash: null, invite_expires_at: null },
 		});
 		expect(fake.technician.update).not.toHaveBeenCalled();
 		// lookup asks only for what it needs — never the hash or the token itself

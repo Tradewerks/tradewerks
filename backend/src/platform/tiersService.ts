@@ -21,8 +21,7 @@ import { badRequest, isUniqueViolation } from "./errors.js";
 export type TierPatch =
 	| { label: string }
 	| { archived: boolean }
-	| { signupDefault: true }
-	| { trialDefault: true };
+	| { signupDefault: true };
 type Contents = { modules: string[]; limits: Record<LimitKey, number | null> };
 type ContentsInput = {
 	modules: string[];
@@ -109,7 +108,6 @@ export async function listTiers() {
 		assignable: p.assignable,
 		archived_at: p.archived_at,
 		is_signup_default: p.is_signup_default,
-		is_trial_default: p.is_trial_default,
 		versions: p.versions.map((v) => ({
 			id: v.id,
 			version: v.version,
@@ -184,9 +182,9 @@ export async function patchTier(
 				changes = { label: { old: plan.label, new: patch.label } };
 			} else if ("archived" in patch) {
 				if (patch.archived) {
-					if (plan.is_signup_default || plan.is_trial_default)
+					if (plan.is_signup_default)
 						throw badRequest(
-							"Choose another default tier before archiving this one",
+							"Choose another signup default before archiving this one",
 						);
 					const inUse = await tx.org_entitlement.count({
 						where: {
@@ -209,10 +207,7 @@ export async function patchTier(
 				};
 			} else {
 				// The schema only accepts `true`: a default is cleared by making another tier the default.
-				const field =
-					"signupDefault" in patch
-						? "is_signup_default"
-						: "is_trial_default";
+				const field = "is_signup_default";
 				if (!plan.assignable || plan.archived_at)
 					throw badRequest(
 						"Only an assignable, active tier can be a default",

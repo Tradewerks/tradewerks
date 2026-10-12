@@ -4,7 +4,8 @@ import LimitsCard from "../components/LimitsCard";
 import type { OrgDetail } from "../types";
 
 const detail = (overrides: Record<string, number | null> = {}): OrgDetail => ({
-	org: { id: "org-1", name: "Acme" },
+	org: { id: "org-1", name: "Acme", timezone: "America/Chicago" },
+	adminInvite: null,
 	entitlement: {
 		plan_version_id: "pv-2",
 		plan_source: "operator",

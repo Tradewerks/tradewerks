@@ -7,7 +7,7 @@ import { useTierMutation } from "../hooks";
 import { noteReady, REASON_TOO_SHORT } from "../notes";
 import type { TierPatch, TierRow } from "../types";
 
-export type TierAction = "rename" | "archive" | "unarchive" | "signupDefault" | "trialDefault";
+export type TierAction = "rename" | "archive" | "unarchive" | "signupDefault";
 
 const COPY: Record<TierAction, { title: string; confirm: string; body: string }> = {
 	rename: {
@@ -29,11 +29,6 @@ const COPY: Record<TierAction, { title: string; confirm: string; body: string }>
 		title: "Make signup default",
 		confirm: "Make default",
 		body: "New self-serve signups start on this tier's latest version. The current default stops being one.",
-	},
-	trialDefault: {
-		title: "Make trial default",
-		confirm: "Make default",
-		body: "New signups trial this tier's latest version. The current trial default stops being one.",
 	},
 };
 
@@ -61,9 +56,7 @@ export default function TierActionDialog({
 			? { label: label.trim() }
 			: action === "archive" || action === "unarchive"
 				? { archived: action === "archive" }
-				: action === "signupDefault"
-					? { signupDefault: true }
-					: { trialDefault: true };
+				: { signupDefault: true };
 	const confirm = () => {
 		setTried(true);
 		if (!noteReady(reason)) return;

@@ -3,7 +3,7 @@ import { log } from "../../services/appLogger.js";
 import { getEntitlements } from "../../services/entitlementService.js";
 import { notifyDispatchers } from "../../controllers/notificationsController.js";
 import { countSeats } from "./seats.js";
-import { METER_KEYS, type LimitKey, type MeterKey } from "./registry.js";
+import { METER_KEYS, SUBSCRIPTION_PATH, type LimitKey, type MeterKey } from "./registry.js";
 
 export interface QuotaResult {
 	allowed: boolean;
@@ -105,7 +105,7 @@ async function warnOnce(
 				type: "usage_limit_warning",
 				title: `${copy.name}: ${Math.floor((used / limit) * 100)}% of this month's limit used`,
 				body: `${used} of ${limit} ${copy.unit} used this month. The limit resets on the 1st (UTC).`,
-				actionUrl: "/dispatch/admin?tab=entitlements",
+				actionUrl: SUBSCRIPTION_PATH,
 			},
 			orgId,
 		);

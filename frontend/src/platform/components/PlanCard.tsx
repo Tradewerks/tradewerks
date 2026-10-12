@@ -9,13 +9,13 @@ import {
 	chip,
 	defaultTrialDate,
 	flash,
-	shortDate,
 	smallButton,
 	statePill,
 	textButton,
 	versionLabel,
 	type OpenChange,
 } from "./orgDetailUi";
+import { endOfDayIn, shortDateIn } from "../../lib/trialDays";
 import type { PlanDraft } from "../usePlanDraft";
 import type { ModuleState, OrgDetail, TierRow } from "../types";
 
@@ -68,10 +68,11 @@ export default function PlanCard({
 	const labelOf = (k: string) => detail.catalog.find((m) => m.key === k)?.label ?? k;
 	const draftGrants = draft.state?.grants ?? null;
 	const pbd = draft.state ? (draft.preview?.breakdown ?? null) : null;
+	const orgDay = (iso: string) => shortDateIn(iso, detail.org.timezone, true);
 	const trialLine = trial
-		? `Trial: ${trial.label} until ${shortDate(trial.endsAt)}. ${trial.label} applies now; ${bd!.baseTier.label} applies after.`
+		? `Trial: ${trial.label} until ${orgDay(trial.endsAt)}. ${trial.label} applies now; ${bd!.baseTier.label} applies after.`
 		: trialOn
-			? `Trial: ${versionLabel(tiers, e.trial_plan_version_id) ?? "tier"} until ${shortDate(e.trial_ends_at!)}`
+			? `Trial: ${versionLabel(tiers, e.trial_plan_version_id) ?? "tier"} until ${orgDay(e.trial_ends_at!)}`
 			: "No trial";
 
 	return (
@@ -152,9 +153,10 @@ export default function PlanCard({
 								!trialForm.date
 							}
 							onClick={() => {
-								const endsAt = new Date(
-									`${trialForm.date}T23:59:59`
-								).toISOString();
+								const endsAt = endOfDayIn(
+									trialForm.date,
+									detail.org.timezone
+								);
 								open({
 									change: {
 										kind: "trial",

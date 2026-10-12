@@ -62,7 +62,6 @@ const plan = (over: Record<string, unknown> = {}) => ({
 	assignable: true,
 	archived_at: null,
 	is_signup_default: false,
-	is_trial_default: false,
 	...over,
 });
 const call = (
@@ -268,7 +267,7 @@ describe("patch tier", () => {
 
 	it("refuses archiving a default tier", async () => {
 		mockDb.plan.findUnique.mockResolvedValue(
-			plan({ is_trial_default: true }),
+			plan({ is_signup_default: true }),
 		);
 		await expect(patch({ archived: true })).rejects.toMatchObject({
 			statusCode: 400,
@@ -305,13 +304,13 @@ describe("patch tier", () => {
 
 	it("refuses clearing a default and refuses non-assignable defaults", async () => {
 		mockDb.plan.findUnique.mockResolvedValue(
-			plan({ is_trial_default: true }),
+			plan({ is_signup_default: true }),
 		);
-		await expect(patch({ trialDefault: false })).rejects.toMatchObject({
+		await expect(patch({ signupDefault: false })).rejects.toMatchObject({
 			statusCode: 400,
 		});
 		mockDb.plan.findUnique.mockResolvedValue(plan({ assignable: false }));
-		await expect(patch({ trialDefault: true })).rejects.toMatchObject({
+		await expect(patch({ signupDefault: true })).rejects.toMatchObject({
 			statusCode: 400,
 		});
 	});

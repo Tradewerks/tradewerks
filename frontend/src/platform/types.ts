@@ -75,6 +75,7 @@ export interface EntitlementBreakdown {
 export interface OrgListRow {
 	id: string;
 	name: string;
+	timezone: string;
 	tier: { key: string; label: string; version: number } | null;
 	trial: { tierLabel: string; endsAt: string } | null;
 	template: string | null;
@@ -88,8 +89,18 @@ export interface OrgListPage {
 	pageSize: number;
 }
 
+export interface CreateOrgBody {
+	name: string;
+	admin_name: string;
+	admin_email: string;
+	business_type: string;
+	plan_key: string;
+	trial?: { plan_key: string; days: number };
+}
+
 export interface OrgDetail {
-	org: { id: string; name: string };
+	org: { id: string; name: string; timezone: string };
+	adminInvite: { email: string; expiresAt: string } | null;
 	entitlement: {
 		plan_version_id: string;
 		plan_source: string;
@@ -135,7 +146,6 @@ export interface TierRow {
 	assignable: boolean;
 	archived_at: string | null;
 	is_signup_default: boolean;
-	is_trial_default: boolean;
 	versions: {
 		id: string;
 		version: number;
@@ -209,5 +219,4 @@ export interface RequestPage {
 export type TierPatch =
 	| { label: string }
 	| { archived: boolean }
-	| { signupDefault: true }
-	| { trialDefault: true };
+	| { signupDefault: true };

@@ -43,7 +43,6 @@ export function sameContents(a: TierContents | null, b: TierContents | null): bo
 export function tierFlags(t: TierRow): string[] {
 	return [
 		t.is_signup_default && "Signup default",
-		t.is_trial_default && "Trial default",
 		!t.assignable && "Not assignable",
 		t.archived_at && "Archived",
 	].filter((f): f is string => !!f);

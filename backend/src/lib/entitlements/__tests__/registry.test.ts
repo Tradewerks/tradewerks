@@ -8,6 +8,7 @@ import {
 	METER_KEYS,
 } from "../registry.js";
 import { getAllPermissions } from "../../permissionCatalogs.js";
+import { BUSINESS_TYPES, businessTypeProblems, getBusinessType } from "../businessTypes.js";
 
 describe("entitlement registry", () => {
 	it("owns every catalog permission exactly once with an access value", () => {
@@ -64,5 +65,42 @@ describe("limit keys (build plan 2)", () => {
 			"tax_lookups_month",
 		]);
 		for (const m of METER_KEYS) expect(LIMIT_KEYS).toContain(m);
+	});
+});
+
+describe("business types", () => {
+	const optional = MODULES.filter((m) => m.kind === "optional").map((m) => m.key);
+	const full = (over: Record<string, boolean> = {}) => ({
+		...Object.fromEntries(optional.map((k) => [k, true])),
+		...over,
+	});
+
+	it("the shipped list is valid", () => {
+		expect(businessTypeProblems()).toEqual([]);
+	});
+	it("every type lists every optional module", () => {
+		for (const t of BUSINESS_TYPES)
+			expect(Object.keys(t.moduleDefaults).sort()).toEqual([...optional].sort());
+	});
+	it("general matches the old signup defaults", () => {
+		expect(getBusinessType("general")?.moduleDefaults).toEqual(full({ followups: false }));
+	});
+	it("flags a missing module, an unknown or non-optional module, a broken requires and a duplicate key", () => {
+		const { quotes: _q, ...missing } = full();
+		const problems = businessTypeProblems([
+			{ key: "a", label: "A", moduleDefaults: missing },
+			{ key: "b", label: "B", moduleDefaults: { ...full(), nope: true, ai_assistant: true } },
+			{ key: "c", label: "C", moduleDefaults: full({ inventory: false }) },
+			{ key: "c", label: "C2", moduleDefaults: full() },
+		]);
+		expect(problems).toEqual(
+			expect.arrayContaining([
+				"a: missing quotes",
+				"b: unknown or non-optional nope",
+				"b: unknown or non-optional ai_assistant",
+				"c: vehicle_stock needs inventory",
+				"duplicate key c",
+			]),
+		);
 	});
 });

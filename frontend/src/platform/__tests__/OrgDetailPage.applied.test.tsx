@@ -11,7 +11,6 @@ const { success, state, tiers } = vi.hoisted(() => {
 			assignable: true,
 			archived_at: null,
 			is_signup_default: false,
-			is_trial_default: false,
 			versions: [
 				{
 					id: "pv-3",
@@ -64,7 +63,8 @@ vi.mock("../components/ChangeDialog", () => ({ default: () => null }));
 import OrgDetailPage from "../pages/OrgDetailPage";
 
 const makeDetail = (trial: boolean): OrgDetail => ({
-	org: { id: "org-1", name: "Acme" },
+	org: { id: "org-1", name: "Acme", timezone: "America/Chicago" },
+	adminInvite: null,
 	entitlement: {
 		plan_version_id: "pv-2",
 		plan_source: "operator",

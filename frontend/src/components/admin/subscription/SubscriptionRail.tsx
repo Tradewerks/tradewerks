@@ -9,8 +9,17 @@ import RequestStatus from "./RequestStatus";
 import ConfirmDialog from "../../ui/ConfirmDialog";
 import { useUpgradeRequests, useWithdrawUpgradeRequest } from "../../../hooks/useUpgradeRequests";
 import { requestErrorMessage } from "../../../lib/upgradeRequests";
+import { shortDateIn, trialEndsInDays } from "../../../lib/trialDays";
+import { useAuthStore } from "../../../auth/authStore";
+import { FALLBACK_TIMEZONE } from "../../../util/util";
 
 const sectionLabel = "text-[11px] font-medium uppercase tracking-wide text-text-tertiary";
+
+function trialLine(endsAt: string, timeZone: string) {
+	const days = trialEndsInDays(endsAt);
+	const date = shortDateIn(endsAt, timeZone);
+	return `Trial ends ${date} · ${days} ${days === 1 ? "day" : "days"} left`;
+}
 
 // A cached entitlements snapshot can predate `plan.label`.
 const SEAT_NOTES: Record<string, string> = {
@@ -27,6 +36,7 @@ export default function SubscriptionRail({
 	data: EntitlementsData;
 	canManage: boolean;
 }) {
+	const tz = useAuthStore((s) => s.user?.orgTimezone) ?? FALLBACK_TIMEZONE;
 	const requests = useUpgradeRequests(canManage);
 	const withdraw = useWithdrawUpgradeRequest();
 	const hasOpenRequest = (requests.data ?? []).some((r) => r.status === "open");
@@ -68,6 +78,11 @@ export default function SubscriptionRail({
 						</span>
 					)}
 				</div>
+				{data.setup?.trial && (
+					<p className="mt-1 text-xs text-text-secondary">
+						{trialLine(data.setup.trial.endsAt, tz)}
+					</p>
+				)}
 				{canManage ? (
 					<div className="mt-3 space-y-2">
 						<RequestStatus

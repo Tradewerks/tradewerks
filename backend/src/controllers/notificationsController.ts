@@ -137,6 +137,7 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	usage_limit_warning: "manage_organization",
 	subscription_changed: "manage_organization",
 	upgrade_request_resolved: "manage_organization",
+	trial_ending: "manage_organization",
 };
 
 // Notify every dispatcher in the org who can see this type and hasn't muted it

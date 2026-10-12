@@ -21,7 +21,6 @@ const tiers: TierRow[] = [
 		assignable: true,
 		archived_at: null,
 		is_signup_default: false,
-		is_trial_default: false,
 		versions: [version("pv-2", 2, ["quickbooks", "inventory"])],
 	},
 	{
@@ -30,7 +29,6 @@ const tiers: TierRow[] = [
 		assignable: true,
 		archived_at: null,
 		is_signup_default: false,
-		is_trial_default: false,
 		versions: [version("pv-s1", 1, [])],
 	},
 ];

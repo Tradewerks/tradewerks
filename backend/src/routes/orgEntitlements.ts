@@ -18,6 +18,7 @@ import { getUsageSummary, type UsageSummary } from "../lib/entitlements/quota.js
 import { log } from "../services/appLogger.js";
 import { db } from "../db.js";
 import { upgradeRequestLimiter } from "../platform/rateLimit.js";
+import { activeTrial } from "../platform/activeTrial.js";
 import {
 	fileRequest,
 	listOwnRequests,
@@ -36,6 +37,30 @@ async function usageFor(
 		return await getUsageSummary(orgId, limits);
 	} catch (err) {
 		log.warn({ err, orgId }, "usage summary unavailable");
+		return null;
+	}
+}
+
+// Uncached PK read; a failure must not take module state down with it.
+async function setupFor(orgId: string) {
+	try {
+		const row = await db.org_entitlement.findUnique({
+			where: { organization_id: orgId },
+			select: {
+				template_key: true,
+				modules_reviewed_at: true,
+				trial_ends_at: true,
+				trial_plan_version: { select: { plan: { select: { label: true } } } },
+			},
+		});
+		if (!row) return null;
+		return {
+			templateKey: row.template_key,
+			modulesReviewed: row.modules_reviewed_at !== null,
+			trial: activeTrial(row, Date.now()),
+		};
+	} catch (err) {
+		log.warn({ err, orgId }, "setup state unavailable");
 		return null;
 	}
 }
@@ -71,12 +96,28 @@ router.get("/", async (req, res, next) => {
 			createSuccessResponse({
 				...present(ent, await tierLabel(ent.planKey)),
 				usage: canSeeUsage ? await usageFor(orgId, ent.limits) : null,
+				setup: await setupFor(orgId),
 			}),
 		);
 	} catch (err) {
 		next(err);
 	}
 });
+
+router.post(
+	"/modules-reviewed",
+	requirePermission("manage_organization"),
+	async (req, res, next) => {
+		try {
+			const orgId = req.user!.organization_id as string;
+			// Raw: updated_at is a staff draft's stale-check stamp and must not move.
+			await db.$executeRaw`UPDATE "org_entitlement" SET "modules_reviewed_at" = now() WHERE "organization_id" = ${orgId} AND "modules_reviewed_at" IS NULL`;
+			res.json(createSuccessResponse({ reviewed: true }));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
 
 router.get(
 	"/modules/:key/disable-preview",

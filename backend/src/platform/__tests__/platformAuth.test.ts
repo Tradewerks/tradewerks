@@ -156,9 +156,9 @@ describe.runIf(DB_URL)(
 				expect(r.reason.message).toBe("Setup is not available");
 		});
 
-		it("only one tier can be signup default and one trial default", async () => {
+		it("only one tier can be signup default", async () => {
 			await db.plan.updateMany({
-				data: { is_signup_default: false, is_trial_default: false },
+				data: { is_signup_default: false },
 			});
 			await db.plan.createMany({
 				data: [
@@ -170,16 +170,6 @@ describe.runIf(DB_URL)(
 				db.plan.update({
 					where: { key: "t-b" },
 					data: { is_signup_default: true },
-				}),
-			).rejects.toThrow();
-			await db.plan.update({
-				where: { key: "t-b" },
-				data: { is_trial_default: true },
-			});
-			await expect(
-				db.plan.update({
-					where: { key: "t-a" },
-					data: { is_trial_default: true },
 				}),
 			).rejects.toThrow();
 		});

@@ -8,7 +8,6 @@ const tier = (over: Partial<TierRow> = {}): TierRow => ({
 	assignable: true,
 	archived_at: null,
 	is_signup_default: false,
-	is_trial_default: false,
 	versions: [
 		{
 			id: "pv-3",

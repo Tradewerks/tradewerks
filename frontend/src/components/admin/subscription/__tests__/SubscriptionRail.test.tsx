@@ -55,3 +55,44 @@ describe("SubscriptionRail seat request link", () => {
 		expect(screen.getByTestId("search")).not.toHaveTextContent("request=");
 	});
 });
+
+describe("SubscriptionRail trial line (build plan 4)", () => {
+	const dayLabel = (iso: string) =>
+		new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+	const renderRail = (d: EntitlementsData) =>
+		render(
+			<MemoryRouter>
+				<SubscriptionRail data={d} canManage />
+			</MemoryRouter>
+		);
+
+	it("shows when an active trial ends", () => {
+		const endsAt = new Date(Date.now() + 2.5 * 86_400_000).toISOString();
+		renderRail({
+			...data,
+			plan: { ...data.plan, label: "Enterprise", trialActive: true },
+			setup: {
+				templateKey: "hvac",
+				modulesReviewed: true,
+				trial: { tierLabel: "Enterprise", endsAt },
+			},
+		});
+		expect(
+			screen.getByText(`Trial ends ${dayLabel(endsAt)} · 3 days left`)
+		).toBeInTheDocument();
+	});
+
+	it("says 1 day, singular, on the last day", () => {
+		const endsAt = new Date(Date.now() + 5 * 3_600_000).toISOString();
+		renderRail({
+			...data,
+			setup: { templateKey: "hvac", modulesReviewed: true, trial: { tierLabel: "Pro", endsAt } },
+		});
+		expect(screen.getByText(`Trial ends ${dayLabel(endsAt)} · 1 day left`)).toBeInTheDocument();
+	});
+
+	it("shows no trial line without setup data", () => {
+		renderRail({ ...data, setup: undefined });
+		expect(screen.queryByText(/^Trial ends/)).toBeNull();
+	});
+});

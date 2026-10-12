@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { log } from "../services/appLogger.js";
+import { SUBSCRIPTION_PATH } from "../lib/entitlements/registry.js";
 import {
 	createDispatcherNotification,
 	notifyDispatchers,
@@ -18,7 +19,7 @@ export async function notifyRequestResolved(
 			type: TYPE,
 			title: `Your subscription request was ${outcome}`,
 			body: note,
-			actionUrl: "/dispatch/admin?tab=entitlements",
+			actionUrl: SUBSCRIPTION_PATH,
 		};
 		const request = await db.upgrade_request.findUnique({
 			where: { id: requestId },

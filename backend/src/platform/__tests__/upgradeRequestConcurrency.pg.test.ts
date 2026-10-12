@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { DAY_MS } from "../../lib/dayRange.js";
 
 // Real Postgres for races the fake DB cannot show. CI sets QUOTA_TEST_DATABASE_URL after
 // `prisma migrate deploy`. Never the dev database.
@@ -179,5 +180,65 @@ describe.runIf(DB_URL)("build plan 3b against Postgres", () => {
 			}),
 		]);
 		expect(made.map((v) => v.version).sort()).toEqual([2, 3]);
+	});
+});
+
+describe.runIf(DB_URL)("org admin invite against Postgres", () => {
+	it("two parallel accepts of one token apply once", async () => {
+		const { db } = await import("../../db.js");
+		const inv = await import("../../services/orgAdminInvite.js");
+		const org = await db.organization.create({
+			data: { name: "PG invite org", email: "pg-inv@t.test" },
+		});
+		const { token, hash, expires } = inv.newOrgInvite();
+		await db.dispatcher.create({
+			data: {
+				organization_id: org.id,
+				name: "PG",
+				email: `pg-inv-${Date.now()}@t.test`,
+				password: "x",
+				title: "Administrator",
+				description: "",
+				role: "admin",
+				invite_token_hash: hash,
+				invite_expires_at: expires,
+			},
+		});
+		const results = await Promise.allSettled([
+			inv.acceptOrgInvite(token, "Sup3r$ecret1"),
+			inv.acceptOrgInvite(token, "Sup3r$ecret2"),
+		]);
+		expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+		await db.dispatcher.deleteMany({ where: { organization_id: org.id } });
+		await db.organization.delete({ where: { id: org.id } });
+	});
+});
+
+describe.runIf(DB_URL)("trial warning claim against Postgres", () => {
+	it("two parallel runs warn an org once", async () => {
+		const { db } = await import("../../db.js");
+		const sched = await import("../../services/trialScheduler.js");
+		const { notifyDispatchers } = await import("../../controllers/notificationsController.js");
+		const org = await db.organization.create({
+			data: { name: "PG trial org", email: "pg-trial@t.test" },
+		});
+		const legacy = await db.plan_version.findFirstOrThrow({ where: { plan_key: "legacy" } });
+		await db.org_entitlement.create({
+			data: {
+				organization_id: org.id,
+				plan_version_id: legacy.id,
+				plan_source: "operator",
+				trial_plan_version_id: legacy.id,
+				trial_ends_at: new Date(Date.now() + 2 * DAY_MS),
+			},
+		});
+		(notifyDispatchers as any).mockClear();
+		await Promise.all([sched.runTrialWarnings(), sched.runTrialWarnings()]);
+		const forOrg = (notifyDispatchers as any).mock.calls.filter(
+			(c: unknown[]) => c[1] === org.id,
+		);
+		expect(forOrg).toHaveLength(1);
+		await db.org_entitlement.delete({ where: { organization_id: org.id } });
+		await db.organization.delete({ where: { id: org.id } });
 	});
 });

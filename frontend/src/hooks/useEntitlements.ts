@@ -34,6 +34,8 @@ export function useEntitlements() {
 	});
 	return {
 		data: query.data ?? (query.isError ? readCachedEntitlements() : undefined),
+		/** False while `data` is the stored snapshot shown after a failed fetch. */
+		fromServer: query.data !== undefined,
 		isLoading: query.isLoading,
 	};
 }

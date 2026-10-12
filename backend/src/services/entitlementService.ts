@@ -3,7 +3,13 @@ import { db } from "../db.js";
 import { log } from "./appLogger.js";
 import { emitToOrg } from "./socketService.js";
 import { ErrorCodes, httpError } from "../types/responses.js";
-import { LIMIT_KEYS, MODULES, getModule, type LimitKey } from "../lib/entitlements/registry.js";
+import {
+	LIMIT_KEYS,
+	MODULES,
+	SUBSCRIPTION_PATH,
+	getModule,
+	type LimitKey,
+} from "../lib/entitlements/registry.js";
 import { diffResolved, type EntitlementDiff } from "../lib/entitlements/change.js";
 import { getUsageSummary } from "../lib/entitlements/quota.js";
 import { notifyDispatchers } from "../controllers/notificationsController.js";
@@ -95,6 +101,28 @@ function resolveRow(
 		row.trial_plan_version ? asPlan(row.trial_plan_version) : null,
 		new Date(),
 	);
+}
+
+type PlanVersionRow = Parameters<typeof asPlan>[0];
+
+// What stops when the trial ends: on with the trial, not on without it, after grants and choices.
+export function trialOnlyModules(
+	row: Parameters<typeof rowLike>[0] & {
+		plan_version: PlanVersionRow;
+		trial_plan_version: PlanVersionRow | null;
+	},
+	now: Date,
+): string[] {
+	if (!row.trial_plan_version) return [];
+	const r = rowLike(row);
+	const base = resolveEntitlements(r, asPlan(row.plan_version), null, now).modules;
+	const trial = resolveEntitlements(
+		r,
+		asPlan(row.plan_version),
+		asPlan(row.trial_plan_version),
+		now,
+	).modules;
+	return MODULES.filter((m) => trial[m.key] === "on" && base[m.key] !== "on").map((m) => m.key);
 }
 
 export function invalidateEntitlements(orgId: string): void {
@@ -713,7 +741,7 @@ export async function applyStaffChanges(
 					type: "subscription_changed",
 					title: "Your subscription changed",
 					body: describeLoss(diff),
-					actionUrl: "/dispatch/admin?tab=entitlements",
+					actionUrl: SUBSCRIPTION_PATH,
 				},
 				orgId,
 			);

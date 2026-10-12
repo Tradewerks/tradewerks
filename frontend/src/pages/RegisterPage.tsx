@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { isAxiosError } from "axios";
 import { registerOrganization } from "../api/organizations";
+import { useBusinessTypes } from "../hooks/useBusinessTypes";
+import { passwordProblem } from "../lib/passwordRules";
 
-type Status = "input" | "loading" | "success" | "error";
+type Status = "input" | "loading" | "success" | "error" | "paused";
 
 export default function RegisterPage() {
 	const navigate = useNavigate();
@@ -19,15 +22,15 @@ export default function RegisterPage() {
 	const [adminPhone, setAdminPhone] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirmPassword, setConfirmPassword] = useState("");
+	const [businessType, setBusinessType] = useState("");
+	const types = useBusinessTypes();
 
 	const validate = (): string | null => {
 		if (!orgName.trim()) return "Organization name is required.";
 		if (!adminName.trim()) return "Your name is required.";
-		if (password !== confirmPassword) return "Passwords do not match.";
-		if (password.length < 8) return "Password must be at least 8 characters.";
-		if (!/[A-Z]/.test(password)) return "Password must contain at least one capital letter.";
-		if (!/[0-9]/.test(password)) return "Password must contain at least one number.";
-		if (!/[^A-Za-z0-9]/.test(password)) return "Password must contain at least one special character.";
+		if (!businessType) return "Choose what kind of business you are.";
+		const pw = passwordProblem(password, confirmPassword);
+		if (pw) return pw;
 		return null;
 	};
 
@@ -43,6 +46,7 @@ export default function RegisterPage() {
 				admin_name: adminName.trim(),
 				admin_email: adminEmail.trim(),
 				admin_password: password,
+				business_type: businessType,
 				admin_phone: adminPhone.trim() || undefined,
 				org_phone: orgPhone.trim() || undefined,
 				org_address: orgAddress.trim() || undefined,
@@ -51,7 +55,15 @@ export default function RegisterPage() {
 			});
 			setStatus("success");
 		} catch (e) {
-			setErrorMessage((e instanceof Error && e.message) || "Registration failed.");
+			if (isAxiosError(e) && e.response?.data?.error?.code === "SIGNUPS_PAUSED") {
+				setStatus("paused");
+				return;
+			}
+			setErrorMessage(
+				(isAxiosError(e) && e.response?.data?.error?.message) ||
+					(e instanceof Error && e.message) ||
+					"Registration failed.",
+			);
 			setStatus("error");
 		}
 	};
@@ -65,22 +77,26 @@ export default function RegisterPage() {
 		onChange: (v: string) => void,
 		placeholder?: string,
 		required = true
-	) => (
-		<div>
-			<label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
-				{label}
-				{!required && <span className="ml-1 text-zinc-400 normal-case">(optional)</span>}
-			</label>
-			<input
-				type={type}
-				value={value}
-				onChange={(e) => { onChange(e.target.value); setErrorMessage(""); }}
-				placeholder={placeholder}
-				required={required}
-				className={inputClass}
-			/>
-		</div>
-	);
+	) => {
+		const id = `reg-${label.toLowerCase().replace(/\W+/g, "-")}`;
+		return (
+			<div>
+				<label htmlFor={id} className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+					{label}
+					{!required && <span className="ml-1 text-zinc-400 normal-case">(optional)</span>}
+				</label>
+				<input
+					id={id}
+					type={type}
+					value={value}
+					onChange={(e) => { onChange(e.target.value); setErrorMessage(""); }}
+					placeholder={placeholder}
+					required={required}
+					className={inputClass}
+				/>
+			</div>
+		);
+	};
 
 	return (
 		<div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-4">
@@ -94,15 +110,36 @@ export default function RegisterPage() {
 
 						<p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider pt-2">Organization</p>
 						{field("Organization Name", "text", orgName, setOrgName, "e.g. Acme HVAC")}
+						<div>
+							<label htmlFor="reg-business-type" className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+								What kind of business are you?
+							</label>
+							<select
+								id="reg-business-type"
+								required
+								value={businessType}
+								onChange={(e) => { setBusinessType(e.target.value); setErrorMessage(""); }}
+								className={inputClass}
+								disabled={!types.data}
+							>
+								<option value="" disabled>
+									{types.isError ? "Could not load — reload the page" : "Choose one"}
+								</option>
+								{types.data?.map((t) => (
+									<option key={t.key} value={t.key}>{t.label}</option>
+								))}
+							</select>
+						</div>
 						{field("Organization Phone", "tel", orgPhone, setOrgPhone, "+1 (555) 000-0000", false)}
 						{field("Address", "text", orgAddress, setOrgAddress, "123 Main St, Chicago, IL", false)}
 						{field("Website", "url", orgWebsite, setOrgWebsite, "https://example.com", false)}
 						<div>
-							<label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
+							<label htmlFor="reg-timezone" className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1">
 								Timezone
 								<span className="ml-1 text-zinc-400 normal-case">(optional)</span>
 							</label>
 							<select
+								id="reg-timezone"
 								value={orgTimezone}
 								onChange={(e) => setOrgTimezone(e.target.value)}
 								className={inputClass}
@@ -166,6 +203,14 @@ export default function RegisterPage() {
 						>
 							Go to Login
 						</button>
+					</div>
+				)}
+
+				{status === "paused" && (
+					<div className="text-center py-6 space-y-3">
+						<h1 className="text-2xl font-semibold text-zinc-900">Signups are paused</h1>
+						<p className="text-sm text-zinc-600">Signups are paused. Contact TradeWerks.</p>
+						<Link to="/login" className="text-sm text-blue-600 hover:underline">Back to sign in</Link>
 					</div>
 				)}
 

@@ -3,15 +3,15 @@ import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { inputClass } from "../components/AuthCard";
+import NewOrgPanel from "../components/NewOrgPanel";
 import { UsageCell } from "../components/UsageCell";
 import { LIMIT_KEYS, LIMIT_LABELS } from "../limits";
 import { platformError } from "../api";
 import { useOrgs } from "../hooks";
 import { useRowOpen } from "../rowOpen";
+import { shortDateIn, trialEndsInDays } from "../../lib/trialDays";
 import type { OrgListRow } from "../types";
 
-const shortDate = (iso: string) =>
-	new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const isMeter = (key: string) => key.endsWith("_month");
 
 function TierText({ row }: { row: OrgListRow }) {
@@ -24,12 +24,29 @@ function TierText({ row }: { row: OrgListRow }) {
 }
 
 const trialText = (row: OrgListRow) =>
-	row.trial ? `${row.trial.tierLabel} until ${shortDate(row.trial.endsAt)}` : "";
+	row.trial ? `${row.trial.tierLabel} until ${shortDateIn(row.trial.endsAt, row.timezone)}` : "";
+
+function TrialCell({ row }: { row: OrgListRow }) {
+	if (!row.trial) return null;
+	const days = trialEndsInDays(row.trial.endsAt);
+	return (
+		<>
+			{trialText(row)}
+			{days <= 7 && (
+				<span className="ml-2 inline-block whitespace-nowrap rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-warning-text">
+					Trial ends in {days} d
+				</span>
+			)}
+		</>
+	);
+}
 
 export default function OrgsPage() {
 	const [input, setInput] = useState("");
 	const [q, setQ] = useState("");
 	const [page, setPage] = useState(1);
+	const [panelOpen, setPanelOpen] = useState(false);
+	const [trialEnding, setTrialEnding] = useState(false);
 	const openRow = useRowOpen();
 
 	useEffect(() => {
@@ -40,7 +57,7 @@ export default function OrgsPage() {
 		return () => clearTimeout(t);
 	}, [input]);
 
-	const orgs = useOrgs(q, page);
+	const orgs = useOrgs(q, page, trialEnding);
 	const data = orgs.data;
 	const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
@@ -58,15 +75,39 @@ export default function OrgsPage() {
 						</p>
 					)}
 				</div>
-				<input
-					type="search"
-					aria-label="Search organizations"
-					placeholder="Search by name"
-					className={`${inputClass} sm:w-64`}
-					value={input}
-					onChange={(e) => setInput(e.target.value)}
-				/>
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<label className="flex items-center gap-2 text-xs text-text-secondary">
+						<input
+							type="checkbox"
+							checked={trialEnding}
+							onChange={(e) => {
+								setTrialEnding(e.target.checked);
+								setPage(1);
+							}}
+						/>
+						Trials ending in 7 days
+					</label>
+					<input
+						type="search"
+						aria-label="Search organizations"
+						placeholder="Search by name"
+						className={`${inputClass} sm:w-64`}
+						value={input}
+						onChange={(e) => setInput(e.target.value)}
+					/>
+					<button
+						type="button"
+						aria-expanded={panelOpen}
+						className="h-8 shrink-0 rounded-md bg-primary px-3 text-sm font-medium text-white"
+						onClick={() => setPanelOpen((o) => !o)}
+					>
+						New organization
+					</button>
+				</div>
 			</div>
+
+			{panelOpen && <NewOrgPanel />}
+
 
 			{orgs.error && <FormErrorBanner message={platformError(orgs.error)} />}
 
@@ -81,9 +122,11 @@ export default function OrgsPage() {
 				</div>
 			) : data && data.rows.length === 0 ? (
 				<p className="text-sm text-text-secondary">
-					{q
-						? `No organizations match "${q}".`
-						: "No organizations yet."}
+					{trialEnding
+						? "No trials end in the next 7 days."
+						: q
+							? `No organizations match "${q}".`
+							: "No organizations yet."}
 				</p>
 			) : (
 				data && (
@@ -146,9 +189,7 @@ export default function OrgsPage() {
 											/>
 										</td>
 										<td className="py-2 pr-3 text-text-secondary">
-											{trialText(
-												row
-											)}
+											<TrialCell row={row} />
 										</td>
 										<td className="py-2 pr-3 text-text-secondary">
 											{row.template ??
@@ -226,9 +267,7 @@ export default function OrgsPage() {
 									{row.trial && (
 										<p className="text-xs text-text-secondary">
 											Trial:{" "}
-											{trialText(
-												row
-											)}
+											<TrialCell row={row} />
 										</p>
 									)}
 									<dl className="grid grid-cols-2 gap-2 text-sm">
