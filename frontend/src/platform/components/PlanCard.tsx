@@ -240,6 +240,9 @@ export default function PlanCard({
 							b?.state ?? detail.resolved.modules[m.key];
 						const pb = pbd?.modules[m.key];
 						const moves = !!pb && pb.state !== state;
+						// Off by org → Not in tier is a move, but both read "Off".
+						const flips =
+							!!pb && moves && (pb.state === "on") !== (state === "on");
 						const marked = inDraft || moves;
 						const source =
 							pb && pbd
@@ -280,7 +283,7 @@ export default function PlanCard({
 												? "On"
 												: "Off"}
 										</span>
-										{moves && (
+										{flips && (
 											<>
 												<span
 													aria-hidden

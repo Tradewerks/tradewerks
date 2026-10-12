@@ -107,7 +107,7 @@ export default function SubscriptionRail({
 					</p>
 				)}
 			</div>
-			{data.usage && <UsageMeters usage={data.usage} />}
+			{data.usage && <UsageMeters usage={data.usage} modules={data.modules} />}
 			{features.length > 0 && (
 				<div className="border-t border-border-subtle p-4">
 					<h3 className={sectionLabel}>Subscription features</h3>

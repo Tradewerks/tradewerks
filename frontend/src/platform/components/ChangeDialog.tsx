@@ -28,7 +28,8 @@ export default function ChangeDialog({
 	requestId?: string;
 	/** Whether the "Mark request approved" box starts ticked. */
 	markApprovedByDefault?: boolean;
-	onApplied?: (preview: StaffChangePreview) => void;
+	/** `appliedAgainst` is the org version the save was checked against (fresh after a 409). */
+	onApplied?: (preview: StaffChangePreview, appliedAgainst?: string) => void;
 	onClose: () => void;
 }) {
 	const org = useOrg(orgId);
@@ -155,7 +156,7 @@ export default function ChangeDialog({
 				expectedUpdatedAt: stamp,
 				upgradeRequestId: requestId && markApproved ? requestId : undefined,
 			});
-			onApplied?.(p);
+			onApplied?.(p, stamp);
 			onClose();
 		} catch (err) {
 			if (!isAxiosError(err) || err.response?.status !== 409) return; // shown from apply.error

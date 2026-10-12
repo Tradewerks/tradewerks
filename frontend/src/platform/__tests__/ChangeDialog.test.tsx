@@ -112,7 +112,7 @@ describe("ChangeDialog", () => {
 		expect(screen.queryByText("After the trial ends")).toBeNull();
 		fireEvent.change(screen.getByRole("textbox"), { target: { value: "Ticket 123" } });
 		fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
-		await waitFor(() => expect(onApplied).toHaveBeenCalledWith(preview));
+		await waitFor(() => expect(onApplied).toHaveBeenCalledWith(preview, undefined));
 		expect(onClose).toHaveBeenCalled();
 	});
 
@@ -233,6 +233,34 @@ describe("request checkbox", () => {
 		expect(
 			screen.getByRole("checkbox", { name: /Mark request approved/ })
 		).not.toBeChecked();
+	});
+
+	it("reports the stamp it finally applied against, after a stale-page retry", async () => {
+		mutateAsync.mockRejectedValueOnce(
+			Object.assign(new Error("stale"), {
+				isAxiosError: true,
+				response: { status: 409, data: { error: { code: "CONFLICT", message: "x" } } },
+			})
+		);
+		stable.refetch.mockResolvedValueOnce({
+			data: { entitlement: { updated_at: "t-colleague" } },
+		});
+		const onApplied = vi.fn();
+		render(
+			<ChangeDialog
+				orgId="org-1"
+				change={grantChange}
+				title="Inventory: force on"
+				expectedUpdatedAt="t-open"
+				onApplied={onApplied}
+				onClose={vi.fn()}
+			/>
+		);
+		fireEvent.change(screen.getByRole("textbox"), { target: { value: "Ticket 123" } });
+		fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+		expect(await screen.findByText(/Someone else changed/)).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Apply change" }));
+		await waitFor(() => expect(onApplied).toHaveBeenCalledWith(preview, "t-colleague"));
 	});
 });
 

@@ -230,8 +230,9 @@ export default function OrgDetailPage() {
 	const open = (d: DialogTarget) =>
 		setDialog(d && { ...d, expectedUpdatedAt: e?.updated_at });
 	const moduleLabel = (k: string) => detail.catalog.find((m) => m.key === k)?.label ?? k;
-	const onApplied = (p: StaffChangePreview) => {
+	const onApplied = (p: StaffChangePreview, appliedAgainst?: string) => {
 		if (!dialog) return;
+		draft.rebase(appliedAgainst);
 		const deferred = dialog.change.kind === "plan" && !!detail.breakdown?.trialTier;
 		toast.success(appliedMessage(dialog.title, p.diff, moduleLabel, deferred));
 		setChanged(changedKeys(p.diff, dialog.change));

@@ -42,10 +42,22 @@ export function usePlanDraft(orgId: string, detail: OrgDetail | undefined) {
 	const [raw, setRaw] = useState<DraftState | null>(null);
 	const [session, setSession] = useState(0);
 	const [conflict, setConflict] = useState(false);
+	const [reason, setReason] = useState("");
+	const [markApproved, setMarkApproved] = useState(false);
+	const [rebaseFrom, setRebaseFrom] = useState<string | null>(null);
 	const org = useOrg(orgId);
 	const apply = useApplyChanges(orgId);
 	const stored = detail?.entitlement ?? null;
 	const state = useMemo(() => against(raw, stored), [raw, stored]);
+
+	// A save made through the change dialog on this page moves the stored stamp. The
+	// draft takes it only if it was current before that save; a colleague's save it
+	// never saw must still conflict.
+	const storedStamp = stored?.updated_at;
+	if (rebaseFrom && storedStamp && storedStamp !== rebaseFrom) {
+		setRebaseFrom(null);
+		if (raw?.stamp === rebaseFrom) setRaw({ ...raw, stamp: storedStamp });
+	}
 
 	const changes = useMemo<StaffChange[]>(() => {
 		if (!state) return [];
@@ -65,12 +77,20 @@ export function usePlanDraft(orgId: string, detail: OrgDetail | undefined) {
 	const end = () => {
 		setRaw(null);
 		setConflict(false);
+		setReason("");
+		setMarkApproved(false);
+		setRebaseFrom(null);
 		setSession((s) => s + 1);
 	};
 
 	const update = (edits: StaffChange[], extra: Partial<DraftState> = {}) => {
 		if (!stored) return;
 		setConflict(false);
+		// A draft can vanish without end() (the stored row caught up), so a new one starts clean.
+		if (!state) {
+			setReason("");
+			setMarkApproved(!!extra.requestId);
+		} else if (extra.requestId && extra.requestId !== state.requestId) setMarkApproved(true);
 		const next: DraftState = {
 			planVersionId: null,
 			grants: {},
@@ -132,6 +152,13 @@ export function usePlanDraft(orgId: string, detail: OrgDetail | undefined) {
 		saving: apply.isPending,
 		saveError: apply.error,
 		conflict,
+		reason,
+		setReason,
+		markApproved,
+		setMarkApproved,
+		rebase: (from: string | undefined) => {
+			if (raw && from) setRebaseFrom(from);
+		},
 	};
 }
 

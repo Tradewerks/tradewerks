@@ -81,6 +81,14 @@ describe("PlanCard draft mode", () => {
 		expect(row("QuickBooks").className).not.toContain("border-primary");
 	});
 
+	it("an Off that stays Off shows no arrow but keeps the row marked", () => {
+		renderCard(drafting());
+		const purchasing = row("Purchasing");
+		expect(within(purchasing).queryByText("→")).toBeNull();
+		expect(within(purchasing).getAllByText("Off")).toHaveLength(1);
+		expect(purchasing.className).toContain("border-primary");
+	});
+
 	it("a toggle edits the draft, reflects the draft grant and marks the row", () => {
 		const open = vi.fn();
 		const draft = drafting({

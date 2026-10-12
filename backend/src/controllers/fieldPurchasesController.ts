@@ -19,7 +19,7 @@ import { remapHeader, type ExtractedHeader } from "../services/receiptOcr/remap.
 import type { field_purchase_ocr_status } from "../../generated/prisma/client.js";
 import { consumeQuota } from "../lib/entitlements/quota.js";
 
-const SCANS_USED_UP =
+export const SCANS_USED_UP =
 	"This month's receipt scans are used up. Enter the lines by hand; scanning resumes on the 1st (UTC).";
 
 // Charged before the vendor call, so a read that then fails still counts: the vendor bills it.

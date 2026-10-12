@@ -31,16 +31,9 @@ export default function PlanDraftBar({
 }) {
 	const state = draft.state!;
 	const p = draft.preview;
-	const [reason, setReason] = useState("");
+	// Held by the draft, not here: a save elsewhere on the page remounts this bar.
+	const { reason, setReason, markApproved, setMarkApproved } = draft;
 	const [localError, setLocalError] = useState<string | null>(null);
-	const seededRequest = state.requestId;
-	const [markApproved, setMarkApproved] = useState(!!seededRequest);
-	// A request seeded into a draft that was already open ticks the box, as a fresh one would.
-	const [seenRequest, setSeenRequest] = useState(seededRequest);
-	if (seenRequest !== seededRequest) {
-		setSeenRequest(seededRequest);
-		if (seededRequest) setMarkApproved(true);
-	}
 
 	const moduleLabel = (k: string) => detail.catalog.find((m) => m.key === k)?.label ?? k;
 	const bd = detail.breakdown ?? null;

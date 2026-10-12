@@ -217,4 +217,93 @@ describe("usePlanDraft", () => {
 		expect(result.current.conflict).toBe(false);
 		expect(result.current.state).not.toBeNull();
 	});
+
+	const at = (d: OrgDetail, updated_at: string) =>
+		({ ...d, entitlement: { ...d.entitlement!, updated_at } }) as OrgDetail;
+
+	it("adopts the version a change-dialog save on this page produced", async () => {
+		const { result, rerender } = renderHook(({ d }) => usePlanDraft("org-1", d), {
+			initialProps: { d: detail },
+		});
+		act(() => result.current.setGrant("inventory", "on"));
+		act(() => result.current.rebase(detail.entitlement!.updated_at));
+		rerender({ d: at(detail, "2026-10-08T02:00:00.000Z") });
+		h.mutateAsync.mockResolvedValue(undefined);
+		await act(async () => {
+			await result.current.save("Customer asked");
+		});
+		expect(h.mutateAsync).toHaveBeenCalledWith(
+			expect.objectContaining({ expectedUpdatedAt: "2026-10-08T02:00:00.000Z" })
+		);
+	});
+
+	it("keeps its old stamp when it was already behind before the dialog save", async () => {
+		const { result, rerender } = renderHook(({ d }) => usePlanDraft("org-1", d), {
+			initialProps: { d: detail },
+		});
+		act(() => result.current.setGrant("inventory", "on"));
+		rerender({ d: at(detail, "2026-10-08T01:00:00.000Z") });
+		act(() => result.current.rebase("2026-10-08T01:00:00.000Z"));
+		rerender({ d: at(detail, "2026-10-08T02:00:00.000Z") });
+		h.mutateAsync.mockResolvedValue(undefined);
+		await act(async () => {
+			await result.current.save("Customer asked");
+		});
+		expect(h.mutateAsync).toHaveBeenCalledWith(
+			expect.objectContaining({ expectedUpdatedAt: detail.entitlement!.updated_at })
+		);
+	});
+
+	it("keeps the reason and the tick while the page re-renders", () => {
+		const { result, rerender } = setup();
+		act(() => result.current.setGrant("inventory", "on"));
+		act(() => result.current.setReason("Customer asked"));
+		act(() => result.current.setMarkApproved(true));
+		rerender();
+		expect(result.current.reason).toBe("Customer asked");
+		expect(result.current.markApproved).toBe(true);
+	});
+
+	it("a request seeded into an open draft ticks the box", () => {
+		const { result } = setup();
+		act(() => result.current.setGrant("inventory", "on"));
+		expect(result.current.markApproved).toBe(false);
+		act(() =>
+			result.current.seed({ kind: "plan", planVersionId: "pv-3" }, { requestId: "r-1" })
+		);
+		expect(result.current.markApproved).toBe(true);
+	});
+
+	it("a draft that vanished because the stored row caught up starts the next one clean", () => {
+		const { result, rerender } = renderHook(({ d }) => usePlanDraft("org-1", d), {
+			initialProps: { d: detail },
+		});
+		act(() => result.current.setGrant("inventory", "on"));
+		act(() => result.current.setReason("Customer asked"));
+		act(() => result.current.setMarkApproved(true));
+		const caughtUp = {
+			...detail,
+			entitlement: {
+				...detail.entitlement!,
+				module_grants: { quickbooks: "off", inventory: "on" },
+				updated_at: "2026-10-08T01:00:00.000Z",
+			},
+		} as OrgDetail;
+		rerender({ d: caughtUp });
+		expect(result.current.state).toBeNull();
+		act(() => result.current.setTier("pv-3"));
+		expect(result.current.reason).toBe("");
+		expect(result.current.markApproved).toBe(false);
+	});
+
+	it("ending the draft clears the reason and the tick", () => {
+		const { result } = setup();
+		act(() => result.current.setGrant("inventory", "on"));
+		act(() => result.current.setReason("Customer asked"));
+		act(() => result.current.setMarkApproved(true));
+		act(() => result.current.discard());
+		act(() => result.current.setGrant("inventory", "on"));
+		expect(result.current.reason).toBe("");
+		expect(result.current.markApproved).toBe(false);
+	});
 });

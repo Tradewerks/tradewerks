@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PlanDraftBar from "../components/PlanDraftBar";
@@ -92,16 +93,22 @@ const draft = (over: Partial<PlanDraft> = {}): PlanDraft =>
 		...over,
 	}) as unknown as PlanDraft;
 
-const renderBar = (d: PlanDraft, det = detail(), requestId?: string) =>
-	render(
+// The reason and the tick live in usePlanDraft now; this stands in for it.
+function Bar({ d, det, requestId }: { d: PlanDraft; det: OrgDetail; requestId?: string }) {
+	const [reason, setReason] = useState("");
+	const [markApproved, setMarkApproved] = useState(!!d.state?.requestId);
+	return (
 		<PlanDraftBar
-			draft={d}
+			draft={{ ...d, reason, setReason, markApproved, setMarkApproved }}
 			detail={det}
 			tiers={tiers}
 			requestId={requestId}
 			onSaved={onSaved}
 		/>
 	);
+}
+const renderBar = (d: PlanDraft, det = detail(), requestId?: string) =>
+	render(<Bar d={d} det={det} requestId={requestId} />);
 const reason = () => screen.getByLabelText(/Reason/);
 const saveButton = () => screen.getByRole("button", { name: "Save changes" });
 

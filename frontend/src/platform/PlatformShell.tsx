@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import ToastViewport from "../components/ui/ToastViewport";
 import { useOpenRequestCount } from "./hooks";
 import { usePlatformAuth } from "./store";
+import { useUnsaved } from "./unsavedStore";
 
 const link = ({ isActive }: { isActive: boolean }) =>
 	`block whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors duration-150 ease-out ${
@@ -16,6 +19,7 @@ export default function PlatformShell() {
 	const qc = useQueryClient();
 	const navigate = useNavigate();
 	const openCount = useOpenRequestCount().data?.count ?? 0;
+	const [confirming, setConfirming] = useState(false);
 	const signOut = () => {
 		usePlatformAuth.getState().signOut();
 		qc.removeQueries({ queryKey: ["platform"] });
@@ -34,7 +38,9 @@ export default function PlatformShell() {
 						</p>
 						<button
 							type="button"
-							onClick={signOut}
+							onClick={() =>
+								useUnsaved.getState().dirty ? setConfirming(true) : signOut()
+							}
 							className="text-xs text-primary hover:underline"
 						>
 							Sign out
@@ -64,6 +70,18 @@ export default function PlatformShell() {
 			<main className="min-w-0 flex-1 p-4 md:p-6">
 				<Outlet />
 			</main>
+			<ConfirmDialog
+				open={confirming}
+				title="Discard unsaved changes?"
+				body="The tier and module changes on the Plan card are not saved yet."
+				confirmLabel="Discard and sign out"
+				tone="destructive"
+				onConfirm={() => {
+					setConfirming(false);
+					signOut();
+				}}
+				onCancel={() => setConfirming(false)}
+			/>
 			<ToastViewport />
 		</div>
 	);

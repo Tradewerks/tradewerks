@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useUnsaved } from "./unsavedStore";
 
 // The app runs on <BrowserRouter>, where useBlocker is unavailable, so in-app links are
 // caught at the document instead. Browser back/forward is not caught; reload and close are.
 export function useUnsavedGuard(active: boolean) {
 	const navigate = useNavigate();
 	const [pending, setPending] = useState<string | null>(null);
+
+	useEffect(() => {
+		useUnsaved.setState({ dirty: active });
+		return () => useUnsaved.setState({ dirty: false });
+	}, [active]);
 
 	useEffect(() => {
 		if (!active) return;
