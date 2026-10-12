@@ -222,7 +222,7 @@ export default function Timesheet () {
 	const location = useLocation();
 
 	const [searchInput, setSearchInput] = useState("");
-	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
+	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search", { replace: true });
 
 	const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
 	const techRaw = queryParams.get("tech");
@@ -233,12 +233,13 @@ export default function Timesheet () {
     const parsedWeek = new Date(`${weekParam}T00:00`);
     const weekStart = startOfWeek(Number.isNaN(parsedWeek.getTime()) ? new Date() : parsedWeek);
     const weekKey = weekStart.toLocaleDateString("en-CA");
+    const isCurrentWeek = weekKey === startOfWeek(new Date()).toLocaleDateString("en-CA");
     const pickerRef = useRef<HTMLInputElement>(null);
 
     const setWeek = (day: Date) => {
         const next = new URLSearchParams(location.search);
         next.set("week", startOfWeek(day).toLocaleDateString("en-CA"));
-        navigate(`/dispatch/timesheet?${next.toString()}`);
+        navigate(`/dispatch/timesheet?${next.toString()}`, { replace: true });
     };
 
     const { data, isLoading, error } = useTimesheetsReportQuery(
@@ -466,7 +467,7 @@ export default function Timesheet () {
 		next.delete("tech");
 		next.delete("search");
 		const qs = next.toString();
-		navigate(`/dispatch/timesheet${qs ? `?${qs}` : ""}`);
+		navigate(`/dispatch/timesheet${qs ? `?${qs}` : ""}`, { replace: true });
 	};
 
     const clearAllFilters = () => {
@@ -474,7 +475,7 @@ export default function Timesheet () {
 		const next = new URLSearchParams(location.search);
 		next.delete("search");
 		const qs = next.toString();
-		navigate(`/dispatch/timesheet${qs ? `?${qs}` : ""}`);
+		navigate(`/dispatch/timesheet${qs ? `?${qs}` : ""}`, { replace: true });
 	};
 
     const handleTechClick = (techId: string) => {
@@ -482,7 +483,7 @@ export default function Timesheet () {
 		const next = new URLSearchParams(location.search);
 		next.delete("search"); // clear detail-level search when drilling down
 		next.set("tech", techId);
-		navigate(`/dispatch/timesheet?${next.toString()}`);
+		navigate(`/dispatch/timesheet?${next.toString()}`, { replace: true });
 	};
 
     const hasActiveFilters = terms.length > 0;
@@ -600,6 +601,13 @@ export default function Timesheet () {
                 }
                 middle={
                     <div className="relative flex items-center gap-1">
+                        <button
+                            className="px-3 py-1.5 border border-border-subtle rounded-md text-sm bg-surface hover:enabled:bg-surface-raised transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            onClick={() => setWeek(new Date())}
+                            disabled={isCurrentWeek}
+                        >
+                            Today
+                        </button>
                         <button
                             className="p-2 border border-border-subtle rounded-md bg-surface"
                             onClick={() => setWeek(addDays(weekStart, -7))}

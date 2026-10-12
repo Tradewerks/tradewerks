@@ -169,7 +169,7 @@ export default function TimesheetsReportPage() {
 		const next = new URLSearchParams(location.search);
 		next.delete("search"); // clear detail-level search when drilling down
 		next.set("tech", encodeURIComponent(techName));
-		navigate(`/dispatch/timesheets?${next.toString()}`);
+		navigate(`/dispatch/timesheets?${next.toString()}`, { replace: true });
 	};
 
 	const handleBackToSummary = () => {
@@ -178,7 +178,7 @@ export default function TimesheetsReportPage() {
 		next.delete("tech");
 		next.delete("search");
 		const qs = next.toString();
-		navigate(`/dispatch/timesheets${qs ? `?${qs}` : ""}`);
+		navigate(`/dispatch/timesheets${qs ? `?${qs}` : ""}`, { replace: true });
 	};
 
 	const clearAllFilters = () => {
@@ -188,7 +188,10 @@ export default function TimesheetsReportPage() {
 		next.delete("date");
 		next.delete("dateFrom");
 		next.delete("dateTo");
-		navigate(`/dispatch/timesheets${techParam ? `?tech=${encodeURIComponent(techParam)}` : ""}`);
+		navigate(
+			`/dispatch/timesheets${techParam ? `?tech=${encodeURIComponent(techParam)}` : ""}`,
+			{ replace: true },
+		);
 	};
 
 	const hasActiveFilters = terms.length > 0 || dateRange.option !== "all";
