@@ -538,7 +538,7 @@ function MaintenanceReminderWarning(
 				{noneDue 
 				?  (
 					<>
-						<p>No Upcoming reminders</p>
+						<p className="p-2">No upcoming reminders</p>
 					</>
 				)
 				: reminders.map(({ reminder, due }) => (
