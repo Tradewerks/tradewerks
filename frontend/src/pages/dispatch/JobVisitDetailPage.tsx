@@ -64,6 +64,7 @@ import { useAuthStore } from "../../auth/authStore";
 import { usePermission, useAnyPermission } from "../../hooks/usePermission";
 import { useActiveTechCount } from "../../hooks/useRecordMapData";
 import RecordMap from "../../components/ui/maps/RecordMap";
+import { useToast } from "../../components/ui/useToast";
 
 // Overview holds what a dispatcher opens a visit to check: when it is, who is
 // on it, what happened. Financials is a separate body of work, not context for
@@ -209,6 +210,7 @@ export default function JobVisitDetailPage() {
 	const { jobId, visitId } = useParams<{ jobId: string; visitId: string }>();
 	const navigate = useNavigate();
 	const { user } = useAuthStore();
+	const toast = useToast();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 	const { data: visit, isLoading: visitLoading } = useJobVisitByIdQuery(visitId!);
 	const { data: job, isLoading: jobLoading } = useJobByIdQuery(jobId!);
@@ -352,17 +354,25 @@ export default function JobVisitDetailPage() {
 				)
 			: null;
 
+	const requireTech = (fn: () => void) => () => {
+		if (!visit.visit_techs?.length) {
+			toast.warning("Assign a technician to this visit before updating its status.");
+			return;
+		}
+		fn();
+	};
+
 	const actions = visitActions({
 		status: visit.status,
 		canUpdateStatus: UPDATE_VISIT,
 		handlers: {
-			drive: () => applyVerb("drive"),
-			arrive: () => applyVerb("arrive"),
-			start: () => applyVerb("start"),
-			pause: () => setReasonModal("pause"),
-			resume: () => applyVerb("resume"),
+			drive: requireTech(() => applyVerb("drive")),
+			arrive: requireTech(() => applyVerb("arrive")),
+			start: requireTech(() => applyVerb("start")),
+			pause: requireTech(() => setReasonModal("pause")),
+			resume: requireTech(() => applyVerb("resume")),
 			delay: () => setPendingConfirm("delay"),
-			complete: () => setPendingConfirm("complete"),
+			complete: requireTech(() => setPendingConfirm("complete")),
 			cancel: () => setReasonModal("cancel"),
 		},
 	});

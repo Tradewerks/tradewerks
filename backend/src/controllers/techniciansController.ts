@@ -389,13 +389,13 @@ export const deleteTechnician = async (
 		const upcomingVisits = await sdb.job_visit_technician.count({
 			where: {
 				tech_id: id,
-				visit: { status: { in: ["Scheduled", "InProgress"] } },
+				visit: { status: { in: ["Scheduled", "Driving", "OnSite", "InProgress", "Paused", "Delayed"] } },
 			},
 		});
 
 		if (upcomingVisits > 0) {
 			return {
-				err: `Cannot delete technician with ${upcomingVisits} scheduled or in-progress visits`,
+				err: `Can't delete this technician: they're on ${upcomingVisits} open visit${upcomingVisits === 1 ? "" : "s"}. Reassign or finish those first.`,
 			};
 		}
 

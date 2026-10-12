@@ -69,6 +69,7 @@ export const buildSecondaryEventPayload = (
 };
 
 const ACTIVE_VISIT_STATUSES = ["Driving", "OnSite", "InProgress", "Paused", "Delayed"] as const;
+const NEEDS_TECH = ["Driving", "OnSite", "InProgress", "Paused", "Completed"];
 
 export const buildVisitStatusPayload = (
 	visit: {
@@ -605,6 +606,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 						inventory_item_id: true,
 					},
 				},
+				visit_techs: true,
 			},
 		});
 
@@ -663,6 +665,18 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			"actual_end_at",
 			"status",
 		] as const);
+
+		if (
+			parsed.status &&
+			changes.status &&
+			NEEDS_TECH.includes(parsed.status) &&
+			existingVisit.visit_techs.length === 0
+		) {
+			return {
+				err: "Assign a technician to this visit first.",
+			};
+		}
+
 		let deductLowStockIds: string[] = [];
 		const updated = await sdb.$transaction(async (tx) => {
 			// ── Scalar field update ───────────────────────────────────────
@@ -1125,6 +1139,10 @@ export const assignTechniciansToVisit = async (
 			return { err: "Job visit not found" };
 		}
 
+		if (techIds.length === 0 && NEEDS_TECH.includes(visit.status)) {
+			return { err: `Can't remove every technician while the visit is ${visit.status}. Assign someone else first.` };
+		}
+
 		const existingTechs = await sdb.technician.findMany({
 			where: { id: { in: techIds } },
 			select: { id: true, name: true },
@@ -1351,10 +1369,18 @@ export const applyVisitTransition = async (
 		const sdb = getScopedDb(organizationId);
 		const existingVisit = await sdb.job_visit.findFirst({
 			where: { id, job: { organization_id: organizationId } },
-			include: { job: true, line_items: { select: { id: true } } },
+			include: { job: true, line_items: { select: { id: true } }, visit_techs: true },
 		});
 
 		if (!existingVisit) return { err: "Job visit not found" };
+		if (context?.techId && !existingVisit.visit_techs.some((v) => v.tech_id === context.techId)) {
+			return { err: "You aren't assigned to this visit." };
+		}
+
+		// Guard: only delay action can be done with no technicians assigned
+		if (action !== "delay" && existingVisit.visit_techs.length === 0) {
+			return { err: "Assign a technician to this visit before updating its status." };
+		}
 
 		// Guard: delay is dispatcher-only
 		if (action === "delay" && context?.techId) {
@@ -1445,6 +1471,19 @@ export const applyVisitTransition = async (
 			if (!existingVisit.actual_start_at) timestampData.actual_start_at = now;
 		}
 
+		const actingTechIds = context?.techId
+			? [context.techId]
+			: (
+				await sdb.technician.findMany({
+					where: {
+						id: { in: existingVisit.visit_techs.map((vt) => vt.tech_id) },
+						status: { not: "Break" },
+						time_entries: { none: { clocked_out_at: null } },
+					},
+					select: { id: true },
+				})
+			).map((t) => t.id);
+
 		let deductLowStockIds: string[] = [];
 		let jobJustCompleted = false;
 		await sdb.$transaction(async (tx) => {
@@ -1456,13 +1495,13 @@ export const applyVisitTransition = async (
 				},
 			});
 
-			// Destination switch: revert any other Driving visit assigned to this tech
-			if (action === "drive" && context?.techId) {
+			// Destination switch: revert any other Driving visit assigned to these techs
+			if (action === "drive") {
 				const otherDrivingVisits = await tx.job_visit.findMany({
 					where: {
 						status: "Driving",
 						id: { not: id },
-						visit_techs: { some: { tech_id: context.techId } },
+						visit_techs: { some: { tech_id: { in: actingTechIds } } },
 					},
 					include: { job: true },
 				});
@@ -1474,7 +1513,7 @@ export const applyVisitTransition = async (
 					await tx.job_visit_technician.updateMany({
 						where: {
 							visit_id: other.id,
-							tech_id: context.techId,
+							tech_id: { in: actingTechIds },
 							tech_status: "EnRoute",
 						},
 						data: { tech_status: "Assigned" },
@@ -1498,9 +1537,11 @@ export const applyVisitTransition = async (
 						});
 					}
 				}
-				await recordDrive(tx, context.techId, now, id);
+				for (const techId of actingTechIds) await recordDrive(tx, techId, now, id);
 			}
-			if (action === "arrive" && context?.techId) await recordDrive(tx, context.techId, now);
+			if (action === "arrive") {
+				for (const techId of actingTechIds) await recordDrive(tx, techId, now);
+			}
 			if (action === "delay") {
 				await tx.visit_tech_drive.updateMany({ where: { visit_id: id, ended_at: null }, data: { ended_at: now } });
 			}
@@ -1678,24 +1719,24 @@ export const applyVisitTransition = async (
 						data: { status: newTechGlobalStatus! },
 					});
 				}
-			} else if (context?.techId && (newTechVisitStatus || newTechGlobalStatus)) {
-				// Only the calling tech
+			} else if (newTechVisitStatus || newTechGlobalStatus) {
+				// The calling tech, or every assigned tech when a dispatcher acts
 				if (newTechVisitStatus) {
-					await tx.job_visit_technician.update({
-						where: { visit_id_tech_id: { visit_id: id, tech_id: context.techId } },
+					await tx.job_visit_technician.updateMany({
+						where: { visit_id: id, tech_id: { in: actingTechIds } },
 						data: { tech_status: newTechVisitStatus },
 					});
 				}
 				if (newTechGlobalStatus) {
-					await tx.technician.update({
-						where: { id: context.techId },
+					await tx.technician.updateMany({
+						where: { id: { in: actingTechIds } },
 						data: { status: newTechGlobalStatus },
 					});
 				}
 				// Cancel any pending WrappingUp timer when tech transitions to an active state
 				if (["drive", "arrive", "start", "resume"].includes(action)) {
 					import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
-						cancelWrappingUpTimer(context.techId!);
+						for (const techId of actingTechIds) cancelWrappingUpTimer(techId);
 					}).catch(() => {});
 				}
 			}
