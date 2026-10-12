@@ -38,7 +38,7 @@ describe("getTechnicianById", () => {
 		expect(mockFindFirst).toHaveBeenCalledWith(
 			expect.objectContaining({
 				select: expect.objectContaining({
-					current_vehicle: { select: { id: true, name: true } },
+					current_vehicle: { select: { id: true, name: true, stored_at_coords: true } },
 				}),
 			}),
 		);

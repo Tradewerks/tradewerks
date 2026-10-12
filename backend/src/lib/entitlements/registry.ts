@@ -49,6 +49,8 @@ export const MODULES: ModuleDef[] = [
 			export_reports: r,
 			view_technicians: r,
 			manage_technicians: w,
+			view_timesheet: r,
+			manage_timesheet: w,
 			view_dispatchers: r,
 			manage_dispatchers: w,
 			view_admin: r,
