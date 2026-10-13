@@ -75,6 +75,7 @@ const ORG_SCOPED_MODELS = new Set([
 	"vehicle_maintenance_reminder",
 	"purchase",
 	"timesheet_week",
+	"shift_correction",
 ]);
 
 /**
@@ -111,6 +112,8 @@ const RELATION_SCOPED_MODELS: Record<string, (organizationId: string) => Record<
 	assistant_tool_call: (o) => ({ message: { conversation: { organization_id: o } } }),
 	technician_notification: (o) => ({ technician: { organization_id: o } }),
 	dispatcher_notification: (o) => ({ dispatcher: { organization_id: o } }),
+	technician_shift: (o) => ({ tech: {organization_id: o }}),
+	technician_shift_break: (o) => ({ shift: { tech: { organization_id: o }}}),
 };
 
 // Returns the where-fragment that pins a row to the caller's org, or null if the

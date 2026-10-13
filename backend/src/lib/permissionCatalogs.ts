@@ -49,6 +49,8 @@ const TECHNICIAN_CATALOG = [
 	// Reaching the flow only. The spend ceiling lives on the technician's
 	// field_purchase_grant, which is per-person and revocable.
 	{ category: "Field Purchases", permissions: ["request_field_purchase"] },
+	// no view permission right now, all techs can see their time
+	{ category: "Timesheets", permissions: [ "edit_own_timesheet",]},
 ] as const;
 
 export const PERMISSION_CATALOGS = {

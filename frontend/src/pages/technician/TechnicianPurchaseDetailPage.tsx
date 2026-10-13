@@ -41,7 +41,7 @@ import {
 import { useToast } from "../../components/ui/useToast";
 import { FOCUS_RING, money } from "../../components/fieldPurchases/fieldPurchaseFormat";
 import { partsSummary, refundLedger } from "../../components/technician/procurement/refundParts";
-import { errorMessage } from "../../util/util";
+import { errorMessage, toLocalInputValue } from "../../util/util";
 import TechPage from "../../components/technician/TechPage";
 import {
 	pendingRefundsLine,
@@ -83,15 +83,6 @@ const jobLabel = (name: string | null | undefined, number: string | null | undef
  * own data sent people somewhere they had never been.
  */
 const PURCHASES = "/technician/purchases";
-
-// datetime-local reads and writes wall clock. Seeding it from toISOString()
-// would show the UTC instant and then re-submit it as local, shifting the
-// timestamp by the offset on every save.
-function toLocalInputValue(iso: string | null): string {
-	if (!iso) return "";
-	const d = new Date(iso);
-	return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-}
 
 /** A receipt amount in the form the money fields hold, so a diff compares like with like. */
 const money2 = (v: number | null | undefined): string | null => (v == null ? null : v.toFixed(2));

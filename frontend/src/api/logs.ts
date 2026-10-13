@@ -33,6 +33,7 @@ const CHANGE_PATHS: Record<ScopeKey, (id: string) => string> = {
 	"entity:client": (id) => `/clients/${id}/changes`,
 	"entity:recurring_plan": (id) => `/recurring-plans/${id}/changes`,
 	"entity:vehicle": (id) => `/vehicles/${id}/changes`,
+	"entity:timesheet": (id) => `/timesheets/weeks/${id}/changes`,
 };
 
 export interface ChangeHistoryResult {

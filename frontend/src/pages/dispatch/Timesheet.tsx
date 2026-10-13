@@ -13,24 +13,18 @@ import { useToast } from "../../components/ui/useToast";
 import { usePermission } from "../../hooks/usePermission";
 import { usePushTimesheetToQBMutation, useQBStatusQuery } from "../../hooks/useQuickbooks";
 import { formatDate, formatTime, FALLBACK_TIMEZONE } from "../../util/util";
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, Clock, Moon, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock, Moon, Pencil, X } from "lucide-react";
+import EditShiftModal from "../../components/timesheets/EditShiftModal";
 import ExportExcelButton from "../../components/reports/ExportExcelButton";
 import { datedFilename } from "../../util/download";
 import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import { useColumnVisibility, type ColumnOption } from "../../hooks/useColumnVisibility";
-import { addDays, camelCaseToRegular, errorMessage, formatWeekRange, startOfWeek } from "../../util/util";
+import { addDays, camelCaseToRegular, errorMessage, fmtHours, formatWeekRange, startOfWeek } from "../../util/util";
 import { exportReport } from "../../api/reports";
 import Card from "../../components/ui/Card";
 import type { Segment, SegType } from "../../types/timesheets";
 import { useAuthStore } from "../../auth/authStore";
-
-
-const fmtHours = (h: number) => {
-    const m = Math.round(h * 60);
-    const hh = Math.floor(m / 60);
-    const mm = String(m % 60).padStart(2, "0");
-    return hh ? `${hh}h ${mm}m` : `${m}m`;
-};
+import ChangeHistory from "../../components/activity/ChangeHistory";
 
 const pctOf = (h: number, total: number) =>
     `${total > 0 ? Math.round((h / total) * 100) : 0}% of shift time`;
@@ -256,6 +250,11 @@ export default function Timesheet () {
     const { data: techWeekDetails } = useTechnicianWeekQuery(techParam ?? "", weekKey);
 
     const CAN_APPROVE = usePermission("manage_timesheet");
+    const canEditTimes = CAN_APPROVE && !techWeekDetails?.approvedAt;
+    const [editShiftId, setEditShiftId] = useState<string | null>(null);
+    const editDay = techWeekDetails?.days.find((d) => d.shiftId === editShiftId);
+    const [reviewShiftId, setReviewShiftId] = useState<string | null>(null);
+    const reviewDay = techWeekDetails?.days.find((d) => d.shiftId === reviewShiftId);
     const [confirmApprove, setConfirmApprove] = useState(false);
     const { mutateAsync: approveMutation, isPending: approving } = useApproveTimesheetMutation();
     const { mutateAsync: unapproveMutation, isPending: unapproving } = useUnapproveTimesheetMutation();
@@ -388,12 +387,13 @@ export default function Timesheet () {
             )
             .sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
 
-        const segmentsByShift = new Map(
-            (techWeekDetails?.days ?? []).map((d) => [d.shiftId, d.segments]),
+        const dayByShift = new Map(
+            (techWeekDetails?.days ?? []).map((d) => [d.shiftId, d]),
         );
 
         const detailRows = filtered.map((r) => {
-            const segs = segmentsByShift.get(r.shiftId) ?? [];
+            const day = dayByShift.get(r.shiftId);
+            const segs = day?.segments ?? [];
             const sum = (t: SegType) => segs.filter((s) => s.type === t).reduce((h, s) => h + spanHours(s), 0);
             return {
                 id: r.shiftId,
@@ -404,6 +404,7 @@ export default function Timesheet () {
                 payable: fmtHours(r.payableHours),
                 _segments: segs,
                 _overnight: isOvernight(segs, tz),
+                _pending: !!day?.pendingCorrection,
             }
         });
 
@@ -502,7 +503,7 @@ export default function Timesheet () {
     }, [techWeekDetails, tz]);
 
     return (
-        <div>
+        <div className="mb-5">
             <PageHeader
                 title={isSummaryView ? "Timesheet" : (techName ?? "Timesheet")}
                 subtitle={
@@ -711,6 +712,11 @@ export default function Timesheet () {
                                             <Moon size={11} /> Overnight
                                         </span>
                                     )}
+                                    {!!row._pending && (
+                                        <span className="text-[11px] bg-warning-bg rounded-full px-2 py-0.5 font-medium text-warning-text">
+                                            Correction pending
+                                        </span>
+                                    )}
                                 </span>
                             ),
                             status: (row) => (
@@ -736,7 +742,31 @@ export default function Timesheet () {
                         }}
                         renderExpanded={isSummaryView
                             ? undefined
-                            : (row) => <SegmentTable segments={row._segments as Segment[]} tz={tz} />
+                            : (row) => (
+                                <>
+                                    <div className="flex justify-end gap-2 px-5 pt-3 empty:hidden">
+                                        {CAN_APPROVE && !!row._pending && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setReviewShiftId(row.id as string)}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-primary-hover hover:bg-primary text-on-primary rounded-md transition-colors"
+                                            >
+                                                <ClipboardCheck size={14} /> Review correction
+                                            </button>
+                                        )}
+                                        {canEditTimes && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setEditShiftId(row.id as string)}
+                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border border-border rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-raised transition-colors"
+                                            >
+                                                <Pencil size={14} /> Edit times
+                                            </button>
+                                        )}
+                                    </div>
+                                    <SegmentTable segments={row._segments as Segment[]} tz={tz} />
+                                </>
+                            )
                         }
                         renderSubRow={isSummaryView ? undefined : (row) => <Timeline segments={row._segments as Segment[]} axis={axis} tz={tz} />}
                         columnAlign={{
@@ -746,6 +776,24 @@ export default function Timesheet () {
                     
 				)}
             </Card>
+            <br/>
+            {!isSummaryView && (
+                <ChangeHistory
+                    title="Change History"
+                    scope={{ kind: "entity", type: "timesheet", id: `${techParam}:${weekKey}`  }}
+
+                />
+            )}
+            {editDay && <EditShiftModal day={editDay} tz={tz} onClose={() => setEditShiftId(null)} />}
+            {reviewDay?.pendingCorrection && (
+                <EditShiftModal
+                    day={reviewDay}
+                    tz={tz}
+                    onClose={() => setReviewShiftId(null)}
+                    mode="review"
+                    correction={reviewDay.pendingCorrection}
+                />
+            )}
         </div>
     )
 }

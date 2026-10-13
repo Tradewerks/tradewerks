@@ -7,7 +7,9 @@ export type NotificationType =
 	| "field_purchase_preauth"
 	| "field_purchase_reviewed"
 	| "vehicle_maintenance_due"
-	| "tech_running_late";
+	| "tech_running_late"
+	| "time_correction_accepted"
+	| "time_correction_rejected";
 
 export interface TechnicianNotification {
 	id: string;
@@ -37,6 +39,7 @@ export type DispatcherNotificationType =
 	| "invoice_paid"
 	| "quote_accepted"
 	| "quote_declined"
+	| "timesheet_issue_reported"
 
 export interface DispatcherNotification {
 	id: string;
@@ -50,7 +53,7 @@ export interface DispatcherNotification {
 }
 
 // Display order of the preference groups
-export const DISPATCHER_NOTIFICATION_GROUPS = ["Jobs", "Purchases", "Vehicles & inventory", "Sales & billing"] as const;
+export const DISPATCHER_NOTIFICATION_GROUPS = ["Jobs", "Timesheets", "Purchases", "Vehicles & inventory", "Sales & billing"] as const;
 
 export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	type: DispatcherNotificationType;
@@ -64,6 +67,7 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "visit_delayed", group: "Jobs", permission: "view_jobs", label: "Delayed visits", description: "A visit was marked delayed" },
 	{ type: "tech_running_late", group: "Jobs", permission: "view_jobs", label: "Running late", description: "A technician is likely to miss a visit's arrival time" },
 	{ type: "tech_note_added", group: "Jobs", permission: "view_jobs", label: "Technician notes", description: "A technician added a note to a job" },
+	{ type: "timesheet_issue_reported", group: "Timesheets", permission: "view_timesheet", label: "Time issue reports", description: "A technician reported a problem with their hours" },
 	{ type: "field_purchase_preauth_requested", group: "Purchases", permission: "review_field_purchases", label: "Pre-approval requests", description: "A technician needs approval before a purchase" },
 	{ type: "field_purchase_submitted", group: "Purchases", permission: "review_field_purchases", label: "Purchases submitted", description: "A technician submitted a purchase for review" },
 	{ type: "field_purchase_second_signoff", group: "Purchases", permission: "second_sign_off_field_purchases", label: "Second sign-offs", description: "A purchase is waiting on a second signature" },

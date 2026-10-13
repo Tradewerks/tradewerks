@@ -1,6 +1,6 @@
 ﻿import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, Calendar, Clock, XCircle, FileText, AlarmClock, Timer, CheckCheck } from "lucide-react";
+import { Bell, Calendar, CheckCircle2, Clock, XCircle, FileText, AlarmClock, Timer, CheckCheck } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useNotificationsQuery, useMarkNotificationReadMutation, useMarkAllNotificationsReadMutation } from "../../hooks/useNotifications";
 import type { TechnicianNotification, NotificationType } from "../../types/notifications";
@@ -37,6 +37,8 @@ function NotificationIcon({ type }: { type: NotificationType }) {
 		case "note_added":      return <FileText size={18} className={`${cls} text-primary-text`} />;
 		case "visit_reminder":  return <AlarmClock size={18} className={`${cls} text-warning-text`} />;
 		case "tech_running_late": return <Timer size={18} className={`${cls} text-warning-text`} />;
+		case "time_correction_accepted": return <CheckCircle2 size={18} className={`${cls} text-success-text`} />;
+		case "time_correction_rejected": return <XCircle size={18} className={`${cls} text-error-text`} />;
 	}
 }
 

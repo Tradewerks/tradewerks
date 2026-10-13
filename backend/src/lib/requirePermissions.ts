@@ -61,6 +61,8 @@ import { log } from "../services/appLogger.js";
  *     view_forms          · submit_forms
  *   Field Purchases
  *     request_field_purchase
+ * 	 Timesheets
+ *	   edit_own_timesheet
  */
 
 function resolvePerms(req: Request): string[] | null {

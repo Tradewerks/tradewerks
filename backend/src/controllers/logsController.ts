@@ -5,6 +5,7 @@ import { log } from "../services/appLogger.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { createErrorResponse, createSuccessResponse, ErrorCodes } from "../types/responses.js";
 import { FEED_EVENT_TYPES } from "../lib/activityFeedEvents.js";
+import { weekRangeIn, weekStartOf } from "../lib/dayRange.js";
 
 export type actor = "technician" | "dispatcher";
 export type entity =
@@ -17,7 +18,8 @@ export type entity =
     | "recurring_plan"
     | "vehicle"
     | "technician"
-    | "dispatcher";
+    | "dispatcher"
+    | "timesheet";
 
 export const DEFAULT_HISTORY_LIMIT = 20;
 export const MAX_HISTORY_LIMIT = 200;
@@ -111,6 +113,22 @@ const pluck = (rows: { id: string }[]) => rows.map((r) => r.id);
  * lookup for every child entity type of the group (Postgres JSON path filter).
  */
 export const PARENT_ID_PATH = ["_parent_id", "new"] as const;
+
+export const timesheetWeekId = (technicianId: string, weekStart: Date) =>
+    `${technicianId}:${weekStart.toISOString().slice(0, 10)}`;
+
+const weekShiftIds = async (sdb: ScopedDb, id: string) => {
+    const [techId, date] = id.split(":");
+    const tech = await sdb.technician.findFirst({
+        where: { id: techId },
+        select: { organization: { select: { timezone: true } } },
+    });
+    if (!tech) return [];
+    const { start, end } = weekRangeIn(weekStartOf(date), tech.organization?.timezone ?? "UTC");
+    return sdb.technician_shift
+        .findMany({ where: { tech_id: techId, started_at: { gte: start, lt: end } }, select: { id: true } })
+        .then(pluck);
+};
 
 export const parentBreadcrumb = (type: entity, id: string) => ({
     _parent_type: { old: null, new: type },
@@ -301,6 +319,31 @@ const ENTITY_GROUPS: Record<entity, GroupMember[]> = {
     // here regardless of who the actor was.
     technician: [{ entity_type: "technician" }, { entity_type: "organization_role_assignment" }],
     dispatcher: [{ entity_type: "dispatcher" }, { entity_type: "organization_role_assignment" }],
+    // Id is timesheetWeekId(); the timesheet_week row is deleted on unapprove, so its rows carry the breadcrumb.
+    timesheet: [
+        {
+            entity_type: "timesheet",
+            resolve: async (sdb, id) => {
+                const [techId, date] = id.split(":");
+                const week = await sdb.timesheet_week.findFirst({
+                    where: { technician_id: techId, week_start: weekStartOf(date) },
+                    select: { id: true },
+                });
+                return week ? [week.id] : [];
+            },
+        },
+        {
+            entity_type: "technician_shift",
+            resolve: (sdb, id) => weekShiftIds(sdb, id),
+        },
+        {
+            entity_type: "shift_correction",
+            resolve: async (sdb, id) =>
+                sdb.shift_correction
+                    .findMany({ where: { shift_id: { in: await weekShiftIds(sdb, id) } }, select: { id: true } })
+                    .then(pluck),
+        },
+    ],
 };
 
 export const getActorHistory = async (orgId: string, type: actor, id: string, limit = DEFAULT_HISTORY_LIMIT) => {

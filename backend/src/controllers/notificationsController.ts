@@ -16,7 +16,9 @@ export type NotificationType =
 	| "field_purchase_preauth"
 	| "field_purchase_reviewed"
 	| "vehicle_maintenance_due"
-	| "tech_running_late";
+	| "tech_running_late"
+	| "time_correction_accepted"
+	| "time_correction_rejected";
 
 export type DispatcherNotificationType = z.infer<typeof DispatcherNotificationTypeEnum>;
 
@@ -134,6 +136,7 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	invoice_paid: "view_invoices",
 	quote_accepted: "view_quotes",
 	quote_declined: "view_quotes",
+	timesheet_issue_reported: "view_timesheet",
 };
 
 // Notify every dispatcher in the org who can see this type and hasn't muted it

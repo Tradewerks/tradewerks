@@ -117,6 +117,9 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
             return entry.rows.length > 0 || log.action !== "updated";
     });
 
+    const presentKeys = new Set(allEntries.map(({ log }) => actionFilterKeyFor(log)));
+    const actionFilters = ACTION_FILTERS.filter((f) => presentKeys.has(f.key));
+
     // Chips filter only the rows loaded so far — the server page is unfiltered, so the
     // footer stays visible whenever there is more to load.
     const entries = allEntries.filter(({ log }) => activeActions.has(actionFilterKeyFor(log)));
@@ -140,7 +143,7 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
                     </button>
                 </div>
                 <div className="flex flex-wrap items-center gap-1 px-4 pb-3 mb-1">
-                    {ACTION_FILTERS.map((f) => {
+                    {actionFilters.map((f) => {
                         const active = activeActions.has(f.key);
                         const Icon = f.icon;
 

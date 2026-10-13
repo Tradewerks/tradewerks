@@ -279,3 +279,25 @@ export function errorMessage(err: unknown, fallback: string): string {
 	}
 	return err instanceof Error && err.message ? err.message : fallback;
 }
+
+// datetime-local reads and writes wall clock. Seeding it from toISOString()
+// would show the UTC instant and then re-submit it as local, shifting the
+// timestamp by the offset on every save.
+export const fmtHours = (h: number) => {
+	const m = Math.round(h * 60);
+	const hh = Math.floor(m / 60);
+	const mm = String(m % 60).padStart(2, "0");
+	return hh ? `${hh}h ${mm}m` : `${m}m`;
+};
+
+export function atShiftTime(date: string, shiftStart: string, time: string): Date {
+	const d = new Date(`${date}T${time}`);
+	if (time < shiftStart) d.setDate(d.getDate() + 1);
+	return d;
+}
+
+export function toLocalInputValue(iso: string | null): string {
+	if (!iso) return "";
+	const d = new Date(iso);
+	return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}

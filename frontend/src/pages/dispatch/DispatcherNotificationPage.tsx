@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
 	Bell, Clock, CheckCheck, Wrench, MailOpen, Settings, ShoppingCart, Receipt, PenLine, KeyRound,
-	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown,
+	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, ClockAlert,
 } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useDispatcherNotificationsQuery, useMarkDispatcherNotificationReadMutation, useMarkAllDispatcherNotificationsReadMutation } from "../../hooks/useNotifications";
@@ -49,6 +49,7 @@ function NotificationIcon({ type }: { type: DispatcherNotificationType }) {
         case "invoice_paid": return <DollarSign size={18} className={`${cls} text-success-text`} />;
         case "quote_accepted": return <ThumbsUp size={18} className={`${cls} text-success-text`} />;
         case "quote_declined": return <ThumbsDown size={18} className={`${cls} text-error-text`} />;
+        case "timesheet_issue_reported": return <ClockAlert size={18} className={`${cls} text-warning-text`} />;
     }
 }
 

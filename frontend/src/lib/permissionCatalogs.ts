@@ -217,6 +217,12 @@ export const TECHNICIAN_CATALOG = [
 			{ id: "request_field_purchase", label: "Request Field Purchase" },
 		],
 	},
+	{
+		category: "Timesheets",
+		permissions: [
+			{ id: "edit_own_timesheet", label: "Edit Own Timesheet"}
+		]
+	},
 ] as const;
 
 export const PERMISSION_CATALOGS = {

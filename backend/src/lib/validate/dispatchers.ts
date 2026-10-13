@@ -19,6 +19,7 @@ export const DispatcherNotificationTypeEnum = z.enum([
 	"invoice_paid",
 	"quote_accepted",
 	"quote_declined",
+	"timesheet_issue_reported",
 ]);
 
 const reportLayoutSchema = z.record(

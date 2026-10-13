@@ -1,4 +1,4 @@
-import { History, Link2, Pencil, Plus, Repeat, Send, ShieldCheck, Trash2, Unlink, UserCheck, UserX } from "lucide-react";
+import { Check, Flag, History, Link2, Lock, LockOpen, Pencil, Plus, Repeat, Send, ShieldCheck, Trash2, Unlink, UserCheck, UserX, X } from "lucide-react";
 import type React from "react";
 import type { ActivityLog } from "../../types/logs";
 
@@ -60,6 +60,11 @@ const VERB_STYLES: Record<string, EntryStyle> = {
 	assigned: { icon: UserCheck, color: "text-success-text", bg: "bg-success/10" },
 	removed: { icon: UserX, color: "text-error-text", bg: "bg-error/10" },
 	converted: { icon: Repeat, color: "text-primary-text", bg: "bg-primary/10" },
+	approved: { icon: Lock, color: "text-success-text", bg: "bg-success/10" },
+	unapproved: { icon: LockOpen, color: "text-warning-text", bg: "bg-warning/10" },
+	accepted: { icon: Check, color: "text-success-text", bg: "bg-success/10" },
+	rejected: { icon: X, color: "text-error-text", bg: "bg-error/10" },
+	reported: { icon: Flag, color: "text-warning-text", bg: "bg-warning/10" },
 };
 
 export const OTHER_FILTER_KEY = "other";
@@ -73,7 +78,9 @@ export const ACTION_FILTERS = [
 	{ key: "attached", label: "Attached", verbs: ["attached"], ...VERB_STYLES.attached },
 	{ key: "detached", label: "Detached", verbs: ["detached"], ...VERB_STYLES.detached },
 	{ key: "sent", label: "Sent", verbs: ["sent"], ...VERB_STYLES.sent },
-	{ key: "authorized", label: "Authorized", verbs: ["authorized"], ...VERB_STYLES.authorized },
+	{ key: "authorized", label: "Authorized", verbs: ["authorized", "approved", "accepted"], ...VERB_STYLES.authorized },
+	{ key: "rejected", label: "Rejected", verbs: ["rejected", "unapproved"], ...VERB_STYLES.rejected },
+	{ key: "reported", label: "Reported", verbs: ["reported"], ...VERB_STYLES.reported },
 	{ key: "converted", label: "Converted", verbs: ["converted"], ...VERB_STYLES.converted },
 	// Catch-all for verbs no chip above lists (failed, push_failed, reuse_detected, …)
 	{ key: OTHER_FILTER_KEY, label: "Other", verbs: [], ...DEFAULT_STYLE },
@@ -122,6 +129,9 @@ const ENTITY_LABELS: Record<string, string> = {
 	organization_role_assignment: "Role assignment",
 	saved_report: "Saved report",
 	mfa: "Two-factor authentication",
+	timesheet: "Timesheet",
+	technician_shift: "Shift",
+	shift_correction: "Time correction",
 };
 
 const HEADLINE_OVERRIDES: Record<string, string> = {
@@ -132,6 +142,12 @@ const HEADLINE_OVERRIDES: Record<string, string> = {
 	"request.quoted": "Request converted to quote",
 	"request.quote_approved": "Linked quote approved",
 	"request.quote_rejected": "Linked quote rejected",
+	"timesheet.created": "Week approved",
+	"timesheet.deleted": "Week unapproved",
+	"timesheet.time_edited": "Times edited",
+	"timesheet.issue_reported": "Time issue reported",
+	"timesheet.correction_accepted": "Time correction accepted",
+	"timesheet.correction_rejected": "Time correction rejected",
 };
 
 const humanize = (raw: string): string => {
@@ -174,7 +190,21 @@ const FIELD_LABELS: Record<string, string> = {
 	replacement: "Replacement document",
 };
 
-const labelFor = (key: string): string => FIELD_LABELS[key] ?? humanize(key);
+// Timesheet edits key break and visit times as "break.<id>.started_at" / "entry.<id>.clocked_in_at".
+const SHIFT_PART_LABELS: Record<string, string> = {
+	started_at: "start",
+	ended_at: "end",
+	clocked_in_at: "clock-in",
+	clocked_out_at: "clock-out",
+};
+
+const labelFor = (key: string): string => {
+	const [part, , field] = key.split(".");
+	if ((part === "break" || part === "entry") && field) {
+		return `${part === "break" ? "Break" : "Visit"} ${SHIFT_PART_LABELS[field] ?? humanize(field).toLowerCase()}`;
+	}
+	return FIELD_LABELS[key] ?? humanize(key);
+};
 
 // Denormalized context, not field edits — these belong in the subtitle, not rows.
 const BREADCRUMB_KEYS = new Set([
@@ -214,9 +244,12 @@ const readBreadcrumb = (log: ActivityLog, keys: string[]): string | null => {
 };
 
 const buildSubtitle = (log: ActivityLog): string | null => {
+	const note = readBreadcrumb(log, ["_note"]);
 	const parts = [
 		readBreadcrumb(log, REFERENCE_KEYS),
 		readBreadcrumb(log, ["client_name", "_client_name"]),
+		readBreadcrumb(log, ["_day"]),
+		note && `"${note}"`,
 	].filter(Boolean) as string[];
 	return parts.length ? parts.join(" · ") : null;
 };
@@ -315,6 +348,7 @@ export const formatChange = (log: ActivityLog, tz: string): ChangeEntry => {
 
 	return {
 		headline:
+			(log.event_type === "timesheet.issue_reported" && rows.length ? "Time correction suggested" : null) ??
 			HEADLINE_OVERRIDES[log.event_type] ??
 			([entity, verb].filter(Boolean).join(" ") || "Change recorded"),
 		subtitle: buildSubtitle(log),

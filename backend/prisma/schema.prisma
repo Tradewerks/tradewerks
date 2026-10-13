@@ -471,6 +471,7 @@ model organization {
   assistant_conversations assistant_conversation[]
   document_disputes document_dispute[]
   timesheet_weeks   timesheet_week[]
+  shift_corrections shift_correction[]
 }
 
 model saved_report {
@@ -2716,6 +2717,7 @@ model technician {
   field_purchases       field_purchase[]
   external_mappings     technician_external_mapping[]
   timesheet_weeks       timesheet_week[]
+  shift_corrections     shift_correction[]
 
   @@index([email])
   @@index([status])
@@ -2807,6 +2809,7 @@ model dispatcher {
   notifications      dispatcher_notification[]
 
   approved_timesheet_weeks timesheet_week[] @relation("TimesheetApprover")
+  reviewed_shift_corrections shift_correction[]
 
   @@index([email])
   @@index([organization_id])
@@ -2840,6 +2843,34 @@ model vehicle_readiness {
 // SHIFT TRACKING
 // ============================================================================
 
+enum shift_correction_status { 
+  pending 
+  accepted 
+  rejected 
+  superseded 
+}
+
+model shift_correction {
+  id                 String                  @id @default(uuid())
+  organization_id    String
+  organization       organization            @relation(fields: [organization_id], references: [id])
+  shift_id           String
+  shift              technician_shift        @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+  tech_id            String
+  tech               technician              @relation(fields: [tech_id], references: [id])
+  message            String
+  proposed           Json                    // EditShiftInput shape: { started_at?, ended_at?, breaks?, entries? }
+  status             shift_correction_status @default(pending)
+  reviewed_by_id     String?
+  reviewed_by        dispatcher?             @relation(fields: [reviewed_by_id], references: [id], onDelete: SetNull)
+  reviewed_at        DateTime?
+  review_note        String?
+  created_at         DateTime                @default(now())
+
+  @@index([shift_id, status])
+  @@index([organization_id, status])
+}
+
 model technician_shift {
   id              String     @id @default(uuid())
   tech_id         String
@@ -2851,6 +2882,7 @@ model technician_shift {
   break_hours     Decimal?   @db.Decimal(8, 4)
   payable_hours   Decimal?   @db.Decimal(8, 4)
   breaks          technician_shift_break[]
+  corrections     shift_correction[]
 
   qb_time_activity_id String?
   account_id          String  @default("")
