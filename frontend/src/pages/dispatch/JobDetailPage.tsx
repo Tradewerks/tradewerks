@@ -845,7 +845,7 @@ export default function JobDetailPage() {
 				   column width instead of its own content's, so a row of
 				   visits reads as a set and a long title or crew list
 				   wraps inside its card rather than widening it. */
-				<div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(380px,1fr))]">
+				<div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(380px,1fr))] overflow-y-auto scrollbar-on-hover max-h-[min(480px,60vh)]">
 					{sortedVisits.map((visit) => (
 						/* A real link, not a button + navigate(): a visit is a
 						   page, so middle-click and open-in-new-tab must work.

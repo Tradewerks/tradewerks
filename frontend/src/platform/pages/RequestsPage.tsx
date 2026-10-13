@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import SegmentedToggle from "../../components/ui/SegmentedToggle";
+import Pagination from "../../components/ui/Pagination";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { platformError } from "../api";
 import { useRequests, useTiers } from "../hooks";
@@ -21,9 +22,6 @@ export default function RequestsPage() {
 	const [status, setStatus] = useState<"open" | "all">("open");
 	const [page, setPage] = useState(1);
 	const requests = useRequests(status, undefined, page);
-	const pageCount = requests.data
-		? Math.max(1, Math.ceil(requests.data.total / requests.data.pageSize))
-		: 1;
 	const tiers = useTiers();
 	const navigate = useNavigate();
 	const [declining, setDeclining] = useState<UpgradeRequest | null>(null);
@@ -136,28 +134,13 @@ export default function RequestsPage() {
 					);
 				})}
 			</ul>
-			{pageCount > 1 && (
-				<div className="flex items-center justify-end gap-3 text-sm text-text-secondary">
-					<button
-						type="button"
-						className={textButton}
-						disabled={page <= 1}
-						onClick={() => setPage((p) => p - 1)}
-					>
-						Previous
-					</button>
-					<span className="tabular-nums">
-						Page {page} of {pageCount}
-					</span>
-					<button
-						type="button"
-						className={textButton}
-						disabled={page >= pageCount}
-						onClick={() => setPage((p) => p + 1)}
-					>
-						Next
-					</button>
-				</div>
+			{requests.data && (
+				<Pagination
+					page={page}
+					pageSize={requests.data.pageSize}
+					total={requests.data.total}
+					onPageChange={setPage}
+				/>
 			)}
 			<ResolveRequestDialog
 				key={declining?.id ?? "none"}

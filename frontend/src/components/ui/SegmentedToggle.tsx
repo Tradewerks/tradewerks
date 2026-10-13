@@ -27,6 +27,11 @@ interface SegmentedToggleProps<T extends string> {
 	 * the content below rather than a widget floating above it.
 	 */
 	variant?: "boxed" | "flat";
+	/**
+	 * "sm" (default): 28px track for Card headers.
+	 * "md": 36px track that sits level with SearchBar / ViewToggle in a page controls row.
+	 */
+	size?: "sm" | "md";
 }
 
 // Shared segmented control so the History tab's range control and the stock
@@ -39,6 +44,7 @@ export default function SegmentedToggle<T extends string>({
 	className = "",
 	fullWidth = false,
 	variant = "boxed",
+	size = "sm",
 }: SegmentedToggleProps<T>) {
 	return (
 		<div
@@ -47,7 +53,9 @@ export default function SegmentedToggle<T extends string>({
 			className={`${fullWidth ? "flex w-full items-stretch" : "inline-flex"} ${
 				variant === "flat"
 					? "gap-1"
-					: "rounded-md border border-border-subtle bg-surface p-0.5"
+					: size === "md"
+						? "h-9 items-center gap-1 rounded-md border border-border bg-surface p-1"
+						: "rounded-md border border-border-subtle bg-surface p-0.5"
 			} ${className}`}
 		>
 			{options.map((o) => (
@@ -64,9 +72,11 @@ export default function SegmentedToggle<T extends string>({
 					className={`${
 						fullWidth
 							? "flex-1 px-3 py-2 text-sm"
-							: "inline-flex h-[22px] items-center px-2.5 text-xs"
+							: size === "md"
+								? "inline-flex h-full items-center px-3 text-xs"
+								: "inline-flex h-[22px] items-center px-2.5 text-xs"
 					} font-medium ${
-						variant === "flat" ? "rounded-md" : "rounded-[5px]"
+						variant === "flat" ? "rounded-md" : size === "md" ? "rounded" : "rounded-[5px]"
 					} transition-colors ${
 						value === o.id
 							? "bg-primary-hover text-on-primary"

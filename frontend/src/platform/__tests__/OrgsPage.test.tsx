@@ -18,6 +18,7 @@ const ROW = {
 };
 const state = vi.hoisted(() => ({
 	rows: [] as unknown[],
+	total: null as number | null,
 	useOrgs: vi.fn(),
 	createOrg: vi.fn(),
 }));
@@ -27,7 +28,7 @@ vi.mock("../hooks", () => ({
 		return {
 			isLoading: false,
 			error: null,
-			data: { rows: state.rows, total: state.rows.length, page: 1, pageSize: 25 },
+			data: { rows: state.rows, total: state.total ?? state.rows.length, page: 1, pageSize: 25 },
 		};
 	},
 	useTiers: () => ({
@@ -56,6 +57,7 @@ beforeEach(() => {
 	state.useOrgs.mockClear();
 	state.createOrg.mockReset();
 	state.rows = [ROW];
+	state.total = null;
 });
 
 describe("OrgsPage rows", () => {
@@ -131,5 +133,21 @@ describe("build plan 4", () => {
 			business_type: "plumbing",
 			plan_key: "pro",
 		});
+	});
+});
+
+describe("OrgsPage pagination", () => {
+	it("hides the pager when every org fits on one page", () => {
+		render(<OrgsPage />, { wrapper: MemoryRouter });
+		expect(screen.queryByRole("navigation", { name: "Pagination" })).toBeNull();
+	});
+
+	it("pages through the server total without a page-size picker", () => {
+		state.total = 60;
+		render(<OrgsPage />, { wrapper: MemoryRouter });
+		expect(screen.getByText("Showing 1–25 of 60")).toBeInTheDocument();
+		expect(screen.queryByRole("group", { name: "Rows per page" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+		expect(state.useOrgs).toHaveBeenLastCalledWith("", 2, false);
 	});
 });

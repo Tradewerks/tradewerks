@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
+import Pagination from "../../components/ui/Pagination";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { inputClass } from "../components/AuthCard";
 import NewOrgPanel from "../components/NewOrgPanel";
@@ -59,7 +60,6 @@ export default function OrgsPage() {
 
 	const orgs = useOrgs(q, page, trialEnding);
 	const data = orgs.data;
-	const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
 	return (
 		<div className="space-y-4">
@@ -306,31 +306,12 @@ export default function OrgsPage() {
 								</li>
 							))}
 						</ul>
-						<div className="flex items-center justify-between gap-2 text-sm">
-							<button
-								type="button"
-								className="h-8 rounded-md border border-border px-3 text-text-primary hover:bg-surface-inset disabled:opacity-50"
-								disabled={page <= 1}
-								onClick={() =>
-									setPage((p) => p - 1)
-								}
-							>
-								Previous
-							</button>
-							<span className="text-text-tertiary tabular-nums">
-								Page {page} of {pages}
-							</span>
-							<button
-								type="button"
-								className="h-8 rounded-md border border-border px-3 text-text-primary hover:bg-surface-inset disabled:opacity-50"
-								disabled={page >= pages}
-								onClick={() =>
-									setPage((p) => p + 1)
-								}
-							>
-								Next
-							</button>
-						</div>
+						<Pagination
+							page={page}
+							pageSize={data.pageSize}
+							total={data.total}
+							onPageChange={setPage}
+						/>
 					</>
 				)
 			)}
