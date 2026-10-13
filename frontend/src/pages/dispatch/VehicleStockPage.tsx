@@ -27,7 +27,8 @@ import MaintenanceTab from "../../components/vehicles/maintenance/MaintenanceTab
 import ChangeHistory from "../../components/activity/ChangeHistory";
 import UntrackedStockNotice from "../../components/entitlements/UntrackedStockNotice";
 
-type Tab = "stock" | "restock" | "alerts" | "maintenance" | "activity";
+import { useOrgSettings } from "../../hooks/useOrg";
+import { vehicleStockTabOrder, type VehicleStockTab as Tab } from "../../lib/restockEmphasis";
 
 const STOCK_GRID = "grid-cols-[1fr_84px_84px_84px_84px_116px_36px]";
 
@@ -633,7 +634,7 @@ function AlertsTab({ vehicleId }: { vehicleId: string }) {
 		<div>
 			<div className="px-5 pt-4 pb-2 flex items-center justify-between">
 				<span className="text-xs text-text-muted">
-					{active.length === 0 ? "No active alerts" : `${active.length} active alert${active.length !== 1 ? "s" : ""}`}
+					{active.length === 0 ? "No open requests" : `${active.length} open request${active.length !== 1 ? "s" : ""}`}
 				</span>
 				{resolved.length > 0 && (
 					<button
@@ -646,7 +647,7 @@ function AlertsTab({ vehicleId }: { vehicleId: string }) {
 			</div>
 			{displayed.length === 0 ? (
 				<div className="flex flex-col items-center justify-center py-12 text-text-muted">
-					<p className="text-sm font-medium">No alerts</p>
+					<p className="text-sm font-medium">No restock requests</p>
 					<p className="text-xs mt-1">Restock requests from technicians on this vehicle appear here</p>
 				</div>
 			) : (
@@ -676,6 +677,7 @@ export default function VehicleStockPage() {
 	const [isEditOpen, setIsEditOpen] = useState(false);
 	const [fillOpen, setFillOpen] = useState(false);
 
+	const { data: org } = useOrgSettings();
 	const { data: vehicles } = useVehiclesQuery();
 	const { data: stockItems = [], isLoading: stockLoading } = useVehicleStockQuery(id ?? "");
 	const { data: alertRequests = [] } = useRestockRequestsQuery(undefined, id ?? "");
@@ -754,7 +756,7 @@ export default function VehicleStockPage() {
 				</div>
 				{/* Tabs */}
 				<div className="flex gap-0 -mb-px">
-					{(["stock", "restock", "alerts", "maintenance", "activity"] as Tab[]).map((t) => (
+					{vehicleStockTabOrder(org?.restock_mode).map((t) => (
 						<button
 							key={t}
 							onClick={() => setActiveTab(t)}
@@ -768,7 +770,7 @@ export default function VehicleStockPage() {
 							{t === "restock" && "Warehouse Restock"}
 							{t === "alerts" && (
 								<>
-									Alerts
+									Requests
 									{pendingAlertCount > 0 && (
 										<span className="bg-warning/20 text-warning-text text-[10px] font-bold px-1.5 py-0.5 rounded-full">
 											{pendingAlertCount}

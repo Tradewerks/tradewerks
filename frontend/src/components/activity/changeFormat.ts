@@ -122,6 +122,7 @@ const ENTITY_LABELS: Record<string, string> = {
 	organization_role_assignment: "Role assignment",
 	saved_report: "Saved report",
 	mfa: "Two-factor authentication",
+	organization: "Organization settings",
 };
 
 const HEADLINE_OVERRIDES: Record<string, string> = {
@@ -172,6 +173,16 @@ const FIELD_LABELS: Record<string, string> = {
 	// invoice on an invoice's, and RefType is keyed by field name alone with no
 	// way to vary by the log row's entity. A labelled UUID still beats a bare one.
 	replacement: "Replacement document",
+	restock_mode: "Vehicle restock workflow",
+	measurement_system: "Measurement system",
+	field_purchase_second_signoff_threshold: "Second sign-off threshold",
+	brand_color: "Brand color",
+};
+
+// Enum-valued fields whose stored code is not a readable word.
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+	restock_mode: { tech_self_serve: "Technician self-serve", dispatch_prepared: "Dispatch prepared" },
+	measurement_system: { imperial: "Imperial", metric: "Metric" },
 };
 
 const labelFor = (key: string): string => FIELD_LABELS[key] ?? humanize(key);
@@ -242,6 +253,7 @@ const CURRENCY_FIELDS = new Set([
 	"estimated_total",
 	"actual_total",
 	"estimated_value",
+	"field_purchase_second_signoff_threshold",
 ]);
 
 // Money-ish names that are not money. `discount_value` is a percent OR an amount
@@ -252,6 +264,8 @@ const DATE_ONLY_FIELDS = new Set(["starts_at", "target_end_at", "due_date", "iss
 
 export const formatValue = (key: string, value: unknown, tz: string): string => {
 	if (value === null || value === undefined || value === "") return EM_DASH;
+
+	if (typeof value === "string" && VALUE_LABELS[key]?.[value]) return VALUE_LABELS[key][value];
 
 	if (typeof value === "boolean") return value ? "Yes" : "No";
 

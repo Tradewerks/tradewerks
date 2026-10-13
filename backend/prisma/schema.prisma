@@ -395,9 +395,10 @@ model organization {
   tax_rate            Decimal @default(0) @db.Decimal(5, 4)
   wrapping_up_minutes Int     @default(15)
   restock_mode        restock_mode @default(tech_self_serve)
-  // "imperial" | "metric". ORDERS the unit picker for the org's region and drives
-  // the form default — it hides nothing (a US org still reaches `mm`) and converts
-  // nothing. String + app-level Zod enum, same reasoning as inventory_item.unit.
+  // "imperial" | "metric". ORDERS the unit picker for the org's region — it hides
+  // nothing (a US org still reaches `mm`) and converts nothing. The new-item
+  // default stays `each`, which is system-neutral. String + Zod enum, same
+  // reasoning as inventory_item.unit; a DB CHECK backs the enum.
   // NOT a general locale: currency and number formatting are still en-US/USD
   // throughout the frontend, which is a separate project.
   measurement_system  String       @default("imperial")

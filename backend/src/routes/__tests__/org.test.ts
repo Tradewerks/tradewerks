@@ -40,6 +40,11 @@ vi.mock("../../services/entitlementService.js", () => ({
 const summary = vi.hoisted(() => ({ period_start: "2026-10-01", meters: {} }));
 vi.mock("../../lib/entitlements/quota.js", () => ({ getUsageSummary: vi.fn(async () => summary) }));
 
+vi.mock("../../services/logger.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../services/logger.js")>();
+	return { ...actual, logActivity: vi.fn() };
+});
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import orgRouter from "../org.js";
@@ -47,6 +52,8 @@ import orgEntitlementsRouter from "../orgEntitlements.js";
 import { callRoute } from "./harness.js";
 import { getUsageSummary } from "../../lib/entitlements/quota.js";
 import { db } from "../../db.js";
+import { logActivity } from "../../services/logger.js";
+import { Prisma } from "../../../generated/prisma/client.js";
 
 const mockDb = vi.mocked(db, true);
 
@@ -73,6 +80,7 @@ function getHandlers(method: "get" | "patch", path: string): Array<
 function makeReq(overrides: Partial<Request> = {}): Request {
 	return {
 		user: { organization_id: "org-1", role: "admin", permissions: [] },
+		headers: {},
 		body: {},
 		...overrides,
 	} as unknown as Request;
@@ -139,6 +147,7 @@ const baseOrg = {
 describe("org routes — measurement_system", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
 	});
 
 	it("GET / returns measurement_system on the response", async () => {
@@ -200,6 +209,7 @@ describe("org routes — measurement_system", () => {
 describe("org routes — field purchase second sign-off threshold", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
 	});
 
 	it("PATCH / stores a threshold and returns it as a Decimal string", async () => {
@@ -279,6 +289,81 @@ describe("org routes — field purchase second sign-off threshold", () => {
 	});
 });
 
+describe("org routes — settings audit log", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
+	});
+
+	it("logs one organization.settings_updated row with only the changed fields", async () => {
+		mockDb.organization.update.mockResolvedValue({
+			...baseOrg,
+			restock_mode: "dispatch_prepared",
+		} as never);
+		const req = makeReq({
+			user: { uid: "disp-1", organization_id: "org-1", role: "admin", permissions: [] },
+			body: { name: "Acme HVAC", restock_mode: "dispatch_prepared", measurement_system: "imperial" },
+		} as Partial<Request>);
+		await runChain(getHandlers("patch", "/"), req, makeRes());
+
+		expect(logActivity).toHaveBeenCalledTimes(1);
+		expect(logActivity).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event_type: "organization.settings_updated",
+				action: "updated",
+				entity_type: "organization",
+				entity_id: "org-1",
+				organization_id: "org-1",
+				actor_type: "dispatcher",
+				actor_id: "disp-1",
+				changes: { restock_mode: { old: "tech_self_serve", new: "dispatch_prepared" } },
+			}),
+		);
+	});
+
+	it("writes no log when the save changes nothing", async () => {
+		mockDb.organization.update.mockResolvedValue(baseOrg as never);
+		const req = makeReq({
+			body: { name: "Acme HVAC", restock_mode: "tech_self_serve", measurement_system: "imperial" },
+		});
+		await runChain(getHandlers("patch", "/"), req, makeRes());
+
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	// The stored Decimal and the body's number must compare equal, or every
+	// no-change save would log a phantom threshold change.
+	it("writes no log when the threshold is resent unchanged", async () => {
+		const stored = {
+			...baseOrg,
+			field_purchase_second_signoff_threshold: new Prisma.Decimal("500"),
+		};
+		mockDb.organization.findUnique.mockResolvedValue(stored as never);
+		mockDb.organization.update.mockResolvedValue(stored as never);
+		const req = makeReq({
+			body: {
+				name: "Acme HVAC",
+				restock_mode: "tech_self_serve",
+				measurement_system: "imperial",
+				field_purchase_second_signoff_threshold: 500,
+			},
+		});
+		await runChain(getHandlers("patch", "/"), req, makeRes());
+
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	it("answers 404 without updating when the org row is gone", async () => {
+		mockDb.organization.findUnique.mockResolvedValue(null as never);
+		const res = makeRes();
+		await runChain(getHandlers("patch", "/"), makeReq({ body: { name: "X" } }), res);
+
+		expect(res.status).toHaveBeenCalledWith(404);
+		expect(mockDb.organization.update).not.toHaveBeenCalled();
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+});
+
 describe("GET /org/entitlements usage (build plan 2)", () => {
 	it("includes usage for admins", async () => {
 		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
@@ -353,5 +438,64 @@ describe("org setup state (build plan 4)", () => {
 	it("POST /modules-reviewed is refused without manage_organization", async () => {
 		const r = await post("/modules-reviewed", plain);
 		expect(r.status).toBe(403);
+	});
+});
+
+describe("org routes — restock_mode", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
+	});
+
+	it("GET / returns restock_mode", async () => {
+		const res = makeRes();
+		await runChain(getHandlers("get", "/"), makeReq(), res);
+		expect(res.json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ restock_mode: "tech_self_serve" }),
+			}),
+		);
+	});
+
+	it("PATCH / accepts dispatch_prepared", async () => {
+		mockDb.organization.update.mockResolvedValue({
+			...baseOrg,
+			restock_mode: "dispatch_prepared",
+		} as never);
+		const res = makeRes();
+		await runChain(
+			getHandlers("patch", "/"),
+			makeReq({ body: { restock_mode: "dispatch_prepared" } }),
+			res,
+		);
+		expect(mockDb.organization.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ restock_mode: "dispatch_prepared" }),
+			}),
+		);
+	});
+
+	it("PATCH / rejects an unknown restock_mode", async () => {
+		const res = makeRes();
+		await runChain(
+			getHandlers("patch", "/"),
+			makeReq({ body: { restock_mode: "warehouse_only" } }),
+			res,
+		);
+		expect(mockDb.organization.update).not.toHaveBeenCalled();
+		expect(res.status).toHaveBeenCalledWith(400);
+	});
+
+	it("PATCH / requires manage_organization", () => {
+		const guard = getHandlers("patch", "/")[0];
+		const res = makeRes();
+		const next = vi.fn();
+		guard(
+			makeReq({ user: { organization_id: "org-1", role: "dispatcher", permissions: [] } } as never),
+			res,
+			next as never,
+		);
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(next).not.toHaveBeenCalled();
 	});
 });

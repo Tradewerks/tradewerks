@@ -18,6 +18,8 @@ import {
 import { z } from "zod";
 import { coordsSchema as orgCoordsSchema } from "../lib/validate/shared.js";
 import { Prisma } from "../../generated/prisma/client.js";
+import { logActivity, buildChanges } from "../services/logger.js";
+import { getUserContext } from "../lib/context.js";
 
 const router = Router();
 
@@ -43,6 +45,22 @@ const orgSelect = {
 	// fieldPurchasesController.
 	field_purchase_second_signoff_threshold: true,
 } as const;
+
+// Everything PATCH can write. mfa_required is logged like the rest; the read
+// side (logsController SENSITIVE_CHANGE_KEY) keeps it out of every view.
+const AUDITED_FIELDS = [
+	"name",
+	"phone",
+	"address",
+	"coords",
+	"email",
+	"website",
+	"restock_mode",
+	"measurement_system",
+	"mfa_required",
+	"brand_color",
+	"field_purchase_second_signoff_threshold",
+] as const;
 
 async function withSignedLogo<T extends { logo_url: string | null }>(
 	org: T,
@@ -132,6 +150,19 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 					),
 				);
 		}
+		const existing = await db.organization.findUnique({
+			where: { id: orgId },
+			select: orgSelect,
+		});
+		if (!existing)
+			return res
+				.status(404)
+				.json(
+					createErrorResponse(
+						ErrorCodes.NOT_FOUND,
+						"Organization not found",
+					),
+				);
 		const { coords, ...rest } = parsed.data;
 		const org = await db.organization.update({
 			where: { id: orgId },
@@ -143,6 +174,22 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 			},
 			select: orgSelect,
 		});
+		const changes = buildChanges(existing, parsed.data, AUDITED_FIELDS);
+		if (Object.keys(changes).length > 0) {
+			const context = getUserContext(req);
+			await logActivity({
+				event_type: "organization.settings_updated",
+				action: "updated",
+				entity_type: "organization",
+				entity_id: orgId,
+				organization_id: orgId,
+				actor_type: "dispatcher",
+				actor_id: context.dispatcherId ?? null,
+				changes,
+				ip_address: context.ipAddress,
+				user_agent: context.userAgent,
+			});
+		}
 		res.json(createSuccessResponse(await withSignedLogo(org)));
 	} catch (err) {
 		next(err);
