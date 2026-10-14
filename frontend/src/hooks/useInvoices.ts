@@ -11,6 +11,7 @@ import type {
 	UpdateInvoiceInput,
 	InvoicePayment,
 	CreateInvoicePaymentInput,
+	RecordRefundInput,
 	InvoiceNote,
 	CreateInvoiceNoteInput,
 	UpdateInvoiceNoteInput,
@@ -136,6 +137,9 @@ export const useUpdateInvoiceMutation = (): UseMutationResult<
 			await queryClient.invalidateQueries({
 				queryKey: ["clients", updatedInvoice.client_id],
 			});
+			// Voiding an adjustment reopens outcomes on the invoice it adjusts,
+			// and those arrive with that invoice's disputes.
+			await queryClient.invalidateQueries({ queryKey: ["disputes"] });
 
 			// If the invoice is linked to a recurring plan, the plan summary
 			// may show derived financials that need to refresh.
@@ -215,6 +219,10 @@ export const useCreateInvoicePaymentMutation = (): UseMutationResult<
 			// Invalidate the list so payment progress / status is current in
 			// the invoices table view as well.
 			await queryClient.invalidateQueries({ queryKey: ["invoices"] });
+			// Money applied mid-dispute closes both voiding outcomes (D7).
+			await queryClient.invalidateQueries({
+				queryKey: ["disputes", "invoice", variables.invoiceId],
+			});
 			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 		},
 	});
@@ -236,6 +244,39 @@ export const useDeleteInvoicePaymentMutation = (): UseMutationResult<
 				queryKey: ["invoices", variables.invoiceId],
 			});
 			await queryClient.invalidateQueries({ queryKey: ["invoices"] });
+			await queryClient.invalidateQueries({
+				queryKey: ["disputes", "invoice", variables.invoiceId],
+			});
+		},
+	});
+};
+
+/**
+ * A refund writes a negative payment row, so the same caches move as a payment:
+ * amount_paid, balance_due and status are all recalculated backend-side and a
+ * refunded invoice can fall back out of Paid.
+ */
+export const useRecordRefundMutation = (): UseMutationResult<
+	InvoicePayment,
+	Error,
+	{ invoiceId: string; data: RecordRefundInput }
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ invoiceId, data }) => invoiceApi.recordRefund(invoiceId, data),
+		onSuccess: async (_, variables) => {
+			await queryClient.invalidateQueries({
+				queryKey: ["invoices", variables.invoiceId],
+			});
+			await queryClient.invalidateQueries({ queryKey: ["invoices"] });
+			await queryClient.invalidateQueries({
+				queryKey: ["disputes", "invoice", variables.invoiceId],
+			});
+			// A refund moves amount_paid and balance_due, which is what every
+			// receivables figure is computed from.
+			await queryClient.invalidateQueries({ queryKey: ["reports"] });
+			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 		},
 	});
 };

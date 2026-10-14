@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import svgr from "vite-plugin-svgr";
 
+// Tests assume a zone west of UTC (schedule labels, day keys). Pin it before any
+// worker starts: setting TZ inside a test moves Date math but not Intl formatting,
+// which V8 resolves once per process.
+if (process.env.VITEST) process.env.TZ = "America/Chicago";
+
 export default defineConfig(({ mode }) => ({
 	plugins: [react(), tailwindcss(), svgr()],
 	define: {

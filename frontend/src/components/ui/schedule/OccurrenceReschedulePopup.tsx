@@ -9,12 +9,16 @@ import type {
 	RescheduleOccurrenceInput,
 } from "../../../types/recurringPlans";
 import {
+	alignScheduleToConstraints,
 	formatDateDisplay,
 	dateToHHMM,
 	hhmmToPickerDate,
 	POPUP_LABEL_STYLE,
 	POPUP_MUTED_STYLE,
 	POPUP_SELECT_STYLE,
+	RESCHEDULE_POPUP_W,
+	constraintPayload,
+	getAnchoredPopupPos,
 } from "./scheduleBoardUtils";
 
 type ConflictState = "ok" | "error";
@@ -39,14 +43,6 @@ interface OccurrenceReschedulePopupProps {
 	onGenerate: (input: Omit<RescheduleOccurrenceInput, "scope">) => void;
 	onCancel: () => void;
 	isGenerating?: boolean;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function hhmmOnDate(newDateStr: string, hhmm: string): Date {
-	const [h, m] = hhmm.split(":").map(Number);
-	const [y, mo, dd] = newDateStr.split("-").map(Number);
-	return new Date(y, mo - 1, dd, h, m, 0, 0);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -136,24 +132,23 @@ export default function OccurrenceReschedulePopup({
 
 	// ── Compute new start / end ───────────────────────────────────────────────
 
-	const computedStart: Date = (() => {
-		let hhmm =
-			arrivalConstraint === "at"
-				? arrivalTime
-				: arrivalConstraint === "between"
-					? arrivalWindowStart
-					: arrivalConstraint === "by"
-						? arrivalWindowEnd
-						: dateToHHMM(origStart); // anytime: preserve original time
-		if (!hhmm) hhmm = dateToHHMM(origStart);
-		return hhmmOnDate(newDateStr, hhmm);
-	})();
-
-	const computedEnd: Date | undefined = (() => {
-		if (finishConstraint === "when_done") return undefined;
-		const hhmm = finishTime || dateToHHMM(origEnd);
-		return hhmmOnDate(newDateStr, hhmm);
-	})();
+	const payload = constraintPayload({
+		arrival_constraint: arrivalConstraint,
+		arrival_time: arrivalTime,
+		arrival_window_start: arrivalWindowStart,
+		arrival_window_end: arrivalWindowEnd,
+		finish_constraint: finishConstraint,
+		finish_time: finishTime,
+	});
+	// Anchored to the stored start, not the deadline: a `by` occurrence is stored ahead of it.
+	const aligned = alignScheduleToConstraints(
+		newDateStr,
+		{ start: occurrence.occurrence_start_at, end: occurrence.occurrence_end_at },
+		occurrence,
+		payload
+	);
+	const computedStart = aligned.start;
+	const computedEnd = finishConstraint === "when_done" ? undefined : aligned.end;
 
 	// ── Completion gate ───────────────────────────────────────────────────────
 
@@ -166,35 +161,12 @@ export default function OccurrenceReschedulePopup({
 
 	// ── Popup positioning ─────────────────────────────────────────────────────
 
-	const popupW = 308;
-	const popupLeft =
-		anchorRect.right + 8 + popupW < window.innerWidth
-			? anchorRect.right + 8
-			: anchorRect.left - popupW - 8;
-	const popupTop = Math.max(8, Math.min(anchorRect.top, window.innerHeight - 480));
+	const { top: popupTop, left: popupLeft } = getAnchoredPopupPos(anchorRect, {
+		popupW: RESCHEDULE_POPUP_W,
+		popupH: 472,
+	});
 
 	// ── Actions ───────────────────────────────────────────────────────────────
-
-	function buildConstraintPayload(): Omit<
-		RescheduleOccurrenceInput,
-		"new_start_at" | "new_end_at" | "scope"
-	> {
-		return {
-			arrival_constraint: arrivalConstraint,
-			finish_constraint: finishConstraint,
-			arrival_time: arrivalConstraint === "at" ? arrivalTime : null,
-			arrival_window_start:
-				arrivalConstraint === "between" ? arrivalWindowStart : null,
-			arrival_window_end:
-				arrivalConstraint === "between" || arrivalConstraint === "by"
-					? arrivalWindowEnd
-					: null,
-			finish_time:
-				finishConstraint === "at" || finishConstraint === "by"
-					? finishTime
-					: null,
-		};
-	}
 
 	return createPortal(
 		<>
@@ -210,7 +182,7 @@ export default function OccurrenceReschedulePopup({
 					position: "fixed",
 					top: popupTop,
 					left: popupLeft,
-					width: popupW,
+					width: RESCHEDULE_POPUP_W,
 					zIndex: 1001,
 					backgroundColor: "var(--color-popup-bg)",
 					border: "1px solid var(--color-border)",
@@ -724,7 +696,7 @@ export default function OccurrenceReschedulePopup({
 														computedStart.toISOString(),
 													new_end_at: computedEnd?.toISOString(),
 													scope: occurrenceScope,
-													...buildConstraintPayload(),
+													...payload,
 												}
 											);
 										}
@@ -780,7 +752,7 @@ export default function OccurrenceReschedulePopup({
 												new_start_at:
 													computedStart.toISOString(),
 												new_end_at: computedEnd?.toISOString(),
-												...buildConstraintPayload(),
+												...payload,
 											});
 										}
 									: undefined

@@ -1,15 +1,24 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn } from "lucide-react";
+import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn, MapPin, Clock } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useJobVisitsByTechIdQuery, useCreateJobNoteMutation } from "../../hooks/useJobs";
-import { useTechnicianByIdQuery, useGoAvailableMutation, useGoOfflineMutation, useGoOnBreakMutation, useMarkDoneMutation } from "../../hooks/useTechnicians";
+import { 
+	useTechnicianByIdQuery, 
+	useGoAvailableMutation, 
+	useGoOfflineMutation, 
+	useGoOnBreakMutation, 
+	useMarkDoneMutation,
+	useReturnFromJobMutation,
+
+} from "../../hooks/useTechnicians";
 import TechVisitCard from "../../components/technicianComponents/TechVisitCard";
 import AddNotePhotoModal from "../../components/technicianComponents/AddNotePhotoModal";
 import type { NotePhoto } from "../../components/technicianComponents/AddNotePhotoModal";
 import type { JobVisit, VisitStatus } from "../../types/jobs";
-import { formatTime, FALLBACK_TIMEZONE } from "../../util/util";
+import { errorMessage, formatTime, FALLBACK_TIMEZONE } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
+import TechPage from "../../components/technician/TechPage";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -58,6 +67,7 @@ export default function TechnicianDashboardPage() {
 	const goOfflineMutation = useGoOfflineMutation();
 	const goOnBreakMutation = useGoOnBreakMutation();
 	const markDoneMutation = useMarkDoneMutation();
+	const returnFromJobMutation = useReturnFromJobMutation();
 
 	const [vehicleBannerDismissed, setVehicleBannerDismissed] = useState(false);
 
@@ -216,10 +226,11 @@ export default function TechnicianDashboardPage() {
 
 	// ── hero type ───────────────────────────────────────────────────────────
 
-	type HeroType = "wrapping-up" | "primary" | "empty";
+	type HeroType = "wrapping-up" | "heading-back" | "primary" | "empty";
 
 	const heroType: HeroType =
 		techProfile?.status === "WrappingUp" ? "wrapping-up"
+		: techProfile?.status === "HeadingBack" ? "heading-back"
 		: primaryHeroVisit                   ? "primary"
 		: "empty";
 
@@ -227,7 +238,7 @@ export default function TechnicianDashboardPage() {
 
 	if (isLoading) {
 		return (
-			<div className="px-4 sm:px-6 pt-5 pb-8 max-w-lg w-full space-y-4 lg:max-w-4xl lg:px-8">
+			<TechPage width="wide" className="space-y-4">
 				<div className="h-7 w-36 bg-surface rounded animate-pulse" />
 				<div className="h-4 w-28 bg-surface rounded animate-pulse" />
 				<div className="h-28 bg-surface rounded-xl animate-pulse mt-2" />
@@ -237,19 +248,19 @@ export default function TechnicianDashboardPage() {
 						className="h-[52px] bg-surface rounded-lg animate-pulse"
 					/>
 				))}
-			</div>
+			</TechPage>
 		);
 	}
 
 	if (error) {
 		return (
-			<div className="px-4 sm:px-6 pt-5 max-w-lg w-full">
+			<TechPage>
 				<div className="p-4 bg-error/10 border border-error/20 rounded-lg">
 					<p className="text-sm text-error-text">
 						Failed to load schedule.
 					</p>
 				</div>
-			</div>
+			</TechPage>
 		);
 	}
 
@@ -258,7 +269,7 @@ export default function TechnicianDashboardPage() {
 	// Offline → Start Shift gate
 	if (techProfile?.status === "Offline") {
 		return (
-			<div className="px-4 sm:px-6 pt-5 max-w-lg w-full flex flex-col items-center justify-center min-h-[60vh] gap-6">
+			<TechPage className="flex flex-col items-center justify-center min-h-[60vh] gap-6">
 				<div className="text-center">
 					<h1 className="text-2xl font-bold text-text-primary mb-1">
 						Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"},{" "}
@@ -274,12 +285,24 @@ export default function TechnicianDashboardPage() {
 					<LogIn size={18} />
 					{goAvailableMutation.isPending ? "Starting…" : "Start Shift"}
 				</button>
-			</div>
+				{goAvailableMutation.isError && (
+					<p className="max-w-xs text-center text-sm text-red-500">
+						{errorMessage(goAvailableMutation.error, "Couldn't start your shift — try again.").replace(/^TIMESHEET_LOCKED: /, "")}
+					</p>
+				)}
+				<button
+					onClick={() => navigate("/technician/timesheet")}
+					className="flex items-center gap-1.5 min-h-[44px] px-3 text-sm text-text-secondary hover:text-text-primary transition-colors"
+				>
+					<Clock size={15} />
+					View my hours
+				</button>
+			</TechPage>
 		);
 	}
 
 	return (
-		<div className="px-4 sm:px-6 pt-5 pb-10 max-w-lg w-full lg:max-w-4xl lg:px-8">
+		<TechPage width="wide" className="pb-10">
 			{/* Vehicle warning banner */}
 			{noVehicle && !vehicleBannerDismissed && (
 				<div className="flex items-center justify-between gap-2 mb-4 px-3 py-2.5 rounded-lg bg-warning/10 border border-warning/20 text-warning-text">
@@ -357,6 +380,16 @@ export default function TechnicianDashboardPage() {
 							Take Break
 						</button>
 					)}
+					{techProfile?.status === "Available" && (
+						<button
+							onClick={() => user?.userId && returnFromJobMutation.mutate(user.userId)}
+							disabled={returnFromJobMutation.isPending}
+							className="flex-1 flex items-center justify-center gap-2 min-h-[44px] py-3 rounded-lg bg-base border border-border-subtle text-sm text-text-secondary hover:bg-surface hover:text-text-primary transition-colors disabled:opacity-50"
+						>
+							<MapPin size={15} />
+							Head back
+						</button>
+					)}
 					{!isClockedInAnywhere && techProfile?.status !== "Break" && (
 						<button
 							onClick={() => {
@@ -426,16 +459,25 @@ export default function TechnicianDashboardPage() {
 			<div className="lg:grid lg:grid-cols-2 lg:gap-8 lg:items-start">
 				{/* ── Hero section: all active visits ──────────────────────────────── */}
 				<div className="mb-6 space-y-3 lg:mb-0">
+					{heroType === "wrapping-up" && (
+						<WrappingUpCard
+							onAvailable={() =>
+								user?.userId && markDoneMutation.mutateAsync(user.userId)
+							}
+							onHeadBack={() =>
+								user?.userId && returnFromJobMutation.mutateAsync(user.userId)
+							}
+							isLoading={markDoneMutation.isPending || returnFromJobMutation.isPending}
+						/>
+					)}
+					{heroType === "heading-back" && (
+						<HeadingBackCard
+							onBack={() => user?.userId && markDoneMutation.mutateAsync(user.userId)}
+							isLoading={markDoneMutation.isPending}
+						/>
+					)}
 					{activeVisits.length === 0 && (
 						<>
-							{heroType === "wrapping-up" && (
-								<WrappingUpCard
-									onAvailable={() =>
-										user?.userId && markDoneMutation.mutateAsync(user.userId)
-									}
-									isLoading={markDoneMutation.isPending}
-								/>
-							)}
 							{primaryHeroVisit ? (
 								<TechVisitCard
 									visit={primaryHeroVisit}
@@ -443,7 +485,7 @@ export default function TechnicianDashboardPage() {
 									tz={tz}
 									showDateTime={true}
 								/>
-							) : heroType !== "wrapping-up" && (
+							) : heroType !== "wrapping-up" && heroType !== "heading-back" && (
 								<div className="rounded-xl border border-border-subtle bg-base px-4 py-6 text-center">
 									<p className="text-sm text-text-faint">
 										No visits scheduled. Check with dispatch.
@@ -733,13 +775,13 @@ export default function TechnicianDashboardPage() {
 					onSubmit={handleAddNotePhoto}
 				/>
 			)}
-		</div>
+		</TechPage>
 	);
 }
 
 // ─── sub-components ───────────────────────────────────────────────────────────
 
-function WrappingUpCard({ onAvailable, isLoading }: { onAvailable: () => void; isLoading: boolean }) {
+function WrappingUpCard({ onAvailable, onHeadBack, isLoading }: { onAvailable: () => void; onHeadBack: () => void; isLoading: boolean }) {
 	return (
 		<div
 			style={{
@@ -764,6 +806,45 @@ function WrappingUpCard({ onAvailable, isLoading }: { onAvailable: () => void; i
 					className="w-full py-2.5 rounded-lg bg-gradient-tech-teal/10 border border-gradient-tech-teal/20 text-gradient-tech-teal-text text-sm font-medium hover:bg-gradient-tech-teal/20 transition-colors disabled:opacity-40"
 				>
 					I'm Available
+				</button>
+				<button
+					onClick={onHeadBack}
+					disabled={isLoading}
+					className="w-full py-2.5 rounded-lg border border-border-subtle text-text-primary text-sm font-medium hover:bg-surface-raised bg-surface transition-colors disabled:opacity-40"
+				>
+					Head back
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function HeadingBackCard({ onBack, isLoading }: { onBack: () => void; isLoading: boolean }) {
+	return (
+		<div
+			style={{
+				padding: "1px 1px 1px 3px",
+				background: "linear-gradient(to right, var(--color-action-drive) 0%, var(--color-surface-raised) 45%, var(--color-surface-raised) 100%)",
+				borderRadius: "12px",
+			}}
+		>
+			<div className="rounded-[11px] bg-base px-4 py-4 space-y-3">
+				<div className="flex items-center gap-2">
+					<div className="w-2 h-2 rounded-full bg-action-drive animate-pulse" />
+					<span className="text-[10px] font-bold tracking-[0.1em] uppercase text-primary-text">
+						Heading Back
+					</span>
+				</div>
+				<p className="text-sm text-text-tertiary">
+					Your drive is being logged. Tap when you're back.
+				</p>
+				<button
+					onClick={onBack}
+					disabled={isLoading}
+					className="w-full py-2.5 rounded-lg flex items-center justify-center gap-2 bg-action-drive hover:bg-action-drive-hover text-on-primary text-sm font-medium transition-colors disabled:opacity-40"
+				>
+					<MapPin size={16} />
+					I'm Back
 				</button>
 			</div>
 		</div>

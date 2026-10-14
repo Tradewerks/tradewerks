@@ -1,47 +1,83 @@
 ﻿import { useParams, useNavigate } from "react-router-dom";
-import {
-	Edit2,
-	Calendar,
-	MapPin,
-	DollarSign,
-	MoreVertical,
-	FileText,
-	Briefcase,
-	TrendingUp,
-	Phone,
-	Mail,
-	Globe,
-	RotateCcw,
-	Link2Off,
-} from "lucide-react";
+import { Edit2, Calendar, DollarSign, Globe } from "lucide-react";
 import { useRequestByIdQuery, useUpdateRequestMutation } from "../../hooks/useRequests";
 import { useCreateQuoteMutation } from "../../hooks/useQuotes";
 import { useCreateJobMutation } from "../../hooks/useJobs";
 import Card from "../../components/ui/Card";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import EditRequest from "../../components/requests/EditRequest";
 import ConvertToQuote from "../../components/requests/ConvertToQuote";
 import ConvertToJob from "../../components/requests/ConvertToJob";
 import NoteManager from "../../components/requests/RequestNoteManager";
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { usePermission } from "../../hooks/usePermission";
 import ChangeHistory from "../../components/activity/ChangeHistory";
+import LifecycleBar, {
+	LifecycleActions,
+	LifecycleRule,
+} from "../../components/lifecycle/LifecycleBar";
+import TerminalDetail from "../../components/lifecycle/TerminalDetail";
+import {
+	requestActions,
+	REQUEST_STEPS,
+	isRequestTerminalOffRamp,
+	isRequestNonTerminalOffRamp,
+} from "../../components/lifecycle/requestActions";
+import { placeActions } from "../../components/lifecycle/placement";
+import type { LifecycleStage } from "../../components/lifecycle/types";
+import BalancedOverviewGrid from "../../components/detail/BalancedOverviewGrid";
+import DetailHeader, { type DetailMenuGroup } from "../../components/detail/DetailHeader";
+import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
+import { useDetailTab } from "../../components/detail/useDetailTab";
+import DetailStatRow from "../../components/detail/DetailStatRow";
+import ActivityPanel from "../../components/detail/ActivityPanel";
+import DetailFieldGrid, { type DetailField } from "../../components/detail/DetailFieldGrid";
+import RelationCard from "../../components/detail/RelationCard";
+import { RequestStatusColors, RequestStatusLabels } from "../../types/requests";
+import type { RequestStatus } from "../../types/requests";
+import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
+import type { QuoteStatus } from "../../types/quotes";
+import { JobStatusColors, JobStatusLabels } from "../../types/jobs";
+import type { JobStatus } from "../../types/jobs";
+import { PriorityColors } from "../../types/common";
+import { formatCurrency, formatDate } from "../../util/util";
+
+// Two tabs: the request's own details and its two relations stay in Overview,
+// and Activity takes the notes and change history.
+const REQUEST_TABS: readonly DetailTabDef<"overview" | "activity">[] = [
+	{ id: "overview", label: "Overview" },
+	{ id: "activity", label: "Activity" },
+];
+
+// What the terminal stage says for a status that stores no reason. The three
+// off-ramps each have an implicit one, so "no reason recorded" would be a lie.
+const TERMINAL_COPY: Partial<Record<RequestStatus, string>> = {
+	QuoteRejected: "The client rejected the quote raised from this request.",
+	ConvertedToJob: "This request became a job — the job is the live record now.",
+	Cancelled: "Cancelled before it reached a quote.",
+};
+
+/** Sources are stored as keys: "phone" → "Phone", "walk_in" → "Walk In". */
+const titleCase = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export default function RequestDetailPage() {
 	const { requestId } = useParams<{ requestId: string }>();
 	const navigate = useNavigate();
 	const { data: request, isLoading } = useRequestByIdQuery(requestId!);
-	const { mutateAsync: updateRequest } = useUpdateRequestMutation();
+	const { mutateAsync: updateRequest, isPending: isUpdatingRequest } =
+		useUpdateRequestMutation();
 	const { mutateAsync: createQuote } = useCreateQuoteMutation();
 	const { mutateAsync: createJob } = useCreateJobMutation();
 
-	const [showActionsMenu, setShowActionsMenu] = useState(false);
+	const [activeTab, setActiveTab] = useDetailTab(REQUEST_TABS);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [isConvertToQuoteModalOpen, setIsConvertToQuoteModalOpen] = useState(false);
 	const [isConvertToJobModalOpen, setIsConvertToJobModalOpen] = useState(false);
+	const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
 	const [hasManualStatusChange, setHasManualStatusChange] = useState(false);
 	const [hasAutoUpdated, setHasAutoUpdated] = useState(false);
-	const menuRef = useRef<HTMLDivElement>(null);
+	const [autoAdvancePending, setAutoAdvancePending] = useState(false);
 
 	// permissions
 	const EDIT_REQUEST = usePermission("edit_requests");
@@ -50,33 +86,37 @@ export default function RequestDetailPage() {
 
 	// Auto-update: New → Reviewing after 5 seconds
 	useEffect(() => {
-		if (!request || request.status !== "New" || hasManualStatusChange || hasAutoUpdated)
+		if (
+			!request ||
+			request.status !== "New" ||
+			hasManualStatusChange ||
+			hasAutoUpdated
+		) {
+			setAutoAdvancePending(false);
 			return;
+		}
 
+		setAutoAdvancePending(true);
 		const timeoutId = setTimeout(() => {
 			if (!hasManualStatusChange && !hasAutoUpdated) {
 				setHasAutoUpdated(true);
+				setAutoAdvancePending(false);
 				updateRequest({ id: request.id, data: { status: "Reviewing" } });
 			}
 		}, 5000);
 
-		return () => clearTimeout(timeoutId);
+		return () => {
+			clearTimeout(timeoutId);
+			setAutoAdvancePending(false);
+		};
 	}, [request?.id, request?.status, hasManualStatusChange, hasAutoUpdated, updateRequest]);
-
-	useEffect(() => {
-		function handleClickOutside(event: MouseEvent) {
-			if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-				setShowActionsMenu(false);
-			}
-		}
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
 
 	if (isLoading) {
 		return (
 			<div className="flex items-center justify-center h-64">
-				<div className="text-text-primary text-lg">Loading request details...</div>
+				<div className="text-text-primary text-lg">
+					Loading request details...
+				</div>
 			</div>
 		);
 	}
@@ -92,505 +132,309 @@ export default function RequestDetailPage() {
 	const firstQuote = request.quotes?.[0] ?? null;
 	const firstJob = request.jobs?.[0] ?? null;
 
-	const getStatusColor = (status: string) => {
-		switch (status) {
-			case "New":
-				return "bg-primary/20 text-primary-text border-primary/30";
-			case "Reviewing":
-				return "bg-reviewing/20 text-reviewing-text border-reviewing/30";
-			case "Quoted":
-				return "bg-warning/20 text-warning-text border-warning/30";
-			case "QuoteApproved":
-				return "bg-success/20 text-success-text border-success/30";
-			case "QuoteRejected":
-				return "bg-rejected/20 text-rejected-text border-rejected/30";
-			case "ConvertedToJob":
-				return "bg-success/20 text-success-text border-success/30";
-			case "Cancelled":
-				return "bg-neutral/20 text-text-tertiary border-border-strong/30";
-			case "Unscheduled":
-				return "bg-neutral/20 text-text-tertiary border-neutral/30";
-			case "Scheduled":
-				return "bg-primary/20 text-primary-text border-primary/30";
-			case "InProgress":
-				return "bg-warning-bg text-warning-text border-warning-border";
-			case "Completed":
-				return "bg-success/20 text-success-text border-success/30";
-			default:
-				return "bg-neutral/20 text-text-tertiary border-border-strong/30";
+	const actions = requestActions({
+		status: request.status,
+		// `quote`/`job` singular fields don't exist on Request — the relation
+		// arrives as `quotes`/`jobs`, so presence is read off the same
+		// first-element derivation the relation cards use.
+		hasQuote: Boolean(firstQuote),
+		hasJob: Boolean(firstJob),
+		autoAdvancePending,
+		canEdit: EDIT_REQUEST,
+		canCreateQuote: CREATE_QUOTE,
+		canCreateJob: CREATE_JOB,
+		handlers: {
+			review: () => {
+				setHasManualStatusChange(true);
+				updateRequest({ id: request.id, data: { status: "Reviewing" } });
+			},
+			quote: () => setIsConvertToQuoteModalOpen(true),
+			job: () => setIsConvertToJobModalOpen(true),
+			// The flag is set on open, not on confirm: a New request may have
+			// the five-second auto-advance timer armed, and leaving it running
+			// while the dialog sits open would write Reviewing mid-decision.
+			cancel: () => {
+				setHasManualStatusChange(true);
+				setIsCancelConfirmOpen(true);
+			},
+		},
+	});
+
+	const confirmCancel = async () => {
+		try {
+			await updateRequest({
+				id: request.id,
+				data: { status: "Cancelled" },
+			});
+			setIsCancelConfirmOpen(false);
+		} catch (error) {
+			console.error("Failed to cancel request:", error);
 		}
 	};
 
-	const getPriorityColor = (priority: string) => {
-		switch (priority?.toLowerCase()) {
-			case "emergency":
-				return "text-error";
-			case "urgent":
-				return "text-orange-text";
-			case "high":
-				return "text-error-text";
-			case "medium":
-				return "text-warning-text";
-			case "low":
-				return "text-success-text";
-			default:
-				return "text-primary-text";
-		}
-	};
+	const stage: LifecycleStage = isRequestTerminalOffRamp(request.status)
+		? "terminal"
+		: "normal";
+	// Feeds placeActions — the Rule 2 inversion that promotes the one live exit
+	// ahead of dead buttons — and the rule's offRamp prop, so the rail claims
+	// no position.
+	const isOffRamp = isRequestNonTerminalOffRamp(request.status);
+	// One call, two destinations: the inline share is rendered in the header
+	// beside the kebab that holds the rest, so the two placements cannot drift.
+	const { headerActions, barActions, overflow, showBar } = placeActions(stage, actions, {
+		offRamp: isOffRamp,
+	});
 
-	const getSourceIcon = (source?: string | null) => {
-		switch (source?.toLowerCase()) {
-			case "phone":
-				return <Phone size={14} />;
-			case "email":
-				return <Mail size={14} />;
-			case "web":
-				return <Globe size={14} />;
-			default:
-				return <FileText size={14} />;
-		}
-	};
+	const menuGroups: DetailMenuGroup[] = [
+		{
+			id: "lifecycle",
+			label: "Lifecycle",
+			items: overflow.map((a) => ({
+				id: a.id,
+				label: a.label,
+				intent: a.intent === "primary" ? "neutral" : a.intent,
+				disabled: a.disabled,
+				disabledReason: a.disabledReason,
+				onSelect: a.onSelect,
+			})),
+		},
+		{
+			id: "request",
+			label: "Request",
+			items: [
+				{
+					id: "edit",
+					label: "Edit Request",
+					icon: <Edit2 size={16} />,
+					disabled: !EDIT_REQUEST,
+					disabledReason: EDIT_REQUEST
+						? undefined
+						: "You don't have permission to perform this action",
+					onSelect: () => setIsEditModalOpen(true),
+				},
+			],
+		},
+	];
 
-	const handleEdit = () => {
-		if (!EDIT_REQUEST) return;
-		setShowActionsMenu(false);
-		setIsEditModalOpen(true);
-	};
-	const handleConvertToQuote = () => {
-		if (!CREATE_QUOTE) return;
-		setShowActionsMenu(false);
-		setIsConvertToQuoteModalOpen(true);
-	};
-	const handleConvertToJob = () => {
-		if (!CREATE_JOB) return;
-		setShowActionsMenu(false);
-		setIsConvertToJobModalOpen(true);
-	};
-	const handleResetToNew = async () => {
-		if (!EDIT_REQUEST) return;
-		setShowActionsMenu(false);
-		setHasManualStatusChange(true);
-		await updateRequest({ id: request.id, data: { status: "New" } });
-	};
+	const ageDays = Math.floor(
+		(Date.now() - new Date(request.created_at).getTime()) / 86_400_000
+	);
+
+	const statTiles = [
+		{
+			label: "Estimated Value",
+			icon: <DollarSign size={13} />,
+			value:
+				request.estimated_value != null
+					? formatCurrency(Number(request.estimated_value))
+					: "Not estimated",
+		},
+		{
+			label: "Age",
+			icon: <Calendar size={13} />,
+			value: `${ageDays} ${ageDays === 1 ? "day" : "days"}`,
+		},
+		{
+			label: "Source",
+			icon: <Globe size={13} />,
+			value: request.source ? titleCase(request.source) : "Unknown",
+		},
+	];
+
+	// Estimated Value and Source are stat tiles, so they are not repeated here.
+	const infoFields: DetailField[] = [
+		...(request.address ? [{ label: "Address", value: request.address }] : []),
+		{ label: "Created", value: formatDate(request.created_at) },
+		...(request.source_reference
+			? [{ label: "Source Reference", value: request.source_reference }]
+			: []),
+		// Only while it is still owed: once a quote exists the requirement is met.
+		...(request.requires_quote && !firstQuote
+			? [{ label: "Quote", value: "Required", tone: "warning" as const }]
+			: []),
+	];
+
+	// Cancellation reason and date belong to the lifecycle bar's TerminalDetail
+	// below, not to this card.
+	const infoCard = (
+		<Card className="flex-1" title="Request Information">
+			<DetailFieldGrid
+				fill
+				lead={
+					<p className="break-words text-text-primary">
+						{request.description || "No description provided"}
+					</p>
+				}
+				fields={infoFields}
+			/>
+		</Card>
+	);
+
+	const clientCard = (
+		<ClientDetailsCard fill client_id={request.client_id} client={request.client} />
+	);
+
+	const relationCards = (
+		<>
+			<RelationCard
+				eyebrow="Related Quote"
+				to={firstQuote ? `/dispatch/quotes/${firstQuote.id}` : undefined}
+				emptyLabel="No quote created yet"
+				title={firstQuote?.quote_number}
+				subtitle={firstQuote?.title || "Quote"}
+				meta={
+					firstQuote && (
+						<>
+							<Calendar size={12} />
+							<span>{formatDate(firstQuote.created_at)}</span>
+						</>
+					)
+				}
+				trailing={
+					firstQuote && (
+						<>
+							<span className="whitespace-nowrap text-sm font-semibold tabular-nums text-success-text">
+								{formatCurrency(Number(firstQuote.total))}
+							</span>
+							<span
+								className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${QuoteStatusColors[firstQuote.status as QuoteStatus] ?? ""}`}
+							>
+								{QuoteStatusLabels[firstQuote.status as QuoteStatus] ?? firstQuote.status}
+							</span>
+						</>
+					)
+				}
+			/>
+
+			<RelationCard
+				eyebrow="Related Job"
+				to={firstJob ? `/dispatch/jobs/${firstJob.id}` : undefined}
+				emptyLabel="No job created yet"
+				title={firstJob?.job_number}
+				subtitle={firstJob?.name}
+				meta={
+					firstJob && (
+						<>
+							<Calendar size={12} />
+							<span>{formatDate(firstJob.created_at)}</span>
+						</>
+					)
+				}
+				trailing={
+					firstJob && (
+						<span
+							className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${JobStatusColors[firstJob.status as JobStatus] ?? ""}`}
+						>
+							{JobStatusLabels[firstJob.status as JobStatus] ?? firstJob.status}
+						</span>
+					)
+				}
+			/>
+		</>
+	);
 
 	return (
-		<div className="text-text-primary space-y-6">
-			{/* Header */}
-			<div className="grid grid-cols-2 gap-4 mb-6 items-center">
-				<h1 className="text-3xl font-bold text-text-primary">{request.title}</h1>
-
-				<div className="justify-self-end flex items-center gap-3">
-					<span
-						className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${getStatusColor(request.status)}`}
-					>
-						{request.status}
-					</span>
-
-					<div className="relative" ref={menuRef}>
-						<button
-							onClick={() =>
-								setShowActionsMenu(!showActionsMenu)
-							}
-							className="p-2 hover:bg-surface rounded-md transition-colors border border-border hover:border-border-strong"
+		<div className="text-text-primary pb-4 md:pb-6">
+			<div className="space-y-4">
+				<DetailHeader
+					title={request.title}
+					meta={request.client?.name}
+					statusPill={
+						<span
+							className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${RequestStatusColors[request.status]}`}
 						>
-							<MoreVertical size={20} />
-						</button>
+							{RequestStatusLabels[request.status]}
+						</span>
+					}
+					badges={
+						<span
+							className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${PriorityColors[request.priority]}`}
+						>
+							{request.priority}
+						</span>
+					}
+					inlineActions={<LifecycleActions actions={headerActions} />}
+					menuGroups={menuGroups}
+					menuLabel="Request actions"
+				/>
 
-						{showActionsMenu && (
-							<div className="absolute right-0 mt-2 w-56 bg-base border border-border-subtle rounded-lg shadow-xl z-50">
-								<div className="py-1">
-										<button
-											title={!EDIT_REQUEST ? "You don't have permission to perform this action" : undefined}
-											disabled={!EDIT_REQUEST}
-											onClick={handleEdit}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Edit2 size={16} />{" "}
-											Edit Request
-										</button>
-										<button
-											title={!CREATE_QUOTE ? "You don't have permission to perform this action" : undefined}
-											onClick={handleConvertToQuote}
-											disabled={!CREATE_QUOTE}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<FileText size={16} />{" "}
-											Convert to Quote
-										</button>
-										<button
-											title={!CREATE_JOB ? "You don't have permission to perform this action" : undefined}
-											onClick={handleConvertToJob}
-											disabled={!CREATE_JOB}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Briefcase size={16} />{" "}
-											Convert to Job
-										</button>
-									{request.status === "Reviewing" && (
-										<>
-											<div className="border-t border-border-subtle my-1" />
-												<button
-													title={!EDIT_REQUEST ? "You don't have permission to perform this action" : undefined}
-													onClick={handleResetToNew}
-													disabled={!EDIT_REQUEST}
-													className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 text-text-tertiary disabled:opacity-40 disabled:cursor-not-allowed"
-												>
-													<RotateCcw size={16} />{" "}
-													Reset to New
-												</button>
-										</>
-									)}
-								</div>
-							</div>
-						)}
-					</div>
-				</div>
+				{/* The step track moved to the tab strip and the buttons to the
+				    header, so the bar survives only for a block of text: the
+				    terminal reason here, a dispute reason on other pages. */}
+				{showBar && (
+					<LifecycleBar
+						steps={REQUEST_STEPS}
+						stepLabels={RequestStatusLabels}
+						stage={stage}
+						currentStatus={request.status}
+						track={false}
+						tone={
+							request.status === "Cancelled" ? "error" : undefined
+						}
+						actions={barActions}
+						detail={
+							<TerminalDetail
+								reason={request.cancellation_reason ?? null}
+								at={request.cancelled_at ?? null}
+								noReasonLabel={
+									TERMINAL_COPY[request.status] ??
+									"No reason recorded."
+								}
+							/>
+						}
+					/>
+				)}
+
+				<DetailTabs
+					tabs={REQUEST_TABS}
+					activeTab={activeTab}
+					onSelect={setActiveTab}
+					label="Request sections"
+					progress={
+						<LifecycleRule
+							steps={REQUEST_STEPS}
+							stepLabels={RequestStatusLabels}
+							currentStatus={request.status}
+							offRamp={isOffRamp}
+						/>
+					}
+				/>
 			</div>
 
-			{/* Request Information (2/3) and Client Details (1/3) */}
-			<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-				<div className="lg:col-span-2">
-					<Card title="Request Information">
-						<div className="space-y-4">
-							<div>
-								<h3 className="text-text-tertiary text-sm mb-1">
-									Description
-								</h3>
-								<p className="text-text-primary break-words">
-									{request.description ||
-										"No description provided"}
-								</p>
-							</div>
+			{activeTab === "overview" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-overview"
+					aria-labelledby="tab-overview"
+					className="mt-6 space-y-4"
+				>
+					<h2 className="sr-only">Overview</h2>
+					<DetailStatRow tiles={statTiles} />
 
-							{request.address && (
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<MapPin size={14} />{" "}
-										Address
-									</h3>
-									<p className="text-text-primary break-words">
-										{request.address}
-									</p>
-								</div>
-							)}
-
-							<div className="grid grid-cols-2 gap-4">
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<TrendingUp
-											size={14}
-										/>{" "}
-										Priority
-									</h3>
-									<p
-										className={`font-medium capitalize ${getPriorityColor(request.priority)}`}
-									>
-										{request.priority}
-									</p>
-								</div>
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<Calendar
-											size={14}
-										/>{" "}
-										Created
-									</h3>
-									<p className="text-text-primary">
-										{new Date(
-											request.created_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												year: "numeric",
-												month: "short",
-												day: "numeric",
-											}
-										)}
-									</p>
-								</div>
-							</div>
-
-							{request.estimated_value && (
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<DollarSign
-											size={14}
-										/>{" "}
-										Estimated Value
-									</h3>
-									<p className="text-text-primary font-medium">
-										$
-										{Number(
-											request.estimated_value
-										).toLocaleString(
-											"en-US",
-											{
-												minimumFractionDigits: 2,
-												maximumFractionDigits: 2,
-											}
-										)}
-									</p>
-								</div>
-							)}
-
-							{request.source && (
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										{getSourceIcon(
-											request.source
-										)}{" "}
-										Source
-									</h3>
-									<div className="flex items-center gap-2">
-										<span className="text-text-primary capitalize">
-											{
-												request.source
-											}
-										</span>
-										{request.source_reference && (
-											<>
-												<span className="text-text-faint">
-													•
-												</span>
-												<span className="text-text-tertiary text-sm">
-													{
-														request.source_reference
-													}
-												</span>
-											</>
-										)}
-									</div>
-								</div>
-							)}
-
-							{request.requires_quote && (
-								<div>
-									<span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-warning/20 text-warning-text border border-warning/30">
-										Quote Required
-									</span>
-								</div>
-							)}
-
-							{request.cancelled_at && (
-								<div className="pt-4 border-t border-border">
-									<h3 className="text-text-tertiary text-sm mb-2">
-										Cancellation Details
-									</h3>
-									<div className="space-y-2">
-										<p className="text-sm text-text-secondary">
-											Cancelled
-											on:{" "}
-											{new Date(
-												request.cancelled_at
-											).toLocaleDateString(
-												"en-US",
-												{
-													year: "numeric",
-													month: "short",
-													day: "numeric",
-													hour: "numeric",
-													minute: "2-digit",
-												}
-											)}
-										</p>
-										{request.cancellation_reason && (
-											<p className="text-sm text-text-tertiary">
-												Reason:{" "}
-												{
-													request.cancellation_reason
-												}
-											</p>
-										)}
-									</div>
-								</div>
-							)}
-						</div>
-					</Card>
-				</div>
-
-				<div className="lg:col-span-1">
-					<ClientDetailsCard
-						client_id={request.client_id}
-						client={request.client}
+					<BalancedOverviewGrid
+						recordId={request.id}
+						infoCard={infoCard}
+						block={relationCards}
+						railCard={clientCard}
 					/>
 				</div>
-			</div>
+			)}
 
-			{/* Relations Row: Quote + Job */}
-			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-				{/* Related Quote */}
-				{firstQuote ? (
-					<button
-						onClick={() =>
-							navigate(
-								`/dispatch/quotes/${firstQuote.id}`
-							)
-						}
-						className="w-full p-4 bg-base hover:bg-surface rounded-lg border border-border hover:border-border-strong transition-all cursor-pointer text-left group"
-					>
-						<p className="text-text-muted text-xs uppercase tracking-wide font-semibold mb-2">
-							Related Quote
-						</p>
-						<div className="flex items-start justify-between gap-3">
-							<div className="flex-1 min-w-0">
-								<h4 className="text-text-primary font-medium text-sm mb-1 group-hover:text-primary-text transition-colors">
-									{firstQuote.quote_number}
-								</h4>
-								<p className="text-text-tertiary text-xs mb-2">
-									{firstQuote.title ||
-										"Quote"}
-								</p>
-								<div className="flex items-center gap-2 text-xs text-text-muted">
-									<Calendar size={12} />
-									<span>
-										{new Date(
-											firstQuote.created_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												month: "short",
-												day: "numeric",
-												year: "numeric",
-											}
-										)}
-									</span>
-								</div>
-							</div>
-							<div className="flex flex-col items-end gap-2 flex-shrink-0">
-								<span className="text-success-text font-semibold text-sm whitespace-nowrap">
-									$
-									{Number(
-										firstQuote.total
-									).toLocaleString("en-US", {
-										minimumFractionDigits: 2,
-										maximumFractionDigits: 2,
-									})}
-								</span>
-								<span
-									className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(firstQuote.status)}`}
-								>
-									{firstQuote.status}
-								</span>
-							</div>
-						</div>
-					</button>
-				) : (
-					<div className="p-4 bg-base/40 rounded-lg border border-dashed border-border-subtle">
-						<div className="grid grid-cols-3 gap-4">
-							<div className="col-span-2 flex flex-col gap-2">
-								<p className="text-text-muted text-xs uppercase tracking-wide font-semibold">
-									Related Quote
-								</p>
-								<div className="flex items-center gap-2 text-text-faint text-sm">
-									<Link2Off
-										size={14}
-										className="flex-shrink-0"
-									/>
-									<span>
-										No quote created yet
-									</span>
-								</div>
-							</div>
-							<div className="col-span-1 flex items-center justify-end">
-									<button
-										title={!CREATE_QUOTE ? "You don't have permission to perform this action" : undefined}
-										onClick={(e) => {
-											e.stopPropagation();
-											handleConvertToQuote();
-										}}
-										disabled={!CREATE_QUOTE}
-										className="flex items-center gap-2 px-3 py-1.5 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-xs font-medium text-on-primary transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-									>
-										<FileText size={12} />{" "}
-										Convert to Quote
-									</button>
-							</div>
-						</div>
-					</div>
-				)}
-
-				{/* Related Job */}
-				{firstJob ? (
-					<button
-						onClick={() =>
-							navigate(`/dispatch/jobs/${firstJob.id}`)
-						}
-						className="w-full p-4 bg-base hover:bg-surface rounded-lg border border-border hover:border-border-strong transition-all cursor-pointer text-left group"
-					>
-						<p className="text-text-muted text-xs uppercase tracking-wide font-semibold mb-2">
-							Related Job
-						</p>
-						<div className="flex items-start justify-between gap-3">
-							<div className="flex-1 min-w-0">
-								<h4 className="text-text-primary font-medium text-sm mb-1 group-hover:text-primary-text transition-colors">
-									{firstJob.job_number}
-								</h4>
-								<p className="text-text-tertiary text-xs mb-2">
-									{firstJob.name}
-								</p>
-								<div className="flex items-center gap-2 text-xs text-text-muted">
-									<Calendar size={12} />
-									<span>
-										{new Date(
-											firstJob.created_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												month: "short",
-												day: "numeric",
-												year: "numeric",
-											}
-										)}
-									</span>
-								</div>
-							</div>
-							<span
-								className={`flex-shrink-0 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(firstJob.status)}`}
-							>
-								{firstJob.status}
-							</span>
-						</div>
-					</button>
-				) : (
-					<div className="p-4 bg-base/40 rounded-lg border border-dashed border-border-subtle">
-						<div className="grid grid-cols-3 gap-4">
-							<div className="col-span-2 flex flex-col gap-2">
-								<p className="text-text-muted text-xs uppercase tracking-wide font-semibold">
-									Related Job
-								</p>
-								<div className="flex items-center gap-2 text-text-faint text-sm">
-									<Link2Off
-										size={14}
-										className="flex-shrink-0"
-									/>
-									<span>
-										No job created yet
-									</span>
-								</div>
-							</div>
-							<div className="col-span-1 flex items-center justify-end">
-									<button
-										title={!CREATE_JOB ? "You don't have permission to perform this action" : undefined}
-										onClick={(e) => {
-											e.stopPropagation();
-											handleConvertToJob();
-										}}
-										disabled={!CREATE_JOB}
-										className="flex items-center gap-2 px-3 py-1.5 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-xs font-medium text-on-primary transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-									>
-										<Briefcase size={12} />{" "}
-										Convert to Job
-									</button>
-							</div>
-						</div>
-					</div>
-				)}
-			</div>
-
-			<NoteManager requestId={requestId!} />
-
-			<ChangeHistory scope={{ kind: "entity", type: "request", id: requestId ?? ""}} />
-			
+			{activeTab === "activity" && (
+				<ActivityPanel
+					notes={<NoteManager requestId={requestId!} />}
+					lifecycle={null}
+					history={
+						<ChangeHistory
+							scope={{
+								kind: "entity",
+								type: "request",
+								id: requestId ?? "",
+							}}
+						/>
+					}
+				/>
+			)}
 
 			{request && (
 				<>
@@ -630,6 +474,17 @@ export default function RequestDetailPage() {
 					/>
 				</>
 			)}
+
+			<ConfirmDialog
+				open={isCancelConfirmOpen}
+				title="Cancel Request"
+				body="Are you sure you want to cancel this request? A cancelled request can't be quoted or converted to a job."
+				confirmLabel="Cancel Request"
+				tone="destructive"
+				pending={isUpdatingRequest}
+				onConfirm={confirmCancel}
+				onCancel={() => setIsCancelConfirmOpen(false)}
+			/>
 		</div>
 	);
 }

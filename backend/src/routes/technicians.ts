@@ -1,16 +1,22 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from 'express';
 import {
     getAllTechnicians,
     getTechnicianById,
     insertTechnician,
     updateTechnician,
+    updateTechnicianLocation,
     deleteTechnician,
     checkAndClearWrappingUp,
     startShift,
     goOffline,
     goOnBreak,
     returnFromBreak,
-    changeTechnicianPassword
+    changeTechnicianPassword,
+    returnFromJob,
+    markAvailable,
+    deactivateTechnician,
+    reactivateTechnician
 } from "../controllers/techniciansController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
@@ -21,7 +27,7 @@ import {
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
 import { getJobVisitsByTechId } from '../controllers/jobVisitsController.js';
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import { setTechnicianVehicle } from "../controllers/vehiclesController.js";
 import { 
     requirePermission,
@@ -29,7 +35,7 @@ import {
     requirePermissionOrSelf,
     requireAnyPermissionOrSelf
 } from '../lib/requirePermissions.js';
-import { getActorHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
+import { getUserHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 
 const router = Router();
 
@@ -100,13 +106,12 @@ router.post("/:id/ping", requirePermissionOrSelf("manage_technicians"), async (r
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
-        const context = getUserContext(req);
 
         // Lazy WrappingUp auto-transition: clear to Available if timer has passed
         const cleared = await checkAndClearWrappingUp(id, orgId);
         if (cleared) {
-            getSocket().emit("technician-update", cleared);
-            getSocket().emit("technician:status_changed", {
+            emitToOrg(orgId, "technician-update", cleared);
+            emitToOrg(orgId, "technician:status_changed", {
                 techId: cleared.id,
                 techName: cleared.name,
                 newStatus: "Available",
@@ -115,26 +120,20 @@ router.post("/:id/ping", requirePermissionOrSelf("manage_technicians"), async (r
             });
         }
 
-        const result = await updateTechnician(id, req.body, orgId, context);
+        const result = await updateTechnicianLocation(id, req.body, orgId);
 
         if (result.err) {
-            const isDuplicate = result.err
-                .toLowerCase()
-                .includes("already exists");
+            const notFound = result.err === "Technician not found";
             return res
-                .status(isDuplicate ? 409 : 400)
+                .status(notFound ? 404 : 400)
                 .json(
                     createErrorResponse(
-                        isDuplicate
-                            ? ErrorCodes.CONFLICT
-                            : ErrorCodes.VALIDATION_ERROR,
+                        notFound ? ErrorCodes.NOT_FOUND : ErrorCodes.VALIDATION_ERROR,
                         result.err,
                     ),
                 );
         }
-
-        const io = getSocket();
-        io.emit("technician-update", result.item);
+        emitToOrg(orgId, "technician-update", result.item);
         res.json(createSuccessResponse(result.item));
     } catch (err) {
         next(err);
@@ -260,6 +259,38 @@ router.delete("/:id", requirePermission("manage_technicians"), async (req, res, 
     }
 });
 
+router.post("/:id/deactivate", requirePermission("manage_technicians"), async (req, res, next) => {
+    try {
+        const result = await deactivateTechnician(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.BAD_REQUEST, result.err));
+        }
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post("/:id/reactivate", requirePermission("manage_technicians"), async (req, res, next) => {
+    try {
+        const result = await reactivateTechnician(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.BAD_REQUEST, result.err));
+        }
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
 // Get job visits for a technician
 router.get("/:techId/visits", requirePermissionOrSelf("view_technicians", "techId"), async (req, res, next) => {
     try {
@@ -275,7 +306,7 @@ router.get("/:techId/visits", requirePermissionOrSelf("view_technicians", "techI
 // Technicians may set only their OWN current vehicle (self match on :id); dispatchers
 // with manage_vehicles may set anyone's. use_vehicles is intentionally NOT accepted here —
 // it would let any technician reassign a colleague's vehicle (horizontal priv-esc).
-router.put("/:id/vehicle", requireAnyPermissionOrSelf(["manage_vehicles"], "id"), async (req, res, next) => {
+router.put("/:id/vehicle", requireModule("fleet"), requireAnyPermissionOrSelf(["manage_vehicles"], "id"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -314,10 +345,13 @@ router.post("/:id/available", async (req, res, next) => {
 		}
 
 		if (result.err) {
+			if (result.err.startsWith("TIMESHEET_LOCKED")) {
+				return res.status(409).json(createErrorResponse(ErrorCodes.CONFLICT, result.err));
+			}
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: result.item!.status,
@@ -335,13 +369,20 @@ router.post("/:id/offline", async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
-		const result = await goOffline(id, orgId);
+		const { tech_coords } = req.body;
+		const rawLat = Number(tech_coords?.lat);
+		const rawLon = Number(tech_coords?.lon);
+		const techCoords =
+			Number.isFinite(rawLat) && Number.isFinite(rawLon)
+				? { lat: rawLat, lon: rawLon }
+				: undefined;
+		const result = await goOffline(id, orgId, techCoords);
 		if (result.err) {
 			const status = result.err.includes("clocked into") ? 409 : 400;
 			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "Offline",
@@ -368,8 +409,8 @@ router.post("/:id/break", async (req, res, next) => {
 			const status = result.err.includes("clocked into") ? 409 : 400;
 			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "Break",
@@ -391,16 +432,42 @@ router.post("/:id/done", async (req, res, next) => {
 		import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
 			cancelWrappingUpTimer(id);
 		}).catch(() => {});
-		const result = await updateTechnician(id, { status: "Available" }, orgId, getUserContext(req));
+		const result = await markAvailable(id, orgId, getUserContext(req));
 		if (result.err) {
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "Available",
 			changeType: "wrapping_up_cleared",
+			changedAt: new Date().toISOString(),
+		});
+		res.json(createSuccessResponse(result.item));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Tech explicitly clears WrappingUp → EnRoute (heading back)
+router.post("/:id/head-back", async (req, res, next) => {
+	try {
+		const id = req.params.id as string;
+		const orgId = req.user!.organization_id as string;
+		import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
+			cancelWrappingUpTimer(id);
+		}).catch(() => {});
+		const result = await returnFromJob(orgId, id, getUserContext(req));
+		if (result.err) {
+			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+		}
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
+			techId: result.item!.id,
+			techName: result.item!.name,
+			newStatus: "HeadingBack",
+			changeType: "heading_back",
 			changedAt: new Date().toISOString(),
 		});
 		res.json(createSuccessResponse(result.item));
@@ -439,7 +506,7 @@ router.get("/:id/changes", requirePermissionOrSelf("view_technicians"), async (r
                 .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, INVALID_HISTORY_LIMIT));
         }
 
-        const results = await getActorHistory(orgId, "technician", id, limit);
+        const results = await getUserHistory(orgId, "technician", id, limit);
 
         if (results.err) {
             return res

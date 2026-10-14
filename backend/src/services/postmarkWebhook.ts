@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { db } from "../db.js";
 import { log } from "./appLogger.js";
+import { notifyDispatchers } from "../controllers/notificationsController.js";
 
 // ============================================================================
 // Postmark webhook — records opens (for no-open chaining) and bounces/spam
@@ -41,7 +42,12 @@ async function handleOpen(event: Record<string, unknown>): Promise<void> {
 	const send = await db.followup_send.findUnique({
 		where: { postmark_message_id: messageId },
 		include: {
-			enrollment: { include: { sequence: { select: { stop_on_open: true } } } },
+			enrollment: {
+				include: {
+					sequence: { select: { stop_on_open: true, name: true } },
+					client: { select: { name: true } },
+				},
+			},
 		},
 	});
 	if (!send) return; // not a tracked followup email (e.g. a quote/invoice email)
@@ -73,6 +79,15 @@ async function handleOpen(event: Record<string, unknown>): Promise<void> {
 				next_send_at: null,
 			},
 		});
+	}
+
+	if (firstOpen && send.organization_id && send.enrollment) {
+		notifyDispatchers({
+			type: "followup_email_opened",
+			title: `${send.enrollment.client.name} opened a follow-up`,
+			body: `"${send.enrollment.sequence.name}" email to ${send.recipient_email} was opened.`,
+			actionUrl: "/dispatch/followups",
+		}, send.organization_id).catch(() => {});
 	}
 }
 

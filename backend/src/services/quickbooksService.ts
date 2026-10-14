@@ -1,3 +1,4 @@
+import { isModuleOn } from "./entitlementService.js";
 import OAuthClient from "intuit-oauth";
 import { getScopedDb } from "../lib/context.js";
 import { db } from "../db.js";
@@ -9,7 +10,7 @@ import { httpError, ErrorCodes } from "../types/responses.js";
 // (so every QB consumer cleanly hides its UI), and every other QB route — plus the
 // OAuth callback and webhook — short-circuits. To re-enable, flip QB_ENABLED to true.
 // ============================================================================
-export const QB_ENABLED = false;
+export const QB_ENABLED = true;
 
 const QB_ENV = (process.env.QB_ENVIRONMENT ?? "sandbox") as "sandbox" | "production";
 export const QB_BASE =
@@ -120,6 +121,9 @@ export async function handleCallback(
 	orgId: string,
 	realmId: string,
 ): Promise<void> {
+	// Public route, so no gate ran: refuse to store tokens for an org without the module.
+	if (!(await isModuleOn(orgId, "quickbooks")))
+		throw new Error("QuickBooks is not available for this organization");
 	const client = makeOAuthClient();
 	const authResponse = await client.createToken(fullCallbackUrl);
 	const token = authResponse.getJson() as {
@@ -202,6 +206,27 @@ export async function qbFetch(
 	}
 
 	return res.json();
+}
+
+/** For binary responses (e.g. .../pdf) — qbFetch always parses via res.json(). */
+export async function qbFetchBinary(orgId: string, path: string): Promise<Buffer> {
+	const { accessToken, realmId } = await getValidToken(orgId);
+	const sep = path.includes("?") ? "&" : "?";
+	const url = `${QB_BASE}/v3/company/${realmId}${path}${sep}minorversion=75`;
+
+	const res = await fetch(url, {
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+			Accept: "application/pdf",
+		},
+	});
+
+	if (!res.ok) {
+		const text = await res.text();
+		throw new Error(`QB GET ${path} → ${res.status}: ${text}`);
+	}
+
+	return Buffer.from(await res.arrayBuffer());
 }
 
 export async function isQBConnected(orgId: string): Promise<boolean> {

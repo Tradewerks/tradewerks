@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Send, X, Mail, FileText, Loader2, AlertCircle } from "lucide-react";
 import FullPopup from "./FullPopup";
+import { errorMessage } from "../../util/util";
 
 interface SendDocumentModalProps {
 	isOpen: boolean;
@@ -51,7 +52,10 @@ export default function SendDocumentModal({
 			await onSend(email.trim());
 			onClose();
 		} catch (err: unknown) {
-			setError(err instanceof Error ? err.message : "Failed to send. Please try again.");
+			// This changeset added the pre-email transition guards so the
+			// dispatcher could read why a stale-tab send is refused; that
+			// sentence is on the response envelope, not AxiosError.message.
+			setError(errorMessage(err, "Failed to send. Please try again."));
 		} finally {
 			setIsSending(false);
 		}

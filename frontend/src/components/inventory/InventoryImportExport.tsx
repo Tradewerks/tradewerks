@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { X, Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import {
 	importInventory,
 	downloadInventoryTemplate,
@@ -16,6 +17,7 @@ const ACCEPTED_MIMES = [
 	"text/csv",
 	"application/csv",
 ];
+const DRAFT_WORKFLOW_ENABLED = import.meta.env.VITE_INVENTORY_AI_IMPORT_ENABLED === "true";
 
 function isValidFile(file: File) {
 	const ext = "." + (file.name.split(".").pop()?.toLowerCase() ?? "");
@@ -28,6 +30,7 @@ interface Props {
 }
 
 export default function InventoryImportExport({ isOpen, onClose }: Props) {
+	const navigate = useNavigate();
 	const [isDragging, setIsDragging] = useState(false);
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [isImporting, setIsImporting] = useState(false);
@@ -132,6 +135,20 @@ export default function InventoryImportExport({ isOpen, onClose }: Props) {
 						</button>
 					</div>
 
+					{DRAFT_WORKFLOW_ENABLED ? (
+						<div className="rounded-lg border border-border bg-base p-4">
+							<p className="text-sm text-text-primary">Imports now open as persistent drafts for extraction, duplicate review, and approval before stock changes.</p>
+							<button
+								type="button"
+								onClick={() => { handleClose(); navigate("/dispatch/inventory/imports/new"); }}
+								className="mt-3 w-full h-9 rounded-md bg-primary hover:bg-primary-hover text-sm font-medium text-on-primary"
+							>
+								Start reviewed import
+							</button>
+							<button type="button" onClick={() => { handleClose(); navigate("/dispatch/inventory/imports"); }} className="mt-2 w-full text-xs text-link hover:underline">View import history</button>
+						</div>
+					) : (
+					<>
 					{/* Drop zone */}
 					<div
 						onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -239,6 +256,8 @@ export default function InventoryImportExport({ isOpen, onClose }: Props) {
 					>
 						{isImporting ? "Importing…" : importResult ? "Done" : "Import Items"}
 					</button>
+					</>
+					)}
 				</div>
 
 				{/* Divider */}

@@ -1,8 +1,14 @@
 ﻿import z from "zod";
 import type { ClientWithPrimaryContact } from "./clients";
 import type { Coordinates } from "./location";
-import type { Priority, BaseNote, LineItemType, DispatcherReference } from "./common";
-import { PriorityValues, LineItemTypeValues } from "./common";
+import type {
+	Priority,
+	BaseNote,
+	LineItemType,
+	LineItemDisposition,
+	DispatcherReference,
+} from "./common";
+import { PriorityValues, LineItemTypeValues, LineItemDispositionValues } from "./common";
 import type { JobSummary, VisitReference } from "./jobs";
 
 // ============================================================================
@@ -231,6 +237,11 @@ export interface RecurringPlanLineItem {
 	created_at: Date | string;
 	isNew?: boolean; // Frontend only - marks items created in form
 	isDeleted?: boolean; // Frontend only - soft delete marker
+	/** Catalog link, when the line was picked from inventory rather than typed. */
+	inventory_item_id?: string | null;
+	/** Inherited by every visit this template generates. */
+	disposition?: LineItemDisposition | null;
+	disposition_vehicle_id?: string | null;
 }
 
 export interface RecurringOccurrence {
@@ -401,6 +412,9 @@ export const CreateRecurringPlanSchema = z
 						.nonnegative("Unit price must be non-negative"),
 					item_type: z.enum(LineItemTypeValues).optional().nullable(),
 					sort_order: z.number().int().min(0).optional(),
+					inventory_item_id: z.string().uuid().nullable().optional(),
+					disposition: z.enum(LineItemDispositionValues).nullable().optional(),
+					disposition_vehicle_id: z.string().uuid().nullable().optional(),
 				})
 			)
 			.optional(),
@@ -594,6 +608,9 @@ export const UpdateRecurringPlanSchema = z
 						.nonnegative("Unit price must be non-negative"),
 					item_type: z.enum(LineItemTypeValues).optional().nullable(),
 					sort_order: z.number().int().min(0).optional(),
+					inventory_item_id: z.string().uuid().nullable().optional(),
+					disposition: z.enum(LineItemDispositionValues).nullable().optional(),
+					disposition_vehicle_id: z.string().uuid().nullable().optional(),
 				})
 			)
 			.optional(),
@@ -742,6 +759,9 @@ export const UpdateRecurringPlanLineItemsSchema = z.object({
 					.nonnegative("Unit price must be non-negative"),
 				item_type: z.enum(LineItemTypeValues).optional().nullable(),
 				sort_order: z.number().int().min(0).optional(),
+				inventory_item_id: z.string().uuid().nullable().optional(),
+				disposition: z.enum(LineItemDispositionValues).nullable().optional(),
+				disposition_vehicle_id: z.string().uuid().nullable().optional(),
 			})
 		)
 		.min(1, "At least one line item is required"),

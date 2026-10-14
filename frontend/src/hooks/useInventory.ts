@@ -1,14 +1,5 @@
-import {
-	useInfiniteQuery,
-	useMutation,
-	useQuery,
-	useQueryClient,
-	keepPreviousData,
-	type InfiniteData,
-	type UseInfiniteQueryResult,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient, keepPreviousData, type InfiniteData, type UseInfiniteQueryResult, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 
 import type {
 	InventoryItem,
@@ -26,9 +17,12 @@ import type {
 } from "../types/inventory";
 
 import * as inventoryApi from "../api/inventory";
+import type { ItemOrigin, ReconcileSort } from "../api/inventory";
 import * as orgApi from "../api/org";
 import { qk, invalidate } from "../lib/queryKeys";
 import { useScanDispatcher } from "./useScanDispatcher";
+
+const useQuery = moduleQuery("inventory");
 
 // ============================================================================
 // INVENTORY QUERIES
@@ -90,12 +84,17 @@ export const useInventoryMovementsQuery = (
 // cursor (these are GROUP BY aggregate rows with no stable row id).
 export const useItemUsageQuery = (
 	itemId: string | undefined,
-	opts?: { limit?: number },
+	opts?: { limit?: number; createdAfter?: string },
 ): UseInfiniteQueryResult<InfiniteData<ItemUsage, number>, Error> => {
 	const limit = opts?.limit;
 	return useInfiniteQuery({
 		queryKey: qk.inventory.usage(itemId ?? "", opts),
-		queryFn: ({ pageParam }) => inventoryApi.getItemUsage(itemId!, { limit, offset: pageParam }),
+		queryFn: ({ pageParam }) =>
+			inventoryApi.getItemUsage(itemId!, {
+				limit,
+				offset: pageParam,
+				createdAfter: opts?.createdAfter,
+			}),
 		initialPageParam: 0,
 		getNextPageParam: (last, pages) =>
 			last.hasMore ? pages.reduce((n, p) => n + p.usage.length, 0) : undefined,
@@ -298,6 +297,10 @@ export const useUpdateInventoryTagMutation = (): UseMutationResult<
 		mutationFn: ({ tagId, label }) => inventoryApi.updateInventoryTag(tagId, label),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: qk.inventory.tags });
+			// Item lists/details cache each tag's label at fetch time (item.tags[].label),
+			// not a live join against the tags query — a rename left those showing the old
+			// label until an unrelated refetch, same gap delete already closes below.
+			invalidate.warehouse(queryClient);
 		},
 	});
 };
@@ -339,13 +342,174 @@ export const useProvisionalItemsQuery = (enabled = true) =>
 		enabled,
 	});
 
+export const useLinkageAuditQuery = (enabled = true) =>
+	useQuery({
+		queryKey: [...qk.inventory.all, "linkage-audit"],
+		queryFn: inventoryApi.getLinkageAudit,
+		staleTime: 60_000,
+		enabled,
+	});
+
+/**
+ * Invalidates broadly: linking historical lines changes what the item's
+ * usage, forecast and charged-price reads return, not just the audit.
+ */
+export const useApplyLinkageMatchMutation = () => {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: inventoryApi.applyLinkageMatch,
+		onSuccess: async (_data, variables) => {
+			await qc.invalidateQueries({ queryKey: qk.inventory.reconcile() });
+			await qc.invalidateQueries({ queryKey: qk.inventory.list() });
+			await qc.invalidateQueries({
+				queryKey: qk.inventory.detail(variables.inventory_item_id),
+			});
+		},
+	});
+};
+
+/** Invalidates the catalog list too — the picker has to find the new item. */
+export const useCreateProvisionalItemMutation = () => {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: inventoryApi.createProvisionalItem,
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: qk.inventory.provisional });
+			await qc.invalidateQueries({ queryKey: qk.inventory.all });
+		},
+	});
+};
+
+export interface ReconcileQueueOpts {
+	includeDismissed?: boolean;
+	origin?: ItemOrigin;
+	search?: string;
+	sort?: ReconcileSort;
+	offset?: number;
+	limit?: number;
+}
+
+/** Filters live in the key because the server applies them. */
+export const useReconcileQueueQuery = (opts?: ReconcileQueueOpts, enabled = true) =>
+	useQuery({
+		queryKey: qk.inventory.reconcile(opts),
+		queryFn: () =>
+			inventoryApi.getReconcileQueue({
+				include_dismissed: opts?.includeDismissed,
+				origin: opts?.origin,
+				search: opts?.search,
+				sort: opts?.sort,
+				offset: opts?.offset,
+				limit: opts?.limit,
+			}),
+		staleTime: 60_000,
+		// Every control on the page is a server filter, so without this the whole
+		// surface — strip, toolbar, selection — unmounts on each keystroke.
+		placeholderData: keepPreviousData,
+		enabled,
+	});
+
+/** The documents behind one row. Only fetched once a row is actually selected. */
+export const useReconcileLinesQuery = (key: {
+	name?: string;
+	foldedName?: string;
+	itemId?: string;
+}) =>
+	useQuery({
+		queryKey: qk.inventory.reconcileLines(key),
+		queryFn: () =>
+			inventoryApi.getReconcileLines({
+				name: key.name,
+				folded_name: key.foldedName,
+				item_id: key.itemId,
+			}),
+		staleTime: 60_000,
+		enabled: Boolean(key.name || key.foldedName || key.itemId),
+	});
+
+/** Search runs on the server, so the catalog never has to reach the client whole. */
+export const useReconcileTargetsQuery = (
+	opts: { q?: string; excludeId?: string },
+	enabled = true
+) =>
+	useQuery({
+		queryKey: qk.inventory.reconcileTargets(opts),
+		queryFn: () => inventoryApi.getReconcileTargets({ q: opts.q, exclude_id: opts.excludeId }),
+		enabled,
+		staleTime: 30_000,
+		placeholderData: keepPreviousData,
+	});
+
+/**
+ * The same search from the field. A separate hook rather than a widened guard: the
+ * reconcile queue's route stays at `manage_inventory`, which a technician lacks.
+ */
+export const useCatalogSearchQuery = (opts: { q?: string }, enabled = true) =>
+	useQuery({
+		queryKey: ["inventory", "search", opts.q ?? ""],
+		queryFn: () => inventoryApi.searchCatalog({ q: opts.q }),
+		enabled,
+		staleTime: 30_000,
+		placeholderData: keepPreviousData,
+		// A technician without inventory access gets a 403 every time; retrying it
+		// three times per keystroke helps nobody.
+		retry: false,
+	});
+
+/**
+ * Accepting a screenful of suggestions at once. Invalidates the whole tree
+ * rather than a list of ids: a bulk run touches many items' usage and cost reads.
+ */
+export const useApplyLinkageMatchBulkMutation = () => {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: inventoryApi.applyLinkageMatchBulk,
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: qk.inventory.all });
+		},
+	});
+};
+
+/** Both change what coverage counts, and nothing outside the queue. */
+export const useDismissUnmappedMutation = () => {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: inventoryApi.dismissUnmappedName,
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: qk.inventory.reconcile() });
+		},
+	});
+};
+
+export const useRestoreUnmappedMutation = () => {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: inventoryApi.restoreUnmappedName,
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: qk.inventory.reconcile() });
+		},
+	});
+};
+
+/** Cost is required unless the row already has one. */
 export const useApproveItemMutation = () => {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ itemId, initial_warehouse_qty }: { itemId: string; initial_warehouse_qty?: number }) =>
-			orgApi.approveItem(itemId, initial_warehouse_qty !== undefined ? { initial_warehouse_qty } : undefined),
+		mutationFn: ({
+			itemId,
+			...body
+		}: {
+			itemId: string;
+			initial_warehouse_qty?: number;
+			cost?: number;
+			unit?: string;
+			low_stock_threshold?: number | null;
+			location?: string | null;
+		}) => orgApi.approveItem(itemId, body),
 		onSuccess: async () => {
 			await qc.invalidateQueries({ queryKey: qk.inventory.provisional });
+			// The catalog list and the provisional queue are separate cache entries.
+			await qc.invalidateQueries({ queryKey: qk.inventory.all });
 			await invalidate.warehouse(qc);
 		},
 	});

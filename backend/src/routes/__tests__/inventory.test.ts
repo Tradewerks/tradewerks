@@ -40,6 +40,9 @@ vi.mock("../../controllers/inventoryController.js", async (importOriginal) => {
 		getItemUsage: vi.fn(),
 		getItemConsumptionTrend: vi.fn(),
 		getItemForecast: vi.fn(),
+		getLinkageAudit: vi.fn(),
+		applyLinkageMatch: vi.fn(),
+		createProvisionalItemForLine: vi.fn(),
 	};
 });
 
@@ -50,11 +53,17 @@ import {
 	getItemUsage,
 	getItemConsumptionTrend,
 	getItemForecast,
+	getLinkageAudit,
+	applyLinkageMatch,
+	createProvisionalItemForLine,
 } from "../../controllers/inventoryController.js";
 
 const mockGetItemUsage = vi.mocked(getItemUsage);
 const mockGetItemConsumptionTrend = vi.mocked(getItemConsumptionTrend);
 const mockGetItemForecast = vi.mocked(getItemForecast);
+const mockGetLinkageAudit = vi.mocked(getLinkageAudit);
+const mockApplyLinkageMatch = vi.mocked(applyLinkageMatch);
+const mockCreateProvisionalItemForLine = vi.mocked(createProvisionalItemForLine);
 
 // ── Harness (same shape as org.test.ts) ───────────────────────────────────────
 
@@ -124,8 +133,52 @@ async function run(path: string, req: Request) {
 	return res;
 }
 
+// getHandlers/run above stay "get"-only so the existing suites are untouched.
+function getHandlersAny(method: "get" | "post", path: string): Array<
+	(req: Request, res: Response, next: NextFunction) => unknown
+> {
+	const stack = (inventoryRouter as unknown as Router & {
+		stack: Array<{
+			route?: {
+				path: string;
+				methods: Record<string, boolean>;
+				stack: Array<{ handle: (req: Request, res: Response, next: NextFunction) => unknown }>;
+			};
+		}>;
+	}).stack;
+	const layer = stack.find((l) => l.route?.path === path && l.route.methods[method]);
+	if (!layer?.route) throw new Error(`route ${method.toUpperCase()} ${path} not found`);
+	return layer.route.stack.map((s) => s.handle);
+}
+
+async function runAny(method: "get" | "post", path: string, req: Request) {
+	const res = makeRes();
+	await dispatch(getHandlersAny(method, path), req, res, 0);
+	return res;
+}
+
 const EACH = { units: ["each"], unit: "each", mixed: false };
 const MIXED = { units: ["box", "each"], unit: null, mixed: true };
+
+describe("inventory routes — legacy import retirement", () => {
+	it("returns 410 before multipart processing when the reviewed workflow is enabled", async () => {
+		const previous = process.env.INVENTORY_AI_IMPORT_ENABLED;
+		process.env.INVENTORY_AI_IMPORT_ENABLED = "true";
+		try {
+			const res = await runAny("post", "/import", makeReq({
+				user: { organization_id: "org-1", role: "dispatcher", permissions: ["manage_inventory"] },
+			}));
+			expect(res.status).toHaveBeenCalledWith(410);
+			expect(res.json.mock.calls[0][0]).toMatchObject({
+				success: false,
+				error: { message: expect.stringContaining("/inventory/imports") },
+			});
+		} finally {
+			if (previous === undefined) delete process.env.INVENTORY_AI_IMPORT_ENABLED;
+			else process.env.INVENTORY_AI_IMPORT_ENABLED = previous;
+		}
+	});
+});
 
 describe("inventory routes — History tab payloads", () => {
 	beforeEach(() => {
@@ -216,5 +269,125 @@ describe("inventory routes — GET /:id/forecast lookbackDays", () => {
 			}),
 		);
 		expect(mockGetItemForecast).not.toHaveBeenCalled();
+	});
+});
+
+describe("inventory routes — linkage audit + provisional quick-add", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("GET /linkage-audit requires manage_inventory", async () => {
+		const req = makeReq({ user: { organization_id: "org-1", role: "dispatcher", permissions: [] } });
+
+		const res = await runAny("get", "/linkage-audit", req);
+
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(mockGetLinkageAudit).not.toHaveBeenCalled();
+	});
+
+	it("GET /linkage-audit returns counts, candidates, and candidate_total on 200", async () => {
+		mockGetLinkageAudit.mockResolvedValue({
+			counts: [{ entity: "quote", linked: 3, unmapped: 2, total: 5 }],
+			candidates: [{ name: "Capacitor", entities: ["quote"], lines: 2, match: null }],
+			candidate_total: 1,
+		});
+		const req = makeReq({
+			user: { organization_id: "org-1", role: "dispatcher", permissions: ["manage_inventory"] },
+		});
+
+		const res = await runAny("get", "/linkage-audit", req);
+
+		expect(mockGetLinkageAudit).toHaveBeenCalledWith("org-1");
+		expect(res.json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				success: true,
+				data: {
+					counts: [{ entity: "quote", linked: 3, unmapped: 2, total: 5 }],
+					candidates: [{ name: "Capacitor", entities: ["quote"], lines: 2, match: null }],
+					candidate_total: 1,
+				},
+			}),
+		);
+	});
+
+	it("POST /linkage-audit/apply requires manage_inventory", async () => {
+		const req = makeReq({
+			user: { organization_id: "org-1", role: "dispatcher", permissions: [] },
+			body: { name: "Capacitor", inventory_item_id: "item-1" },
+		});
+
+		const res = await runAny("post", "/linkage-audit/apply", req);
+
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(mockApplyLinkageMatch).not.toHaveBeenCalled();
+	});
+
+	it("POST /linkage-audit/apply returns { updated } on 200", async () => {
+		mockApplyLinkageMatch.mockResolvedValue({
+			updated: { quote: 1, job: 0, job_visit: 0, recurring_plan: 0, invoice: 0 },
+		});
+		const req = makeReq({
+			user: { organization_id: "org-1", role: "dispatcher", permissions: ["manage_inventory"] },
+			body: { name: "Capacitor", inventory_item_id: "item-1" },
+		});
+
+		const res = await runAny("post", "/linkage-audit/apply", req);
+
+		expect(mockApplyLinkageMatch).toHaveBeenCalledWith(req.body, "org-1", expect.anything());
+		expect(res.json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				success: true,
+				data: { updated: { quote: 1, job: 0, job_visit: 0, recurring_plan: 0, invoice: 0 } },
+			}),
+		);
+	});
+
+	// A lower bar than POST /, so any one of these three permissions is enough.
+	it.each([["manage_inventory"], ["edit_quotes"], ["edit_jobs"]])(
+		"POST /provisional is allowed with %s and returns 201",
+		async (permission) => {
+			mockCreateProvisionalItemForLine.mockResolvedValue({ item: { id: "new-item" } });
+			const req = makeReq({
+				user: { organization_id: "org-1", role: "dispatcher", permissions: [permission] },
+				body: { name: "Capacitor" },
+			});
+
+			const res = await runAny("post", "/provisional", req);
+
+			expect(res.status).toHaveBeenCalledWith(201);
+			expect(res.json).toHaveBeenCalledWith(
+				expect.objectContaining({ success: true, data: { id: "new-item" } }),
+			);
+		},
+	);
+
+	it("POST /provisional rejects a caller with none of the three permissions", async () => {
+		const req = makeReq({
+			user: { organization_id: "org-1", role: "dispatcher", permissions: ["view_inventory"] },
+			body: { name: "Capacitor" },
+		});
+
+		const res = await runAny("post", "/provisional", req);
+
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(mockCreateProvisionalItemForLine).not.toHaveBeenCalled();
+	});
+
+	// Express stops at the first match in registration order, so either would be
+	// swallowed as a lookup for an item literally named "provisional".
+	it("registers /linkage-audit and /provisional ahead of the catch-all /:id route", () => {
+		const stack = (inventoryRouter as unknown as Router & {
+			stack: Array<{ route?: { path: string; methods: Record<string, boolean> } }>;
+		}).stack;
+		const indexOf = (path: string, method: "get" | "post") =>
+			stack.findIndex((l) => l.route?.path === path && l.route.methods[method]);
+
+		const catchAllIndex = indexOf("/:id", "get");
+		expect(catchAllIndex).toBeGreaterThanOrEqual(0);
+		expect(indexOf("/linkage-audit", "get")).toBeGreaterThanOrEqual(0);
+		expect(indexOf("/linkage-audit", "get")).toBeLessThan(catchAllIndex);
+		expect(indexOf("/provisional", "post")).toBeGreaterThanOrEqual(0);
+		expect(indexOf("/provisional", "post")).toBeLessThan(catchAllIndex);
 	});
 });

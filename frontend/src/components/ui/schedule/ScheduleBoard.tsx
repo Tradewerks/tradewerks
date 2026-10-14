@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-import { ChevronLeft, ChevronRight, ChevronDown, Eye, EyeOff } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import { ChevronDown } from "lucide-react";
+import DayHeaderCell from "./DayHeaderCell";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import ScheduleBoardDayColumn from "./ScheduleBoardDayColumn";
 import { setSharedDragOffset } from "./scheduleBoardDragState";
 import MonthGrid from "./MonthGrid";
@@ -9,7 +10,6 @@ import {
 	buildTechOrder,
 	getTechColor,
 	getWeekDays,
-	formatDayHeader,
 	groupVisitsByDay,
 	getPriorityColor,
 	SLOT_H,
@@ -17,6 +17,11 @@ import {
 	DAY_END,
 	SCROLL_ZONE_W,
 	SCROLL_DELAY_MS,
+	localDateKey,
+	dateKeyAt,
+	getAnchoredPopupPos,
+	CLICK_POPUP_H,
+	prefersReducedMotion,
 } from "./scheduleBoardUtils";
 import { extractOccurrences, type OccurrenceWithPlan, type VisitWithJob } from "./dashboardCalendarUtils";
 import type { Job } from "../../../types/jobs";
@@ -24,6 +29,10 @@ import type { Technician } from "../../../types/technicians";
 import { useUpdateJobVisitMutation } from "../../../hooks/useJobs";
 import { useRescheduleOccurrenceMutation, useGenerateVisitFromOccurrenceMutation } from "../../../hooks/useRecurringPlans";
 import VisitClickPopup from "./VisitClickPopup";
+import { buildWeekTemplate } from "./weekTemplate";
+import { weekParamToMonday, windowLabel } from "./stripWindow";
+import ScheduleToolbar from "./ScheduleToolbar";
+import { TOOLBAR_FOCUS } from "./toolbarButton";
 
 interface ScheduleBoardProps {
 	jobs: Job[];
@@ -37,6 +46,15 @@ function isAnytimeOccurrence(occ: OccurrenceWithPlan): boolean {
 
 const GUTTER_W  = 64;
 const HEADER_H  = 44;
+// Until a column has been measured.
+const FALLBACK_COL_W = 200;
+
+function mondayOf(date: Date): Date {
+	const monday = new Date(date);
+	monday.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+	monday.setHours(0, 0, 0, 0);
+	return monday;
+}
 
 function hourLabel(h: number): string {
 	if (h === 0)  return "12 AM";
@@ -48,36 +66,44 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	const navigate = useNavigate();
 	const [viewMode, setViewMode] = useState<"week" | "month">("week");
 
-	// Week view state
-	const [weekStart, setWeekStart] = useState<Date>(() => {
-		const today = new Date();
-		const day = today.getDay();
-		const monday = new Date(today);
-		monday.setDate(today.getDate() - ((day + 6) % 7));
-		monday.setHours(0, 0, 0, 0);
-		return monday;
+	const [searchParams] = useSearchParams();
+
+	// `?week=` is read once; later navigation does not rewrite the URL.
+	const [link] = useState(() => {
+		const day = searchParams.get("week");
+		const monday = weekParamToMonday(day);
+		if (!day || !monday) return null;
+		return { day, monday: dateKeyAt(monday), zoom: searchParams.get("zoom") === "1" };
 	});
 
-	// Month view state
+	const [weekStart, setWeekStart] = useState<Date>(() => link?.monday ?? mondayOf(new Date()));
+
+	// Seeded from the linked week so switching to Month stays on it.
 	const [monthYear, setMonthYear] = useState<{ year: number; month: number }>(() => {
-		const today = new Date();
-		return { year: today.getFullYear(), month: today.getMonth() };
+		const d = link?.monday ?? new Date();
+		return { year: d.getFullYear(), month: d.getMonth() };
 	});
 
 	const [selectedTechs, setSelectedTechs] = useState<Set<string>>(new Set());
 	const [showVisits, setShowVisits] = useState(true);
 	const [showOccurrences, setShowOccurrences] = useState(true);
 	const [anytimeOpen, setAnytimeOpen] = useState(false);
-	const [colWidth, setColWidth] = useState(200);
+	const [colWidths, setColWidths] = useState<Record<string, number>>({});
 	const [clickedAnytimeVisit, setClickedAnytimeVisit] = useState<{ visit: VisitWithJob; rect: DOMRect } | null>(null);
 	const [scrollTop, setScrollTop] = useState(0);
 	const [containerHeight, setContainerHeight] = useState(0);
 	const [dragOverAnytimeDay, setDragOverAnytimeDay] = useState<string | null>(null);
+	// `&zoom=1` (the dashboard's "open in schedule") enlarges the linked day on arrival.
+	const [zoomedDay, setZoomedDay] = useState<string | null>(link?.zoom ? link.day : null);
+	const [hoverDay, setHoverDay] = useState<string | null>(null);
+	const [animateZoom, setAnimateZoom] = useState(false);
+	const [scrollLeft, setScrollLeft] = useState(0);
+	const [containerWidth, setContainerWidth] = useState(0);
 
-	const gridRef         = useRef<HTMLDivElement>(null);
 	const scrollRef       = useRef<HTMLDivElement>(null);
 	const anytimePopupRef = useRef<HTMLDivElement>(null);
 	const anytimeRef      = useRef<HTMLDivElement>(null);
+	const colRefs         = useRef<Map<string, HTMLDivElement>>(new Map());
 
 	// -- Week-view scroll zone state/refs --------------------------------------
 	const [weekScrollZone, setWeekScrollZone]         = useState<"left" | "right" | null>(null);
@@ -101,25 +127,16 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	useEffect(() => {
 		if (!scrollRef.current) return;
 		const ro = new ResizeObserver(() => {
-			if (scrollRef.current) setContainerHeight(scrollRef.current.clientHeight);
+			if (!scrollRef.current) return;
+			setContainerHeight(scrollRef.current.clientHeight);
+			setContainerWidth(scrollRef.current.clientWidth);
 		});
 		ro.observe(scrollRef.current);
 		setContainerHeight(scrollRef.current.clientHeight);
+		setContainerWidth(scrollRef.current.clientWidth);
 		return () => ro.disconnect();
 	}, []);
 
-
-	// Measure column width
-	useEffect(() => {
-		function measure() {
-			if (!gridRef.current) return;
-			setColWidth((gridRef.current.getBoundingClientRect().width - GUTTER_W) / 7);
-		}
-		measure();
-		const ro = new ResizeObserver(measure);
-		if (gridRef.current) ro.observe(gridRef.current);
-		return () => ro.disconnect();
-	}, []);
 
 	// Auto-scroll to ~2 hours before current time on week-view mount
 	useEffect(() => {
@@ -141,7 +158,35 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	}, [clickedAnytimeVisit]);
 
 	const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart]);
-	const todayStr = new Date().toISOString().split("T")[0];
+
+	// Measure each day column: widths differ once a day is zoomed, and DayColumn's
+	// overlap layout, ghost width and popup flip all key off its own width. Layout effect +
+	// sync measure so a new week's first paint uses real widths, not a placeholder or a
+	// stale zoomed width from a previous visit to that week.
+	useLayoutEffect(() => {
+		if (viewMode !== "week") return;
+		const measured: Record<string, number> = {};
+		colRefs.current.forEach((el, day) => {
+			measured[day] = el.getBoundingClientRect().width;
+		});
+		setColWidths(measured);
+		const ro = new ResizeObserver((entries) => {
+			setColWidths((prev) => {
+				let next = prev;
+				for (const entry of entries) {
+					const day = (entry.target as HTMLElement).dataset.day;
+					if (!day || prev[day] === entry.contentRect.width) continue;
+					if (next === prev) next = { ...prev };
+					next[day] = entry.contentRect.width;
+				}
+				return next;
+			});
+		});
+		colRefs.current.forEach((el) => ro.observe(el));
+		return () => ro.disconnect();
+	}, [weekDays, viewMode]);
+
+	const todayStr = localDateKey(new Date());
 
 	const globalTechOrder = useMemo(() => buildTechOrder(technicians), [technicians]);
 	const techColorMap = useMemo(
@@ -181,7 +226,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 	const timedOccurrencesByDay = useMemo(() =>
 		allOccs.filter((o) => !isAnytimeOccurrence(o)).reduce((acc, occ) => {
-			const dateStr = new Date(occ.occurrence_start_at).toISOString().split("T")[0];
+			const dateStr = localDateKey(occ.occurrence_start_at);
 			if (!acc[dateStr]) acc[dateStr] = [];
 			acc[dateStr].push(occ);
 			return acc;
@@ -190,7 +235,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 	const anytimeOccurrencesByDay = useMemo(() =>
 		allOccs.filter(isAnytimeOccurrence).reduce((acc, occ) => {
-			const dateStr = new Date(occ.occurrence_start_at).toISOString().split("T")[0];
+			const dateStr = localDateKey(occ.occurrence_start_at);
 			if (!acc[dateStr]) acc[dateStr] = [];
 			acc[dateStr].push(occ);
 			return acc;
@@ -223,11 +268,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	}
 	function goToday() {
 		const today = new Date();
-		const day = today.getDay();
-		const monday = new Date(today);
-		monday.setDate(today.getDate() - ((day + 6) % 7));
-		monday.setHours(0, 0, 0, 0);
-		setWeekStart(monday);
+		setWeekStart(mondayOf(today));
 		setMonthYear({ year: today.getFullYear(), month: today.getMonth() });
 		// Also scroll to now
 		if (scrollRef.current) {
@@ -244,6 +285,27 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 	// Keep weekStartRef current so mount-only document handlers have fresh weekStart
 	useEffect(() => { weekStartRef.current = weekStart; }, [weekStart]);
+
+	// Zoom belongs to a date, not a weekday, so a week change drops it — during render, so
+	// the new week never commits with the old zoom. Keyed on time: Today on the current
+	// week builds a new Date for the same Monday and must keep the zoom.
+	const weekKey = weekStart.getTime();
+	const [zoomWeekKey, setZoomWeekKey] = useState(weekKey);
+	if (zoomWeekKey !== weekKey) {
+		setZoomWeekKey(weekKey);
+		setZoomedDay(null);
+		setAnimateZoom(false);
+	}
+
+	function toggleZoom(dateStr: string) {
+		setAnimateZoom(true);
+		setZoomedDay((d) => (d === dateStr ? null : dateStr));
+	}
+
+	const reducedMotion = useMemo(prefersReducedMotion, []);
+	// Only a user toggle animates; a week change must snap rather than tween the old zoom away.
+	const gridTransition =
+		animateZoom && !reducedMotion ? "grid-template-columns 180ms ease-out" : undefined;
 
 	// Document-level drag tracking (mount only – uses refs, no stale closures)
 	useEffect(() => {
@@ -311,12 +373,14 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	}
 
 	function handleWeekGridDragOver(e: React.DragEvent<HTMLDivElement>) {
-		const rect = weekTimeGridRef.current?.getBoundingClientRect();
-		if (!rect || !isDraggingWeekRef.current) return;
-		const x = e.clientX - rect.left;
+		// Zones key off the visible viewport, not the grid: a zoomed day can make the
+		// grid wider than the board, which would push the right zone off-screen.
+		const viewport = scrollRef.current;
+		if (!viewport || !isDraggingWeekRef.current) return;
+		const x = e.clientX - viewport.getBoundingClientRect().left;
 		const newZone: "left" | "right" | null =
 			x > GUTTER_W && x < GUTTER_W + SCROLL_ZONE_W ? "left"
-			: x > rect.width - SCROLL_ZONE_W ? "right"
+			: x > viewport.clientWidth - SCROLL_ZONE_W ? "right"
 			: null;
 		if (newZone !== weekScrollZoneRef.current) {
 			weekScrollZoneRef.current = newZone;
@@ -432,9 +496,8 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 			durationMs: number;
 		};
 
+		const newStart = dateKeyAt(targetDateStr);
 		if (parsed.type === "occurrence") {
-			const [year, month, day] = targetDateStr.split("-").map(Number);
-			const newStart = new Date(year, month - 1, day, 0, 0, 0, 0);
 			weekHasPendingPopupRef.current = true;
 			try {
 				await rescheduleOccurrence({
@@ -451,8 +514,6 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 		}
 
 		if (parsed.type !== "visit") return;
-		const [year, month, day] = targetDateStr.split("-").map(Number);
-		const newStart = new Date(year, month - 1, day, 0, 0, 0, 0);
 		const newEnd   = new Date(newStart.getTime() + Math.max(parsed.durationMs, 3_600_000));
 		const data: Parameters<typeof updateVisit>[0]["data"] = {
 			scheduled_start_at: newStart.toISOString(),
@@ -479,17 +540,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 	// -- Labels ----------------------------------------------------------------
 
-	const weekLabel = useMemo(() => {
-		const firstDay = new Date(weekDays[0] + "T12:00:00");
-		const lastDay  = new Date(weekDays[6] + "T12:00:00");
-		const startMon = firstDay.toLocaleDateString("en-US", { month: "short" });
-		const startDay = firstDay.getDate();
-		const endDay   = lastDay.getDate();
-		const year     = lastDay.getFullYear();
-		return firstDay.getMonth() === lastDay.getMonth()
-			? `${startMon} ${startDay} – ${endDay}, ${year}`
-			: `${startMon} ${startDay} – ${lastDay.toLocaleDateString("en-US", { month: "short" })} ${endDay}, ${year}`;
-	}, [weekDays]);
+	const weekLabel = useMemo(() => windowLabel(weekDays, "full"), [weekDays]);
 
 	const monthLabel = useMemo(() =>
 		new Date(monthYear.year, monthYear.month, 1).toLocaleDateString("en-US", {
@@ -502,117 +553,42 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 	// -- Anytime popup positioning ---------------------------------------------
 
-	const ANYTIME_POPUP_W = 224;
 	function getAnytimePopupPos(rect: DOMRect) {
-		const PAD = 8;
-		const left = rect.right + 4 + ANYTIME_POPUP_W < window.innerWidth
-			? rect.right + 4
-			: Math.max(PAD, rect.left - ANYTIME_POPUP_W - 4);
-		const top = Math.min(rect.bottom + 4, window.innerHeight - 280 - PAD);
-		return { top, left };
+		return getAnchoredPopupPos(
+			{ left: rect.left, right: rect.right, top: rect.bottom + 4 },
+			{ popupH: CLICK_POPUP_H }
+		);
 	}
 
 	// -- Grid column template --------------------------------------------------
 
-	const gridTemplateColumns = `${GUTTER_W}px repeat(7, minmax(150px, 1fr))`;
-	const gridMinWidth = GUTTER_W + 7 * 150;
+	const { gridTemplateColumns, gridMinWidth } = buildWeekTemplate(weekDays, zoomedDay, GUTTER_W);
 
 	return (
 		<div className="flex flex-col h-full bg-canvas text-text-primary select-none">
 
-			{/* -- Toolbar -------------------------------------------------------- */}
-			<div className="flex items-center gap-1.5 px-3 border-b border-border-subtle shrink-0" style={{ height: 44 }}>
-
-				{/* Today */}
-				<button
-					onClick={goToday}
-					className="h-7 px-3 rounded text-[11px] font-medium border border-border text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors shrink-0"
-				>
-					Today
-				</button>
-
-				{/* Period navigation */}
-				<div className="flex items-center shrink-0">
-					<button
-						aria-label={viewMode === "week" ? "Previous week" : "Previous month"}
-						onClick={viewMode === "week" ? prevWeek : prevMonth}
-						className="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:bg-surface hover:text-text-secondary transition-colors"
-					>
-						<ChevronLeft size={14} />
-					</button>
-					<span className="text-[13px] font-semibold text-text-primary min-w-[144px] text-center tracking-tight">
-						{viewMode === "week" ? weekLabel : monthLabel}
-					</span>
-					<button
-						aria-label={viewMode === "week" ? "Next week" : "Next month"}
-						onClick={viewMode === "week" ? nextWeek : nextMonth}
-						className="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:bg-surface hover:text-text-secondary transition-colors"
-					>
-						<ChevronRight size={14} />
-					</button>
-				</div>
-
-				{/* Divider */}
-				<div className="w-px h-4 bg-border-subtle mx-1 shrink-0" />
-
-				{/* View mode – segmented */}
-				<div className="flex items-center bg-base border border-border-subtle rounded p-0.5 shrink-0">
-					<button
-						onClick={() => setViewMode("week")}
-						className={`h-6 px-3 rounded-sm text-[11px] font-medium transition-colors ${
-							viewMode === "week" ? "bg-surface-raised text-text-primary" : "text-text-muted hover:text-text-secondary"
-						}`}
-					>
-						Week
-					</button>
-					<button
-						onClick={() => setViewMode("month")}
-						className={`h-6 px-3 rounded-sm text-[11px] font-medium transition-colors ${
-							viewMode === "month" ? "bg-surface-raised text-text-primary" : "text-text-muted hover:text-text-secondary"
-						}`}
-					>
-						Month
-					</button>
-				</div>
-
-				{/* Divider */}
-				<div className="w-px h-4 bg-border-subtle mx-1 shrink-0" />
-
-				{/* Layer toggles */}
-				<button
-					onClick={() => setShowVisits((v) => !v)}
-					className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
-						showVisits
-							? "bg-primary/10 border-primary/25 text-primary-text"
-							: "border-transparent text-text-muted hover:text-text-secondary"
-					}`}
-				>
-					{showVisits ? <Eye size={12} /> : <EyeOff size={12} />}
-					Visits
-				</button>
-				<button
-					onClick={() => setShowOccurrences((v) => !v)}
-					className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
-						showOccurrences
-							? "bg-reviewing-bg border-reviewing-border text-reviewing-text"
-							: "border-transparent text-text-muted hover:text-text-secondary"
-					}`}
-				>
-					{showOccurrences ? <Eye size={12} /> : <EyeOff size={12} />}
-					Recurring
-				</button>
-
-				{/* Divider */}
-				<div className="w-px h-4 bg-border-subtle mx-1 shrink-0" />
-
-				<TechFilter
-					technicians={technicians}
-					selected={selectedTechs}
-					onChange={setSelectedTechs}
-					techColorMap={techColorMap}
-				/>
-
-			</div>
+			<ScheduleToolbar
+				periodLabel={viewMode === "week" ? weekLabel : monthLabel}
+				prevLabel={viewMode === "week" ? "Previous week" : "Previous month"}
+				nextLabel={viewMode === "week" ? "Next week" : "Next month"}
+				onToday={goToday}
+				onPrev={viewMode === "week" ? prevWeek : prevMonth}
+				onNext={viewMode === "week" ? nextWeek : nextMonth}
+				viewMode={viewMode}
+				onViewModeChange={setViewMode}
+				showVisits={showVisits}
+				onToggleVisits={() => setShowVisits((v) => !v)}
+				showOccurrences={showOccurrences}
+				onToggleOccurrences={() => setShowOccurrences((v) => !v)}
+				techFilter={
+					<TechFilter
+						technicians={technicians}
+						selected={selectedTechs}
+						onChange={setSelectedTechs}
+						techColorMap={techColorMap}
+					/>
+				}
+			/>
 
 			{/* -- Month View ----------------------------------------------------- */}
 			{viewMode === "month" && (
@@ -642,117 +618,96 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 			{/* -- Week View ------------------------------------------------------ */}
 			{viewMode === "week" && (
-				<div ref={scrollRef} className="flex-1 overflow-auto" onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
-				<div ref={gridRef} style={{ minWidth: gridMinWidth, position: "relative" }}>
+				<div ref={scrollRef} className="flex-1 overflow-auto" onScroll={(e) => {
+					setScrollTop(e.currentTarget.scrollTop);
+					setScrollLeft(e.currentTarget.scrollLeft);
+				}}>
+				<div
+					// The header row is separate from the body rows, so hover is resolved by x.
+					onMouseMove={(e) => {
+						const hit = Array.from(
+							e.currentTarget.querySelectorAll<HTMLElement>("[data-day-header]")
+						).find((h) => {
+							const r = h.getBoundingClientRect();
+							return e.clientX >= r.left && e.clientX < r.right;
+						});
+						const day = hit?.dataset.dayHeader ?? null;
+						if (day !== hoverDay) setHoverDay(day);
+					}}
+					onMouseLeave={() => setHoverDay(null)}
+					style={{ minWidth: gridMinWidth, position: "relative" }}
+				>
 
 					{/* Sticky day-header row */}
 					<div
 						style={{
 							display: "grid",
 							gridTemplateColumns,
+							transition: gridTransition,
 							height: HEADER_H,
 							position: "sticky",
 							top: 0,
-							borderBottom: "1px solid var(--color-border)",
+							borderBottom: "1px solid var(--color-grid-line-strong)",
 							backgroundColor: "var(--color-canvas)",
 							zIndex: 30,
 						}}
 					>
 						{/* Gutter header cell */}
-						<div style={{ borderRight: "1px solid var(--color-border)" }} />
-						{weekDays.map((dateStr) => {
-							const { weekday, day } = formatDayHeader(dateStr);
-							const isToday = dateStr === todayStr;
-							return (
-								<div
-									key={dateStr}
-									style={{
-										borderLeft: "1px solid var(--color-border)",
-										display: "flex",
-										alignItems: "center",
-										paddingLeft: 10,
-										boxShadow: isToday ? "inset 0 -2px 0 var(--color-primary)" : undefined,
-									}}
-								>
-									<div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-										<span style={{
-											fontSize: 10,
-											fontWeight: 600,
-											color: isToday ? "var(--color-visit-driving-text)" : "var(--color-sched-text-secondary)",
-											textTransform: "uppercase",
-											letterSpacing: "0.05em",
-										}}>
-											{weekday}
-										</span>
-										<span style={{
-											fontSize: 15,
-											fontWeight: 700,
-											color: isToday ? "var(--color-primary)" : "var(--color-text-on-surface)",
-										}}>
-											{day}
-										</span>
-									</div>
-								</div>
-							);
-						})}
+						<div style={{ borderRight: "1px solid var(--color-grid-line-strong)" }} />
+						{weekDays.map((dateStr) => (
+							<DayHeaderCell
+								key={dateStr}
+								dateStr={dateStr}
+								isToday={dateStr === todayStr}
+								isZoomed={dateStr === zoomedDay}
+								height={HEADER_H}
+								onToggleZoom={() => toggleZoom(dateStr)}
+								revealZoom={dateStr === hoverDay}
+								style={{ borderLeft: "1px solid var(--color-grid-line-strong)" }}
+							/>
+						))}
 					</div>
 
 					{/* Anytime section */}
 					{showVisits && (
 						<div
 							ref={anytimeRef}
+							id="anytime-row"
+							role="group"
+							aria-label="Anytime visits"
 							onDragOver={handleWeekGridDragOver}
 							onDragLeave={handleAnytimeSectionDragLeave}
 							style={{
 								display: "grid",
 								gridTemplateColumns,
+								transition: gridTransition,
 								position: "sticky",
 								top: HEADER_H,
-								borderBottom: "1px solid var(--color-border)",
+								borderBottom: "1px solid var(--color-grid-line-strong)",
 								backgroundColor: "var(--color-canvas)",
 								zIndex: 20,
 							}}
 						>
-							{/* Anytime toggle cell */}
-							<div
-								style={{
-									borderRight: "1px solid var(--color-border)",
-									display: "flex",
-									alignItems: "flex-start",
-									justifyContent: "flex-end",
-									padding: "6px 6px 0 0",
-								}}
+							{/* Anytime toggle — the whole gutter cell is the control */}
+							<button
+								type="button"
+								onClick={() => setAnytimeOpen((v) => !v)}
+								aria-expanded={anytimeOpen}
+								aria-controls="anytime-row"
+								className={`flex justify-end w-full pr-1.5 text-[9px] font-semibold text-text-tertiary hover:bg-surface hover:text-text-secondary transition-colors duration-150 ${TOOLBAR_FOCUS} focus-visible:ring-inset ${
+									anytimeOpen ? "items-start pt-1.5" : "items-center"
+								}`}
+								style={{ borderRight: "1px solid var(--color-grid-line-strong)" }}
 							>
-								<button
-									onClick={() => setAnytimeOpen((v) => !v)}
-									style={{
-										display: "flex",
-										alignItems: "center",
-										gap: 3,
-										fontSize: 9,
-										fontWeight: 600,
-										color: "var(--color-text-tertiary)",
-										background: "none",
-										border: "none",
-										cursor: "pointer",
-										padding: "2px 4px",
-										borderRadius: 4,
-										transition: "color 0.15s",
-									}}
-									onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--color-surface)"; }}
-									onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "none"; }}
-								>
+								<span className="flex items-center gap-[3px]">
 									Anytime
 									<ChevronDown
 										size={11}
-										style={{
-											transform: anytimeOpen ? "rotate(180deg)" : "rotate(0deg)",
-											transition: "transform 0.15s ease",
-											color: "var(--color-text-tertiary)",
-										}}
+										aria-hidden
+										className={`transition-transform duration-150 ease-out ${anytimeOpen ? "rotate-180" : ""}`}
 									/>
-								</button>
-							</div>
+								</span>
+							</button>
 
 							{/* Per-day anytime cells */}
 							{weekDays.map((dateStr) => {
@@ -766,7 +721,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 										onDragLeave={handleAnytimeCellDragLeave}
 										onDrop={(e) => handleAnytimeCellDrop(e, dateStr)}
 										style={{
-											borderLeft: "1px solid var(--color-border)",
+											borderLeft: "1px solid var(--color-grid-line-strong)",
 											padding: "4px 5px",
 											minHeight: anytimeOpen ? undefined : 28,
 											outline: dragOverAnytimeDay === dateStr ? "2px solid var(--color-primary)" : undefined,
@@ -1010,6 +965,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 						style={{
 							display: "grid",
 							gridTemplateColumns,
+							transition: gridTransition,
 							height: totalSlots * SLOT_H,
 							position: "relative",
 						}}
@@ -1023,7 +979,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 									left: 0,
 									zIndex: 10,
 									backgroundColor: "var(--color-canvas)",
-									borderRight: "1px solid var(--color-border)",
+									borderRight: "1px solid var(--color-grid-line-strong)",
 									height: totalSlots * SLOT_H,
 								}}
 							>
@@ -1069,7 +1025,15 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 								const dayOccurrences = timedOccurrencesByDay[dateStr] ?? [];
 								const isToday = dateStr === todayStr;
 								return (
-									<div key={dateStr} style={{ position: "relative" }}>
+									<div
+										key={dateStr}
+										data-day={dateStr}
+										ref={(el) => {
+											if (el) colRefs.current.set(dateStr, el);
+											else colRefs.current.delete(dateStr);
+										}}
+										style={{ position: "relative" }}
+									>
 										<ScheduleBoardDayColumn
 											dateStr={dateStr}
 											dayIndex={dayIndex}
@@ -1080,7 +1044,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 											showOccurrences={showOccurrences}
 											technicians={technicians}
 											techColorMap={techColorMap}
-											colWidth={colWidth}
+											colWidth={colWidths[dateStr] || FALLBACK_COL_W}
 											selectedTechs={selectedTechs}
 											isAllSelected={isAllSelected}
 											updateVisit={updateVisit}
@@ -1127,10 +1091,10 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 					</div>
 
-				{/* Left week scroll zone – positioned at gridRef level so it spans the
+				{/* Left week scroll zone – positioned at the grid wrapper so it spans the
 				    anytime sticky section + time grid (zIndex 25 clears sticky z-index 20) */}
-				<div aria-hidden style={{
-					position: "absolute", left: GUTTER_W, top: 0, bottom: 0, width: SCROLL_ZONE_W,
+				<div aria-hidden data-scroll-zone="left" style={{
+					position: "absolute", left: scrollLeft + GUTTER_W, top: 0, bottom: 0, width: SCROLL_ZONE_W,
 					pointerEvents: "none", opacity: isDraggingWeek ? 1 : 0, transition: "opacity 0.3s ease",
 					overflow: "hidden", zIndex: 25,
 				}}>
@@ -1153,8 +1117,9 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 				</div>
 
 				{/* Right week scroll zone */}
-				<div aria-hidden style={{
-					position: "absolute", right: 0, top: 0, bottom: 0, width: SCROLL_ZONE_W,
+				<div aria-hidden data-scroll-zone="right" style={{
+					position: "absolute", top: 0, bottom: 0, width: SCROLL_ZONE_W,
+					...(containerWidth ? { left: scrollLeft + containerWidth - SCROLL_ZONE_W } : { right: 0 }),
 					pointerEvents: "none", opacity: isDraggingWeek ? 1 : 0, transition: "opacity 0.3s ease",
 					overflow: "hidden", zIndex: 25,
 				}}>

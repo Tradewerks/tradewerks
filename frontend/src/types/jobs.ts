@@ -9,6 +9,7 @@ import type {
 	QuoteReference,
 	LineItemType,
 	LineItemSource,
+	LineItemDisposition,
 	PricingBreakdown,
 	ExecutionTotals,
 } from "./common";
@@ -253,6 +254,8 @@ export interface JobLineItem {
 	tax_group?: { id: string; name: string; rates?: { tax_rate: { id: string; name: string; rate: number } }[] } | null;
 	isNew?: boolean;
 	isDeleted?: boolean;
+	/** Catalog link, when the line was picked from inventory rather than typed. */
+	inventory_item_id?: string | null;
 }
 
 export interface CreateJobLineItemInput {
@@ -265,6 +268,7 @@ export interface CreateJobLineItemInput {
 	source?: LineItemSource;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	inventory_item_id?: string | null;
 }
 
 export interface UpdateJobLineItemInput {
@@ -278,6 +282,7 @@ export interface UpdateJobLineItemInput {
 	source?: LineItemSource;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	inventory_item_id?: string | null;
 }
 
 export interface VisitLineItem {
@@ -289,6 +294,8 @@ export interface VisitLineItem {
 	total: number;
 	item_type?: LineItemType | null;
 	inventory_item_id?: string | null;
+	disposition?: LineItemDisposition | null;
+	disposition_vehicle_id?: string | null;
 	source?: LineItemSource;
 	source_job_id?: string | null;
 	source_visit_id?: string | null;
@@ -312,6 +319,9 @@ export interface CreateVisitLineItemInput {
 	sort_order?: number;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	inventory_item_id?: string | null;
+	disposition?: LineItemDisposition | null;
+	disposition_vehicle_id?: string | null;
 }
 
 export interface UpdateVisitLineItemInput {
@@ -326,6 +336,9 @@ export interface UpdateVisitLineItemInput {
 	sort_order?: number;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	inventory_item_id?: string | null;
+	disposition?: LineItemDisposition | null;
+	disposition_vehicle_id?: string | null;
 }
 
 // ============================================================================

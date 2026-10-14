@@ -106,10 +106,12 @@ export const useMileageReportQuery = (
 export const useTimesheetsReportQuery = (
 	startDate?: string,
 	endDate?: string,
+	options?: { enabled?: boolean },
 ): UseQueryResult<TimesheetReportEntry[], Error> => {
 	return useQuery({
 		queryKey: ["reports", "timesheets", startDate, endDate],
 		queryFn: () => reportsApi.getTimesheetsReport(startDate, endDate),
+		enabled: options?.enabled ?? true,
 	});
 };
 
@@ -280,6 +282,37 @@ export const useFirstTimeFixQuery = (
 		placeholderData: keepPreviousData,
 	});
 
+export const useProjectsReportQuery = (
+	params: ReportFetchParams,
+): UseQueryResult<Paginated, Error> =>
+	useQuery({
+		queryKey: ["reports", "projects", params],
+		queryFn: () => reportsApi.getProjectsReport(params),
+		placeholderData: keepPreviousData,
+	});
+
+export const useCogsByJobReportQuery = (
+	params: ReportFetchParams,
+	enabled = true
+): UseQueryResult<Paginated, Error> =>
+	useQuery({
+		queryKey: ["reports", "cogs-by-job", params],
+		queryFn: () => reportsApi.getCogsByJobReport(params),
+		placeholderData: keepPreviousData,
+		enabled,
+	});
+
+export const useCogsByItemReportQuery = (
+	params: ReportFetchParams,
+	enabled = true
+): UseQueryResult<Paginated, Error> =>
+	useQuery({
+		queryKey: ["reports", "cogs-by-item", params],
+		queryFn: () => reportsApi.getCogsByItemReport(params),
+		placeholderData: keepPreviousData,
+		enabled,
+	});
+
 export const useTechnicianScorecardQuery = (
 	startDate?: string,
 	endDate?: string,
@@ -289,6 +322,17 @@ export const useTechnicianScorecardQuery = (
 		queryFn: () => reportsApi.getTechnicianScorecard(startDate, endDate),
 	});
 };
+
+export const useJobProfitabilityReportQuery = (
+	params: ReportFetchParams,
+	enabled = true,
+): UseQueryResult<Paginated, Error> =>
+	useQuery({
+		queryKey: ["reports", "job-profitability", params],
+		queryFn: () => reportsApi.getJobProfitabilityReport(params),
+		placeholderData: keepPreviousData,
+		enabled,
+	});
 
 export const usePageSummaryQuery = (
 	page: string,

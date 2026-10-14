@@ -6,9 +6,10 @@ import EmptyState from "../../ui/EmptyState";
 // hook, so it lives in chartNotes.tsx instead.
 
 /**
- * A failed read, rendered as a failed read. Every detail card used to fall
- * through to its empty state on a query error ("No history yet" over a 500),
- * which is a false claim about the data. `onRetry` is the query's refetch.
+ * A failed read, rendered as a failed read: every detail card must route a
+ * query error into this state rather than its empty state, because "No
+ * history yet" over a 500 is a false claim about data that is still there.
+ * `onRetry` is the query's refetch.
  */
 export function QueryErrorState({
 	what,

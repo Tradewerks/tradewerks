@@ -66,8 +66,10 @@ const ROUTES: RouteCase[] = [
 	{ path: "/register", url: "/register", page: "RegisterPage" },
 	{ path: "/verify-email", url: "/verify-email", page: "VerifyEmailPage" },
 	{ path: "/reset-password", url: "/reset-password", page: "ResetPasswordPage" },
+	{ path: "/accept-invite", url: "/accept-invite", page: "AcceptInvitePage" },
 	{ path: "/quickbooks/callback", url: "/quickbooks/callback", page: "QBCallbackPage" },
 	{ path: "/auth/sso/complete", url: "/auth/sso/complete", page: "SSOCompletePage" },
+	{ path: "/platform/*", url: "/platform/login", page: "PlatformRoutes" },
 	// dispatch shell
 	{ path: "/dispatch/*", url: "/dispatch", page: "DispatchLayout" },
 	{ path: null, url: "/dispatch", page: "DashboardPage" },
@@ -110,6 +112,7 @@ const ROUTES: RouteCase[] = [
 		perm: "manage_technicians",
 	},
 	{ path: "map", url: "/dispatch/map", page: "MapPage" },
+	{ path: "kpi", url: "/dispatch/kpi", page: "KpiPage", perm: "view_reports" },
 	{ path: "reporting", url: "/dispatch/reporting", page: "ReportingPage", perm: "view_reports" },
 	{ path: "reporting/builder", url: "/dispatch/reporting/builder", page: "ReportBuilderPage", perm: "view_reports" },
 	{
@@ -143,8 +146,11 @@ const ROUTES: RouteCase[] = [
 		page: "ProfitAndLossPage",
 		perm: "view_reports",
 	},
+	{ path: "reporting/job-profitability", url: "/dispatch/reporting/job-profitability", page: "JobProfitabilityPage", perm: "view_reports" },
+	{ path: "reporting/qb/:reportType", url: "/dispatch/reporting/qb/profit-and-loss", page: "QBReportPage", perm: "view_reports" },
 	{ path: "reporting/tax-liability", url: "/dispatch/reporting/tax-liability", page: "TaxLiabilityPage", perm: "view_reports" },
 	{ path: "reporting/payments", url: "/dispatch/reporting/payments", page: "PaymentsReportPage", perm: "view_reports" },
+	{ path: "reporting/cogs", url: "/dispatch/reporting/cogs", page: "CogsReportPage", perm: "view_reports" },
 	{ path: "reporting/quote-funnel", url: "/dispatch/reporting/quote-funnel", page: "QuoteFunnelPage", perm: "view_reports" },
 	{
 		path: "reporting/revenue-by-line-item-type",
@@ -182,9 +188,9 @@ const ROUTES: RouteCase[] = [
 		page: "RecurringRevenuePage",
 		perm: "view_reports",
 	},
-	{ path: "kpi", url: "/dispatch/kpi", page: "KPIPage", perm: "view_reports" },
 	{ path: "mileage", url: "/dispatch/mileage", page: "MileageReportPage" },
 	{ path: "timesheets", url: "/dispatch/timesheets", page: "TimesheetsReportPage", perm: "view_reports" },
+	{ path: "timesheet", url: "/dispatch/timesheet", page: "Timesheet", perm: "view_timesheet" },
 	{
 		path: "inventory/reorder-forecast",
 		url: "/dispatch/inventory/reorder-forecast",
@@ -192,6 +198,16 @@ const ROUTES: RouteCase[] = [
 		perm: "view_reports",
 	},
 	{ path: "inventory", url: "/dispatch/inventory", page: "InventoryPage", perm: "view_inventory" },
+	{ path: "inventory/imports", url: "/dispatch/inventory/imports", page: "InventoryImportsPage", perm: "view_inventory" },
+	{ path: "inventory/imports/new", url: "/dispatch/inventory/imports/new", page: "InventoryImportPage", perm: "manage_inventory" },
+	{ path: "inventory/imports/:id", url: "/dispatch/inventory/imports/import-1", page: "InventoryImportReviewPage", perm: "view_inventory" },
+	{
+		// Every verb on this page rewrites catalog or historical billing rows.
+		path: "inventory/reconcile",
+		url: "/dispatch/inventory/reconcile",
+		page: "InventoryReconcilePage",
+		perm: "manage_inventory",
+	},
 	{
 		path: "inventory/items/:itemId",
 		url: "/dispatch/inventory/items/i1",
@@ -203,6 +219,10 @@ const ROUTES: RouteCase[] = [
 	{ path: "inventory/items/:itemId/tracking", url: "/dispatch/inventory/items/i1/tracking", page: "InventoryItemDetailPage", perm: "view_inventory" },
 	{ path: "inventory/serials/:serialId", url: "/dispatch/inventory/serials/s1", page: "SerialRedirectPage", perm: "view_inventory" },
 	{ path: "inventory/batches/:batchId", url: "/dispatch/inventory/batches/b1", page: "BatchDetailPage", perm: "view_inventory" },
+	{ path: "inventory/suppliers", url: "/dispatch/inventory/suppliers", page: "SuppliersPage", perm: "view_inventory" },
+	{ path: "inventory/suppliers/:supplierId", url: "/dispatch/inventory/suppliers/s1", page: "SupplierDetailPage", perm: "view_inventory" },
+	{ path: "purchases", url: "/dispatch/purchases", page: "PurchasePage", perm: ["view_field_purchases", "review_field_purchases", "view_purchases"] },
+	{ path: "purchases/:purchaseId", url: "/dispatch/purchases/p1", page: "PurchaseDetailsPage", perm: "view_purchases" },
 	{ path: "quotes", url: "/dispatch/quotes", page: "QuotesPage", perm: "view_quotes" },
 	{ path: "quotes/:quoteId", url: "/dispatch/quotes/q1", page: "QuoteDetailPage", perm: "view_quotes" },
 	{ path: "requests", url: "/dispatch/requests", page: "RequestsPage", perm: "view_requests" },
@@ -211,6 +231,7 @@ const ROUTES: RouteCase[] = [
 	{ path: "invoices/:invoiceId", url: "/dispatch/invoices/i1", page: "InvoiceDetailPage", perm: "view_invoices" },
 	{ path: "profile", url: "/dispatch/profile", page: "MyProfilePage" },
 	{ path: "admin", url: "/dispatch/admin", page: "AdminPage", perm: ["view_admin", "manage_organization", "manage_roles"] },
+	{ path: "welcome", url: "/dispatch/welcome", page: "WelcomePage", perm: "manage_organization" },
 	{ path: "followups", url: "/dispatch/followups", page: "FollowupsPage", perm: "view_followups" },
 	{ path: "vehicles", url: "/dispatch/vehicles", page: "VehiclesPage", perm: ["view_inventory", "manage_technicians"] },
 	{
@@ -231,6 +252,19 @@ const ROUTES: RouteCase[] = [
 	{ path: "map", url: "/technician/map", page: "TechnicianMapPage" },
 	{ path: "profile", url: "/technician/profile", page: "MyProfilePage" },
 	{ path: "mileage", url: "/technician/mileage", page: "TechnicianMileagePage" },
+	{ path: "timesheet", url: "/technician/timesheet", page: "TechnicianTimesheetPage" },
+	{
+		path: "purchases",
+		url: "/technician/purchases",
+		page: "TechnicianPurchasesPage",
+		perm: "request_field_purchase",
+	},
+	{
+		path: "purchases/:purchaseId",
+		url: "/technician/purchases/fp1",
+		page: "TechnicianPurchaseDetailPage",
+		perm: "request_field_purchase",
+	},
 	// catch-all
 	{ path: "*", url: "/definitely/not/a/route", page: "LoginPage" },
 ];
@@ -383,7 +417,7 @@ describe("AppRoutes — role and auth redirects", () => {
 	it.each(ROUTES.filter((r) => r.url.startsWith("/technician")))(
 		"technician: $url renders $page",
 		async ({ url, page }) => {
-			signIn("technician", ["view_visits", "view_vehicles"]);
+			signIn("technician", ["view_visits", "view_vehicles", "request_field_purchase"]);
 			renderAt(url);
 			await expectPage(page);
 		},

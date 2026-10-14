@@ -9,6 +9,8 @@ import { db } from "../../db.js";
 import { getBuffer } from "../../services/wasabiService.js";
 import type { TaxSnapshot } from "../../services/taxEngine.js";
 import { log } from "../../services/appLogger.js";
+import { getPurchase } from "../../controllers/purchasesController.js";
+import { PurchaseOrderPdfTemplate, type PurchaseOrderPdfProps } from "./PurchaseOrderPdfTemplate.js";
 
 type DocElement = ReactElement<DocumentProps, string | JSXElementConstructor<unknown>>;
 
@@ -71,6 +73,25 @@ export async function generateInvoicePdf(invoiceId: string, organizationId: stri
 			},
 			org,
 		},
+	) as unknown as DocElement;
+	return renderToBuffer(element) as Promise<Buffer>;
+}
+
+export async function generatePurchaseOrderPdf(purchaseId: string, organizationId: string): Promise<Buffer> {
+	const [result, org] = await Promise.all([
+		getPurchase(organizationId, purchaseId),
+		fetchOrg(organizationId),
+	]);
+	// getPurchase returns a Result wrapper ({ err? } & Partial<{ purchase, events }>),
+	// not the purchase itself.
+	if (result.err || !result.purchase) throw Object.assign(new Error("Purchase not found"), { status: 404 });
+
+	const element = React.createElement(
+		PurchaseOrderPdfTemplate,
+		{
+			purchase: result.purchase as PurchaseOrderPdfProps,
+			org,
+		}
 	) as unknown as DocElement;
 	return renderToBuffer(element) as Promise<Buffer>;
 }

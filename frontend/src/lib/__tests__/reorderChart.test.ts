@@ -32,6 +32,16 @@ const row = (over: Partial<ReorderForecastRow> = {}): ReorderForecastRow => ({
 	lowStockThreshold: 5,
 	belowReorderPoint: false,
 	severity: "warning",
+	// No vendor by default — these cases are about runway geometry, and a case
+	// that cares about a supplier says so.
+	preferredSupplierId: null,
+	preferredSupplierName: null,
+	vendorSku: null,
+	preferredUnitPrice: null,
+	priceSource: "none",
+	vendorSource: "none",
+	shortfallQty: null,
+	estimatedShortfallCost: null,
 	...over,
 });
 

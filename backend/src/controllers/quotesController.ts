@@ -12,6 +12,14 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
 import { assertValidQuoteTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { fillCoords } from "../lib/geocode.js";
+import { assertInventoryItemsInOrg } from "../lib/inventory.js";
+import { resolveDocumentLineage } from "../lib/documentLineage.js";
+import { formatCurrency } from "../lib/money.js";
+import { SOLD_BY_QUOTE_JOBS } from "../services/disputeAdapters.js";
+import { quoteDetailInclude } from "../services/quoteService.js";
+import { openDisputeStatusChangeRefusal } from "../services/disputeService.js";
+import { notifyDispatchers } from "./notificationsController.js";
 import { db, generateQuoteNumber } from "../db.js";
 import {
 	centsToDollars,
@@ -19,6 +27,7 @@ import {
 import {
 	recomputeDocumentTotals,
 	lockDocumentTaxSnapshot,
+	type RecomputeResult,
 } from "../lib/recomputeDocumentTotals.js";
 
 // ============================================================================
@@ -31,7 +40,7 @@ async function recomputeQuoteTotals(
 	organizationId: string,
 	tx: Prisma.TransactionClient,
 	lockedAt?: Date,
-): Promise<boolean> {
+): Promise<RecomputeResult> {
 	return recomputeDocumentTotals("quote", quoteId, organizationId, tx, lockedAt);
 }
 
@@ -78,79 +87,34 @@ export const getAllQuotes = async (organizationId: string) => {
 	});
 };
 
+/**
+ * The quote without its revision-chain walk. The PDF renderer, the email
+ * sender and the pre-send transition guard all call this and none read
+ * `lineage`, so resolving the two recursive CTEs here made every send pay for
+ * a value nobody uses. getQuoteDetail adds it.
+ */
 export const getQuoteById = async (quoteId: string, organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
 	return await sdb.quote.findFirst({
 		where: { id: quoteId },
-		include: {
-			client: {
-				select: {
-					id: true,
-					name: true,
-					address: true,
-					coords: true,
-					is_active: true,
-					is_tax_exempt: true,
-					tax_group_id: true,
-					contacts: {
-						where: { is_primary: true },
-						include: {
-							contact: {
-								select: {
-									id: true,
-									name: true,
-									email: true,
-									phone: true,
-								},
-							},
-						},
-						take: 1,
-					},
-				},
-			},
-			request: {
-				select: {
-					id: true,
-					title: true,
-					status: true,
-					created_at: true,
-				},
-			},
-			job: {
-				select: {
-					id: true,
-					job_number: true,
-					name: true,
-					status: true,
-					created_at: true,
-					estimated_total: true,
-				},
-			},
-			line_items: {
-				orderBy: { sort_order: "asc" },
-				include: {
-					tax_group: { select: { name: true } },
-				},
-			},
-			notes: {
-				include: {
-					creator_tech: {
-						select: { id: true, name: true, email: true },
-					},
-					creator_dispatcher: {
-						select: { id: true, name: true, email: true },
-					},
-					last_editor_tech: {
-						select: { id: true, name: true, email: true },
-					},
-					last_editor_dispatcher: {
-						select: { id: true, name: true, email: true },
-					},
-				},
-				orderBy: { created_at: "desc" },
-			},
-		},
+		include: quoteDetailInclude,
 	});
+};
+
+/** getQuoteById plus the resolved revision lineage — for the detail GET. */
+export const getQuoteDetail = async (
+	quoteId: string,
+	organizationId: string,
+) => {
+	const quote = await getQuoteById(quoteId, organizationId);
+	if (!quote) return null;
+	// A walk, not a join — kept out of the include so it is paid for only here.
+	const lineage = await resolveDocumentLineage(
+		"quote",
+		quoteId,
+		organizationId,
+	);
+	return { ...quote, lineage };
 };
 
 export const getQuotesByClientId = async (clientId: string, organizationId: string) => {
@@ -185,6 +149,7 @@ export const getQuotesByClientId = async (clientId: string, organizationId: stri
 export const insertQuote = async (req: Request, organizationId: string, context?: UserContext) => {
 	try {
 		const parsed = createQuoteSchema.parse(req.body);
+		await fillCoords(parsed, false);
 		const sdb = getScopedDb(organizationId);
 
 		let created: Awaited<ReturnType<typeof db.quote.findFirst>> | undefined;
@@ -237,6 +202,25 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 				await tx.request.update({
 					where: { id: parsed.request_id },
 					data: { status: "Quoted" },
+				});
+
+				await logActivity({
+					event_type: "request.quoted",
+					action: "converted",
+					entity_type: "request",
+					entity_id: parsed.request_id,
+					organization_id: organizationId,
+					actor_type: context?.techId
+						? "technician"
+						: context?.dispatcherId
+							? "dispatcher"
+							: "system",
+					actor_id: context?.techId || context?.dispatcherId,
+					changes: {
+						status: { old: request.status, new: "Quoted" },
+					},
+					ip_address: context?.ipAddress,
+					user_agent: context?.userAgent,
 				});
 			}
 
@@ -293,6 +277,11 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 				data: quoteData,
 			});
 			if (parsed.line_items && parsed.line_items.length > 0) {
+				await assertInventoryItemsInOrg(
+					tx,
+					organizationId,
+					parsed.line_items.map((i) => i.inventory_item_id),
+				);
 				await tx.quote_line_item.createMany({
 					data: parsed.line_items.map((item, index) => ({
 						quote_id: quote.id,
@@ -305,6 +294,7 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 						sort_order: item.sort_order ?? index,
 						tax_group_id: item.tax_group_id ?? null,
 						taxable: item.taxable !== undefined ? item.taxable : true,
+						inventory_item_id: item.inventory_item_id ?? null,
 					})),
 				});
 
@@ -342,12 +332,7 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 
 			return tx.quote.findUnique({
 				where: { id: quote.id },
-				include: {
-					client: true,
-					request: true,
-					job: true,
-					line_items: true,
-				},
+				include: quoteDetailInclude,
 			});
 				});
 				break;
@@ -385,6 +370,7 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 	try {
 		const quoteId = req.params.id as string;
 		const parsed = updateQuoteSchema.parse(req.body);
+		await fillCoords(parsed, false);
 		const sdb = getScopedDb(organizationId);
 
 		const existing = await sdb.quote.findFirst({
@@ -394,6 +380,27 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 
 		if (!existing) {
 			return { err: "Quote not found" };
+		}
+
+		// Terminal quotes are immutable, matching how Void invoices behave.
+		// A repealed quote must stay repealed.
+		const QUOTE_TERMINAL_STATUSES = ["Cancelled", "Rejected", "Revised"];
+		if (QUOTE_TERMINAL_STATUSES.includes(existing.status)) {
+			return { err: `${existing.status} quotes cannot be modified` };
+		}
+
+		// Mirrors updateInvoice: moving a quote out of Disputed from here
+		// strands the dispute. resolveDispute requires the quote to still be
+		// Disputed, and both exits from Disputed (Cancelled, Revised) are
+		// themselves terminal, so the open row could never be closed — and it
+		// holds the one-open-dispute index forever. Resolution is the only exit.
+		if (parsed.status && parsed.status !== existing.status) {
+			const openRefusal = await openDisputeStatusChangeRefusal(
+				sdb as unknown as Prisma.TransactionClient,
+				"quote",
+				quoteId,
+			);
+			if (openRefusal) return { err: openRefusal };
 		}
 
 		if (existing.job) {
@@ -426,6 +433,11 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 		const updated = await sdb.$transaction(async (tx) => {
 			if (parsed.line_items !== undefined) {
 				const incomingItems = parsed.line_items || [];
+				await assertInventoryItemsInOrg(
+					tx,
+					organizationId,
+					incomingItems.map((i) => i.inventory_item_id),
+				);
 				const existingItemIds = new Set(
 					existing.line_items.map((item) => item.id),
 				);
@@ -540,6 +552,9 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 									...(item.taxable !== undefined && {
 										taxable: item.taxable,
 									}),
+									...(item.inventory_item_id !== undefined && {
+										inventory_item_id: item.inventory_item_id,
+									}),
 								},
 							});
 
@@ -578,6 +593,7 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 								sort_order: item.sort_order ?? index,
 								tax_group_id: item.tax_group_id ?? null,
 								taxable: item.taxable !== undefined ? item.taxable : true,
+								inventory_item_id: item.inventory_item_id ?? null,
 							},
 						});
 
@@ -706,12 +722,7 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 					...(isFirstApproved && { approved_at: new Date() }),
 					...(isFirstRejected && { rejected_at: new Date() }),
 				},
-				include: {
-					client: true,
-					request: true,
-					job: true,
-					line_items: true,
-				},
+				include: quoteDetailInclude,
 			});
 
 			// Lock tax snapshot when transitioning to Issued
@@ -726,16 +737,35 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 
 			// Sync request status if linked
 			if (quote.request_id && parsed.status) {
+				const requestStatusSync = async (newStatus: "QuoteApproved" | "QuoteRejected") => {
+					await tx.request.update({
+						where: { id: quote.request_id! },
+						data: { status: newStatus },
+					});
+					await logActivity({
+						event_type: newStatus === "QuoteApproved" ? "request.quote_approved" : "request.quote_rejected",
+						action: "updated",
+						entity_type: "request",
+						entity_id: quote.request_id!,
+						organization_id: organizationId,
+						actor_type: context?.techId
+							? "technician"
+							: context?.dispatcherId
+								? "dispatcher"
+								: "system",
+						actor_id: context?.techId || context?.dispatcherId,
+						changes: {
+							status: { old: quote.request?.status ?? null, new: newStatus },
+						},
+						ip_address: context?.ipAddress,
+						user_agent: context?.userAgent,
+					});
+				};
+
 				if (parsed.status === "Approved") {
-					await tx.request.update({
-						where: { id: quote.request_id },
-						data: { status: "QuoteApproved" },
-					});
+					await requestStatusSync("QuoteApproved");
 				} else if (parsed.status === "Rejected") {
-					await tx.request.update({
-						where: { id: quote.request_id },
-						data: { status: "QuoteRejected" },
-					});
+					await requestStatusSync("QuoteRejected");
 				}
 			}
 
@@ -760,6 +790,18 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 
 			return quote;
 		});
+
+		if (parsed.status !== existing.status && (parsed.status === "Approved" || parsed.status === "Rejected")) {
+			const approved = parsed.status === "Approved";
+			notifyDispatchers({
+				type: approved ? "quote_accepted" : "quote_declined",
+				title: `Quote ${existing.quote_number} ${approved ? "accepted" : "declined"}`,
+				body: approved
+					? `${formatCurrency(Number(existing.total))} quote was accepted.`
+					: (parsed.rejection_reason ?? "The client declined the quote."),
+				actionUrl: `/dispatch/quotes/${quoteId}`,
+			}, organizationId, context?.dispatcherId).catch(() => {});
+		}
 
 		return { err: "", item: updated };
 	} catch (e) {
@@ -794,6 +836,28 @@ export const deleteQuote = async (id: string, organizationId: string, context?: 
 		if (existing.job) {
 			return {
 				err: "Cannot delete quote that has been converted to a job",
+			};
+		}
+
+		// document_dispute.quote_id cascades on delete, so deleting the quote
+		// would destroy the dispute's reason, contested lines, resolution and
+		// actors. The quote.deleted log row carries none of that, and spec §12
+		// makes the audit trail the only mitigation for single-actor repeal.
+		// A quote a resolution produced belongs to that dispute's audit trail
+		// too. replacement_quote_id is ON DELETE RESTRICT; this sentence is what
+		// the dispatcher reads instead of the constraint violation.
+		const dispute = await sdb.document_dispute.findFirst({
+			where: { OR: [{ quote_id: id }, { replacement_quote_id: id }] },
+			select: { id: true, replacement_quote_id: true },
+		});
+		if (dispute?.replacement_quote_id === id) {
+			return {
+				err: "This quote was produced by a dispute resolution and is part of its audit trail. Cancel it instead.",
+			};
+		}
+		if (dispute) {
+			return {
+				err: "Cannot delete a quote with dispute history. Its dispute record is part of the audit trail.",
 			};
 		}
 
@@ -880,6 +944,10 @@ export const insertQuoteItem = async (
 		}
 
 		const created = await sdb.$transaction(async (tx) => {
+			await assertInventoryItemsInOrg(tx, organizationId, [
+				parsed.inventory_item_id,
+			]);
+
 			// Calculate total if not provided
 			const total =
 				parsed.total !== undefined
@@ -896,6 +964,7 @@ export const insertQuoteItem = async (
 					total: total,
 					item_type: parsed.item_type || null,
 					sort_order: parsed.sort_order,
+					inventory_item_id: parsed.inventory_item_id ?? null,
 					tax_group_id: parsed.tax_group_id ?? null,
 					taxable: parsed.taxable !== undefined ? parsed.taxable : true,
 				},
@@ -971,6 +1040,10 @@ export const updateQuoteItem = async (
 		] as const);
 
 		const updated = await sdb.$transaction(async (tx) => {
+			await assertInventoryItemsInOrg(tx, organizationId, [
+				parsed.inventory_item_id,
+			]);
+
 			// Recalculate total if quantity or unit_price changed
 			let total = parsed.total;
 			if (total === undefined) {
@@ -1004,6 +1077,9 @@ export const updateQuoteItem = async (
 					}),
 					...(parsed.sort_order !== undefined && {
 						sort_order: parsed.sort_order,
+					}),
+					...(parsed.inventory_item_id !== undefined && {
+						inventory_item_id: parsed.inventory_item_id,
 					}),
 					...(parsed.tax_group_id !== undefined && {
 						tax_group_id: parsed.tax_group_id,

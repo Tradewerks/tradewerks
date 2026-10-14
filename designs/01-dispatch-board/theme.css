@@ -1,0 +1,415 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SYSTEM 01 · DISPATCH — "The board"
+ * A graphite console for the dispatcher. One ochre signal, mono for anything a
+ * machine produced, hairline rules instead of shadows. Same tokens invert
+ * cleanly for the night shift.
+ * Type: Archivo (UI) / IBM Plex Mono (machine output)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+	/* ── Backgrounds / Surfaces ──────────────────────────────────────────── */
+	--color-canvas:         #F4F4F2;   /* ground */
+	--color-base:           #FFFFFF;   /* surface — brightest card */
+	--color-surface:        #FAFAF8;
+	--color-surface-raised: #EDEDE9;   /* hover/selected — darker than surface */
+	--color-surface-inset:  #E7E7E3;   /* recessed wells/inputs */
+
+	/* ── Text ────────────────────────────────────────────────────────────── */
+	--color-text-primary:    #16181A;   /* ink */
+	--color-text-secondary:  #3E4244;
+	--color-text-tertiary:   #4A4E50;
+	--color-text-muted:      #6C6F71;
+	--color-text-faint:      #83878A;
+	--color-text-inverse:    #FBFBF9;
+	--color-text-link:       #3A5570;
+	--color-text-on-surface: #4A4E50;
+
+	/* ── Primary — ink. The console's CTA is graphite, never the signal. ─── */
+	--color-primary:           #16181A;
+	--color-primary-hover:     #2C3033;
+	--color-primary-active:    #000000;
+	--color-primary-bg:        rgba(22, 24, 26, 0.08);
+	--color-primary-bg-subtle: rgba(22, 24, 26, 0.05);
+	--color-primary-bg-dim:    rgba(22, 24, 26, 0.03);
+	--color-primary-border:    rgba(22, 24, 26, 0.18);
+	--color-primary-text:      #16181A;
+	--color-on-primary:        #FBFBF9;
+	--color-primary-disabled:  #8A8E90;
+
+	/* ── Borders — hairline rules, no shadows ────────────────────────────── */
+	--color-border-subtle: #ECECE7;
+	--color-border:        #E0E0DC;
+	--color-border-strong: #CFCFC9;
+	--color-border-card:   #E0E0DC;
+	--color-border-input:  #CFCFC9;
+
+	/* ── Overlay ─────────────────────────────────────────────────────────── */
+	--color-overlay: rgba(18, 20, 21, 0.62);
+
+	/* ── Confirm / Payment / QuickBooks ──────────────────────────────────── */
+	--color-confirm:       #2F7A5B;
+	--color-confirm-hover: #256349;
+	--color-payment:       #B4761A;   /* ochre signal — act now */
+	--color-payment-hover: #96620F;
+	--color-quickbooks:       #2F7A5B;
+	--color-quickbooks-hover: #256349;
+
+	/* ── Status: success — "on track" ────────────────────────────────────── */
+	--color-success:             #2F7A5B;
+	--color-success-text:        #1F5C43;
+	--color-success-bg:          #EDF4F0;
+	--color-success-border:      #C3DACE;
+	--color-success-bright-text: #1F5C43;
+
+	/* ── Status: error — "at risk" ───────────────────────────────────────── */
+	--color-error:        #B4472A;
+	--color-error-strong: #93341B;
+	--color-error-text:   #93341B;
+	--color-error-bg:     #F8EFEB;
+	--color-error-border: #E5C9BF;
+
+	/* ── Status: warning — the ochre signal ──────────────────────────────── */
+	--color-warning:        #B4761A;
+	--color-warning-text:   #7A5008;
+	--color-warning-bg:     #F7F1E4;
+	--color-warning-border: #E3D3B4;
+	--color-on-warning:     #FFFFFF;
+
+	/* ── Status: info — "agent" ──────────────────────────────────────────── */
+	--color-info:        #4E6B85;
+	--color-info-text:   #3A5570;
+	--color-info-bg:     #EEF2F6;
+	--color-info-border: #C8D5E1;
+
+	/* ── Status: reviewing ───────────────────────────────────────────────── */
+	--color-reviewing:        #6B5B8A;
+	--color-reviewing-text:   #574873;
+	--color-reviewing-bg:     #F1EFF5;
+	--color-reviewing-border: #D3CCE0;
+
+	/* ── Status: rejected ────────────────────────────────────────────────── */
+	--color-rejected:        #A33A38;
+	--color-rejected-text:   #8A2F2D;
+	--color-rejected-bg:     #F7ECEC;
+	--color-rejected-border: #E2C6C5;
+
+	/* ── Status: neutral / orange ────────────────────────────────────────── */
+	--color-neutral: #6C6F71;
+	--color-orange:        #A85E20;
+	--color-orange-text:   #874A15;
+	--color-orange-bg:     #F7F0E7;
+	--color-orange-border: #E2D0BA;
+
+	/* ── Priority ────────────────────────────────────────────────────────── */
+	--color-priority-emergency: #93341B;
+	--color-priority-urgent:    #B4472A;
+	--color-priority-high:      #B4761A;
+	--color-priority-medium:    #A8862F;
+	--color-priority-low:       #2F7A5B;
+	--color-priority-default:   #6C6F71;
+
+	/* ── Visit status ────────────────────────────────────────────────────── */
+	--color-visit-scheduled:  #6C6F71;
+	--color-visit-driving:    #4E6B85;
+	--color-visit-onsite:     #B4761A;
+	--color-visit-inprogress: #3A5570;
+	--color-visit-paused:     #A85E20;
+	--color-visit-delayed:    #A8862F;
+	--color-visit-completed:  #2F7A5B;
+	--color-visit-cancelled:  #B4472A;
+
+	--color-visit-driving-text:   #3A5570;
+	--color-visit-completed-dark: #1F5C43;
+	--color-visit-delayed-text:   #7A5008;
+	--color-visit-paused-text:    #874A15;
+
+	/* ── Schedule card surfaces ──────────────────────────────────────────── */
+	--color-card-bg:           #F4F4F2;
+	--color-occurrence-bg:     #F1EFF5;
+	--color-popup-bg:          #FFFFFF;
+	--color-occurrence-border: rgba(107, 91, 138, 0.28);
+
+	/* ── Schedule text ───────────────────────────────────────────────────── */
+	--color-sched-text-primary:      #16181A;
+	--color-sched-text-secondary:    #4A4E50;
+	--color-sched-text-muted:        rgba(22, 24, 26, 0.56);
+	--color-sched-text-client:       rgba(22, 24, 26, 0.62);
+	--color-sched-text-time:         rgba(22, 24, 26, 0.72);
+	--color-sched-text-faint:        #6C6F71;
+	--color-sched-visit-title:       #16181A;
+	--color-sched-occurrence-title:  #574873;
+	--color-sched-occurrence-badge:  #6B5B8A;
+	--color-sched-today-bg:          #EEF2F6;
+	--color-sched-status-badge-bg:   rgba(22, 24, 26, 0.07);
+	--color-sched-status-badge-text: #3E4244;
+	--color-sched-open-ended-dash:   rgba(22, 24, 26, 0.24);
+
+	/* ── Calendar ────────────────────────────────────────────────────────── */
+	--color-cal-month-day: #4A4E50;
+
+	/* ── Charts — graphite with one ochre signal ─────────────────────────── */
+	--color-chart-primary:  #4E6B85;
+	--color-chart-success:  #2F7A5B;
+	--color-chart-warning:  #B4761A;
+	--color-chart-info:     #6B7F92;
+	--color-chart-error:    #B4472A;
+	--color-chart-fallback: #E0E0DC;
+	--color-chart-axis:     #6C6F71;
+	--color-chart-hole-bg:  #F4F4F2;
+
+	/* ── Tech palette — earthy, desaturated to sit under the ochre ───────── */
+	--color-tech-1:          #4E6B85;
+	--color-tech-2:          #B4761A;
+	--color-tech-3:          #2F7A5B;
+	--color-tech-4:          #B4472A;
+	--color-tech-5:          #6B5B8A;
+	--color-tech-6:          #7A8B6E;
+	--color-tech-7:          #A8862F;
+	--color-tech-8:          #8A6A55;
+	--color-tech-9:          #95999B;
+	--color-tech-unassigned: #6C6F71;
+
+	--color-sched-tech-1:  #4E6B85;
+	--color-sched-tech-2:  #2F7A5B;
+	--color-sched-tech-3:  #B4761A;
+	--color-sched-tech-4:  #6B5B8A;
+	--color-sched-tech-5:  #B4472A;
+	--color-sched-tech-6:  #3A5570;
+	--color-sched-tech-7:  #A85E20;
+	--color-sched-tech-8:  #8A5570;
+	--color-sched-tech-9:  #7A8B6E;
+	--color-sched-tech-10: #2F6B6B;
+	--color-sched-tech-11: #574873;
+	--color-sched-tech-12: #A8862F;
+
+	/* ── Mapbox ──────────────────────────────────────────────────────────── */
+	--color-mapbox-bg:       #FFFFFF;
+	--color-mapbox-bg-hover: #EDEDE9;
+	--color-mapbox-border:   #E0E0DC;
+
+	/* ── Gradient / special ──────────────────────────────────────────────── */
+	--color-gradient-tech-teal:      #4E8B85;
+	--color-gradient-tech-teal-text: #2F5F5A;
+	--color-dispatcher-avatar-to:    #6B5B8A;
+
+	/* ── Recurring Plan ──────────────────────────────────────────────────── */
+	--color-plan:       #6B5B8A;
+	--color-plan-hover: #574873;
+	--color-plan-text:  #574873;
+
+	/* ── Lifecycle actions ───────────────────────────────────────────────── */
+	--color-action-drive:       #4E6B85;
+	--color-action-drive-hover: #3A5570;
+	--color-action-pause:       #B4761A;
+	--color-action-pause-hover: #96620F;
+
+	--color-test: #F4F4F2;
+
+	/* ── Geometry — tight. Rules, not pills. ─────────────────────────────── */
+	--radius-xs:  2px;
+	--radius-sm:  3px;
+	--radius-md:  4px;
+	--radius-lg:  5px;
+	--radius-xl:  6px;
+	--radius-2xl: 8px;
+	--radius-3xl: 10px;
+}
+
+/* ── Dark · night shift ─────────────────────────────────────────────────── */
+[data-theme="dark"] {
+	--color-canvas:         #121415;
+	--color-base:           #1A1D1E;
+	--color-surface:        #16191A;
+	--color-surface-raised: #26292B;
+	--color-surface-inset:  #0E1011;
+
+	--color-text-primary:    #EDECE9;
+	--color-text-secondary:  #C4C3C0;
+	--color-text-tertiary:   #ADACA9;
+	--color-text-muted:      #95999B;
+	--color-text-faint:      #7E8285;
+	--color-text-inverse:    #16181A;
+	--color-text-link:       #93AFC8;
+	--color-text-on-surface: #C4C3C0;
+
+	/* Primary inverts — the one bright button on a dark board */
+	--color-primary:           #EDECE9;
+	--color-primary-hover:     #FFFFFF;
+	--color-primary-active:    #D6D5D1;
+	--color-primary-bg:        rgba(237, 236, 233, 0.14);
+	--color-primary-bg-subtle: rgba(237, 236, 233, 0.08);
+	--color-primary-bg-dim:    rgba(237, 236, 233, 0.05);
+	--color-primary-border:    rgba(237, 236, 233, 0.24);
+	--color-primary-text:      #EDECE9;
+	--color-on-primary:        #16181A;
+	--color-primary-disabled:  #63676A;
+
+	--color-border-subtle: #26292B;
+	--color-border:        #2B2F31;
+	--color-border-strong: #3C4042;
+	--color-border-card:   #2B2F31;
+	--color-border-input:  #3C4042;
+
+	--color-overlay: rgba(9, 10, 11, 0.78);
+
+	--color-confirm:       #6FC49B;
+	--color-confirm-hover: #57B287;
+	--color-payment:       #E0A64B;
+	--color-payment-hover: #CE9339;
+	--color-quickbooks:       #6FC49B;
+	--color-quickbooks-hover: #57B287;
+
+	--color-success:             #6FC49B;
+	--color-success-text:        #6FC49B;
+	--color-success-bg:          #16241E;
+	--color-success-border:      #2C4A3D;
+	--color-success-bright-text: #6FC49B;
+
+	--color-error:        #E58A6C;
+	--color-error-strong: #E58A6C;
+	--color-error-text:   #E58A6C;
+	--color-error-bg:     #26160F;
+	--color-error-border: #4A2A1E;
+
+	--color-warning:        #E0A64B;
+	--color-warning-text:   #E0A64B;
+	--color-warning-bg:     #241C10;
+	--color-warning-border: #4A3A1C;
+	--color-on-warning:     #1A1408;
+
+	--color-info:        #93AFC8;
+	--color-info-text:   #93AFC8;
+	--color-info-bg:     #141B21;
+	--color-info-border: #26333D;
+
+	--color-reviewing:        #B2A3CE;
+	--color-reviewing-text:   #B2A3CE;
+	--color-reviewing-bg:     #1B1826;
+	--color-reviewing-border: #362F47;
+
+	--color-rejected:        #E08C8A;
+	--color-rejected-text:   #E08C8A;
+	--color-rejected-bg:     #241516;
+	--color-rejected-border: #46292A;
+
+	--color-neutral: #95999B;
+	--color-orange:        #DB9560;
+	--color-orange-text:   #DB9560;
+	--color-orange-bg:     #241A11;
+	--color-orange-border: #46341F;
+
+	--color-priority-emergency: #E58A6C;
+	--color-priority-urgent:    #DB9560;
+	--color-priority-high:      #E0A64B;
+	--color-priority-medium:    #CBBA6A;
+	--color-priority-low:       #6FC49B;
+	--color-priority-default:   #95999B;
+
+	--color-visit-scheduled:  #95999B;
+	--color-visit-driving:    #93AFC8;
+	--color-visit-onsite:     #E0A64B;
+	--color-visit-inprogress: #93AFC8;
+	--color-visit-paused:     #DB9560;
+	--color-visit-delayed:    #CBBA6A;
+	--color-visit-completed:  #6FC49B;
+	--color-visit-cancelled:  #E58A6C;
+
+	--color-visit-driving-text:   #93AFC8;
+	--color-visit-completed-dark: #6FC49B;
+	--color-visit-delayed-text:   #CBBA6A;
+	--color-visit-paused-text:    #DB9560;
+
+	--color-card-bg:           #1A1D1E;
+	--color-occurrence-bg:     #1B1826;
+	--color-popup-bg:          #1A1D1E;
+	--color-occurrence-border: rgba(178, 163, 206, 0.3);
+
+	--color-sched-text-primary:      #EDECE9;
+	--color-sched-text-secondary:    #C4C3C0;
+	--color-sched-text-muted:        rgba(237, 236, 233, 0.56);
+	--color-sched-text-client:       rgba(237, 236, 233, 0.62);
+	--color-sched-text-time:         rgba(237, 236, 233, 0.74);
+	--color-sched-text-faint:        #7E8285;
+	--color-sched-visit-title:       #EDECE9;
+	--color-sched-occurrence-title:  #B2A3CE;
+	--color-sched-today-bg:          #141B21;
+	--color-sched-status-badge-bg:   rgba(237, 236, 233, 0.10);
+	--color-sched-status-badge-text: #C4C3C0;
+	--color-sched-open-ended-dash:   rgba(237, 236, 233, 0.34);
+
+	--color-cal-month-day: #C4C3C0;
+
+	--color-chart-primary:  #93AFC8;
+	--color-chart-success:  #6FC49B;
+	--color-chart-warning:  #E0A64B;
+	--color-chart-info:     #A9BACA;
+	--color-chart-error:    #E58A6C;
+	--color-chart-fallback: #2B2F31;
+	--color-chart-axis:     #95999B;
+	--color-chart-hole-bg:  #121415;
+
+	--color-mapbox-bg:       #1A1D1E;
+	--color-mapbox-bg-hover: #26292B;
+	--color-mapbox-border:   #2B2F31;
+
+	--color-gradient-tech-teal:      #6FC4BC;
+	--color-gradient-tech-teal-text: #6FC4BC;
+	--color-dispatcher-avatar-to:    #B2A3CE;
+
+	--color-plan:       #B2A3CE;
+	--color-plan-hover: #9C8ABD;
+	--color-plan-text:  #B2A3CE;
+
+	--color-action-drive:       #93AFC8;
+	--color-action-drive-hover: #A9BACA;
+	--color-action-pause:       #E0A64B;
+	--color-action-pause-hover: #CE9339;
+
+	--anim-surface-flash: rgba(43, 47, 49, 0.45);
+}
+
+/* Palette variants collapse onto the system's own ground — one board, one look. */
+[data-palette="warm"],
+[data-palette="neutral"] {
+	--color-canvas:         #F4F4F2;
+	--color-base:           #FFFFFF;
+	--color-surface:        #FAFAF8;
+	--color-surface-raised: #EDEDE9;
+	--color-surface-inset:  #E7E7E3;
+	--color-border-subtle:  #ECECE7;
+	--color-border:         #E0E0DC;
+	--color-border-strong:  #CFCFC9;
+	--color-border-card:    #E0E0DC;
+	--color-border-input:   #CFCFC9;
+	--color-mapbox-bg:      #FFFFFF;
+	--color-mapbox-bg-hover:#EDEDE9;
+	--color-chart-fallback: #E0E0DC;
+	--color-chart-hole-bg:  #F4F4F2;
+}
+
+/* ── Geometry: bare `rounded` is a fixed 0.25rem utility in Tailwind v4, so it
+ * needs an explicit override. Unlayered beats @layer utilities. ──────────── */
+.rounded { border-radius: 3px; }
+
+/* ── Machine output keeps the mono face. Times, IDs, figures and anything the
+ * system returned read differently from what a person typed. ─────────────── */
+table th,
+input[type="number"],
+.font-mono,
+[class*="tabular"],
+[class*="font-variant"] {
+	font-family: "IBM Plex Mono", ui-monospace, monospace;
+	font-feature-settings: "tnum" 1;
+}
+
+/* Uppercase micro-labels — the console's register marks */
+.uppercase {
+	font-family: "IBM Plex Mono", ui-monospace, monospace;
+	letter-spacing: 0.12em;
+}
+
+/* Hairline rules instead of shadows */
+.shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl {
+	box-shadow: none !important;
+	border: 1px solid var(--color-border);
+}

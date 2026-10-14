@@ -1,6 +1,7 @@
 import z from "zod";
+import { coordsSchema } from "./shared.js";
 
-const technicianStatusEnum = z.enum(["Offline", "Available", "Break", "EnRoute", "OnSite", "Working", "Paused", "WrappingUp"]);
+const technicianStatusEnum = z.enum(["Offline", "Available", "Break", "EnRoute", "OnSite", "Working", "Paused", "WrappingUp", "HeadingBack"]);
 
 export const createTechnicianSchema = z.object({
 	name: z.string().min(1, "Technician name is required"),
@@ -11,10 +12,7 @@ export const createTechnicianSchema = z.object({
 	description: z.string().default(""),
 	organization_role_id: z.string().uuid("Valid role ID is required").nullable().optional(),
 	status: technicianStatusEnum.default("Offline"),
-	coords: z.object({
-		lat: z.number(),
-		lon: z.number(),
-	}),
+	coords: coordsSchema,
 	hire_date: z
 		.preprocess(
 			(val) =>
@@ -35,7 +33,7 @@ export const updateTechnicianSchema = z
 		description: z.string().optional(),
 		status: technicianStatusEnum.optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
-		coords: z.object({ lat: z.number(), lon: z.number() }).optional(),
+		coords: coordsSchema.optional(),
 		hire_date: z
 			.preprocess(
 				(val) =>

@@ -1,8 +1,9 @@
 import { ZodError } from "zod";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { fillCoords } from "../lib/geocode.js";
 import { db } from "../db.js";
 import { Prisma } from "../../generated/prisma/client.js";
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import {
 	createJobSchema,
 	updateJobSchema,
@@ -13,8 +14,16 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { LineItemToCreate, ChangeSet } from "../types/common.js";
+import { assertInventoryItemsInOrg } from "../lib/inventory.js";
 import { log } from "../services/appLogger.js";
 import { generateJobNumber } from "../db.js";
+import { DocumentRuleError } from "../lib/statusTransitions.js";
+import {
+	SOLD_BY_QUOTE_JOBS,
+	soldJobReason,
+	type DocumentShape,
+} from "../services/disputeAdapters.js";
+import { hasOpenDispute } from "../services/disputeService.js";
 
 // ============================================================================
 // JOB CRUD
@@ -247,9 +256,43 @@ export const getJobsByClientId = async (clientId: string, organizationId: string
 	});
 };
 
+/** Mirrors QUOTE_TERMINAL in frontend/src/components/lifecycle/quoteActions.ts. */
+const QUOTE_NOT_CONVERTIBLE: readonly string[] = ["Rejected", "Revised", "Expired", "Cancelled"];
+
+/**
+ * Why this quote can't become a job, or null. Conversion writes the quote to
+ * Approved with no transition guard, so this is the whole server-side gate;
+ * the page gates the same states, but a stale tab or a direct API call does not
+ * go through the page.
+ *
+ * Under an open dispute the write is a deadlock rather than a status change:
+ * resolveDispute needs the quote still Disputed, updateQuote refuses to move it
+ * while the dispute is open, and the one-open-dispute index then blocks any new
+ * dispute. Sold work converted again bills the client twice.
+ *
+ * Not assertValidQuoteTransition: that table has no Draft → Approved edge, yet
+ * a Draft quote converts today, so the page's terminal list is mirrored instead.
+ */
+function quoteConversionRefusal(quote: DocumentShape, hasOpenDispute: boolean): string | null {
+	if (hasOpenDispute || quote.status === "Disputed") {
+		return "This quote is under dispute — resolve the dispute before converting it to a job.";
+	}
+	if (quote.job) return "A job was already created from this quote.";
+	const sold = soldJobReason(quote);
+	if (sold) return sold;
+	if (QUOTE_NOT_CONVERTIBLE.includes(quote.status)) {
+		const status = quote.status.toLowerCase();
+		const article = /^[aeiou]/.test(status) ? "An" : "A";
+		return `${article} ${status} quote can't be converted to a job.`;
+	}
+	return null;
+}
+
 export const insertJob = async (req: Request, context?: UserContext) => {
 	try {
 		const parsed = createJobSchema.parse(req.body);
+		const geoErr = await fillCoords(parsed, true);
+		if (geoErr) return { err: geoErr };
 		const organizationId = req.user!.organization_id as string;
 		const sdb = getScopedDb(organizationId);
 		let created: Awaited<ReturnType<typeof db.job.findFirst>> | undefined;
@@ -266,7 +309,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 
 			if (parsed.tech_ids && parsed.tech_ids.length > 0) {
 				const existingTechs = await tx.technician.findMany({
-					where: { id: { in: parsed.tech_ids } },
+					where: { id: { in: parsed.tech_ids }, deactivated_at: null },
 					select: { id: true },
 				});
 				const existingIds = new Set(existingTechs.map((t) => t.id));
@@ -275,7 +318,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				);
 				if (missing.length > 0) {
 					throw new Error(
-						`Technicians not found: ${missing.join(", ")}`,
+						`Technicians not found or deactivated: ${missing.join(", ")}`,
 					);
 				}
 			}
@@ -304,12 +347,24 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 						line_items: {
 							orderBy: { sort_order: "asc" },
 						},
+						job: { select: { id: true } },
+						request: { include: { jobs: SOLD_BY_QUOTE_JOBS } },
 					},
 				});
 
 				if (!quote) {
 					throw new Error("Quote not found");
 				}
+
+				const refusal = quoteConversionRefusal(
+					quote as unknown as DocumentShape,
+					await hasOpenDispute(
+						tx as unknown as Prisma.TransactionClient,
+						"quote",
+						quote.id,
+					),
+				);
+				if (refusal) throw new DocumentRuleError(refusal);
 
 				if (!name) name = quote.title;
 				if (!description) description = quote.description;
@@ -344,7 +399,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 						? Number(quote.discount_amount)
 						: undefined;
 
-				// Store line items from quote for later creation
+				// The catalog link rides along, or it dies at conversion.
 				lineItemsToCreate = quote.line_items.map((item) => ({
 					name: item.name,
 					description: item.description,
@@ -353,6 +408,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					total: Number(item.total),
 					source: "quote" as const,
 					item_type: item.item_type,
+					inventory_item_id: item.inventory_item_id,
 				}));
 
 				await tx.quote.update({
@@ -360,10 +416,48 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					data: { status: "Approved" },
 				});
 
+				await logActivity({
+					event_type: "quote.converted",
+					action: "converted",
+					entity_type: "quote",
+					entity_id: quote.id,
+					organization_id: organizationId,
+					actor_type: context?.techId
+						? "technician"
+						: context?.dispatcherId
+							? "dispatcher"
+							: "system",
+					actor_id: context?.techId || context?.dispatcherId,
+					changes: {
+						status: { old: quote.status, new: "Approved" },
+					},
+					ip_address: context?.ipAddress,
+					user_agent: context?.userAgent,
+				});
+
 				if (quote.request_id) {
 					await tx.request.update({
 						where: { id: quote.request_id },
 						data: { status: "ConvertedToJob" },
+					});
+
+					await logActivity({
+						event_type: "request.converted",
+						action: "converted",
+						entity_type: "request",
+						entity_id: quote.request_id,
+						organization_id: organizationId,
+						actor_type: context?.techId
+							? "technician"
+							: context?.dispatcherId
+								? "dispatcher"
+								: "system",
+						actor_id: context?.techId || context?.dispatcherId,
+						changes: {
+							status: { old: quote.request?.status ?? null, new: "ConvertedToJob" },
+						},
+						ip_address: context?.ipAddress,
+						user_agent: context?.userAgent,
 					});
 				}
 			}
@@ -392,10 +486,34 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					where: { id: parsed.request_id },
 					data: { status: "ConvertedToJob" },
 				});
+
+				await logActivity({
+					event_type: "request.converted",
+					action: "converted",
+					entity_type: "request",
+					entity_id: parsed.request_id,
+					organization_id: organizationId,
+					actor_type: context?.techId
+						? "technician"
+						: context?.dispatcherId
+							? "dispatcher"
+							: "system",
+					actor_id: context?.techId || context?.dispatcherId,
+					changes: {
+						status: { old: request.status, new: "ConvertedToJob" },
+					},
+					ip_address: context?.ipAddress,
+					user_agent: context?.userAgent,
+				});
 			}
 
 			// If line_items provided directly in request, use those
 			if (parsed.line_items && parsed.line_items.length > 0) {
+				await assertInventoryItemsInOrg(
+					tx,
+					organizationId,
+					parsed.line_items.map((i) => i.inventory_item_id),
+				);
 				lineItemsToCreate = parsed.line_items.map((item) => ({
 					name: item.name,
 					description: item.description || null,
@@ -404,6 +522,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					total: item.total ?? item.quantity * item.unit_price,
 					source: "manual" as const,
 					item_type: item.item_type || null,
+					inventory_item_id: item.inventory_item_id ?? null,
 				}));
 			}
 
@@ -466,6 +585,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 						total: item.total ?? item.quantity * item.unit_price,
 						source: item.source ?? "manual",
 						item_type: item.item_type,
+						inventory_item_id: item.inventory_item_id ?? null,
 					})),
 				});
 			}
@@ -641,6 +761,8 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 	try {
 		const id = req.params.id as string;
 		const parsed = updateJobSchema.parse(req.body);
+		const geoErr = await fillCoords(parsed, true);
+		if (geoErr) return { err: geoErr };
 
 		const sdb = getScopedDb(organizationId);
 		const existing = await sdb.job.findFirst({
@@ -680,6 +802,11 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 			// BULK LINE ITEMS UPDATE
 			if (parsed.line_items !== undefined) {
 				const incomingItems = parsed.line_items || [];
+				await assertInventoryItemsInOrg(
+					tx,
+					organizationId,
+					incomingItems.map((i) => i.inventory_item_id),
+				);
 
 				// Track existing and incoming item IDs
 				const existingItemIds = new Set(
@@ -780,6 +907,20 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 									new: item.item_type,
 								};
 							}
+							// On a "same text, now points at the catalog" edit this is the whole
+							// change — without it the write below never fires.
+							const nextInventoryItemId =
+								item.inventory_item_id ?? null;
+							if (
+								item.inventory_item_id !== undefined &&
+								nextInventoryItemId !==
+									existingItem.inventory_item_id
+							) {
+								itemChanges.inventory_item_id = {
+									old: existingItem.inventory_item_id,
+									new: nextInventoryItemId,
+								};
+							}
 
 							// Only update if there are actual changes
 							if (Object.keys(itemChanges).length > 0) {
@@ -792,6 +933,9 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 										unit_price: item.unit_price,
 										total: item.total ?? item.quantity * item.unit_price,
 										item_type: item.item_type || null,
+										...(item.inventory_item_id !== undefined && {
+											inventory_item_id: nextInventoryItemId,
+										}),
 									},
 								});
 
@@ -826,6 +970,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 								total: item.total ?? item.quantity * item.unit_price,
 								source: "manual",
 								item_type: item.item_type || null,
+								inventory_item_id: item.inventory_item_id ?? null,
 							},
 						});
 
@@ -965,7 +1110,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		});
 
 		if (updated) {
-			getSocket().emit("job:updated", { jobId: id, organizationId });
+			emitToOrg(organizationId, "job:updated", { jobId: id, organizationId });
 		}
 		return { err: "", item: updated };
 	} catch (e) {
@@ -1068,6 +1213,10 @@ export const insertJobLineItem = async (
 		}
 
 		const created = await sdb.$transaction(async (tx) => {
+			await assertInventoryItemsInOrg(tx, organizationId, [
+				parsed.inventory_item_id,
+			]);
+
 			// Calculate total if not provided
 			const total =
 				parsed.total !== undefined
@@ -1084,6 +1233,7 @@ export const insertJobLineItem = async (
 					total: total,
 					source: parsed.source || "manual",
 					item_type: parsed.item_type || null,
+					inventory_item_id: parsed.inventory_item_id ?? null,
 				},
 			});
 
@@ -1177,6 +1327,10 @@ export const updateJobLineItem = async (
 		}
 
 		const updated = await sdb.$transaction(async (tx) => {
+			await assertInventoryItemsInOrg(tx, organizationId, [
+				parsed.inventory_item_id,
+			]);
+
 			// Recalculate total if quantity or unit_price changed
 			const total =
 				parsed.total ??
@@ -1202,6 +1356,9 @@ export const updateJobLineItem = async (
 					}),
 					...(parsed.item_type !== undefined && {
 						item_type: parsed.item_type,
+					}),
+					...(parsed.inventory_item_id !== undefined && {
+						inventory_item_id: parsed.inventory_item_id,
 					}),
 				},
 			});

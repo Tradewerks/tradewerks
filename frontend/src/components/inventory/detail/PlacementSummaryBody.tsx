@@ -55,7 +55,10 @@ export default function PlacementSummaryBody({
 				</span>
 			</div>
 
-			<div className="mt-3 flex gap-3">
+			{/* flex-wrap: two 140px-min tiles can exceed a narrow rail's width,
+			    and the parent Card's `overflow-hidden` clips overflow flush
+			    against the edge — reading as lost padding rather than a wrap. */}
+			<div className="mt-3 flex flex-wrap gap-3">
 				<PlacementTile
 					icon={Warehouse}
 					label="Warehouse"

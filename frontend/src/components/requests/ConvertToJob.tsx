@@ -3,9 +3,11 @@ import FullPopup from "../ui/FullPopup";
 import { PriorityValues } from "../../types/common";
 import { type CreateJobInput } from "../../types/jobs";
 import type { Request } from "../../types/requests";
-import type { GeocodeResult } from "../../types/location";
+import { normalizeCoords, type Coordinates, type GeocodeResult } from "../../types/location";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 
 interface ConvertToJobProps {
 	isModalOpen: boolean;
@@ -23,14 +25,16 @@ export default function ConvertToJob({
 	const nameRef = useRef<HTMLInputElement>(null);
 	const descRef = useRef<HTMLTextAreaElement>(null);
 	const priorityRef = useRef<HTMLSelectElement>(null);
-	const [geoData, setGeoData] = useState<GeocodeResult | undefined>(
-		request.address || request.coords
-			? { address: request.address || "", coords: request.coords }
+	const requestCoords = normalizeCoords(request.coords);
+	const [geoData, setGeoData] = useState<{ address: string; coords?: Coordinates } | undefined>(
+		request.address || requestCoords
+			? { address: request.address || "", coords: requestCoords }
 			: undefined
 	);
 	const [isLoading, setIsLoading] = useState(false);
 	const [nameError, setNameError] = useState<string | null>(null);
 	const [addressError, setAddressError] = useState<string | null>(null);
+	const [submitError, setSubmitError] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (isModalOpen && priorityRef.current) {
@@ -49,8 +53,8 @@ export default function ConvertToJob({
 	};
 
 	const handleClearAddress = () => {
-		if (request.address || request.coords) {
-			setGeoData({ address: request.address || "", coords: request.coords });
+		if (request.address || requestCoords) {
+			setGeoData({ address: request.address || "", coords: requestCoords });
 		} else {
 			setGeoData(undefined);
 		}
@@ -82,6 +86,7 @@ export default function ConvertToJob({
 
 		setNameError(null);
 		setAddressError(null);
+		setSubmitError(null);
 
 		let hasError = false;
 		if (!nameValue) {
@@ -117,10 +122,8 @@ export default function ConvertToJob({
 			setIsModalOpen(false);
 		} catch (error) {
 			console.error("Failed to convert request to job:", error);
-			setNameError(
-				error instanceof Error
-					? error.message
-					: "Failed to convert request to job"
+			setSubmitError(
+				errorMessage(error, "Failed to convert request to job.")
 			);
 		} finally {
 			setIsLoading(false);
@@ -181,7 +184,7 @@ export default function ConvertToJob({
 					<AddressForm
 						mode={request.address ? "edit" : "create"}
 						originalValue={request.address || ""}
-						originalCoords={request.coords}
+						originalCoords={requestCoords}
 						dropdownPosition="above"
 						handleChange={handleChangeAddress}
 						handleClear={handleClearAddress}
@@ -215,21 +218,24 @@ export default function ConvertToJob({
 			</div>
 
 			{/* Footer */}
-			<div className="flex items-center justify-end gap-2 px-4 lg:px-6 py-3 lg:py-4 border-t border-border-subtle flex-shrink-0">
-				<button
-					onClick={() => setIsModalOpen(false)}
-					disabled={isLoading}
-					className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-surface rounded-md border border-border transition-colors disabled:opacity-50"
-				>
-					Cancel
-				</button>
-				<button
-					onClick={invokeConvert}
-					disabled={isLoading}
-					className="px-4 py-2 text-sm font-medium bg-primary-hover hover:bg-primary-active text-on-primary rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					{isLoading ? "Creating..." : "Create Job"}
-				</button>
+			<div className="border-t border-border-subtle flex-shrink-0">
+				<FormErrorBanner message={submitError} className="mx-4 lg:mx-6 mt-3" />
+				<div className="flex items-center justify-end gap-2 px-4 lg:px-6 py-3 lg:py-4">
+					<button
+						onClick={() => setIsModalOpen(false)}
+						disabled={isLoading}
+						className="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-surface rounded-md border border-border transition-colors disabled:opacity-50"
+					>
+						Cancel
+					</button>
+					<button
+						onClick={invokeConvert}
+						disabled={isLoading}
+						className="px-4 py-2 text-sm font-medium bg-primary-hover hover:bg-primary-active text-on-primary rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+					>
+						{isLoading ? "Creating..." : "Create Job"}
+					</button>
+				</div>
 			</div>
 		</div>
 	);

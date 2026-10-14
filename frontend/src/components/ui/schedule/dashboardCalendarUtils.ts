@@ -1,7 +1,7 @@
-import { Temporal } from "temporal-polyfill";
 import type { Job, JobVisit } from "../../../types/jobs";
 import type { RecurringOccurrence, RecurringPlan } from "../../../types/recurringPlans";
-import { visitStartLabel, getPriorityColor } from "./scheduleBoardUtils";
+import type { Technician } from "../../../types/technicians";
+import { dateKeyAt, localDateKey } from "./scheduleBoardUtils";
 
 export interface VisitWithJob extends JobVisit {
 	job_obj: Job;
@@ -12,31 +12,9 @@ export interface OccurrenceWithPlan extends RecurringOccurrence {
 	job_obj: Job;
 }
 
-export function getStatusColor(status: string): string {
-	switch (status) {
-		case "Scheduled":  return "var(--color-primary)";
-		case "InProgress": return "var(--color-warning)";
-		case "Completed":  return "var(--color-success)";
-		case "Cancelled":  return "var(--color-error)";
-		default:           return "var(--color-text-muted)";
-	}
-}
-
 export function formatTime(date: Date | string): string {
 	const d = typeof date === "string" ? new Date(date) : date;
 	return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-/** Convert a Date/string to a Temporal.ZonedDateTime in the local timezone (required by @schedule-x v4) */
-export function toZonedDateTime(date: Date | string): Temporal.ZonedDateTime {
-	const d = typeof date === "string" ? new Date(date) : date;
-	const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-	return Temporal.Instant.fromEpochMilliseconds(d.getTime()).toZonedDateTimeISO(tz);
-}
-
-/** Convert a "YYYY-MM-DD" string to a Temporal.PlainDate (for all-day events) */
-export function toPlainDate(dateStr: string): Temporal.PlainDate {
-	return Temporal.PlainDate.from(dateStr);
 }
 
 export function extractVisits(jobs: Job[]): VisitWithJob[] {
@@ -45,9 +23,12 @@ export function extractVisits(jobs: Job[]): VisitWithJob[] {
 	);
 }
 
-export function extractOccurrences(jobs: Job[]): OccurrenceWithPlan[] {
-	const now = new Date();
-	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+/** Planned, ungenerated occurrences from `today` (a "YYYY-MM-DD" key) onward. */
+export function extractOccurrences(
+	jobs: Job[],
+	today: string = localDateKey(new Date()),
+): OccurrenceWithPlan[] {
+	const startOfToday = dateKeyAt(today);
 	return jobs.flatMap((job_obj) => {
 		const plan = job_obj.recurring_plan as RecurringPlan | undefined | null;
 		if (!plan?.occurrences?.length) return [];
@@ -62,118 +43,72 @@ export function extractOccurrences(jobs: Job[]): OccurrenceWithPlan[] {
 	});
 }
 
-const MAX_OPEN_ENDED_HOURS = 4;
-
-// ─── Calendar event types ─────────────────────────────────────────────────────
-
-export interface VisitCalendarEvent {
-	id: string;
-	title: string;
-	start: Temporal.ZonedDateTime;
-	end: Temporal.ZonedDateTime;
-	_type: "visit";
-	_data: VisitWithJob;
-	calendarId: string;
-	style: string;
+export interface AgendaGroup {
+	techId: string;              // technician id or "unassigned"
+	techName: string;
+	color: string;
+	items: Array<{ type: "visit"; item: VisitWithJob } | { type: "occ"; item: OccurrenceWithPlan }>;
 }
 
-export interface OccurrenceCalendarEvent {
-	id: string;
-	title: string;
-	start: Temporal.ZonedDateTime;
-	end: Temporal.ZonedDateTime;
-	_type: "occurrence";
-	_data: OccurrenceWithPlan;
-	calendarId: string;
-	style: string;
+export function itemStart(entry: AgendaGroup["items"][number]): number {
+	return new Date(
+		entry.type === "visit" ? entry.item.scheduled_start_at : entry.item.occurrence_start_at
+	).getTime();
 }
 
-export interface BadgeCalendarEvent {
-	id: string;
-	title: string;
-	start: Temporal.PlainDate;
-	end: Temporal.PlainDate;
-	_type: "occurrence-badge";
-	_count: number;
-	calendarId: string;
-}
-
-export type CalendarEvent = VisitCalendarEvent | OccurrenceCalendarEvent | BadgeCalendarEvent;
-
-/** Build schedule-x CalendarEvent objects from visits */
-export function buildVisitEvents(jobs: Job[], showVisits: boolean): VisitCalendarEvent[] {
-	if (!showVisits) return [];
-	return extractVisits(jobs).map((visit) => {
-		const openEnded = visit.finish_constraint === "when_done";
-		const startZdt = toZonedDateTime(visit.scheduled_start_at);
-		let endZdt = toZonedDateTime(visit.scheduled_end_at);
-
-		if (openEnded) {
-			const startMs = new Date(visit.scheduled_start_at).getTime();
-			const endMs   = new Date(visit.scheduled_end_at).getTime();
-			const capMs   = startMs + MAX_OPEN_ENDED_HOURS * 3_600_000;
-			if (endMs > capMs) endZdt = toZonedDateTime(new Date(capMs));
-		}
-
-		const constraint = visit.arrival_constraint;
-		const timePrefix = constraint === "anytime" ? null : visitStartLabel(visit);
-		const label = visit.name || visit.job_obj.name;
-		const title = timePrefix
-			? (openEnded ? `${timePrefix} ${label}` : `${timePrefix}–${formatTime(visit.scheduled_end_at)} ${label}`)
-			: label;
-
-		return {
-			id: `visit-${visit.id}`,
-			title,
-			start: startZdt,
-			end: endZdt,
-			_type: "visit" as const,
-			_data: visit,
-			calendarId: "visits",
-			style: `background:${getStatusColor(visit.status)};border-left:3px solid ${getPriorityColor(visit.job_obj.priority)}${openEnded ? ";border-bottom:2px dashed rgba(255,255,255,0.35)" : ""}`,
-		};
+export function buildAgendaGroups(
+	dayVisits: VisitWithJob[],
+	dayOccs: OccurrenceWithPlan[],
+	technicians: Technician[],
+	techColorMap: Map<string, string>,
+	globalTechOrder: string[],
+): AgendaGroup[] {
+	const groups: Map<string, AgendaGroup> = new Map(technicians.map((t) => {
+		return [t.id, {
+			techId: t.id,
+			techName: t.name,
+			color: techColorMap.get(t.id) ?? "var(--color-tech-unassigned)",
+			items: [],
+		} as AgendaGroup]
+	}));
+	groups.set("unassigned", {
+		techId: "unassigned",
+		techName: "",
+		color: "var(--color-tech-unassigned)",
+		items: []
 	});
+	dayVisits.forEach((job) => {
+		if (job.visit_techs.length === 0) {
+			groups.get("unassigned")?.items.push({ type: "visit", item: job });
+			return;
+		}
+		job.visit_techs.forEach((tech) => {
+			groups.get(tech.tech_id)?.items.push({ type: "visit", item: job})
+		});
+	});
+	dayOccs.forEach((occ) => {
+		groups.get("unassigned")?.items.push({ type: "occ", item: occ })
+	});
+
+	groups.forEach((g) => g.items.sort((a, b) => itemStart(a) - itemStart(b)));
+
+	const result = globalTechOrder.map((t) => {
+		return groups.get(t);
+	});
+	result.push(groups.get("unassigned"));
+	return result.filter((ag) => ag !== undefined).filter((ag) => ag.items.length > 0);
 }
 
-/** Build schedule-x CalendarEvent objects from occurrences */
-export function buildOccurrenceEvents(jobs: Job[], showOccurrences: boolean): OccurrenceCalendarEvent[] {
-	if (!showOccurrences) return [];
-	return extractOccurrences(jobs).map((occ) => ({
-		id: `occurrence-${occ.id}`,
-		title: `${formatTime(occ.occurrence_start_at)} ${occ.job_obj.name} (recurring)`,
-		start: toZonedDateTime(occ.occurrence_start_at),
-		end: toZonedDateTime(occ.occurrence_start_at),
-		_type: "occurrence" as const,
-		_data: occ,
-		calendarId: "occurrences",
-		style: `background:var(--color-text-muted);border-left:3px solid ${getPriorityColor(occ.job_obj.priority)}`,
-	}));
-}
+export function buildChronologicalAgenda(
+	dayVisits: VisitWithJob[],
+	dayOccs: OccurrenceWithPlan[],
+): AgendaGroup[] {
+	const items: AgendaGroup["items"] = [
+		...dayVisits.map((v) => ({ type: "visit" as const, item: v})),
+		...dayOccs.map((o) => ({ type: "occ" as const, item: o})),
+	];
 
-/** Build occurrence badge events (one per day with count ≥ 1) */
-export function buildOccurrenceBadgeEvents(jobs: Job[], showOccurrences: boolean): BadgeCalendarEvent[] {
-	if (!showOccurrences) return [];
-	const counts = countOccurrencesByDay(extractOccurrences(jobs));
-	return Object.entries(counts).map(([dateStr, count]) => ({
-		id: `badge-${dateStr}`,
-		title: `${count}`,
-		start: toPlainDate(dateStr),
-		end: toPlainDate(dateStr),
-		_type: "occurrence-badge" as const,
-		_count: count,
-		calendarId: "badges",
-	}));
-}
-
-export function countOccurrencesByDay(
-	occurrences: Array<{ occurrence_start_at: string | Date }>
-): Record<string, number> {
-	return occurrences.reduce(
-		(acc, occ) => {
-			const dateStr = new Date(occ.occurrence_start_at).toISOString().split("T")[0];
-			acc[dateStr] = (acc[dateStr] || 0) + 1;
-			return acc;
-		},
-		{} as Record<string, number>
-	);
+	items.sort((a, b) => itemStart(a) - itemStart(b));
+	if (items.length === 0) return [];
+	return [{ techId: "__all__", techName: "", color: "var(--color-tech-unassigned)", items }];
 }

@@ -8,6 +8,7 @@ vi.mock("../../db.js", () => {
 		inventory_item: { findFirst: vi.fn() },
 		log: { findMany: vi.fn() },
 		stock_movement: { findMany: vi.fn() },
+		supplier_item: { findMany: vi.fn() },
 		$queryRaw: vi.fn(),
 		$extends,
 	};
@@ -44,6 +45,7 @@ const mockDb = vi.mocked(db) as unknown as {
 	inventory_item: { findFirst: ReturnType<typeof vi.fn> };
 	log: { findMany: ReturnType<typeof vi.fn> };
 	stock_movement: { findMany: ReturnType<typeof vi.fn> };
+	supplier_item: { findMany: ReturnType<typeof vi.fn> };
 	$queryRaw: ReturnType<typeof vi.fn>;
 };
 
@@ -65,6 +67,7 @@ function setupItem(overrides: Record<string, unknown> = {}) {
 function setupNoSales() {
 	mockDb.$queryRaw.mockResolvedValue([]);
 	mockDb.stock_movement.findMany.mockResolvedValue([]);
+	mockDb.supplier_item.findMany.mockResolvedValue([]);
 }
 
 function logEntry(at: string, changes: Record<string, unknown>) {
@@ -78,13 +81,86 @@ function chargedSql() {
 	return (mockDb.$queryRaw.mock.calls[0][0] as string[]).join("");
 }
 
-function receipt(at: string, qty: number, unit_cost: number | null, batchNumber?: string) {
+// The client-attribution query is the SECOND raw call — it duplicates the
+// aggregate's bucket expression and filters, and a divergence would credit a
+// client to the wrong period.
+function extremesSql() {
+	return (mockDb.$queryRaw.mock.calls[1][0] as string[]).join("");
+}
+
+interface ReceiptOrigin {
+	batchNumber?: string;
+	/** Movement-level vendor — how every receipt records origin from this release on. */
+	supplier?: { id: string; name: string };
+	/** Lot-level entity, for a receipt into a lot bought before the movement column existed. */
+	batchSupplierRef?: { id: string; name: string };
+	/** Lot-level LEGACY free text — a name with no id. */
+	batchSupplier?: string;
+}
+
+function receipt(
+	at: string,
+	qty: number,
+	unit_cost: number | null,
+	origin: string | ReceiptOrigin = {},
+) {
+	const o: ReceiptOrigin = typeof origin === "string" ? { batchNumber: origin } : origin;
+	const hasBatch = o.batchNumber != null || o.batchSupplierRef != null || o.batchSupplier != null;
 	return {
 		created_at: new Date(at),
 		qty,
 		unit_cost,
-		movement_batches: batchNumber ? [{ batch: { batch_number: batchNumber } }] : [],
+		supplier: o.supplier ?? null,
+		movement_batches: hasBatch
+			? [
+					{
+						batch: {
+							batch_number: o.batchNumber ?? null,
+							supplier: o.batchSupplier ?? null,
+							supplier_ref: o.batchSupplierRef ?? null,
+						},
+					},
+				]
+			: [],
 	};
+}
+
+/** One charged bucket, with the spread fields the aggregate now selects. */
+function chargedRow(
+	periodStart: string,
+	over: Partial<{
+		qty: number;
+		revenue: number;
+		sales: number;
+		low: number | null;
+		high: number | null;
+		median: number | null;
+	}> = {},
+) {
+	return {
+		periodStart: new Date(periodStart),
+		qty: 0,
+		revenue: 0,
+		sales: 0,
+		low: null,
+		high: null,
+		median: null,
+		...over,
+	};
+}
+
+/** Sequences the three raw queries: charged aggregate, client extremes, raw per-sale list. */
+function setupCharged(rows: unknown[], extremes: unknown[] = [], sales: unknown[] = []) {
+	mockDb.$queryRaw.mockReset();
+	mockDb.$queryRaw
+		.mockResolvedValueOnce(rows)
+		.mockResolvedValueOnce(extremes)
+		.mockResolvedValueOnce(sales);
+}
+
+/** The raw per-sale query is the THIRD raw call, after the aggregate and the extremes. */
+function allSalesSql() {
+	return (mockDb.$queryRaw.mock.calls[2][0] as string[]).join("");
 }
 
 describe("getItemPriceHistory", () => {
@@ -316,7 +392,12 @@ describe("getItemPriceHistory", () => {
 			const result = await getItemPriceHistory(ITEM, ORG);
 			expect(result.wac!.map((w) => w.value)).toEqual([40, 45]);
 			expect(result.receipts![1].batchNumber).toBe("LOT-A");
-			expect(result.costCoverage).toEqual({ receipts: 2, withCost: 2, wacBasisReceipts: 2 });
+			expect(result.costCoverage).toEqual({
+				receipts: 2,
+				withCost: 2,
+				wacBasisReceipts: 2,
+				withSupplier: 0,
+			});
 		});
 
 		it("excludes unpriced receipts from the average but still counts them", async () => {
@@ -328,7 +409,12 @@ describe("getItemPriceHistory", () => {
 			const result = await getItemPriceHistory(ITEM, ORG);
 			// 50, not 25 — a missing cost is unknown, not zero.
 			expect(result.wac!.map((w) => w.value)).toEqual([50]);
-			expect(result.costCoverage).toEqual({ receipts: 2, withCost: 1, wacBasisReceipts: 1 });
+			expect(result.costCoverage).toEqual({
+				receipts: 2,
+				withCost: 1,
+				wacBasisReceipts: 1,
+				withSupplier: 0,
+			});
 		});
 
 		it("ignores receipts with a non-positive quantity", async () => {
@@ -339,7 +425,12 @@ describe("getItemPriceHistory", () => {
 			const result = await getItemPriceHistory(ITEM, ORG);
 			expect(result.wac).toEqual([]);
 			expect(result.receipts).toEqual([]);
-			expect(result.costCoverage).toEqual({ receipts: 1, withCost: 0, wacBasisReceipts: 0 });
+			expect(result.costCoverage).toEqual({
+				receipts: 1,
+				withCost: 0,
+				wacBasisReceipts: 0,
+				withSupplier: 0,
+			});
 		});
 
 		it("reads both warehouse receives and field supplier purchases", async () => {
@@ -404,7 +495,294 @@ describe("getItemPriceHistory", () => {
 				receipts: 2,
 				withCost: 1,
 				wacBasisReceipts: 2,
+				withSupplier: 0,
 			});
+		});
+	});
+
+	describe("charged price spread", () => {
+		const JUNE = "2026-06-01T00:00:00.000Z";
+
+		it("emits a band and names the client behind each end", async () => {
+			setupCharged(
+				[chargedRow(JUNE, { qty: 4, revenue: 2440, sales: 2, low: 560, high: 660, median: 610 })],
+				[{ periodStart: new Date(JUNE), lowClient: "Acme HVAC", highClient: "Bell Realty" }],
+			);
+
+			const point = (await getItemPriceHistory(ITEM, ORG, { bucket: "month" })).charged!
+				.points[0];
+
+			expect(point.low).toBe(560);
+			expect(point.high).toBe(660);
+			expect(point.median).toBe(610);
+			expect(point.sales).toBe(2);
+			// The average is the number nobody paid — the whole point of the band.
+			expect(point.avgUnitPrice).toBe(610);
+			expect(point.lowClient).toBe("Acme HVAC");
+			expect(point.highClient).toBe("Bell Realty");
+		});
+
+		it("emits no band for a single sale", async () => {
+			setupCharged([
+				chargedRow(JUNE, { qty: 1, revenue: 560, sales: 1, low: 560, high: 560, median: 560 }),
+			]);
+
+			const point = (await getItemPriceHistory(ITEM, ORG, { bucket: "month" })).charged!
+				.points[0];
+
+			// A zero-height ribbon reads as "we measured a spread" when there was none.
+			expect(point.low).toBeNull();
+			expect(point.high).toBeNull();
+			expect(point.lowClient).toBeNull();
+			expect(point.highClient).toBeNull();
+			// The sale count and median still describe the bucket truthfully.
+			expect(point.sales).toBe(1);
+			expect(point.median).toBe(560);
+		});
+
+		it("emits no band when every sale in the bucket was at one price", async () => {
+			setupCharged([
+				chargedRow(JUNE, { qty: 3, revenue: 1680, sales: 3, low: 560, high: 560, median: 560 }),
+			]);
+
+			const point = (await getItemPriceHistory(ITEM, ORG, { bucket: "month" })).charged!
+				.points[0];
+			expect(point.low).toBeNull();
+			expect(point.high).toBeNull();
+			expect(point.avgUnitPrice).toBe(560);
+		});
+
+		it("drops a client attribution that lands on an unbanded bucket", async () => {
+			setupCharged(
+				[chargedRow(JUNE, { qty: 1, revenue: 560, sales: 1, low: 560, high: 560 })],
+				[{ periodStart: new Date(JUNE), lowClient: "Acme HVAC", highClient: "Acme HVAC" }],
+			);
+
+			const point = (await getItemPriceHistory(ITEM, ORG, { bucket: "month" })).charged!
+				.points[0];
+			// Naming a "highest-paying client" for a bucket with one sale is noise.
+			expect(point.lowClient).toBeNull();
+		});
+
+		it("attributes clients on the same clock the aggregate buckets by", async () => {
+			await getItemPriceHistory(ITEM, ORG, { bucket: "month" });
+			const sql = extremesSql();
+			expect(sql).toContain(
+				"date_trunc(, COALESCE(jv.actual_end_at, jv.scheduled_start_at, jli.created_at))",
+			);
+			// Same exclusions too — a cancelled visit must not name the high payer.
+			expect(sql).toContain("jv.status <> 'Cancelled'::visit_status");
+			expect(sql).toContain("j.status <> 'Cancelled'::job_status");
+		});
+	});
+
+	describe("charged.sales — raw per-sale list", () => {
+		const JUNE = "2026-06-01T00:00:00.000Z";
+
+		it("returns every sale unaggregated, not just the bucket's two extremes", async () => {
+			setupCharged(
+				[chargedRow(JUNE, { qty: 3, revenue: 1805, sales: 3, low: 545, high: 660, median: 600 })],
+				[{ periodStart: new Date(JUNE), lowClient: "Williams", highClient: "Smith" }],
+				[
+					{ at: new Date("2026-06-05T06:00:00.000Z"), unitPrice: 660, clientName: "Smith" },
+					{ at: new Date("2026-06-05T12:00:00.000Z"), unitPrice: 545, clientName: "Williams" },
+					// The middle sale a bucket's low/high extremes alone would never name.
+					{ at: new Date("2026-06-10T09:00:00.000Z"), unitPrice: 600, clientName: "Anderson" },
+				],
+			);
+
+			const result = await getItemPriceHistory(ITEM, ORG, { bucket: "month" });
+
+			expect(result.charged!.sales).toEqual([
+				{ at: "2026-06-05T06:00:00.000Z", unitPrice: 660, clientName: "Smith" },
+				{ at: "2026-06-05T12:00:00.000Z", unitPrice: 545, clientName: "Williams" },
+				{ at: "2026-06-10T09:00:00.000Z", unitPrice: 600, clientName: "Anderson" },
+			]);
+		});
+
+		it("drops a malformed row instead of letting it crash the endpoint", async () => {
+			setupCharged(
+				[chargedRow(JUNE)],
+				[],
+				[
+					{ at: null, unitPrice: 660, clientName: "Smith" },
+					{ at: new Date(JUNE), unitPrice: null, clientName: "Bad Row" },
+					{ at: new Date(JUNE), unitPrice: 545, clientName: null },
+				],
+			);
+
+			const result = await getItemPriceHistory(ITEM, ORG, { bucket: "month" });
+
+			expect(result.charged!.sales).toEqual([
+				{ at: new Date(JUNE).toISOString(), unitPrice: 545, clientName: null },
+			]);
+		});
+
+		it("defaults to an empty list rather than crashing when nothing is queued", async () => {
+			// Mirrors the other charged-price tests' bare mockResolvedValue([]) case,
+			// where only one value is ever returned for every raw call.
+			mockDb.$queryRaw.mockResolvedValue([]);
+			const result = await getItemPriceHistory(ITEM, ORG, { bucket: "month" });
+			expect(result.charged!.sales).toEqual([]);
+		});
+
+		it("shares the aggregate's exact filters, clock, and window boundary", async () => {
+			await getItemPriceHistory(ITEM, ORG, { bucket: "month" });
+			const sql = allSalesSql();
+			expect(sql).toContain(
+				"COALESCE(jv.actual_end_at, jv.scheduled_start_at, jli.created_at)",
+			);
+			expect(sql).toContain("jv.status <> 'Cancelled'::visit_status");
+			expect(sql).toContain("j.status <> 'Cancelled'::job_status");
+			// Same boundary the bucket aggregate's `buckets` CTE starts from — a
+			// sale in one list but not the other would make the tooltip disagree
+			// with the chart it's describing.
+			expect(sql).toContain("date_trunc(, ::timestamptz)");
+		});
+	});
+
+	describe("supplier origin", () => {
+		it("groups receipts by vendor and counts attribution coverage", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 10, 40, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+				receipt("2026-03-01T00:00:00.000Z", 10, 50, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+				receipt("2026-04-01T00:00:00.000Z", 5, 60, {
+					supplier: { id: "sup-2", name: "Grainger" },
+				}),
+			]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			const ferguson = result.bySupplier!.find((s) => s.supplierId === "sup-1")!;
+
+			expect(ferguson.receipts).toBe(2);
+			expect(ferguson.qty).toBe(20);
+			expect(ferguson.spend).toBe(900);
+			expect(ferguson.avgUnitCost).toBe(45);
+			expect(ferguson.minUnitCost).toBe(40);
+			expect(ferguson.maxUnitCost).toBe(50);
+			expect(ferguson.firstAt).toBe("2026-02-01T00:00:00.000Z");
+			expect(ferguson.lastAt).toBe("2026-03-01T00:00:00.000Z");
+			expect(result.costCoverage!.withSupplier).toBe(3);
+		});
+
+		it("buckets unattributed receipts as Unrecorded, sorted last", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 100, 40),
+				receipt("2026-03-01T00:00:00.000Z", 1, 50, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+			]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			const last = result.bySupplier![result.bySupplier!.length - 1];
+
+			// Last despite outspending every named vendor — a gap in the data is
+			// not a supplier and must not head the list.
+			expect(last.unattributed).toBe(true);
+			expect(last.supplierName).toBe("Unrecorded");
+			expect(last.supplierId).toBeNull();
+			expect(result.costCoverage!.withSupplier).toBe(1);
+		});
+
+		it("falls back through the lot's entity, then its legacy free text", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 5, 40, {
+					batchSupplierRef: { id: "sup-1", name: "Ferguson" },
+				}),
+				receipt("2026-03-01T00:00:00.000Z", 5, 50, { batchSupplier: "Grainger" }),
+			]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			const byName = Object.fromEntries(
+				result.bySupplier!.map((s) => [s.supplierName, s]),
+			);
+
+			expect(byName["Ferguson"].supplierId).toBe("sup-1");
+			// A pre-migration vendor has a name and no id — it still groups, and
+			// still counts as attributed, or every old purchase would read as a gap.
+			expect(byName["Grainger"].supplierId).toBeNull();
+			expect(byName["Grainger"].unattributed).toBe(false);
+			expect(result.costCoverage!.withSupplier).toBe(2);
+		});
+
+		it("counts a receipt with a vendor but no cost toward coverage", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 5, null, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+			]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			// Coverage is about attribution, not pricing — its denominator is every
+			// windowed receipt, so an unpriced one still counts as named.
+			expect(result.costCoverage).toEqual({
+				receipts: 1,
+				withCost: 0,
+				wacBasisReceipts: 0,
+				withSupplier: 1,
+			});
+			// It carries no cost, so it can't join a spend rollup.
+			expect(result.bySupplier).toEqual([]);
+		});
+
+		it("prefers the vendor's contract price over its last observed price", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 10, 40, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+			]);
+			mockDb.supplier_item.findMany.mockResolvedValue([
+				{ supplier_id: "sup-1", contract_price: 38, last_price: 42, is_preferred: true },
+			]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			const ferguson = result.bySupplier!.find((s) => s.supplierId === "sup-1")!;
+
+			expect(ferguson.lastPaid).toBe(38);
+			expect(ferguson.priceSource).toBe("contract");
+			expect(ferguson.isPreferred).toBe(true);
+		});
+
+		it("falls back to the observed last price when no contract is on file", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 10, 40, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+			]);
+			mockDb.supplier_item.findMany.mockResolvedValue([
+				{ supplier_id: "sup-1", contract_price: null, last_price: 41, is_preferred: false },
+			]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			const ferguson = result.bySupplier!.find((s) => s.supplierId === "sup-1")!;
+
+			expect(ferguson.lastPaid).toBe(41);
+			expect(ferguson.priceSource).toBe("observed");
+			expect(ferguson.isPreferred).toBe(false);
+		});
+
+		it("reports no price-list data for a vendor with no supplier_item row, and none for the unattributed row", async () => {
+			mockDb.stock_movement.findMany.mockResolvedValue([
+				receipt("2026-02-01T00:00:00.000Z", 10, 40, {
+					supplier: { id: "sup-1", name: "Ferguson" },
+				}),
+				receipt("2026-03-01T00:00:00.000Z", 5, 60),
+			]);
+			mockDb.supplier_item.findMany.mockResolvedValue([]);
+
+			const result = await getItemPriceHistory(ITEM, ORG);
+			const ferguson = result.bySupplier!.find((s) => s.supplierId === "sup-1")!;
+			const unattributed = result.bySupplier!.find((s) => s.unattributed)!;
+
+			expect(ferguson.lastPaid).toBeNull();
+			expect(ferguson.priceSource).toBe("none");
+			expect(unattributed.lastPaid).toBeNull();
+			expect(unattributed.priceSource).toBe("none");
+			expect(unattributed.isPreferred).toBe(false);
 		});
 	});
 });

@@ -3,32 +3,77 @@ import {
 	Calendar,
 	DollarSign,
 	MapPin,
-	MoreVertical,
 	Edit2,
-	Send,
-	CheckCircle,
 	Briefcase,
 	Trash2,
-	Link2Off,
 	Download,
 	Loader2,
+	AlertTriangle,
+	Clock,
 } from "lucide-react";
-import { useQuoteByIdQuery, useUpdateQuoteMutation, useDeleteQuoteMutation, useSendQuoteMutation } from "../../hooks/useQuotes";
+import {
+	useQuoteByIdQuery,
+	useUpdateQuoteMutation,
+	useDeleteQuoteMutation,
+	useSendQuoteMutation,
+	useReviseQuoteMutation,
+} from "../../hooks/useQuotes";
 import { useCreateJobMutation } from "../../hooks/useJobs";
-import { QuoteStatusColors } from "../../types/quotes";
+import { useDisputesQuery } from "../../hooks/useDisputes";
+import { QuoteStatusColors, QuoteStatusLabels, isQuoteEditable } from "../../types/quotes";
 import type { QuoteStatus } from "../../types/quotes";
+import LifecycleBar, {
+	LifecycleActions,
+	LifecycleRule,
+} from "../../components/lifecycle/LifecycleBar";
+import TerminalDetail from "../../components/lifecycle/TerminalDetail";
+import { quoteActions, QUOTE_STEPS, isQuoteOffRamp } from "../../components/lifecycle/quoteActions";
+import { placeActions } from "../../components/lifecycle/placement";
+import type { LifecycleStage } from "../../components/lifecycle/types";
+import BalancedOverviewGrid from "../../components/detail/BalancedOverviewGrid";
+import RelationCard from "../../components/detail/RelationCard";
+import DetailHeader, { type DetailMenuGroup } from "../../components/detail/DetailHeader";
+import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
+import DetailStatRow from "../../components/detail/DetailStatRow";
+import DocumentLineage from "../../components/documents/DocumentLineage";
+import { useDetailTab } from "../../components/detail/useDetailTab";
 import Card from "../../components/ui/Card";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import EditQuote from "../../components/quotes/EditQuote";
 import ConvertToJob from "../../components/quotes/ConvertToJob";
 import NoteManager from "../../components/quotes/QuoteNoteManager";
-import { useState, useRef, useEffect } from "react";
-import { formatCurrency } from "../../util/util";
+import QuoteReasonModal from "../../components/quotes/QuoteReasonModal";
+import DisputeModal from "../../components/disputes/DisputeModal";
+import DisputeStage, { disputeActions } from "../../components/lifecycle/DisputeStage";
+import type { Dispute, DisputeResolution } from "../../types/disputes";
+import { useState, useMemo } from "react";
+import { daysUntil, errorMessage, formatCurrency, formatDate } from "../../util/util";
 import { downloadQuotePdf } from "../../api/quotes";
 import FinancialSummary from "../../components/pagesections/FinancialSummary";
 import SendDocumentModal from "../../components/ui/SendDocumentModal";
 import { usePermission } from "../../hooks/usePermission";
 import ChangeHistory from "../../components/activity/ChangeHistory";
+import LifecycleRecord from "../../components/lifecycle/LifecycleRecord";
+import ActivityPanel from "../../components/detail/ActivityPanel";
+
+
+// Two tabs: line items are what a dispatcher opens a quote to read, so they
+// stay in Overview, and Activity takes the notes, dispute record and change
+// history. The invoice page carries the same pair.
+const QUOTE_TABS: readonly DetailTabDef<"overview" | "activity">[] = [
+	{ id: "overview", label: "Overview" },
+	{ id: "activity", label: "Activity" },
+];
+
+// What the terminal stage says when no reason was recorded. Here rather than in
+// TerminalDetail because only the page knows which end state it is explaining,
+// and two of them have an implicit reason.
+const NO_REASON_COPY: Record<string, string> = {
+	Expired: "Passed its valid-until date with no decision recorded.",
+	Revised: "Superseded by a newer version of this quote.",
+};
+
+const NO_DISPUTES: Dispute[] = [];
 
 export default function QuoteDetailPage() {
 	const { quoteId } = useParams<{ quoteId: string }>();
@@ -37,32 +82,55 @@ export default function QuoteDetailPage() {
 	const { mutateAsync: updateQuote } = useUpdateQuoteMutation();
 	const { mutateAsync: sendQuote } = useSendQuoteMutation();
 	const { mutateAsync: createJob } = useCreateJobMutation();
+	const { mutateAsync: reviseQuoteMutation, isPending: revisePending } =
+		useReviseQuoteMutation();
 	const deleteQuote = useDeleteQuoteMutation();
 
-	const [showActionsMenu, setShowActionsMenu] = useState(false);
+	const [activeTab, setActiveTab] = useDetailTab(QUOTE_TABS);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [isConvertToJobModalOpen, setIsConvertToJobModalOpen] = useState(false);
 	const [deleteConfirm, setDeleteConfirm] = useState(false);
 	const [isPdfLoading, setIsPdfLoading] = useState(false);
 	const [isSendModalOpen, setIsSendModalOpen] = useState(false);
-	const menuRef = useRef<HTMLDivElement>(null);
+	const [disputeModalMode, setDisputeModalMode] = useState<"open" | "resolve" | null>(
+		null,
+	);
+	// The outcome picked in the lifecycle bar, handed to the resolve modal so it
+	// opens on that choice instead of asking again.
+	const [resolveOutcome, setResolveOutcome] = useState<DisputeResolution | undefined>(
+		undefined,
+	);
+	const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+	const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+	const [actionError, setActionError] = useState<string | null>(null);
 
 	// permissions
 	const EDIT_QUOTE = usePermission("edit_quotes");
 	const DELETE_QUOTE = usePermission("delete_quotes");
 	const CREATE_JOB = usePermission("create_jobs");
-	//const SEND_QUOTE = usePermission(""); No dedicated send quote permission, will consider how to handle this later
+	const OPEN_DISPUTE = usePermission("open_disputes");
+	const SEND_QUOTE = usePermission("send_quotes");
 
-	useEffect(() => {
-		function handleClickOutside(event: MouseEvent) {
-			if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-				setShowActionsMenu(false);
-				setDeleteConfirm(false);
-			}
-		}
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
+	const { data: disputeList, isError: disputeStateUnknown } = useDisputesQuery(
+		"quote",
+		quoteId ?? "",
+	);
+	const disputes = disputeList?.disputes ?? NO_DISPUTES;
+	// A failed fetch defaults `disputes` to [], indistinguishable from "no
+	// dispute", and every gate below keys off openDispute. Unknown is not absent,
+	// so the irreversible paths close until we know.
+	const openDispute = disputes.find((d) => d.status === "Open") ?? null;
+	// Every dispute, not just the open one: a resolved record still explains what
+	// happened to these lines. A Set, not an includes() per row.
+	const contestedIds = useMemo(
+		() =>
+			new Set(
+				(disputes ?? []).flatMap(
+					(d) => d.contested_line_item_ids?.map((c) => c.id) ?? [],
+				),
+			),
+		[disputes],
+	);
 
 	if (isLoading) {
 		return (
@@ -84,13 +152,23 @@ export default function QuoteDetailPage() {
 		QuoteStatusColors[status as QuoteStatus] ||
 		"bg-neutral/20 text-text-tertiary border-border-strong/30";
 
+	// The expiry sweep runs periodically, so the stored status can lag reality
+	// between runs — show the true state regardless of what's persisted.
+	const isEffectivelyExpired =
+		quote.expires_at != null &&
+		new Date(quote.expires_at).getTime() < Date.now() &&
+		(quote.status === "Issued" || quote.status === "Sent" || quote.status === "Viewed");
+
+	// One derived status feeds stage, stepper and gating alike: split, an
+	// effectively-expired quote sits on the normal stage under the step name
+	// Expired, which QUOTE_STEPS has no node for, and nothing lights.
+	const lifecycleStatus: QuoteStatus = isEffectivelyExpired ? "Expired" : quote.status;
+
 	const handleEdit = () => {
 		if (!EDIT_QUOTE) return;
-		setShowActionsMenu(false);
 		setIsEditModalOpen(true);
 	};
 	const handleSendToClient = () => { // no specific permissions yet
-		setShowActionsMenu(false);
 		setIsSendModalOpen(true);
 	};
 
@@ -99,31 +177,56 @@ export default function QuoteDetailPage() {
 	};
 	const handleMarkAsIssued = async () => {
 		if (!EDIT_QUOTE) return;
-		setShowActionsMenu(false);
+		setActionError(null);
 		try {
 			await updateQuote({ id: quote.id, data: { status: "Issued" } });
 		} catch (error) {
-			console.error("Failed to mark as issued:", error);
+			// These doors hit real refusals (an open-dispute lock, a terminal
+			// quote's immutability), and a swallowed one reads as a dead button.
+			setActionError(errorMessage(error, "Couldn't mark this quote as created."));
 		}
 	};
 
 	const handleMarkAsApproved = async () => {
 		if (!EDIT_QUOTE) return;
-		setShowActionsMenu(false);
+		setActionError(null);
 		try {
 			await updateQuote({ id: quote.id, data: { status: "Approved" } });
 		} catch (error) {
-			console.error("Failed to mark as approved:", error);
+			setActionError(errorMessage(error, "Couldn't mark this quote as approved."));
 		}
 	};
+	// Both entry points (the lifecycle bar and the Related-Job card) gate on the
+	// one `convert` action from quoteActions. jobsController writes the quote to
+	// Approved with no transition guard, so that action's sold-work, disputed and
+	// dead-quote rules are the whole client-side defence.
 	const handleConvertToJob = () => {
-		if (!CREATE_JOB) return;
-		setShowActionsMenu(false);
 		setIsConvertToJobModalOpen(true);
 	};
 
+	const handleMarkAsRejected = () => {
+		if (!EDIT_QUOTE) return;
+		setIsRejectModalOpen(true);
+	};
+
+	const handleCancelQuote = () => {
+		if (!EDIT_QUOTE) return;
+		setIsCancelModalOpen(true);
+	};
+
+	const handleCreateRevision = async () => {
+		setActionError(null);
+		try {
+			const replacement = await reviseQuoteMutation({ id: quote.id });
+			navigate(`/dispatch/quotes/${replacement.id}`);
+		} catch (error) {
+			// Surfaced, not swallowed: the server owns which statuses may be
+			// revised, and names them on the response envelope.
+			setActionError(errorMessage(error, "Failed to create a revision."));
+		}
+	};
+
 	const handleDownloadPdf = async () => {
-		setShowActionsMenu(false);
 		setIsPdfLoading(true);
 		try {
 			await downloadQuotePdf(quote.id, quote.quote_number);
@@ -144,437 +247,471 @@ export default function QuoteDetailPage() {
 			await deleteQuote.mutateAsync({ id: quote.id, hardDelete: false });
 			navigate("/dispatch/quotes");
 		} catch (error) {
-			console.error("Failed to delete quote:", error);
+			// A quote produced by a dispute resolution is audit trail: the server
+			// allows cancelling it, never deleting it.
+			setActionError(errorMessage(error, "Couldn't delete this quote."));
 		}
 	};
 
-	return (
-		<div className="text-text-primary space-y-6">
-			{/* Header */}
-			<div className="grid grid-cols-2 gap-4 mb-6 items-center">
+	// While a dispute is open its three exits are the bar's actions; the normal
+	// quote actions are all gated off anyway.
+	const disputeBarActions = openDispute
+		? disputeActions(
+				"quote",
+				openDispute.outcomes ?? [],
+				(outcome) => {
+					setResolveOutcome(outcome);
+					setDisputeModalMode("resolve");
+				},
+			)
+		: null;
+
+	// Dispute list failed to load while the document is still Disputed: neither
+	// "terminal" (the bar would claim "No reason recorded.") nor "normal" (the
+	// stepper lights nothing) is true, so the page says so.
+	const disputeUnknownWhileDisputed =
+		disputeStateUnknown && lifecycleStatus === "Disputed";
+
+	// One stage value for the whole page: the bar renders it, and placeActions
+	// keys both the slot rule and header-vs-bar off it.
+	const lifecycleStage: LifecycleStage =
+		openDispute || disputeUnknownWhileDisputed
+			? "dispute"
+			: isQuoteOffRamp(lifecycleStatus) && lifecycleStatus !== "Viewed"
+				? "terminal"
+				: "normal";
+
+	const lifecycleActionList =
+		disputeBarActions ??
+		quoteActions({
+			status: lifecycleStatus,
+			hasJob: Boolean(quote.job),
+			hasOpenDispute: Boolean(openDispute),
+			disputeStateUnknown,
+			openRefusal: disputeList?.open_refusal ?? null,
+			soldRefusal: disputeList?.sold_refusal ?? null,
+			canEdit: EDIT_QUOTE,
+			canSend: SEND_QUOTE,
+			canCreateJob: CREATE_JOB,
+			canOpenDispute: OPEN_DISPUTE,
+			revisePending,
+			handlers: {
+				issue: handleMarkAsIssued,
+				send: handleSendToClient,
+				approve: handleMarkAsApproved,
+				convert: handleConvertToJob,
+				dispute: () => setDisputeModalMode("open"),
+				reject: handleMarkAsRejected,
+				withdraw: handleCancelQuote,
+				revise: handleCreateRevision,
+			},
+		});
+
+	// The header or the bar renders the inline share, depending on stage; this is
+	// the remainder, and the only reason the kebab has a Lifecycle group.
+	const {
+		headerActions,
+		barActions,
+		overflow: lifecycleOverflow,
+		showBar,
+	} = placeActions(lifecycleStage, lifecycleActionList);
+
+	// The Related-Job card's Convert button is the same action the bar offers,
+	// derived rather than re-judged here.
+	const convertAction = lifecycleActionList.find((a) => a.id === "convert");
+
+	// Three separate server refusals, each with its own message: the permission
+	// check, the terminal-status gate, and the "converted to a job" gate that
+	// isQuoteEditable does not model.
+	const editBlockedReason = !EDIT_QUOTE
+		? "You don't have permission to perform this action"
+		: quote.job
+			? "A job was created from this quote — it can no longer be edited. Correct the job instead."
+			: !isQuoteEditable(quote.status)
+				? `A ${(QuoteStatusLabels[quote.status] ?? quote.status).toLowerCase()} quote can't be edited. Create a revision instead.`
+				: undefined;
+
+	// One button, two labeled groups: lifecycle above, utility below. The
+	// grouping carries the distinction, so there is no second kebab.
+	const menuGroups: DetailMenuGroup[] = [
+		{
+			id: "lifecycle",
+			label: "Lifecycle",
+			items: lifecycleOverflow.map((a) => ({
+				id: a.id,
+				label: a.label,
+				// `primary` describes a button's fill, which a menu row has
+				// none of; warning and destructive still colour their text.
+				intent: a.intent === "primary" ? ("neutral" as const) : a.intent,
+				disabled: a.disabled,
+				disabledReason: a.disabledReason,
+				onSelect: a.onSelect,
+			})),
+		},
+		{
+			id: "document",
+			label: "Document",
+			items: [
+				{
+					id: "edit",
+					label: "Edit Quote",
+					icon: <Edit2 size={16} />,
+					disabled: editBlockedReason != null,
+					disabledReason: editBlockedReason,
+					onSelect: handleEdit,
+				},
+				{
+					id: "pdf",
+					label: isPdfLoading ? "Generating..." : "Download PDF",
+					icon: isPdfLoading ? (
+						<Loader2 size={16} className="animate-spin" />
+					) : (
+						<Download size={16} />
+					),
+					disabled: isPdfLoading,
+					onSelect: handleDownloadPdf,
+				},
+				...(DELETE_QUOTE
+					? [
+							{
+								id: "delete",
+								label: deleteQuote.isPending
+									? "Deleting..."
+									: deleteConfirm
+										? "Click Again to Confirm"
+										: "Delete Quote",
+								icon: <Trash2 size={16} />,
+								intent: "destructive" as const,
+								disabled: deleteQuote.isPending,
+								// The first click only arms the second, so
+								// the menu has to survive it.
+								keepOpen: !deleteConfirm,
+								onSelect: handleDelete,
+							},
+						]
+					: []),
+			],
+		},
+	];
+
+	// Derived readings, not recorded fields; the Details card keeps the record.
+	// The total is printed here and nowhere else on the page.
+	const validUntil = quote.valid_until ?? quote.expires_at;
+	const daysLeft = validUntil != null ? daysUntil(validUntil) : null;
+	const lineItemCount = quote.line_items?.length ?? 0;
+	const ageDays = -daysUntil(quote.created_at);
+	const statTiles = [
+		{
+			label: "Quote Total",
+			icon: <DollarSign size={13} />,
+			value: formatCurrency(Number(quote.total)),
+			hint: `${lineItemCount} ${lineItemCount === 1 ? "line item" : "line items"}`,
+		},
+		{
+			label: "Expires",
+			icon: <Clock size={13} />,
+			value:
+				daysLeft == null
+					? "No expiry"
+					: daysLeft >= 0
+						? `${daysLeft} ${daysLeft === 1 ? "day" : "days"}`
+						: `${-daysLeft} ${daysLeft === -1 ? "day" : "days"} ago`,
+			hint: validUntil != null ? formatDate(validUntil) : "None set",
+			tone: daysLeft != null && daysLeft < 0 ? ("warning" as const) : undefined,
+		},
+		{
+			label: "Age",
+			icon: <Calendar size={13} />,
+			value: `${ageDays} ${ageDays === 1 ? "day" : "days"}`,
+		},
+	];
+
+	const infoCard = (
+		<Card className="flex-1" title="Quote Information">
+			{/* Field labels are <p>, not <h3>: Card renders its title as an h3,
+			    so h3 labels inside it flatten the outline with one-line labels
+			    that aren't navigable sections. */}
+			{/* Two zones, not three stacked: the description holds the top and
+			    the short fields hold the base, so a stretched grid cell turns its
+			    slack into the gutter between them. DetailFieldGrid's `fill` does
+			    this for the pages that use it; this card is hand-rolled. */}
+			<div className="flex flex-1 flex-col justify-between gap-4">
 				<div>
-					<div className="flex items-center gap-3 mb-1">
-						<h1 className="text-3xl font-bold text-text-primary">
-							{quote.quote_number}
-						</h1>
-						{!quote.is_active && (
-							<span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-surface-raised text-text-tertiary border border-border-strong">
-								Superseded
-							</span>
-						)}
-					</div>
-					<p className="text-text-tertiary text-sm">{quote.title}</p>
+					<p className="text-text-tertiary text-sm mb-1">Description</p>
+					<p className="text-text-primary break-words whitespace-pre-wrap">
+						{quote.description || "No description provided"}
+					</p>
 				</div>
 
-				<div className="justify-self-end flex items-center gap-3">
-					<span
-						className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${getStatusColor(quote.status)}`}
-					>
-						{quote.status}
-					</span>
-
-					<div className="relative" ref={menuRef}>
-						<button
-							onClick={() => {
-								setShowActionsMenu(
-									!showActionsMenu
-								);
-								setDeleteConfirm(false);
-							}}
-							className="p-2 hover:bg-surface rounded-md transition-colors border border-border hover:border-border-strong"
-						>
-							<MoreVertical size={20} />
-						</button>
-
-						{showActionsMenu && (
-							<div className="absolute right-0 mt-2 w-56 bg-base border border-border-subtle rounded-lg shadow-xl z-50">
-								<div className="py-1">
-										<button
-											title={!EDIT_QUOTE ? "You don't have permission to perform this action" : undefined}
-											disabled={!EDIT_QUOTE}
-											onClick={handleEdit}
-											className="w-full px-4 py-2 text-left text-sm hover:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Edit2 size={16} />{" "}
-											Edit Quote
-										</button>
-									{quote.status === "Draft" && (
-											<button
-												title={!EDIT_QUOTE ? "You don't have permission to perform this action" : undefined}
-												disabled={!EDIT_QUOTE}
-												onClick={handleMarkAsIssued}
-												className="w-full px-4 py-2 text-left text-sm hover:bg-surface transition-colors flex items-center gap-2 text-primary-text hover:text-primary-text disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<CheckCircle size={16} />
-												Mark as Issued
-											</button>
-									)}
-									{quote.status !== "Approved" && quote.status !== "Rejected" && quote.status !== "Revised" && quote.status !== "Expired" && quote.status !== "Cancelled" && (
-										// for now anyone with view access can send to client
-										<button
-											onClick={handleSendToClient}
-											className="w-full px-4 py-2 text-left text-sm hover:bg-surface transition-colors flex items-center gap-2"
-										>
-											<Send size={16} />
-											Send to Client
-										</button>
-									)}
-									<button
-										onClick={handleDownloadPdf}
-										disabled={isPdfLoading}
-										className="w-full px-4 py-2 text-left text-sm hover:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-									>
-										{isPdfLoading ? (
-											<Loader2 size={16} className="animate-spin" />
-										) : (
-											<Download size={16} />
-										)}
-										{isPdfLoading ? "Generating..." : "Download PDF"}
-									</button>
-									{(quote.status === "Issued" || quote.status === "Sent" || quote.status === "Viewed") && (
-											<button
-												title={!EDIT_QUOTE ? "You don't have permission to perform this action" : undefined}
-												disabled={!EDIT_QUOTE}
-												onClick={handleMarkAsApproved}
-												className="w-full px-4 py-2 text-left text-sm hover:bg-surface text-success-text hover:text-success-text transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<CheckCircle size={16} />
-												Mark as Approved
-											</button>
-									)}
-										<button
-											title={!CREATE_JOB ? "You don't have permission to perform this action" : undefined}
-											onClick={
-												handleConvertToJob
-											}
-											disabled={
-												!!quote.job || !CREATE_JOB
-											}
-											className="w-full px-4 py-2 text-left text-sm hover:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Briefcase
-												size={16}
-											/>
-											{quote.job
-												? "Job Already Created"
-												: "Convert to Job"}
-										</button>
-									{DELETE_QUOTE && (
-										<>
-											<div className="my-1 border-t border-border-subtle" />
-											<button
-												onClick={
-													handleDelete
-												}
-												onMouseLeave={() =>
-													setDeleteConfirm(
-														false
-													)
-												}
-												disabled={
-													deleteQuote.isPending || !DELETE_QUOTE
-												}
-												className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
-													deleteConfirm
-														? "bg-error hover:bg-error-strong text-on-primary"
-														: "text-error-text hover:bg-surface hover:text-error-text"
-												} disabled:opacity-40 disabled:cursor-not-allowed`}
-											>
-												<Trash2 size={16} />
-												{deleteQuote.isPending
-													? "Deleting..."
-													: deleteConfirm
-														? "Click Again to Confirm"
-														: "Delete Quote"}
-											</button>
-										</>
-									)}
-								</div>
-							</div>
-						)}
-					</div>
-				</div>
-			</div>
-
-			{/* Quote Information (2/3) + Client Details (1/3) */}
-			<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-				<div className="lg:col-span-2">
-					<Card title="Quote Information">
-						<div className="space-y-4">
-							<div>
-								<h3 className="text-text-tertiary text-sm mb-1">
-									Description
-								</h3>
-								<p className="text-text-primary break-words whitespace-pre-wrap">
-									{quote.description ||
-										"No description provided"}
-								</p>
-							</div>
-
-							{quote.address && (
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<MapPin size={14} />{" "}
-										Address
-									</h3>
-									<p className="text-text-primary break-words">
-										{quote.address}
-									</p>
-								</div>
-							)}
-
-							<div className="grid grid-cols-2 gap-4">
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<Calendar
-											size={14}
-										/>{" "}
-										Created
-									</h3>
-									<p className="text-text-primary">
-										{new Date(
-											quote.created_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												year: "numeric",
-												month: "short",
-												day: "numeric",
-											}
-										)}
-									</p>
-								</div>
-								{quote.valid_until && (
-									<div>
-										<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-											<Calendar
-												size={
-													14
-												}
-											/>{" "}
-											Valid Until
-										</h3>
-										<p className="text-text-primary">
-											{new Date(
-												quote.valid_until
-											).toLocaleDateString(
-												"en-US",
-												{
-													year: "numeric",
-													month: "short",
-													day: "numeric",
-												}
-											)}
-										</p>
-									</div>
-								)}
-							</div>
-
-							<div>
-								<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-									<DollarSign size={14} />{" "}
-									Quote Total
-								</h3>
-								<p className="text-text-primary font-medium text-2xl">
-									{formatCurrency(
-										Number(quote.total)
-									)}
-								</p>
-							</div>
-						</div>
-					</Card>
-				</div>
-
-				<div className="lg:col-span-1">
-					<ClientDetailsCard
-						client_id={quote.client_id}
-						client={quote.client}
-					/>
-				</div>
-			</div>
-
-			{/* Financial Summary */}
-			<FinancialSummary
-				lineItems={quote.line_items ?? []}
-				taxSnapshot={quote.tax_snapshot}
-				legacyTaxRate={quote.tax_rate != null ? Number(quote.tax_rate) : null}
-				legacyTaxAmount={quote.tax_amount != null ? Number(quote.tax_amount) : null}
-				subtotal={quote.subtotal != null ? Number(quote.subtotal) : null}
-				discountAmount={quote.discount_amount != null ? Number(quote.discount_amount) : null}
-				discountType={quote.discount_type ?? null}
-				discountValue={quote.discount_value != null ? Number(quote.discount_value) : null}
-				metaLabel="Quote #"
-				metaValue={quote.quote_number}
-				noLineItemsDescription="No line items have been added to this quote yet."
-				totalsContent={
-					<div className="flex items-center justify-between px-4 py-3 bg-surface rounded-lg border border-border">
+				<div className="space-y-4">
+					{quote.address && (
 						<div>
-							<p className="text-text-tertiary text-xs uppercase tracking-wide font-semibold mb-0.5">
-								Quote Total
+							<p className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
+								<MapPin size={14} /> Address
 							</p>
-							<p className="text-xs text-text-muted">Final amount</p>
+							<p className="text-text-primary break-words">
+								{quote.address}
+							</p>
 						</div>
-						<p className="text-2xl font-bold text-primary-text tabular-nums">
-							{formatCurrency(Number(quote.total))}
+					)}
+
+					<div>
+						<p className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
+							<Calendar size={14} /> Created
 						</p>
+						<p className="text-text-primary">{formatDate(quote.created_at)}</p>
 					</div>
+				</div>
+			</div>
+		</Card>
+	);
+
+	const clientCard = <ClientDetailsCard fill client_id={quote.client_id} client={quote.client} />;
+
+	const relationCards = (
+		<>
+			<RelationCard
+				eyebrow="Related Request"
+				to={quote.request ? `/dispatch/requests/${quote.request.id}` : undefined}
+				emptyLabel="No request linked"
+				title={quote.request?.title}
+				meta={
+					quote.request && (
+						<>
+							<Calendar size={12} />
+							<span>{formatDate(quote.request.created_at)}</span>
+						</>
+					)
+				}
+				trailing={
+					quote.request && (
+						<span
+							className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${getStatusColor(quote.request.status)}`}
+						>
+							{quote.request.status}
+						</span>
+					)
 				}
 			/>
 
-			{/* Relations Row: Request + Job */}
-			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-				{/* Related Request */}
-				{quote.request ? (
+			<RelationCard
+				eyebrow="Related Job"
+				to={quote.job ? `/dispatch/jobs/${quote.job.id}` : undefined}
+				emptyLabel="No job created yet"
+				title={quote.job?.job_number}
+				subtitle={quote.job?.name}
+				meta={
+					quote.job && (
+						<>
+							<Calendar size={12} />
+							<span>{formatDate(quote.job.created_at)}</span>
+						</>
+					)
+				}
+				trailing={
+					quote.job && (
+						<>
+							{quote.job.estimated_total != null && (
+								<span className="whitespace-nowrap text-sm font-semibold tabular-nums text-success-text">
+									{formatCurrency(Number(quote.job.estimated_total))}
+								</span>
+							)}
+							<span
+								className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${getStatusColor(quote.job.status)}`}
+							>
+								{quote.job.status}
+							</span>
+						</>
+					)
+				}
+				emptyAction={
 					<button
-						onClick={() =>
-							navigate(
-								`/dispatch/requests/${quote.request?.id}`
+						title={convertAction?.disabledReason}
+						disabled={convertAction?.disabled ?? true}
+						onClick={() => convertAction?.onSelect()}
+						className="flex items-center gap-2 px-3 py-1.5 bg-primary-hover hover:bg-primary-active rounded-md text-xs font-medium text-on-primary transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+					>
+						<Briefcase size={12} /> Convert to Job
+					</button>
+				}
+			/>
+		</>
+	);
+
+	const financialBlock = (
+		<FinancialSummary
+			lineItems={quote.line_items ?? []}
+			contestedIds={contestedIds}
+			taxSnapshot={quote.tax_snapshot}
+			legacyTaxRate={quote.tax_rate != null ? Number(quote.tax_rate) : null}
+			legacyTaxAmount={quote.tax_amount != null ? Number(quote.tax_amount) : null}
+			subtotal={quote.subtotal != null ? Number(quote.subtotal) : null}
+			discountAmount={quote.discount_amount != null ? Number(quote.discount_amount) : null}
+			discountType={quote.discount_type ?? null}
+			discountValue={quote.discount_value != null ? Number(quote.discount_value) : null}
+			metaLabel="Quote #"
+			metaValue={quote.quote_number}
+			noLineItemsDescription="No line items have been added to this quote yet."
+			totalsContent={
+				<div className="flex items-center justify-between px-4 py-3 bg-surface rounded-lg border border-border">
+					<div>
+						<p className="text-text-tertiary text-xs uppercase tracking-wide font-semibold mb-0.5">
+							Quote Total
+						</p>
+						<p className="text-xs text-text-muted">Final amount</p>
+					</div>
+					<p className="text-2xl font-bold text-primary-text tabular-nums">
+						{formatCurrency(Number(quote.total))}
+					</p>
+				</div>
+			}
+		/>
+	);
+
+	return (
+		<div className="text-text-primary pb-4 md:pb-6">
+			{/* Header, lifecycle and the tab strip are one unit: a tight stack
+			    closed by the strip's bottom border, rather than cards floating
+			    at the same weight as the body below them. */}
+			<div className="space-y-4">
+				<DetailHeader
+					title={quote.quote_number}
+					badges={<DocumentLineage kind="quote" lineage={quote.lineage} />}
+					meta={quote.title}
+					statusPill={
+						/* lifecycleStatus, not quote.status. The expiry sweep
+						   runs periodically, so a quote past its valid-until
+						   date still reads Sent in the database — and the pill
+						   printed that while a chip beside it printed Expired,
+						   one strip carrying two truths. The pill is now the
+						   page's single status word, so it has to be the true
+						   one; its title explains the gap that the second chip
+						   used to. */
+						<span
+							title={
+								isEffectivelyExpired
+									? `Stored as ${QuoteStatusLabels[quote.status] ?? quote.status} until the expiry sweep next runs.`
+									: undefined
+							}
+							className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${getStatusColor(lifecycleStatus)}`}
+						>
+							{lifecycleStatus}
+						</span>
+					}
+					inlineActions={<LifecycleActions actions={headerActions} />}
+					menuGroups={menuGroups}
+					menuLabel="Quote actions"
+					onMenuClose={() => setDeleteConfirm(false)}
+				/>
+
+				{showBar && (
+					<LifecycleBar
+						steps={QUOTE_STEPS}
+						stepLabels={QuoteStatusLabels}
+						stage={lifecycleStage}
+						currentStatus={lifecycleStatus}
+						track={false}
+						actions={barActions}
+						detail={
+							openDispute ? (
+								<DisputeStage
+									kind="quote"
+									dispute={openDispute}
+									lineItems={quote.line_items ?? []}
+								/>
+							) : disputeUnknownWhileDisputed ? (
+								<p className="text-sm text-warning-text">
+									This quote's dispute couldn't be loaded, so its
+									status and exits aren't shown. Reload the page.
+								</p>
+							) : (
+								<TerminalDetail
+									reason={quote.rejection_reason}
+									at={
+										lifecycleStatus === "Rejected"
+											? quote.rejected_at
+											: null
+									}
+									noReasonLabel={
+										NO_REASON_COPY[lifecycleStatus] ??
+										"No reason recorded."
+									}
+								/>
 							)
 						}
-						className="w-full p-4 bg-base hover:bg-surface rounded-lg border border-border hover:border-border-strong transition-all cursor-pointer text-left group"
-					>
-						<p className="text-text-muted text-xs uppercase tracking-wide font-semibold mb-2">
-							Related Request
-						</p>
-						<div className="flex items-start justify-between gap-3">
-							<div className="flex-1 min-w-0">
-								<h4 className="text-text-primary font-medium text-sm mb-1 group-hover:text-primary-text transition-colors">
-									{quote.request.title}
-								</h4>
-								<div className="flex items-center gap-2 text-xs text-text-muted mt-2">
-									<Calendar size={12} />
-									<span>
-										{new Date(
-											quote
-												.request
-												.created_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												month: "short",
-												day: "numeric",
-												year: "numeric",
-											}
-										)}
-									</span>
-								</div>
-							</div>
-							<span
-								className={`flex-shrink-0 inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(quote.request.status)}`}
-							>
-								{quote.request.status}
-							</span>
-						</div>
-					</button>
-				) : (
-					<div className="p-4 bg-base/40 rounded-lg border border-dashed border-border-subtle">
-						<p className="text-text-muted text-xs uppercase tracking-wide font-semibold mb-2">
-							Related Request
-						</p>
-						<div className="flex items-center gap-2 text-text-faint text-sm">
-							<Link2Off size={14} />
-							<span>No request linked</span>
-						</div>
+					/>
+				)}
+
+				{actionError && (
+					<p className="text-sm text-error-text" role="alert">
+						{actionError}
+					</p>
+				)}
+
+				{/* Directly under the bar, as on the invoice page. */}
+				{disputeStateUnknown && (
+					<div className="flex items-center gap-2 rounded-lg border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text">
+						<AlertTriangle size={16} className="flex-shrink-0" />
+						<span>
+							This quote's dispute status couldn't be loaded, so
+							dispute, cancel and convert actions are
+							unavailable. Reload the page to try again.
+						</span>
 					</div>
 				)}
 
-				{/* Related Job */}
-				{quote.job ? (
-					<button
-						onClick={() =>
-							navigate(`/dispatch/jobs/${quote.job!.id}`)
-						}
-						className="w-full p-4 bg-base hover:bg-surface rounded-lg border border-border hover:border-border-strong transition-all cursor-pointer text-left group"
-					>
-						<p className="text-text-muted text-xs uppercase tracking-wide font-semibold mb-2">
-							Related Job
-						</p>
-						<div className="flex items-start justify-between gap-3">
-							<div className="flex-1 min-w-0">
-								<h4 className="text-text-primary font-medium text-sm mb-1 group-hover:text-primary-text transition-colors">
-									{quote.job.job_number}
-								</h4>
-								<p className="text-text-tertiary text-xs mb-2">
-									{quote.job.name}
-								</p>
-								<div className="flex items-center gap-2 text-xs text-text-muted">
-									<Calendar size={12} />
-									<span>
-										{new Date(
-											quote.job
-												.created_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												month: "short",
-												day: "numeric",
-												year: "numeric",
-											}
-										)}
-									</span>
-								</div>
-							</div>
-							<div className="flex flex-col items-end gap-2 flex-shrink-0">
-								{quote.job.estimated_total !=
-									null && (
-									<span className="text-success-text font-semibold text-sm whitespace-nowrap">
-										{formatCurrency(
-											Number(
-												quote
-													.job
-													.estimated_total
-											)
-										)}
-									</span>
-								)}
-								<span
-									className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(quote.job.status)}`}
-								>
-									{quote.job.status}
-								</span>
-							</div>
-						</div>
-					</button>
-				) : (
-					<div className="p-4 bg-base/40 rounded-lg border border-dashed border-border-subtle">
-						<div className="grid grid-cols-3 gap-4">
-							<div className="col-span-2 flex flex-col gap-2">
-								<p className="text-text-muted text-xs uppercase tracking-wide font-semibold">
-									Related Job
-								</p>
-								<div className="flex items-center gap-2 text-text-faint text-sm">
-									<Link2Off
-										size={14}
-										className="flex-shrink-0"
-									/>
-									<span>
-										No job created yet
-									</span>
-								</div>
-							</div>
-							<div className="col-span-1 flex items-center justify-end">
-									<button
-										title={!CREATE_JOB ? "You don't have permission to perform this action" : undefined}
-										disabled={!CREATE_JOB}
-										onClick={(e) => {
-											if (!CREATE_JOB) return;
-											e.stopPropagation();
-											handleConvertToJob();
-										}}
-										className="flex items-center gap-2 px-3 py-1.5 bg-primary-hover hover:bg-primary-active rounded-md text-xs font-medium text-on-primary transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-									>
-										<Briefcase size={12} />{" "}
-										Convert to Job
-									</button>
-							</div>
-						</div>
-					</div>
-				)}
+				<DetailTabs
+					tabs={QUOTE_TABS}
+					activeTab={activeTab}
+					onSelect={setActiveTab}
+					label="Quote sections"
+					progress={
+						<LifecycleRule
+							steps={QUOTE_STEPS}
+							stepLabels={QuoteStatusLabels}
+							currentStatus={lifecycleStatus}
+							haltedAt={openDispute?.status_at_open ?? null}
+							tone={
+								lifecycleStage === "dispute"
+									? "warning"
+									: "default"
+							}
+						/>
+					}
+				/>
 			</div>
 
-			<NoteManager quoteId={quoteId!} />
+			{activeTab === "overview" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-overview"
+					aria-labelledby="tab-overview"
+					className="mt-6 space-y-4"
+				>
+					<h2 className="sr-only">Overview</h2>
+					<DetailStatRow tiles={statTiles} />
 
-			<ChangeHistory scope={{ kind: "entity", type: "quote", id: quoteId ?? "" }} />
+					<BalancedOverviewGrid
+						recordId={quote.id}
+						infoCard={infoCard}
+						block={relationCards}
+						railCard={clientCard}
+					/>
+					{financialBlock}
+				</div>
+			)}
+
+			{activeTab === "activity" && (
+				<ActivityPanel
+					notes={<NoteManager quoteId={quoteId!} />}
+					lifecycle={<LifecycleRecord disputes={disputes} />}
+					history={
+						<ChangeHistory
+							scope={{ kind: "entity", type: "quote", id: quoteId ?? "" }}
+						/>
+					}
+				/>
+			)}
 
 			{quote && (
 				<>
@@ -606,6 +743,57 @@ export default function QuoteDetailPage() {
 						clientName={quote.client?.name ?? ""}
 						contactEmail={quote.client?.contacts?.[0]?.contact?.email}
 						contactName={quote.client?.contacts?.[0]?.contact?.name}
+					/>
+					<DisputeModal
+						isOpen={disputeModalMode === "open"}
+						kind="quote"
+						documentId={quote.id}
+						documentNumber={quote.quote_number}
+						lineItems={quote.line_items ?? []}
+						mode="open"
+						onClose={() => setDisputeModalMode(null)}
+					/>
+					{/* Resolve is a separate mount, not a mode flip on the one above:
+					    a DisputeModal stays mounted while closed so FullPopup can fade
+					    out, and swapping `mode` mid-fade would repaint the body of a
+					    modal the dispatcher is still watching close. */}
+					<DisputeModal
+						isOpen={disputeModalMode === "resolve"}
+						kind="quote"
+						documentId={quote.id}
+						documentNumber={quote.quote_number}
+						lineItems={quote.line_items ?? []}
+						mode="resolve"
+						dispute={openDispute}
+						initialResolution={resolveOutcome}
+						onResolved={(resolved) => {
+							// Follow Revise & Resend to the replacement, the
+							// way handleCreateRevision does for a direct revise.
+							if (
+								resolved.resolution === "ReviseAndResend" &&
+								resolved.replacement_quote_id
+							) {
+								navigate(
+									`/dispatch/quotes/${resolved.replacement_quote_id}`,
+								);
+							}
+						}}
+						onClose={() => {
+							setDisputeModalMode(null);
+							setResolveOutcome(undefined);
+						}}
+					/>
+					<QuoteReasonModal
+						isOpen={isRejectModalOpen}
+						quoteId={quote.id}
+						mode="reject"
+						onClose={() => setIsRejectModalOpen(false)}
+					/>
+					<QuoteReasonModal
+						isOpen={isCancelModalOpen}
+						quoteId={quote.id}
+						mode="cancel"
+						onClose={() => setIsCancelModalOpen(false)}
 					/>
 				</>
 			)}

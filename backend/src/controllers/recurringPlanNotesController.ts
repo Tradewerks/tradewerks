@@ -5,6 +5,7 @@ import {
 } from "../lib/validate/recurringPlans.js";
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
+import { parentBreadcrumb } from "./logsController.js";
 import { log } from "../services/appLogger.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 
@@ -90,7 +91,7 @@ export const insertRecurringPlanNote = async (
 				actor_id: context?.techId || context?.dispatcherId,
 				changes: {
 					content: { old: null, new: note.content },
-					recurring_plan_id: { old: null, new: plan.id },
+					...parentBreadcrumb("recurring_plan", plan.id),
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
@@ -172,7 +173,7 @@ export const updateRecurringPlanNote = async (
 							? "dispatcher"
 							: "system",
 					actor_id: context?.techId || context?.dispatcherId,
-					changes,
+					changes: { ...changes, ...parentBreadcrumb("recurring_plan", plan.id) },
 					ip_address: context?.ipAddress,
 					user_agent: context?.userAgent,
 				});
@@ -233,7 +234,7 @@ export const deleteRecurringPlanNote = async (
 				actor_id: context?.techId || context?.dispatcherId,
 				changes: {
 					content: { old: existing.content, new: null },
-					recurring_plan_id: { old: plan.id, new: null },
+					...parentBreadcrumb("recurring_plan", plan.id),
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,

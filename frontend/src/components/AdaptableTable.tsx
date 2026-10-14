@@ -1,9 +1,11 @@
-﻿import React from "react";
+﻿import React, { Fragment, useState } from "react";
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { camelCaseToRegular, formatter } from "../util/util";
 import LoadSvg from "../assets/icons/loading.svg?react";
 import BoxSvg from "../assets/icons/box.svg?react";
 import ErrSvg from "../assets/icons/error.svg?react";
+import type { SortDir } from "../util/sortUtil";
+import { ArrowUpDown, ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
 
 interface AdaptableTableProps {
 	data: Array<Record<string, unknown>>;
@@ -32,6 +34,15 @@ interface AdaptableTableProps {
 	columnClamp?: Record<string, ColumnClamp>;
 	// Render cells with a component instead of the default text rendering
 	cellRenderers?: Record<string, (row: Record<string, unknown>) => React.ReactNode>;
+	// optional row expansion via dropdown
+	renderExpanded?: (row: Record<string, unknown>) => React.ReactNode;
+	// Always-visible full-width row under each row
+	renderSubRow?: (row: Record<string, unknown>) => React.ReactNode;
+	// Adds sorts options directly to the table
+	sortableColumns?: Record<string, boolean>;
+	sortKey?: string;
+	sortDir?: SortDir;
+	onSortChange?: (col: string) => void; 
 }
 
 export interface ColumnClamp {
@@ -78,8 +89,16 @@ const AdaptableTable = ({
 	footerRow,
 	cellClass,
 	columnClamp,
-	cellRenderers
+	cellRenderers,
+	renderExpanded,
+	renderSubRow,
+	sortableColumns,
+	sortKey,
+	sortDir,
+	onSortChange,
 }: AdaptableTableProps) => {
+	const [expandedId, setExpandedId] = useState<string | null>(null);
+
 	const alignClass = (colId: string) => {
 		if (!columnAlign) return "";
 		return columnAlign[colId] === "right" ? "text-right tabular-nums" : "text-left";
@@ -155,6 +174,8 @@ const AdaptableTable = ({
 		);
 	}
 
+	const sortable = (colId:string) => !!sortableColumns?.[colId];
+
 	return (
 		<>
 			{loadListener ? (
@@ -180,7 +201,8 @@ const AdaptableTable = ({
 											key={
 												header.id
 											}
-											className={`sticky top-0 border-b font-bold text-text-tertiary ${borderColor} ${PADDING} ${alignClass(header.column.id)}`}
+											onClick={() => {if (onSortChange && sortable(header.column.id)) onSortChange(header.column.id)}}
+											className={`${sortable(header.column.id) ? "cursor-pointer select-none" : ""} sticky top-0 border-b font-bold text-text-tertiary ${borderColor} ${PADDING} ${alignClass(header.column.id)}`}
 										>
 											{flexRender(
 												typeof header
@@ -200,6 +222,18 @@ const AdaptableTable = ({
 															.header,
 												header.getContext()
 											)}
+											{sortable(header.column.id) && (
+												<span
+														className="ml-1 inline-flex"
+														aria-label="Sort"
+												>
+														{sortKey === header.column.id ? (
+																sortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />
+														) : (
+																<ArrowUpDown size={12} className="text-text-faint" />
+														)}
+												</span>
+											)}
 										</th>
 									)
 								)}
@@ -208,91 +242,120 @@ const AdaptableTable = ({
 					</thead>
 					<tbody>
 						{table.getRowModel().rows.map((row) => (
-							<tr
-								key={row.id}
-								className={`text-left ${borderColor} ${onRowClick ? 'cursor-pointer hover:bg-surface-raised transition-colors' : ''}`}
-								onClick={() => onRowClick?.(row.original)}
-							>
-								{row
-									.getVisibleCells()
-									.map((cell) => {
-										const rawValue =
-											cell.getValue();
-										const content = (() => {
-											// If this is the actions column, render the action cell
-											if (cell.column.id === 'actions') {
+							<Fragment key={row.id} >
+								<tr
+									className={`text-left ${borderColor} ${onRowClick || renderExpanded ? 'cursor-pointer hover:bg-surface-raised transition-colors' : ''} ${renderSubRow && renderExpanded ? "[&:has(+tr:hover)]:bg-surface-raised" : ""}`}
+									onClick={() => {
+										onRowClick?.(row.original);
+										if (renderExpanded) setExpandedId((id) => (id === row.id ? null : row.id));
+									}}
+									aria-expanded={renderExpanded ? expandedId === row.id : undefined}
+								>
+									{row
+										.getVisibleCells()
+										.map((cell, cellIndex) => {
+											const rawValue =
+												cell.getValue();
+											const content = (() => {
+												// If this is the actions column, render the action cell
+												if (cell.column.id === 'actions') {
+													return flexRender(
+														cell.column.columnDef.cell,
+														cell.getContext()
+													);
+												}
+
+												if (cellRenderers?.[cell.column.id]) {
+													return cellRenderers[cell.column.id](row.original);
+												}
+
+												if (
+													typeof rawValue ===
+													"number"
+												)
+													return formatNums
+														? formatter.format(
+																rawValue
+															)
+														: rawValue.toLocaleString();
+
 												return flexRender(
-													cell.column.columnDef.cell,
+													cell
+														.column
+														.columnDef
+														.cell,
 													cell.getContext()
 												);
-											}
+											})();
 
-											if (cellRenderers?.[cell.column.id]) {
-												return cellRenderers[cell.column.id](row.original);
-											}
+											const clamp =
+												columnClamp?.[
+													cell.column
+														.id
+												];
 
-											if (
-												typeof rawValue ===
-												"number"
-											)
-												return formatNums
-													? formatter.format(
-															rawValue
-														)
-													: rawValue.toLocaleString();
-
-											return flexRender(
-												cell
-													.column
-													.columnDef
-													.cell,
-												cell.getContext()
+											return (
+												<td
+													key={
+														cell.id
+													}
+													className={`border-t border-border-subtle font-normal ${PADDING} ${alignClass(cell.column.id)} ${cellClass?.[cell.column.id]?.(row.original) ?? ""}`}
+												>
+													{renderExpanded && cellIndex === 0 && (
+														<ChevronRight
+															size={16}
+															aria-hidden
+															className={`inline mr-2 align-text-bottom text-text-muted transition-transform ${expandedId === row.id ? "rotate-90" : ""}`}
+														/>
+													)}
+													{clamp ? (
+														<div
+															className={
+																CLAMP_LINES[
+																	clamp.lines ??
+																		1
+																]
+															}
+															style={
+																clamp.maxWidth
+																	? {
+																			maxWidth: clamp.maxWidth,
+																		}
+																	: undefined
+															}
+															title={clampTitle(
+																rawValue
+															)}
+														>
+															{
+																content
+															}
+														</div>
+													) : (
+														content
+													)}
+												</td>
 											);
-										})();
-
-										const clamp =
-											columnClamp?.[
-												cell.column
-													.id
-											];
-
-										return (
-											<td
-												key={
-													cell.id
-												}
-												className={`border-t border-border-subtle font-normal ${PADDING} ${alignClass(cell.column.id)} ${cellClass?.[cell.column.id]?.(row.original) ?? ""}`}
-											>
-												{clamp ? (
-													<div
-														className={
-															CLAMP_LINES[
-																clamp.lines ??
-																	1
-															]
-														}
-														style={
-															clamp.maxWidth
-																? {
-																		maxWidth: clamp.maxWidth,
-																	}
-																: undefined
-														}
-														title={clampTitle(
-															rawValue
-														)}
-													>
-														{
-															content
-														}
-													</div>
-												) : (
-													content
-												)}
-											</td>
-										);
-									})}
-							</tr>
+										})}
+								</tr>
+								{renderSubRow && (
+									<tr
+										className={renderExpanded ? "cursor-pointer hover:bg-surface-raised [tr:hover+&]:bg-surface-raised transition-colors" : ""}
+										onClick={() => renderExpanded && setExpandedId((id) => (id === row.id ? null : row.id))}
+									>
+										<td colSpan={row.getVisibleCells().length} className={`${PADDING} pt-0`}>
+											{renderSubRow(row.original)}
+										</td>
+									</tr>
+								)}
+								{renderExpanded && expandedId === row.id && (
+									<tr>
+										<td colSpan={row.getVisibleCells().length} className="border-t border-border-subtle">
+											{renderExpanded(row.original)}
+										</td>
+									</tr>
+								)}
+							</Fragment>
 						))}
 					</tbody>
 					{footerRow && (

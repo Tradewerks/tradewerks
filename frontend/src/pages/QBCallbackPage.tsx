@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { APP_BASE } from "../config";
 
 export default function QBCallbackPage() {
 	const [status] = useState(
@@ -12,7 +13,7 @@ export default function QBCallbackPage() {
 			sessionStorage.removeItem("qb-oauth-same-tab");
 			// Set AdminPage Tab 
 			sessionStorage.setItem("adminPage_activeTab", "integrations");
-			window.location.replace(`/dispatch/admin?qb=${status}`);
+			window.location.replace(`${APP_BASE}/dispatch/admin?qb=${status}`);
 			return;
 		}
 

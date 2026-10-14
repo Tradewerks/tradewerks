@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { coordsSchema } from "./shared.js";
 
 export const createRequestSchema = z.object({
 	client_id: z.string().uuid("Invalid client ID"),
@@ -13,12 +14,7 @@ export const createRequestSchema = z.object({
 		.optional()
 		.or(z.literal(""))
 		.transform((val) => (val === "" ? undefined : val)),
-	coords: z
-		.object({
-			lat: z.number(),
-			lon: z.number(),
-		})
-		.optional(),
+	coords: coordsSchema.optional(),
 	requires_quote: z.boolean().default(false),
 	estimated_value: z.number().min(0).optional().nullable(),
 	status: z
@@ -59,12 +55,7 @@ export const updateRequestSchema = z
 			.optional()
 			.or(z.literal(""))
 			.transform((val) => (val === "" ? undefined : val)),
-		coords: z
-			.object({
-				lat: z.number(),
-				lon: z.number(),
-			})
-			.optional(),
+		coords: coordsSchema.optional(),
 		status: z
 			.enum([
 				"New",

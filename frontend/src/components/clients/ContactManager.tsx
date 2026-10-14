@@ -11,6 +11,7 @@ import {
 	Phone,
 } from "lucide-react";
 import Card from "../ui/Card";
+import { HEADER_BTN_PRIMARY, HEADER_BTN_SECONDARY } from "../ui/headerActions";
 import type {
 	ClientContactLink,
 	CreateContactInput,
@@ -458,13 +459,13 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 		if (!EDIT_CONTACTS) return;
 		resetForm();
 		setFormMode("create");
-	}, [resetForm]);
+	}, [resetForm, EDIT_CONTACTS]);
 
 	const openLinkForm = useCallback(() => {
 		if (!EDIT_CONTACTS) return;
 		resetForm();
 		setFormMode("link");
-	}, [resetForm]);
+	}, [resetForm, EDIT_CONTACTS]);
 
 	const openEditForm = useCallback(
 		(contactLink: ClientContactLink) => {
@@ -611,6 +612,7 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 			updateContact,
 			updateRelationship,
 			createContact,
+			EDIT_CONTACTS,
 		]
 	);
 
@@ -623,7 +625,7 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 				contactId: contactLink.contact.id,
 			});
 		},
-		[clientId, unlinkContact]
+		[clientId, unlinkContact,EDIT_CONTACTS]
 	);
 
 	const handleDeleteClick = useCallback(
@@ -638,7 +640,7 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 				setTimeout(() => setConfirmingDeleteId(null), 3000);
 			}
 		},
-		[confirmingDeleteId, handleUnlink]
+		[confirmingDeleteId, handleUnlink, EDIT_CONTACTS]
 	);
 
 	const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -646,7 +648,7 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 		const { name, value } = e.target;
 		setFormData((prev) => ({ ...prev, [name]: value }));
 		setFieldErrors((prev) => ({ ...prev, [name]: undefined }));
-	}, []);
+	}, [EDIT_CONTACTS]);
 
 	const handleSearchChange = useCallback(
 		(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -731,7 +733,7 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 							disabled={!EDIT_CONTACTS}
 							title={!EDIT_CONTACTS ? "You don't have permission to perform this action" : ""}
 							onClick={openLinkForm}
-							className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 bg-surface-raised hover:enabled:bg-surface-raised rounded text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+							className={HEADER_BTN_SECONDARY}
 						>
 							<LinkIcon size={12} />
 							<span className="hidden sm:inline">
@@ -742,7 +744,7 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 							disabled={!EDIT_CONTACTS}
 							title={!EDIT_CONTACTS ? "You don't have permission to perform this action" : ""}
 							onClick={openCreateForm}
-							className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 bg-primary-hover hover:bg-primary-active text-on-primary rounded text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+							className={HEADER_BTN_PRIMARY}
 						>
 							<Plus size={12} />
 							<span className="hidden sm:inline">

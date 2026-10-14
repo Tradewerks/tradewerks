@@ -1,3 +1,5 @@
+// Ids here must match backend/src/lib/permissionCatalogs.ts - the backend catalog is what
+// grants and guards read; this file only supplies the labels the roles editor renders.
 export const DISPATCHER_CATALOG = [
 	{
 		category: "Jobs",
@@ -23,6 +25,7 @@ export const DISPATCHER_CATALOG = [
 			{ id: "view_quotes", label: "View Quotes" },
 			{ id: "create_quotes", label: "Create Quotes" },
 			{ id: "edit_quotes", label: "Edit Quotes" },
+			{ id: "send_quotes", label: "Email Quotes to Clients" },
 			{ id: "delete_quotes", label: "Delete Quotes" },
 		],
 	},
@@ -32,7 +35,18 @@ export const DISPATCHER_CATALOG = [
 			{ id: "view_invoices", label: "View Invoices" },
 			{ id: "create_invoices", label: "Create Invoices" },
 			{ id: "edit_invoices", label: "Edit Invoices" },
+			{ id: "send_invoices", label: "Email Invoices to Clients" },
 			{ id: "delete_invoices", label: "Delete Invoices" },
+			{ id: "refund_invoices", label: "Refund & Void Invoices" },
+		],
+	},
+	{
+		category: "Disputes",
+		permissions: [
+			{ id: "open_disputes", label: "Open Disputes" },
+			{ id: "resolve_disputes", label: "Resolve Disputes" },
+			{ id: "concede_disputes", label: "Adjust & Repeal Disputes" },
+			{ id: "resolve_own_disputes", label: "Resolve Own Disputes" },
 		],
 	},
 	{
@@ -56,6 +70,13 @@ export const DISPATCHER_CATALOG = [
 		permissions: [
 			{ id: "view_reports", label: "View Reports" },
 			{ id: "export_reports", label: "Export Reports" },
+		],
+	},
+	{
+		category: "Timesheets",
+		permissions: [
+			{ id: "view_timesheet", label: "View Timesheets" },
+			{ id: "manage_timesheet", label: "Manage Timesheets" },
 		],
 	},
 	{
@@ -106,6 +127,23 @@ export const DISPATCHER_CATALOG = [
 			{ id: "delete_projects", label: "Delete Projects" },
 		],
 	},
+	{
+		category: "Field Purchases",
+		permissions: [
+			{ id: "view_field_purchases", label: "View Field Purchases" },
+			{ id: "review_field_purchases", label: "Review Field Purchases" },
+			{ id: "second_sign_off_field_purchases", label: "Second Sign-Off Field Purchases" },
+			{ id: "manage_field_purchase_grants", label: "Manage Purchase Grants" },
+			{ id: "view_field_purchase_location", label: "View Capture Location" },
+		],
+	},
+	{
+		category: "Purchases",
+		permissions: [
+			{ id: "view_purchases", label: "View Purchases" },
+			{ id: "manage_purchases", label: "Manage Purchases" },
+		],
+	},
 ] as const;
 
 export const TECHNICIAN_CATALOG = [
@@ -150,7 +188,6 @@ export const TECHNICIAN_CATALOG = [
 			{ id: "adjust_transfer", label: "Adjust: Transfer In" },
 			{ id: "adjust_audit", label: "Adjust: Audit Correction" },
 			{ id: "adjust_warehouse_exchange", label: "Adjust: Return to Warehouse" },
-			{ id: "adjust_supplier_purchase", label: "Adjust: Supplier Purchase" },
 		],
 	},
 	{
@@ -173,6 +210,18 @@ export const TECHNICIAN_CATALOG = [
 			{ id: "view_vehicles", label: "View Vehicles" },
 			{ id: "use_vehicles", label: "Use Vehicles" },
 		],
+	},
+	{
+		category: "Field Purchases",
+		permissions: [
+			{ id: "request_field_purchase", label: "Request Field Purchase" },
+		],
+	},
+	{
+		category: "Timesheets",
+		permissions: [
+			{ id: "edit_own_timesheet", label: "Edit Own Timesheet"}
+		]
 	},
 ] as const;
 

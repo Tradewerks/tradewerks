@@ -1,6 +1,7 @@
 ﻿import z from "zod";
 import type { ClientWithPrimaryContact } from "./clients";
 import type { Coordinates } from "./location";
+import type { DocumentLineage } from "./lineage";
 import type {
 	Priority,
 	BaseNote,
@@ -23,6 +24,7 @@ export const QuoteStatusValues = [
 	"Sent",
 	"Viewed",
 	"Approved",
+	"Disputed",
 	"Rejected",
 	"Revised",
 	"Expired",
@@ -31,12 +33,15 @@ export const QuoteStatusValues = [
 
 export type QuoteStatus = (typeof QuoteStatusValues)[number];
 
+// Enum values are DB-frozen; these are the display strings. Issued reads
+// "Created", matching the invoice badge of the same name.
 export const QuoteStatusLabels: Record<QuoteStatus, string> = {
 	Draft: "Draft",
-	Issued: "Issued",
+	Issued: "Created",
 	Sent: "Sent",
 	Viewed: "Viewed",
 	Approved: "Approved",
+	Disputed: "Disputed",
 	Rejected: "Rejected",
 	Revised: "Revised",
 	Expired: "Expired",
@@ -46,17 +51,24 @@ export const QuoteStatusLabels: Record<QuoteStatus, string> = {
 export const QuoteStatusColors: Record<QuoteStatus, string> = {
 	Draft:     "bg-neutral/20 text-text-tertiary border-border-strong/30",
 	Issued:    "bg-primary/20 text-primary-text border-primary/30",
-	Sent:      "bg-success/20 text-success-text border-success/30",
+	Sent:      "bg-info/20 text-info-text border-info/30",
 	Viewed:    "bg-info/20 text-info-text border-info/30",
 	Approved:  "bg-success/20 text-success-text border-success/30",
+	Disputed:  "bg-warning/20 text-warning-text border-warning/30",
 	Rejected:  "bg-error/20 text-error-text border-error/30",
-	Revised:   "bg-warning/20 text-warning-text border-warning/30",
+	// Superseded is not a warning: a revised quote did its job and handed off.
+	Revised:   "bg-neutral/20 text-text-tertiary border-border-strong/30",
 	Expired:   "bg-orange/20 text-orange-text border-orange/30",
 	Cancelled: "bg-error/20 text-error-text border-error/30",
 };
 
+// Revised is absent deliberately: quotesController refuses every edit to a
+// Cancelled, Rejected or Revised quote, so offering one only earns a 422.
+// Approved, Disputed and Expired the server would allow, but Create Revision is
+// the intended door for all three — editing a quote the client has already seen
+// decided is a rewrite of history, not an edit.
 export function isQuoteEditable(status: QuoteStatus): boolean {
-	return ["Draft", "Issued", "Sent", "Viewed", "Revised"].includes(status);
+	return ["Draft", "Issued", "Sent", "Viewed"].includes(status);
 }
 
 // ============================================================================
@@ -77,6 +89,7 @@ export interface QuoteVersionReference {
 	id: string;
 	quote_number: string;
 	version: number;
+	status: QuoteStatus;
 }
 
 // ============================================================================
@@ -127,6 +140,8 @@ export interface Quote {
 	job?: JobReference | null;
 	previous_quote?: QuoteVersionReference | null;
 	revised_quote?: QuoteVersionReference | null;
+	/** Resolved chain, attached by getQuoteById. Absent on list payloads. */
+	lineage?: DocumentLineage | null;
 	created_by_dispatcher?: DispatcherReference | null;
 }
 
@@ -225,6 +240,8 @@ export interface QuoteLineItem {
 	tax_group_id: string | null;
 	tax_amount: number | null;
 	tax_group?: { id: string; name: string; rates?: { tax_rate: { id: string; name: string; rate: number } }[] } | null;
+	/** Catalog link, when the line was picked from inventory rather than typed. */
+	inventory_item_id?: string | null;
 }
 
 export interface CreateQuoteLineItemInput {
@@ -237,6 +254,8 @@ export interface CreateQuoteLineItemInput {
 	sort_order?: number;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	/** Catalog link. Reference only except on visits, where it plans and deducts stock. */
+	inventory_item_id?: string | null;
 }
 
 export interface UpdateQuoteLineItemInput {
@@ -249,6 +268,8 @@ export interface UpdateQuoteLineItemInput {
 	sort_order?: number;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	/** Catalog link. Reference only except on visits, where it plans and deducts stock. */
+	inventory_item_id?: string | null;
 }
 
 // ============================================================================

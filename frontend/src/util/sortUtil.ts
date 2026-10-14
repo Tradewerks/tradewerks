@@ -59,6 +59,14 @@ export function compareDateNullsLast(dir: SortDir): (a?: DateLike, b?: DateLike)
     };
 }
 
+export function compareString(a?: string | null, b?: string | null): number {
+    return (a ?? "").localeCompare(b ?? "");
+}
+
+export function compareNumber(a?: number | null, b?: number | null): number {
+    return (a ?? 0) - (b ?? 0);
+}
+
 export function withDir<T>(
     cmp: (a: T, b : T) => number,
     dir: SortDir,

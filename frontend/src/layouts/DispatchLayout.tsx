@@ -1,6 +1,6 @@
 ﻿import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../auth/authStore";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	House,
 	Calendar,
@@ -11,27 +11,34 @@ import {
 	Package,
 	Map,
 	ArrowLeft,
-	Phone,
+	Inbox,
 	Briefcase,
+	Receipt,
 	ReceiptText,
 	ShieldUser,
 	Truck,
-	UserRoundCog,
 	Plus,
 	Mail,
 	FolderKanban,
+	Bell,
+	Timer,
 } from "lucide-react";
 import SideNavItem from "../components/nav/SideNavItem";
 import GlobalSearch from "../components/nav/GlobalSearch";
 import { usePermission, useAnyPermission } from "../hooks/usePermission";
 import DispatcherUserMenu from "../components/nav/DispatcherUserMenu";
 import CreatePanel from "../components/nav/CreatePanel";
+import AssistantPanel from "../components/assistant/AssistantPanel";
+import AssistantTrigger from "../components/assistant/AssistantTrigger";
 import ToastViewport from "../components/ui/ToastViewport";
 import { useToast } from "../components/ui/useToast";
-import { socket } from "../lib/socket";
 import { useOrgSettings } from "../hooks/useOrg";
 import { useSocketQuerySync } from "../hooks/useSocketQuerySync";
-import type { VehicleRestockShortfallEvent } from "../types/socketEvents";
+import { useDispatcherNotificationsQuery } from "../hooks/useNotifications";
+import type { DispatcherNotification } from "../types/notifications";
+import { useEntitlements, useModule } from "../hooks/useEntitlements";
+import { shouldShowWelcome } from "../lib/welcomeDraft";
+import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
 
 export default function DispatchLayout() {
 	const navigate = useNavigate();
@@ -40,57 +47,102 @@ export default function DispatchLayout() {
 	const { data: orgSettings } = useOrgSettings();
 	const [expanded, setExpanded] = useState(false);
 	const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
+	const [navOverflows, setNavOverflows] = useState(false);
+	const navRef = useRef<HTMLElement>(null);
+	const [isAssistantOpen, setIsAssistantOpen] = useState(false);
 	const { user } = useAuthStore();
 
+	const handleNewNotification = useCallback((notif: DispatcherNotification) => {
+		toast.info(
+			<>
+				<div className="font-semibold">{notif.title}</div>
+				{notif.body && <div className="text-xs text-text-muted mt-0.5">{notif.body}</div>}
+			</>,
+			{
+				durationMs: 20_000,
+				action: notif.action_url
+					? { label: "View", onClick: () => navigate(notif.action_url!) }
+					: undefined,
+			},
+		);
+	}, [toast, navigate]);
+
+	const { data: notifications = [] } = useDispatcherNotificationsQuery(user?.userId ?? null, false, handleNewNotification);
+	const unreadCount = notifications.filter((n) => !n.read_at).length;
+
+	// A view permission still passes while its module is switched off (records stay
+	// readable), so the menu needs the module state as well.
+	const quotesOn = useModule("quotes") === "on";
+	const inventoryOn = useModule("inventory") === "on";
+	const fleetOn = useModule("fleet") === "on";
+	const fieldPurchasesOn = useModule("field_purchases") === "on";
+	const purchasingOn = useModule("purchasing") === "on";
+	const followupsOn = useModule("followups") === "on";
+	const projectsOn = useModule("projects") === "on";
+	const advancedReportingOn = useModule("advanced_reporting") === "on";
 	const canViewRequests = usePermission("view_requests");
-	const canViewQuotes = usePermission("view_quotes");
+	const canViewQuotes = usePermission("view_quotes") && quotesOn;
 	const canViewJobs = usePermission("view_jobs");
 	const canViewInvoices = usePermission("view_invoices");
 	const canViewClients = usePermission("view_clients");
-	const canViewInventory = usePermission("view_inventory");
-	const canViewVehicles = useAnyPermission(["view_vehicles", "manage_vehicles"]);
+	const canViewInventory = usePermission("view_inventory") && inventoryOn;
+	const canViewVehicles =
+		useAnyPermission(["view_vehicles", "manage_vehicles"]) && fleetOn;
+	// One page serves both modules: it is listed while either is on.
+	const canViewFieldPurchases =
+		useAnyPermission(["view_field_purchases", "review_field_purchases"]) &&
+		fieldPurchasesOn;
+	const canViewPurchaseOrders =
+		usePermission("view_purchases") && purchasingOn;
+	const canViewPurchases = canViewFieldPurchases || canViewPurchaseOrders;
 	const canViewTechnicians = usePermission("view_technicians");
 	const canViewReports = usePermission("view_reports");
+	const canViewTimesheet = usePermission("view_timesheet");
 	const canViewAdmin = useAnyPermission([
 		"view_admin",
 		"manage_organization",
 		"manage_roles",
 	]);
-	const canViewFollowups = usePermission("view_followups");
-	const canViewProjects = usePermission("view_projects");
+	const canViewFollowups = usePermission("view_followups") && followupsOn;
+	const canViewProjects = usePermission("view_projects") && projectsOn;
+	const { data: entitlements, fromServer: entitlementsFresh } = useEntitlements();
+	const canManageOrg = usePermission("manage_organization");
+	const welcomeChecked = useRef(false);
+	// Once per load, on the first server payload: the stored snapshot shown after a failed
+	// fetch can be stale, and must not use up the check.
+	useEffect(() => {
+		if (welcomeChecked.current || !entitlements || !entitlementsFresh) return;
+		welcomeChecked.current = true;
+		if (shouldShowWelcome(entitlements, canManageOrg) && location.pathname !== "/dispatch/welcome")
+			navigate("/dispatch/welcome", {
+				replace: true,
+				state: { from: location.pathname + location.search + location.hash },
+			});
+	}, [entitlements, entitlementsFresh, canManageOrg, location, navigate]);
 
 	useSocketQuerySync();
 
+	// The nav's scrollbar is hidden by design (.sidebar-nav), so overflow past the
+	// fold needs its own cue. Two observers: the nav's own box changes with the
+	// viewport, while its row count changes later as permission checks resolve.
 	useEffect(() => {
-		const handler = (event: VehicleRestockShortfallEvent) => {
-			toast.warning(
-				<>
-					<div className="text-sm font-semibold text-text-primary">
-						Restock shortfall — {event.vehicle_name}
-					</div>
-					<div className="text-xs text-text-muted mt-0.5">
-						{event.date}
-					</div>
-					<ul className="mt-1 space-y-0.5">
-						{event.shortfalls.map((s, i) => (
-							<li
-								key={i}
-								className="text-xs text-warning-text"
-							>
-								{s.name}: -{s.qty_shortfall}
-							</li>
-						))}
-					</ul>
-				</>,
-				{ durationMs: 12000 }
-			);
-		};
-		socket.on("vehicle:restock_shortfall", handler);
+		const el = navRef.current;
+		if (!el) return;
+		const update = () =>
+			setNavOverflows(el.scrollHeight - el.scrollTop - el.clientHeight > 1);
+		update();
+		el.addEventListener("scroll", update, { passive: true });
+		const resize = new ResizeObserver(update);
+		resize.observe(el);
+		const mutation = new MutationObserver(update);
+		mutation.observe(el, { childList: true });
 		return () => {
-			socket.off("vehicle:restock_shortfall", handler);
+			el.removeEventListener("scroll", update);
+			resize.disconnect();
+			mutation.disconnect();
 		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+
 	const handleBack = () => {
 		const path = location.pathname;
 		const historyIdx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
@@ -124,7 +176,10 @@ export default function DispatchLayout() {
 				<div
 					className={`absolute inset-y-0 left-0 flex flex-col bg-base border-r border-border overflow-hidden transition-[width] duration-200 ease-in-out ${expanded ? "w-40 lg:w-44" : "w-16"}`}
 				>
-					<nav className="flex-1 py-2 space-y-1 overflow-y-auto overflow-x-hidden sidebar-nav">
+					<nav
+						ref={navRef}
+						className="flex-1 py-2 space-y-1 overflow-y-auto overflow-x-hidden sidebar-nav"
+					>
 						<button
 							onClick={() => {
 								setIsCreatePanelOpen((o) => !o);
@@ -140,7 +195,7 @@ export default function DispatchLayout() {
 								<Plus size={ICON_SIZE} />
 							</div>
 							<div
-								className={`absolute left-12 w-24 flex items-center h-full overflow-hidden transition-[opacity,transform] duration-200 ease-in-out ${
+								className={`flex-1 min-w-0 flex items-center overflow-hidden transition-[opacity,transform] duration-200 ease-in-out ${
 									expanded
 										? "opacity-100 translate-x-0"
 										: "opacity-0 -translate-x-2 pointer-events-none"
@@ -167,7 +222,7 @@ export default function DispatchLayout() {
 							<SideNavItem
 								expanded={expanded}
 								to="/dispatch/requests"
-								icon={<Phone size={ICON_SIZE} />}
+								icon={<Inbox size={ICON_SIZE} />}
 								label="Requests"
 							/>
 						)}
@@ -231,6 +286,14 @@ export default function DispatchLayout() {
 								label="Inventory"
 							/>
 						)}
+						{canViewPurchases && (
+							<SideNavItem
+								expanded={expanded}
+								to="/dispatch/purchases"
+								icon={<Receipt size={ICON_SIZE} />}
+								label="Purchases"
+							/>
+						)}
 						{canViewVehicles && (
 							<SideNavItem
 								expanded={expanded}
@@ -253,15 +316,13 @@ export default function DispatchLayout() {
 							icon={<Map size={ICON_SIZE} />}
 							label="Map"
 						/>
-						{canViewReports && (
+						{canViewReports && advancedReportingOn && (
 							<SideNavItem
 								expanded={expanded}
 								to="/dispatch/kpi"
-								icon={
-									<ChartColumnDecreasing
+								icon={<ChartColumnDecreasing
 										size={ICON_SIZE}
-									/>
-								}
+									/>}
 								label="KPIs"
 							/>
 						)}
@@ -273,6 +334,16 @@ export default function DispatchLayout() {
 								label="Reporting"
 							/>
 						)}
+						{canViewTimesheet && (
+							<SideNavItem
+								expanded={expanded}
+								to="/dispatch/timesheet"
+								icon={
+									<Timer size={ICON_SIZE} />
+								}
+								label="Timesheet"
+							/>
+						)}
 						{canViewFollowups && (
 							<SideNavItem
 								expanded={expanded}
@@ -281,12 +352,6 @@ export default function DispatchLayout() {
 								label="Followups"
 							/>
 						)}
-						<SideNavItem
-							expanded={expanded}
-							to="/dispatch/profile"
-							icon={<UserRoundCog size={ICON_SIZE} />}
-							label="My Profile"
-						/>
 						{(user?.role === "admin" || canViewAdmin) && (
 							<SideNavItem
 								expanded={expanded}
@@ -300,6 +365,12 @@ export default function DispatchLayout() {
 							/>
 						)}
 					</nav>
+					<div
+						aria-hidden="true"
+						className={`pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-base to-transparent transition-opacity duration-200 ${
+							navOverflows ? "opacity-100" : "opacity-0"
+						}`}
+					/>
 				</div>
 			</aside>
 
@@ -333,19 +404,41 @@ export default function DispatchLayout() {
 					{/* RIGHT SIDE */}
 					<div className="flex items-center gap-3">
 						<GlobalSearch />
+						{/* Bell / notifications icon */}
+						<button
+							onClick={() => navigate("/dispatch/notifications")}
+							className="relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-raised transition-colors hover:cursor-pointer"
+							title="Notifications"
+						>
+							<Bell size={20} className="text-text-tertiary" />
+							{unreadCount > 0 && (
+								<span className="absolute top-1 right-1 flex items-center justify-center w-4 h-4 rounded-full bg-error text-on-primary text-[9px] font-bold leading-none">
+									{unreadCount > 9 ? "9+" : unreadCount}
+								</span>
+							)}
+						</button>
+						<AssistantTrigger
+							onClick={() => setIsAssistantOpen(true)}
+						/>
 						<DispatcherUserMenu />
 					</div>
 				</header>
 
 				<main className="flex-1 overflow-hidden bg-canvas">
 					<div className="pt-4 px-4 md:pt-6 md:px-6 h-full overflow-y-auto">
-						<Outlet />
+						<ModuleRouteGuard home="/dispatch">
+							<Outlet />
+						</ModuleRouteGuard>
 					</div>
 				</main>
 			</div>
 			<CreatePanel
 				isOpen={isCreatePanelOpen}
 				onClose={() => setIsCreatePanelOpen(false)}
+			/>
+			<AssistantPanel
+				isOpen={isAssistantOpen}
+				onClose={() => setIsAssistantOpen(false)}
 			/>
 
 			<ToastViewport />

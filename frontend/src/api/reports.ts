@@ -309,6 +309,18 @@ export const getQuoteFunnelReport = (params: ReportFetchParams = {}): Promise<Pa
 export const getFirstTimeFixReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
 	fetchPaginated("/reports/first-time-fix", params, "Failed to fetch first-time fix report");
 
+export const getProjectsReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
+	fetchPaginated("/reports/projects", params, "Failed to fetch projects report");
+
+export const getCogsByJobReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
+	fetchPaginated("/reports/cogs-by-job", params, "Failed to fetch cost of goods sold by job report");
+
+export const getCogsByItemReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
+	fetchPaginated("/reports/cogs-by-item", params, "Failed to fetch cost of goods sold by item report");
+
+export const getJobProfitabilityReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
+	fetchPaginated("/reports/job-profitability", params, "Failed to fetch job profitability report");
+
 export const getTechnicianScorecard = async (
 	startDate?: string,
 	endDate?: string,

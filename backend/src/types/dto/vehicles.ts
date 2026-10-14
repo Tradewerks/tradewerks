@@ -1,8 +1,8 @@
 // Plain-JSON response shapes for the vehicle-stock domain (stock items, restock
 // history/requests, adjustments, movements) — converts Prisma Decimal quantity
 // fields to real numbers and Date fields to ISO strings so the wire format
-// matches what the frontend actually consumes (previously it silently gets
-// Decimal-as-string and re-coerces with `Number(...)` at every read site).
+// matches what the frontend actually consumes, rather than leaving every read
+// site to silently receive Decimal-as-string and re-coerce it with `Number(...)`.
 import type {
 	vehicle_stock_item,
 	inventory_item,
@@ -10,6 +10,7 @@ import type {
 	vehicle_stock_adjustment_line,
 	vehicle_restock_request,
 	stock_movement,
+	Prisma,
 } from "../../../generated/prisma/client.js";
 import { mapInventoryItem, type InventoryItemDTO } from "./inventory.js";
 
@@ -197,3 +198,121 @@ export function mapStockMovement(movement: stock_movement): StockMovementDTO {
 		created_at: movement.created_at.toISOString(),
 	};
 }
+
+// ── Vehicle Maintenance ──────────────────────────────────────────────────────────
+
+export interface VehicleMaintenanceRecordDTO {
+	id: string;
+	vehicle_id: string;
+	organization_id: string;
+	category: string;
+	performed_at: string;
+	odometer_mi: number | null;
+	interval_miles: number | null;
+	interval_months: number | null;
+	cost: number | null;
+	vendor_name: string | null;
+	notes: string | null;
+	performed_by: PersonRef;
+	performed_by_tech: PersonRef;
+	source_purchase_line_id: string | null;
+	source_field_purchase_line_id: string | null;
+	// Parent of the source line — what "linked purchase" navigates to.
+	source_purchase_id: string | null;
+	source_field_purchase_id: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+interface VehicleRecord {
+	id: string;
+	vehicle_id: string;
+	organization_id: string;
+	category: string;
+	performed_at: Date;
+	odometer_mi: number | null;
+	interval_miles: number | null;
+	interval_months: number | null;
+	cost: Prisma.Decimal | null;
+	vendor_name: string | null;
+	notes: string | null;
+	performed_by: PersonRef;
+	performed_by_tech: PersonRef;
+	source_purchase_line_id: string | null;
+	source_field_purchase_line_id: string | null;
+	source_purchase_line: { purchase_id: string } | null;
+	source_field_purchase_line: { field_purchase_id: string } | null;
+	created_at: Date;
+	updated_at: Date;
+}
+
+export function mapMaintenanceRecord(record: VehicleRecord): VehicleMaintenanceRecordDTO {
+	const { source_purchase_line, source_field_purchase_line, ...rest } = record;
+	return {
+		...rest,
+		performed_at: record.performed_at.toISOString(),
+		cost: record.cost == null ? null : Number(record.cost),
+		source_purchase_id: source_purchase_line?.purchase_id ?? null,
+		source_field_purchase_id: source_field_purchase_line?.field_purchase_id ?? null,
+		created_at: record.created_at.toISOString(),
+		updated_at: record.updated_at.toISOString(),
+	};
+}
+
+// ── Vehicle Maintenance Reminders ───────────────────────────────────────────
+
+export interface VehicleMaintenanceReminderDTO {
+	id: string;
+	vehicle_id: string;
+	organization_id: string;
+	category: string;
+	title: string;
+	description: string | null;
+	interval_miles: number | null;
+	interval_unit: string | null;
+	interval_count: number | null;
+	repeats: boolean;
+	due_at: string | null;
+	due_odometer_mi: number | null;
+	completed_at: string | null;
+	acknowledged_at: string | null;
+	baseline_at: string | null;
+	baseline_odometer_mi: number | null;
+	created_at: string;
+	updated_at: string;
+}
+
+interface VehicleReminderRecord {
+	id: string;
+	vehicle_id: string;
+	organization_id: string;
+	category: string;
+	title: string;
+	description: string | null;
+	interval_miles: number | null;
+	interval_unit: string | null;
+	interval_count: number | null;
+	repeats: boolean;
+	due_at: Date | null;
+	due_odometer_mi: number | null;
+	completed_at: Date | null;
+	acknowledged_at: Date | null;
+	baseline_at: Date | null;
+	baseline_odometer_mi: number | null;
+	created_at: Date;
+	updated_at: Date;
+}
+
+export function mapMaintenanceReminder(record: VehicleReminderRecord): VehicleMaintenanceReminderDTO {
+	return {
+		...record,
+		due_at: record.due_at ? record.due_at.toISOString() : null,
+		completed_at: record.completed_at ? record.completed_at.toISOString() : null,
+		acknowledged_at: record.acknowledged_at ? record.acknowledged_at.toISOString() : null,
+		baseline_at: record.baseline_at ? record.baseline_at.toISOString() : null,
+		created_at: record.created_at.toISOString(),
+		updated_at: record.updated_at.toISOString(),
+	};
+}
+
+

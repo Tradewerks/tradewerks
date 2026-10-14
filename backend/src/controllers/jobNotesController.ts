@@ -8,8 +8,8 @@ import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
-import { createNotification } from "./notificationsController.js";
-import { getSocket } from "../services/socketService.js";
+import { createNotification, notifyDispatchers } from "./notificationsController.js";
+import { emitToOrg } from "../services/socketService.js";
 import { signImageUrl, deleteFile } from "../services/wasabiService.js";
 
 type NoteLike = { photos?: { photo_url: string }[] | null } | null | undefined;
@@ -184,8 +184,8 @@ export const insertJobNote = async (
 				actor_id: context?.techId || context?.dispatcherId,
 				changes: {
 					content: { old: null, new: parsed.content },
-					job_id: { old: null, new: jobId },
 					visit_id: { old: null, new: parsed.visit_id || null },
+					...parentBreadcrumb("job", jobId),
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
@@ -221,7 +221,17 @@ export const insertJobNote = async (
 			}
 		}
 
-		getSocket().emit("job_note:created", { organizationId });
+		if (context?.techId) {
+			const job = await sdb.job.findFirst({ where: { id: jobId }, select: { job_number: true } });
+			notifyDispatchers({
+				type: "tech_note_added",
+				title: `Technician note on Job ${job?.job_number ?? ""}`.trim(),
+				body: parsed.content.slice(0, 200),
+				actionUrl: `/dispatch/jobs/${jobId}`,
+			}, organizationId).catch(() => {});
+		}
+
+		emitToOrg(organizationId, "job_note:created", { organizationId });
 		return { err: "", item: signed };
 	} catch (e) {
 		if (e instanceof ZodError) {
@@ -353,7 +363,7 @@ export const updateJobNote = async (
 							? "dispatcher"
 							: "system",
 					actor_id: context?.techId || context?.dispatcherId,
-					changes,
+					changes: { ...changes, ...parentBreadcrumb("job", jobId) },
 					ip_address: context?.ipAddress,
 					user_agent: context?.userAgent,
 				});

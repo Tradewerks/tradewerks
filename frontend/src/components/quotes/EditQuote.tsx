@@ -20,7 +20,10 @@ import {
 	useDeleteLineItemMutation,
 } from "../../hooks/useQuotes";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
@@ -92,6 +95,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		dirtyLineItemFields,
 		undoLineItemField,
 		clearLineItemField,
+		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
 	} = useLineItems({
@@ -99,6 +103,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		mode: "edit",
 	});
 
+	const { data: inventoryItems = [] } = useAllInventoryQuery();
 	const lineItemsForCalc = useMemo(
 		() =>
 			activeLineItems.map((item) => ({
@@ -226,6 +231,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 					total: Number(item.total),
 					taxable: item.taxable ?? true,
 					tax_group_id: item.tax_group_id ?? null,
+					inventory_item_id: item.inventory_item_id ?? null,
 					isNew: false,
 					isDeleted: false,
 				})) || [];
@@ -329,6 +335,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 							item_type: item.item_type || undefined,
 							taxable: item.taxable,
 							tax_group_id: item.tax_group_id ?? undefined,
+							inventory_item_id: item.inventory_item_id ?? undefined,
 						},
 					});
 				} else if (editableItem.entity_line_item_id) {
@@ -341,6 +348,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 						item_type: item.item_type || undefined,
 						taxable: item.taxable,
 						tax_group_id: item.tax_group_id ?? undefined,
+						inventory_item_id: item.inventory_item_id ?? undefined,
 					};
 
 					await updateLineItem.mutateAsync({
@@ -355,7 +363,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			setIsModalOpen(false);
 		} catch (error) {
 			console.error("Failed to update quote:", error);
-			setSubmitError(error instanceof Error ? error.message : "Failed to update quote. Please try again.");
+			setSubmitError(errorMessage(error, "Failed to update quote. Please try again."));
 			setIsLoading(false);
 		}
 	};
@@ -544,6 +552,8 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 					<div className="min-w-0 flex flex-col">
 						<ErrorDisplay path="line_items" />
 						<LineItemsSection
+							inventoryItems={inventoryItems}
+							onLinkInventory={setLineItemInventoryItem}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={addLineItemToState}
@@ -688,11 +698,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			isEditMode={true}
 		>
 			<>
-				{submitError && (
-					<div className="mb-2 rounded border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text">
-						{submitError}
-					</div>
-				)}
+				<FormErrorBanner message={submitError} className="mb-2" />
 				{stepContent}
 			</>
 		</FormWizardContainer>

@@ -20,9 +20,8 @@ export default function QBTaxCodeMappingCard() {
     const pending = link.isPending || unlink.isPending;
 
     return (
-        <div className="rounded-lg border border-border-subtle bg-base px-5 py-5">
-            <h2 className="mb-1 text-lg font-semibold text-text-primary">QuickBooks Tax Code Mapping</h2>
-            <p className="mb-4 text-xs text-text-muted">
+        <div>
+            <p className="mb-4 text-xs text-text-muted leading-relaxed max-w-2xl">
                 Link each tax group to a QuickBooks tax code so synced invoices post to the right tax bucket.
             </p>
 

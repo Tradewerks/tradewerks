@@ -13,20 +13,34 @@ import { log } from "../services/appLogger.js";
  *     view_requests       · create_requests    · edit_requests      · delete_requests
  *   Quotes
  *     view_quotes         · create_quotes      · edit_quotes        · delete_quotes
+ *     send_quotes         (emailing the client — independent of edit_quotes)
  *   Invoices
  *     view_invoices       · create_invoices    · edit_invoices      · delete_invoices
+ *     send_invoices       (emailing the client — independent of edit_invoices)
+ *     refund_invoices     (refunds and invoice voids — cash out)
+ *   Disputes
+ *     open_disputes       · resolve_disputes
+ *     concede_disputes    (required with resolve_disputes for IssueAdjustment / Repeal)
+ *     resolve_own_disputes (override for the opener != resolver rule)
  *   Clients
  *     view_clients        · create_clients     · edit_clients       · delete_clients
  *   Inventory
  *     view_inventory      · manage_inventory
  *   Reports
  *     view_reports        · export_reports
+ *   Timesheets
+ *     view_timesheet      · manage_timesheet   (approve, unapprove, push to QB)
  *   Recurring Plans
  *     view_recurring_plans · manage_recurring_plans
  *   Team
  *     view_technicians    · manage_technicians · view_dispatchers   · manage_dispatchers
  *   Administration
  *     view_admin          · manage_roles        · manage_organization
+ *   Field Purchases
+ *     view_field_purchases · review_field_purchases · manage_field_purchase_grants
+ *     second_sign_off_field_purchases  (must differ from the reviewer and the purchaser)
+ *   Purchases
+ *     view_purchases      · manage_purchases
  *
  * TECHNICIAN
  *   Jobs
@@ -40,11 +54,15 @@ import { log } from "../services/appLogger.js";
  *   Vehicle Stock
  *     stock_own_vehicle   · complete_own_restock
  *     adjust_field_loss   · adjust_transfer      · adjust_audit
- *     adjust_warehouse_exchange · adjust_supplier_purchase
+ *     adjust_warehouse_exchange
  *   Schedule
  *     view_own_schedule   · view_team_schedule
  *   Forms
  *     view_forms          · submit_forms
+ *   Field Purchases
+ *     request_field_purchase
+ * 	 Timesheets
+ *	   edit_own_timesheet
  */
 
 function resolvePerms(req: Request): string[] | null {
@@ -60,6 +78,19 @@ export const requirePermission = (permission: string) => (req: Request, res: Res
     }
     next();
 };
+
+/**
+ * Gate that engages only for the requests whose body asks for the privileged
+ * variant of an operation. Voiding an invoice is a PATCH on the same route
+ * that renames its memo, so the cash-out permission cannot sit on the route
+ * itself — it has to read what the body is actually asking for.
+ */
+export const requirePermissionForBody =
+	(permission: string, applies: (body: unknown) => boolean) =>
+	(req: Request, res: Response, next: NextFunction) => {
+		if (!applies(req.body)) return next();
+		return requirePermission(permission)(req, res, next);
+	};
 
 export const requireAnyPermission = (...permissions: string[]) => (req: Request, res: Response, next: NextFunction) => {
     const perms = resolvePerms(req);

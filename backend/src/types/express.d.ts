@@ -8,6 +8,7 @@ declare global {
                 organization_id: string | null;
                 permissions: string[] | null;
             }
+            staff?: { id: string; email: string; name: string };
             // Raw request bytes for webhook
             rawBody?: Buffer;
         }

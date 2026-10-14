@@ -22,7 +22,7 @@ import {
 } from "../../types/project";
 import { PriorityValues, PriorityLabels, type Priority, PriorityColors } from "../../types/common";
 import { matchesDateRange, parseDateRangeFromParams, toLocalDate } from "../../util/dateRangeUtils";
-import { compareByOrder, compareDateNullsLast, comparePriority, withDir, type SortDir } from "../../util/sortUtil";
+import { compareByOrder, compareDateNullsLast, comparePriority, compareString, compareNumber, withDir, type SortDir } from "../../util/sortUtil";
 import { formatCurrency, formatDateOnly } from "../../util/util";
 import AdaptableTable from "../../components/AdaptableTable";
 import CreateProjectModal from "../../components/projects/CreateProjectModal";
@@ -42,7 +42,30 @@ const sortLabels: Record<string, string> = {
     status: "Status",
     date: "Date",
     targetDate: "Target Date",
+    client: "Client",
+    projectNumber: "Project #",
+    jobs: "Jobs",
+    budget: "Budget",
+    actual: "Actual Spend",
+    variance: "Variance",
 };
+
+// "targetEnd" is the displayed column; the existing "targetDate" sort key
+// already drives it (shared with the SortControl "Target Date" option).
+// "budget" is the displayed "Actual / Budget" column — clicking it sorts by
+// actual spend (budget itself stays selectable via the SortControl dropdown
+// only, since there's no header of its own for it).
+const COLUMN_SORT_KEY: Record<string, string> = {
+    targetEnd: "targetDate",
+    budget: "actual",
+};
+
+function computeProjectSpend(p: Project): { actual: number; budget: number | null; variance: number | null } {
+    const actual = p.jobs?.reduce((acc, j) => acc + Number(j.actual_total ?? 0), 0) ?? 0;
+    const budget = p.budget === null || p.budget === undefined ? null : Number(p.budget);
+    const variance = budget === null ? null : budget - actual;
+    return { actual, budget, variance };
+}
 
 type ProjectRow = {
     id: string;
@@ -166,6 +189,18 @@ export default function ProjectsPage() {
                 ? (a, b) => compareDateNullsLast(dir)(a.created_at, b.created_at)
                 : sortParam === "targetDate"
                 ? (a, b) => compareDateNullsLast(dir)(a.target_end_at, b.target_end_at)
+                : sortParam === "client"
+                ? withDir((a, b) => compareString(a.client?.name, b.client?.name), dir)
+                : sortParam === "projectNumber"
+                ? withDir((a, b) => compareString(a.project_number, b.project_number), dir)
+                : sortParam === "jobs"
+                ? withDir((a, b) => compareNumber(a.jobs?.length ?? 0, b.jobs?.length ?? 0), dir)
+                : sortParam === "budget"
+                ? withDir((a, b) => compareNumber(computeProjectSpend(a).budget, computeProjectSpend(b).budget), dir)
+                : sortParam === "actual"
+                ? withDir((a, b) => compareNumber(computeProjectSpend(a).actual, computeProjectSpend(b).actual), dir)
+                : sortParam === "variance"
+                ? withDir((a, b) => compareNumber(computeProjectSpend(a).variance, computeProjectSpend(b).variance), dir)
                 : (a, b) => {
                     const statusDiff =
                     ProjectStatusValues.indexOf(a.status as ProjectStatus) -
@@ -179,10 +214,7 @@ export default function ProjectsPage() {
             .sort(comparator)
             .map((p) => {
                 const jobCount = p.jobs?.length ?? 0;
-                const actual = p.jobs?.reduce((acc, j) => acc + Number(j.actual_total ?? 0), 0) ?? 0;
-                // null budget = never set; keep it null so the renderers can say so instead of "$0 over".
-                const budget = p.budget === null || p.budget === undefined ? null : Number(p.budget);
-                const variance = budget === null ? null : budget - actual;
+                const { actual, budget, variance } = computeProjectSpend(p);
                 return ({
                     id: p.id,
                     projectNumber: p.project_number,   
@@ -209,6 +241,18 @@ export default function ProjectsPage() {
 		next.delete("sort");
 		next.delete("dir");
 		navigate(`/dispatch/projects${next.toString() ? `?${next.toString()}` : ""}`);
+	};
+
+	const handleSortChange = (col: string) => {
+		const key = COLUMN_SORT_KEY[col] ?? col;
+		const next = new URLSearchParams(location.search);
+		if (next.get("sort") === key) {
+			next.set("dir", next.get("dir") === "asc" ? "desc" : "asc");
+		} else {
+			next.set("sort", key);
+			next.set("dir", "asc");
+		}
+		navigate(`/dispatch/projects?${next.toString()}`);
 	};
 
 	const clearAllFilters = () => {
@@ -266,8 +310,14 @@ export default function ProjectsPage() {
                                 { value: "status", label: "Status" },
                                 { value: "date", label: "Date" },
                                 { value: "targetDate", label: "Target Date"},
+                                { value: "client", label: "Client"},
+                                { value: "projectNumber", label: "Project #"},
+                                { value: "jobs", label: "Jobs"},
+                                { value: "budget", label: "Budget"},
+                                { value: "actual", label: "Actual Spend"},
+                                { value: "variance", label: "Variance"},
                             ]}
-                            defaultDirByField={{ priority: "desc", status: "asc", date: "desc", targetDate: "asc" }}
+                            defaultDirByField={{ priority: "desc", status: "asc", date: "desc", targetDate: "asc", jobs: "desc", budget: "desc", actual: "desc", variance: "asc" }}
                         />
                     </div>
                 }
@@ -386,6 +436,25 @@ export default function ProjectsPage() {
                             )
                         }
                     }}
+					sortableColumns={{
+						status: true,
+						priority: true,
+						client: true,
+						projectNumber: true,
+						jobs: true,
+						budget: true,
+						variance: true,
+						targetEnd: true,
+					}}
+					sortKey={
+						sortParam === "targetDate"
+							? "targetEnd"
+							: sortParam === "actual"
+							? "budget"
+							: (sortParam ?? "")
+					}
+					sortDir={dirParam === "asc" ? "asc" : "desc"}
+					onSortChange={handleSortChange}
 				/>
 			</div>
 

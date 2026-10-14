@@ -50,7 +50,7 @@ beforeEach(() => {
 
 describe("typing a known batch number", () => {
 	it("switches to existing mode and shows its expiry read-only", async () => {
-		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null, supplier: "" }} />);
+		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null }} />);
 
 		const input = screen.getByLabelText("Batch or lot number");
 		await userEvent.type(input, "LOT-100");
@@ -66,21 +66,22 @@ describe("typing a known batch number", () => {
 });
 
 describe("typing an unknown batch number", () => {
-	it("stays in new mode with editable expiry and supplier fields", async () => {
-		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null, supplier: "" }} />);
+	it("stays in new mode with an editable expiry and no lot-level supplier field", async () => {
+		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null }} />);
 
 		const input = screen.getByLabelText("Batch or lot number");
 		await userEvent.type(input, "BRAND-NEW-LOT");
 
 		expect(screen.queryByText(/Receiving into existing lot/)).not.toBeInTheDocument();
 		expect(screen.getByLabelText("Expiry date")).not.toBeDisabled();
-		expect(screen.getByLabelText("Supplier")).not.toBeDisabled();
+		// The vendor is captured once per receipt, not per lot.
+		expect(screen.queryByLabelText("Supplier")).not.toBeInTheDocument();
 	});
 });
 
 describe("recalled batches", () => {
 	it("shows recalled batches in the dropdown flagged and not selectable", async () => {
-		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null, supplier: "" }} />);
+		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null }} />);
 
 		const input = screen.getByLabelText("Batch or lot number");
 		await userEvent.click(input);
@@ -91,7 +92,7 @@ describe("recalled batches", () => {
 	});
 
 	it("does not switch to existing mode when typing a recalled batch's number", async () => {
-		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null, supplier: "" }} />);
+		render(<Harness initialValue={{ mode: "new", batch_number: "", expires_at: null }} />);
 
 		const input = screen.getByLabelText("Batch or lot number");
 		await userEvent.type(input, "LOT-BAD");

@@ -39,6 +39,16 @@
 	--color-border-card:   #e2e6ec;   /* card edge — matches subtle (was #b5c4db) */
 	--color-border-input:  #a6b0be;   /* input — firm field boundary, no longer navy (was #5e7a98) */
 
+	/* ── Identity / avatar ────────────────────────────────────────────────── */
+	/* Deliberately NOT a border token. Avatar fills used to borrow --color-border
+	   and --color-border-strong, which is also where status accents come from, so
+	   a neutral status underline resolved to the exact color of the fill it sat
+	   on and just made the square look rectangular. Separate family, collision
+	   cannot recur. Dark enough for white text in every palette — border-strong
+	   is near-white here and measured 1.9:1. */
+	--color-avatar-bg: #64748b;       /* 4.76:1 against --color-avatar-fg */
+	--color-avatar-fg: #ffffff;
+
 	/* ── Overlay / modal backdrop ─────────────────────────────────────────────── */
 	--color-overlay: rgba(9, 9, 11, 0.60);
 
@@ -73,6 +83,7 @@
 	--color-warning-text:   #92400e;
 	--color-warning-bg:     rgba(217, 119, 6, 0.10);
 	--color-warning-border: rgba(217, 119, 6, 0.22);
+	--color-on-warning:     #ffffff;   /* text on a solid --color-warning fill */
 
 	/* ── Status: info ────────────────────────────────────────────────────── */
 	--color-info:           #0891b2;
@@ -132,6 +143,18 @@
 	--color-popup-bg:          #ffffff;
 	--color-occurrence-border: rgba(109, 40, 217, 0.25);
 
+	/* ── Schedule grid (calendar chrome) ──────────────────────────────────── */
+	/* Deliberately NOT the --color-border family. The board floor is --color-canvas,
+	   and in light palettes border/border-subtle land within ~1.2:1 of it, so grid
+	   lines vanished. These carry their own light values tuned against canvas;
+	   dark values reproduce exactly what each call site resolved to before. */
+	--color-grid-line:        #bac3d1;   /* month cell edges, weekday header rule — 1.47:1 on canvas */
+	--color-grid-line-strong: #b0bac9;   /* week column edges, hour lines, header rules */
+	--color-grid-line-minor:  #dbe1e9;   /* week half-hour lines — must stay DARKER than canvas */
+	--color-grid-cell-muted:  #dde2ea;   /* other-month cells — recede, never brighter than in-month */
+	--color-grid-today-tint:  rgba(59, 130, 246, 0.10);
+	--color-grid-float-bg:    #ffffff;   /* overlays/chips floating ON the grid — must not equal canvas */
+
 	/* ── Schedule text variants ───────────────────────────────────────────── */
 	--color-sched-text-primary:      #0f172a;   /* slate-900 */
 	--color-sched-text-secondary:    #475569;   /* slate-600 */
@@ -146,9 +169,14 @@
 	--color-sched-status-badge-bg:   rgba(59, 130, 246, 0.10);
 	--color-sched-status-badge-text: #1d4ed8;
 	--color-sched-open-ended-dash:   rgba(0, 0, 0, 0.22);
-
-	/* ── Calendar (schedule-x) ────────────────────────────────────────────── */
-	--color-cal-month-day: #475569;   /* slate-600 */
+	/* Week-card chips. Window tokens are slate, deliberately NOT --color-primary: per-org accents
+	   must not restyle them, and a blue chip would read as a button. */
+	--color-sched-chip-bg:          rgba(15, 23, 42, 0.06);
+	--color-sched-chip-text:        #334155;   /* slate-700 */
+	--color-sched-window-chip-bg:   rgba(100, 116, 139, 0.16);
+	--color-sched-window-chip-text: #3b5068;   /* muted slate-blue */
+	--color-sched-window-tick:      rgba(71, 85, 105, 0.55);
+	--color-sched-open-ended-fade:  rgba(0, 0, 0, 0.10);
 
 	/* ── Chart tokens ─────────────────────────────────────────────────────── */
 	--color-chart-primary:  #2563eb;
@@ -249,6 +277,10 @@
 	--color-border-card:   #48484f;   /* card edge — between subtle and default */
 	--color-border-input:  #717179;   /* input — zinc-500 tier, strong field boundary */
 
+	/* Identity / avatar */
+	--color-avatar-bg: #3f3f46;       /* zinc-700 — 10.4:1 with white, two steps above --color-base */
+	--color-avatar-fg: #ffffff;
+
 	/* Status badge text */
 	--color-success-text:   #34d399;
 	--color-error-text:     #f87171;
@@ -276,10 +308,21 @@
 	--color-sched-occurrence-title:  #c4b5fd;
 	--color-sched-status-badge-bg:   rgba(59, 130, 246, 0.15);
 	--color-sched-status-badge-text: #93c5fd;
-	--color-sched-open-ended-dash:   rgba(255, 255, 255, 0.38);
 
-	/* Calendar */
-	--color-cal-month-day: #d4d4d8;
+	/* Schedule grid — reproduces the pre-token dark appearance exactly */
+	--color-grid-line:        #3f3f46;   /* was --color-border-subtle */
+	--color-grid-line-strong: #52525b;   /* was --color-border */
+	--color-grid-line-minor:  #111115;   /* was --color-surface */
+	--color-grid-cell-muted:  #18181b;   /* was --color-base */
+	--color-grid-today-tint:  rgba(59, 130, 246, 0.04);
+	--color-grid-float-bg:    #09090b;   /* was --color-canvas */
+	--color-sched-open-ended-dash:   rgba(255, 255, 255, 0.38);
+	--color-sched-chip-bg:          rgba(255, 255, 255, 0.07);
+	--color-sched-chip-text:        rgba(255, 255, 255, 0.78);
+	--color-sched-window-chip-bg:   rgba(148, 163, 184, 0.16);   /* slate-400 */
+	--color-sched-window-chip-text: #b6c6da;
+	--color-sched-window-tick:      rgba(148, 163, 184, 0.60);
+	--color-sched-open-ended-fade:  rgba(0, 0, 0, 0.32);
 
 	/* Charts */
 	--color-chart-fallback: #3f3f46;
@@ -335,10 +378,18 @@
 	--color-border-strong:  #bcae9b; /* emphasized edge (was #8f7e6d) */
 	--color-border-card:    #e7ded1; /* matches subtle (was #c4b8a8) */
 	--color-border-input:   #b2a28e; /* firm field edge, softer (was #8a7a6a) */
+	--color-avatar-bg:      #7a6c58; /* identity fill — warm slate, 5.11:1 with white */
+	--color-avatar-fg:      #ffffff;
 	--color-mapbox-bg:      #fdfbf7;
 	--color-mapbox-bg-hover:#ede7de;
 	--color-chart-fallback: #e6dfd5;
 	--color-chart-hole-bg:  #f4f0eb;
+	/* Schedule grid — tuned against this palette's canvas #efe7db */
+	--color-grid-line:        #cdc0ad;
+	--color-grid-line-strong: #bcab94;
+	--color-grid-line-minor:  #e3dacb;
+	--color-grid-cell-muted:  #ebe4d7;
+	--color-grid-float-bg:    #fefdfa;
 }
 
 /* ── True neutral gray palette ───────────────────────────────────────────
@@ -356,8 +407,16 @@
 	--color-border-strong:  #b3b3b3; /* emphasized edge (was #707070) */
 	--color-border-card:    #e4e4e4; /* matches subtle (was #b8b8b8) */
 	--color-border-input:   #adadad; /* firm field edge, softer (was #888888) */
+	--color-avatar-bg:      #6b6b6b; /* identity fill — neutral, 5.33:1 with white */
+	--color-avatar-fg:      #ffffff;
 	--color-mapbox-bg:      #ffffff;
 	--color-mapbox-bg-hover:#e8e8e8;
 	--color-chart-fallback: #e0e0e0;
 	--color-chart-hole-bg:  #f0f0f0;
+	/* Schedule grid — tuned against this palette's canvas #e9e9e9 */
+	--color-grid-line:        #c0c0c0;
+	--color-grid-line-strong: #b6b6b6;
+	--color-grid-line-minor:  #dedede;
+	--color-grid-cell-muted:  #e3e3e3;
+	--color-grid-float-bg:    #ffffff;
 }

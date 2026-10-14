@@ -1,4 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import {
 	getAllQuotes,
 	getQuoteById,
@@ -8,10 +9,9 @@ import {
 	updateQuote,
 	deleteQuote,
 	sendQuote,
-	approveQuote,
 	rejectQuote,
-	recordQuoteView,
 	reviseQuote,
+	cancelQuote,
 	addLineItem,
 	updateLineItem,
 	deleteLineItem,
@@ -29,6 +29,8 @@ import type {
 	CreateQuoteNoteInput,
 	UpdateQuoteNoteInput,
 } from "../types/quotes";
+
+const useQuery = moduleQuery("quotes");
 
 // ============================================================================
 // Queries
@@ -147,6 +149,10 @@ export const useUpdateQuoteMutation = () => {
 			}
 
 			queryClient.setQueryData(["quotes", updatedQuote.id], updatedQuote);
+			// Status changes (e.g. "Create Without Sending" Draft -> Issued) can
+			// flip whether a dispute is openable; the disabled reason on "Open
+			// Dispute" is read from this cache, same as useUpdateInvoiceMutation.
+			queryClient.invalidateQueries({ queryKey: ["disputes", "quote", updatedQuote.id] });
 		},
 	});
 };
@@ -192,21 +198,7 @@ export const useSendQuoteMutation = () => {
 			}
 
 			queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-		},
-	});
-};
-
-export const useApproveQuoteMutation = () => {
-	const queryClient = useQueryClient();
-
-	return useMutation({
-		mutationFn: (id: string) => approveQuote(id),
-		onSuccess: (updatedQuote) => {
-			queryClient.invalidateQueries({
-				queryKey: ["quotes", updatedQuote.id],
-			});
-			queryClient.invalidateQueries({ queryKey: ["quotes"] });
-			queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			queryClient.invalidateQueries({ queryKey: ["disputes", "quote", updatedQuote.id] });
 		},
 	});
 };
@@ -222,20 +214,11 @@ export const useRejectQuoteMutation = () => {
 				queryKey: ["quotes", updatedQuote.id],
 			});
 			queryClient.invalidateQueries({ queryKey: ["quotes"] });
+			// Both Rejected and Cancelled are lost buckets in the funnel and
+			// drop out of the pipeline's OPEN_STATUSES, so the reports move.
+			queryClient.invalidateQueries({ queryKey: ["reports"] });
 			queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-		},
-	});
-};
-
-export const useRecordQuoteViewMutation = () => {
-	const queryClient = useQueryClient();
-
-	return useMutation({
-		mutationFn: (id: string) => recordQuoteView(id),
-		onSuccess: (updatedQuote) => {
-			queryClient.invalidateQueries({
-				queryKey: ["quotes", updatedQuote.id],
-			});
+			queryClient.invalidateQueries({ queryKey: ["disputes", "quote", updatedQuote.id] });
 		},
 	});
 };
@@ -244,31 +227,41 @@ export const useReviseQuoteMutation = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: (id: string) => reviseQuote(id),
-		onSuccess: (newQuote) => {
+		mutationFn: ({ id }: { id: string }) => reviseQuote(id),
+		onSuccess: (_replacement, { id }) => {
+			// The original moves to Revised and a new quote appears, so both
+			// the detail and every list have to refresh.
+			queryClient.invalidateQueries({ queryKey: ["quotes", id] });
 			queryClient.invalidateQueries({ queryKey: ["quotes"] });
+			// Revising an approved quote pushes its request back to Quoted,
+			// and Revised leaves the funnel's open statuses. The client- and
+			// request-scoped quote lists (["clients", cid, "quotes"] etc.) are
+			// reached by these prefixes — create/update/delete invalidate the
+			// same pair, and the rewrite of this hook had dropped them (DW-28).
+			queryClient.invalidateQueries({ queryKey: ["requests"] });
+			queryClient.invalidateQueries({ queryKey: ["clients"] });
+			queryClient.invalidateQueries({ queryKey: ["reports"] });
+			queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			queryClient.invalidateQueries({ queryKey: ["disputes", "quote", id] });
+		},
+	});
+};
 
-			if (newQuote.client_id) {
-				queryClient.invalidateQueries({
-					queryKey: ["clients", newQuote.client_id, "quotes"],
-				});
-			}
+export const useCancelQuoteMutation = () => {
+	const queryClient = useQueryClient();
 
-			// Invalidate request quotes if applicable
-			if (newQuote.request_id) {
-				queryClient.invalidateQueries({
-					queryKey: ["requests", newQuote.request_id, "quotes"],
-				});
-			}
-
-			// Invalidate the old quote (since it gets deactivated)
-			if (newQuote.previous_quote_id) {
-				queryClient.invalidateQueries({
-					queryKey: ["quotes", newQuote.previous_quote_id],
-				});
-			}
-
-			queryClient.setQueryData(["quotes", newQuote.id], newQuote);
+	return useMutation({
+		mutationFn: ({ id, reason }: { id: string; reason?: string }) => cancelQuote(id, reason),
+		onSuccess: (updatedQuote) => {
+			queryClient.invalidateQueries({
+				queryKey: ["quotes", updatedQuote.id],
+			});
+			queryClient.invalidateQueries({ queryKey: ["quotes"] });
+			// Both Rejected and Cancelled are lost buckets in the funnel and
+			// drop out of the pipeline's OPEN_STATUSES, so the reports move.
+			queryClient.invalidateQueries({ queryKey: ["reports"] });
+			queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			queryClient.invalidateQueries({ queryKey: ["disputes", "quote", updatedQuote.id] });
 		},
 	});
 };

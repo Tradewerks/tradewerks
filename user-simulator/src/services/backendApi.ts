@@ -139,3 +139,38 @@ export const listVisitsInRange = (startIso: string, endIso: string) =>
 		"get",
 		`/job-visits/date-range/${encodeURIComponent(startIso)}/${encodeURIComponent(endIso)}`,
 	);
+
+// Lifecycle transitions go through the same path as the tech app, so tech_status,
+// drive records and the arrival tracker all see a real drive.
+export type VisitAction = "drive" | "arrive" | "start" | "complete";
+
+export const transitionVisit = (id: string, action: VisitAction, tech_coords?: Coordinates) =>
+	call<JobVisit>("post", `/job-visits/${id}/transition`, { action, tech_coords });
+
+export const cancelVisit = (id: string, cancellation_reason: string) =>
+	call<JobVisit>("post", `/job-visits/${id}/cancel`, { cancellation_reason });
+
+export const createAtVisit = (body: {
+	job_id: string;
+	name: string;
+	scheduled_start_at: string;
+	scheduled_end_at: string;
+	arrival_time: string;
+	tech_ids: string[];
+}) =>
+	call<JobVisit>("post", "/job-visits", {
+		...body,
+		arrival_constraint: "at",
+		finish_constraint: "when_done",
+	});
+
+/** The org timezone rides in the access token; no extra request needed. */
+export async function getOrgTimezone(): Promise<string> {
+	const token = await adminAuth.getToken();
+	try {
+		const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+		return payload.organization_timezone || "America/Chicago";
+	} catch {
+		return "America/Chicago";
+	}
+}

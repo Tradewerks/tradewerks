@@ -25,6 +25,8 @@ import { formatDateTime } from "../../../util/util";
 import { unitLabel } from "../../../lib/units";
 import LoadSvg from "../../../assets/icons/loading.svg?react";
 import EmptyState from "../../ui/EmptyState";
+import Card from "../../ui/Card";
+import { HEADER_META } from "../../ui/headerActions";
 import { QueryErrorState } from "./chartShared";
 
 const REASON_META: Record<StockMovementReason, { label: string; icon: LucideIcon }> = {
@@ -73,7 +75,7 @@ function MovementRow({ m }: { m: StockMovement }) {
 	const Icon = meta.icon;
 	const qty = Number(m.qty);
 	return (
-		<li className="flex items-start gap-2.5 px-3 py-2.5 border-t border-border-subtle first:border-t-0">
+		<li className="flex items-start gap-2.5 px-4 py-2.5 border-t border-border-subtle first:border-t-0">
 			<div className="shrink-0 mt-0.5 flex items-center justify-center h-6 w-6 rounded-full bg-surface text-text-secondary">
 				<Icon size={13} />
 			</div>
@@ -135,15 +137,12 @@ export default function StockMovementList({
 	const isFirstLoad = isLoading && rows.length === 0;
 
 	return (
-		<div className="bg-base border border-border-subtle rounded-lg overflow-hidden flex flex-col">
-			<div className="px-3 py-3 border-b border-border-subtle flex items-center justify-between gap-2">
-				<div className="flex items-center gap-2">
-					<History size={14} className="text-text-muted" />
-					<h3 className="text-sm font-semibold text-text-primary">Stock History</h3>
-				</div>
-				{/* Short caption: the long one crowded the title at half width. */}
-				<span className="text-[11px] text-text-faint">Warehouse and vehicle</span>
-			</div>
+		<Card
+			title="Stock History"
+			flush
+			// Short caption: the long one crowded the title at half width.
+			headerAction={<span className={HEADER_META}>Warehouse and vehicle</span>}
+		>
 
 			{isFirstLoad && (
 				<div className="flex justify-center py-12">
@@ -183,7 +182,7 @@ export default function StockMovementList({
 			)}
 
 			{hasNextPage && (
-				<div className="px-3 py-3 flex justify-center border-t border-border-subtle">
+				<div className="px-4 py-3 flex justify-center border-t border-border-subtle">
 					<button
 						type="button"
 						onClick={() => fetchNextPage()}
@@ -194,6 +193,6 @@ export default function StockMovementList({
 					</button>
 				</div>
 			)}
-		</div>
+		</Card>
 	);
 }

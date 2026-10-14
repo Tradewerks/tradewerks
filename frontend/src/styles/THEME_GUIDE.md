@@ -328,11 +328,29 @@ Badge pattern: `bg-surface-raised text-text-tertiary border border-border-strong
 | `--color-sched-status-badge-text` | `#1d4ed8` | `#93c5fd` | Visit popup status badge text |
 | `--color-sched-open-ended-dash` | `rgba(0,0,0,0.22)` | `rgba(255,255,255,0.38)` | Dashed border on open-ended cards |
 
-### Calendar (schedule-x)
+### Schedule Grid — calendar chrome (light/dark adaptive)
 
-| Token | Light | Dark | Usage |
-|---|---|---|---|
-| `--color-cal-month-day` | `#475569` | `#d4d4d8` | Month view day number text |
+Own family, **not** `--color-border*`. The schedule board floor is `--color-canvas`; in every
+light palette `--color-border` / `--color-border-subtle` land within ~1.2:1 of it, so grid lines
+disappeared (month view worst — subtle `#e2e6ec` on canvas `#e6eaf0` is ~1.03:1). These carry
+light values tuned against canvas. Dark values reproduce exactly what each site resolved to
+before the family existed, so dark mode is unchanged.
+
+| Token | Light | Warm | Neutral | Dark | Usage |
+|---|---|---|---|---|---|
+| `--color-grid-line` | `#c3ccd9` | `#cdc0ad` | `#c9c9c9` | `#3f3f46` | Month cell edges, weekday header rule |
+| `--color-grid-line-strong` | `#b0bac9` | `#bcab94` | `#b6b6b6` | `#52525b` | Week column edges, hour lines, header/gutter rules |
+| `--color-grid-line-minor` | `#dbe1e9` | `#e3dacb` | `#dedede` | `#111115` | Week half-hour lines |
+| `--color-grid-cell-muted` | `#dde2ea` | `#ebe4d7` | `#e3e3e3` | `#18181b` | Other-month month cells |
+| `--color-grid-today-tint` | `rgba(59,130,246,0.10)` | same | same | `rgba(59,130,246,0.04)` | Today cell/column wash |
+| `--color-grid-float-bg` | `#ffffff` | `#fefdfa` | `#ffffff` | `#09090b` | Expanded-day overlay, scroll-affordance chips |
+
+Two rules when touching these:
+- A line token must always be **darker** than the surface it draws on in light mode. Half-hour
+  lines previously used `--color-surface` (`#fafcfe`), which rendered as white scratches on the
+  light canvas.
+- `--color-grid-cell-muted` must never be brighter than an in-month cell. It was `--color-base`
+  (`#ffffff`), which made out-of-month days the most prominent thing on the grid.
 
 ### Charts
 
@@ -441,6 +459,8 @@ Per-org accent: inject `<style>` on a wrapper `<div>` overriding `--color-primar
 
 - `bg-surface-strong` — **undefined**; generates no style. Use `bg-surface-inset` (darker inset) or `bg-border` (medium)
 - `bg-surface/40`, `bg-surface/50`, `bg-base/40` — opacity on surface = near-invisible in light mode (white at 40% ≈ nothing). Use solid tiers instead
+- `--color-surface` (or any surface token) **as a line/border color** — surfaces sit *above* canvas in light mode, so the "line" draws brighter than its background. Use the `--color-grid-line*` family on calendar chrome, `--color-border*` elsewhere
+- `--color-border` / `--color-border-subtle` **on the schedule board** — both collapse into `--color-canvas` in light palettes (~1.03–1.19:1). Use `--color-grid-line` / `--color-grid-line-strong`
 - `text-primary` for body text — **wrong**; this is `--color-primary` = blue #3b82f6. Use `text-text-primary`
 - `text-white` on surface-level elements — invisible in light mode. Use `text-text-primary`
 - `hover:text-white` on icon buttons — invisible in light mode. Use `hover:text-text-primary`

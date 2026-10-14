@@ -5,8 +5,9 @@ import { Fragment, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../auth/authStore";
 import { FALLBACK_TIMEZONE } from "../../util/util";
-import { ACTION_FILTERS, actionFilterKeyFor, formatChange, type RefType } from "./changeFormat";
+import { ACTION_FILTERS, actionFilterKeyFor, entityLabelFor, formatChange, type RefType } from "./changeFormat";
 import Card from "../ui/Card";
+import { HEADER_BTN_ICON } from "../ui/headerActions";
 import type { ChangeScope } from "../../types/logs";
 import { useClientByIdQuery } from "../../hooks/useClients";
 import { useProjectByIdQuery } from "../../hooks/useProjects";
@@ -14,6 +15,7 @@ import { useDispatcherByIdQuery } from "../../hooks/useDispatchers";
 import { useOrgRoleByIdQuery } from "../../hooks/useOrgRoles";
 import { useJobByIdQuery } from "../../hooks/useJobs";
 import { useAnyPermission, usePermission } from "../../hooks/usePermission";
+import { useRecurringPlanByIdQuery } from "../../hooks/useRecurringPlans";
 
 interface ChangeHistoryProps {
     scope: ChangeScope;
@@ -53,11 +55,17 @@ function JobRefName({ id }: { id: string }) {
     return <>{data?.name ?? id}</>;
 }
 
+function RecurringPlanRefName({id}: {id: string}) {
+    const {data} = useRecurringPlanByIdQuery(id);
+    return <>{data?.name ?? id}</>
+}
+
 function RefValue({ refType, id }: { refType: RefType; id: string }) {
     const canViewClients = usePermission("view_clients");
     const canViewProjects = usePermission("view_projects");
     const canManageRoles = usePermission("manage_roles");
     const canViewJobs = useAnyPermission(["view_jobs", "view_assigned_jobs", "view_all_jobs"]);
+    const canViewRecurringPlans = usePermission("view_recurring_plans");
 
     switch (refType) {
         case "client": return canViewClients ? <ClientRefName id={id} /> : <>{shortId(id)}</>;
@@ -65,6 +73,7 @@ function RefValue({ refType, id }: { refType: RefType; id: string }) {
         case "dispatcher": return <DispatcherRefName id={id} />;
         case "organization_role": return canManageRoles ? <OrgRoleRefName id={id} /> : <>{shortId(id)}</>;
         case "job": return canViewJobs ? <JobRefName id={id} /> : <>{shortId(id)}</>;
+        case "recurring_plan": return canViewRecurringPlans ? <RecurringPlanRefName id={id}/> : <>{shortId(id)}</>;
     }
 }
 
@@ -109,6 +118,9 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
             return entry.rows.length > 0 || log.action !== "updated";
     });
 
+    const presentKeys = new Set(allEntries.map(({ log }) => actionFilterKeyFor(log)));
+    const actionFilters = ACTION_FILTERS.filter((f) => presentKeys.has(f.key));
+
     // Chips filter only the rows loaded so far — the server page is unfiltered, so the
     // footer stays visible whenever there is more to load.
     const entries = allEntries.filter(({ log }) => activeActions.has(actionFilterKeyFor(log)));
@@ -116,23 +128,24 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
     const loadedCount = historyLogs.length;
 
     return (
-        <Card>
-            <div>   
-                <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-sm font-semibold text-text-primary">{title ?? "Recent Changes"}</h2>
-                    <button
-                        type="button"
-                        onClick={() => refetchHistory()}
-                        disabled={historyFetching}
-                        title={`Refresh now — refreshes on its own every ${CHANGE_HISTORY_REFETCH_MS / 1000}s`}
-                        aria-label="Refresh change history"
-                        className="p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-raised disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
-                    >
-                        <RefreshCw size={14} className={historyFetching ? "animate-spin" : ""} />
-                    </button>
-                </div>
-                <div className="flex flex-wrap items-center gap-1 px-4 pb-3 mb-1">
-                    {ACTION_FILTERS.map((f) => {
+        <Card
+            title={title ?? "Change History"}
+            headerAction={
+                <button
+                    type="button"
+                    onClick={() => refetchHistory()}
+                    disabled={historyFetching}
+                    title={`Refresh now — refreshes on its own every ${CHANGE_HISTORY_REFETCH_MS / 1000}s`}
+                    aria-label="Refresh change history"
+                    className={HEADER_BTN_ICON}
+                >
+                    <RefreshCw size={14} className={historyFetching ? "animate-spin" : ""} />
+                </button>
+            }
+        >
+            <div>
+                <div className="flex flex-wrap items-center gap-1 pb-3 mb-1">
+                    {actionFilters.map((f) => {
                         const active = activeActions.has(f.key);
                         const Icon = f.icon;
 
@@ -174,6 +187,9 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
                                             <entry.icon size={13} className={entry.color} />
                                         </div>
                                         <div className="min-w-0 flex-1">
+                                            <p className="text-[10px] font-semibold uppercase tracking-wide text-text-faint">
+                                                {entityLabelFor(log.entity_type)}
+                                            </p>
                                             <p className="text-sm text-text-primary leading-snug">{entry.headline} by {log.actor_name ?? "-"}</p>
                                             {entry.subtitle && (
                                                 <p className="text-xs text-text-muted mt-0.5 truncate">{entry.subtitle}</p>

@@ -1,3 +1,5 @@
+import { isModuleOn } from "./entitlementService.js";
+import { lastReenabledAt } from "./moduleWindowService.js";
 import { db } from "../db.js";
 import { getScopedDb } from "../lib/context.js";
 import { sendRenderedTracked } from "./emailService.js";
@@ -15,6 +17,7 @@ import {
 } from "./followupEngine.js";
 import { logActivity } from "./logger.js";
 import { log } from "./appLogger.js";
+import { expireStaleQuotes } from "./quoteExpiry.js";
 
 // Max enrollments processed per sweep — keeps a single tick bounded.
 const BATCH_LIMIT = 200;
@@ -100,6 +103,8 @@ function buildAdvanceData(
 async function processEnrollment(enrollment: DueEnrollment, now: Date): Promise<void> {
 	const orgId = enrollment.organization_id;
 	if (!orgId) return;
+	// Left queued, not stopped: the org may switch Followups back on.
+	if (!(await isModuleOn(orgId, "followups"))) return;
 	const sdb = getScopedDb(orgId);
 
 	// 1. Stop if the anchor entity has resolved (quote approved, invoice paid, visit cancelled, …).
@@ -156,6 +161,14 @@ async function processEnrollment(enrollment: DueEnrollment, now: Date): Promise<
 		data: { next_send_at: new Date(Date.now() + LEASE_MS) },
 	});
 	if (claim.count === 0) return; // another tick claimed it
+
+	// A step that fell due while the org had Followups switched off is never sent
+	// late. After the skip the next step is timed from now, so it cannot match again.
+	const reenabledAt = await lastReenabledAt(orgId, "followups");
+	if (reenabledAt && enrollment.next_send_at && enrollment.next_send_at < reenabledAt) {
+		await recordSkipAndAdvance(enrollment, seq, nextStep, now, "module_was_off");
+		return;
+	}
 
 	// 6. Reminder de-burst: for "before the visit" sequences enrolled close to the
 	//    visit, an early reminder step's send time may already be well past. Skip it
@@ -364,8 +377,13 @@ export async function runDueFollowups(): Promise<void> {
 /** Start the followup scheduler: a startup catch-up run, then a sweep every 5 minutes. */
 export function startFollowupSchedulerInterval(): void {
 	runDueFollowups().catch((err) => log.error({ err }, "Followup scheduler startup run failed"));
+	// Piggybacks on the same tick — an unrelated sweep, but there's no other
+	// scheduler in the process to hang it off, and a failure here must never
+	// stop followups from running.
+	expireStaleQuotes().catch((err) => log.error({ err }, "Quote expiry sweep failed"));
 
 	setInterval(() => {
 		runDueFollowups().catch((err) => log.error({ err }, "Followup scheduler interval run failed"));
+		expireStaleQuotes().catch((err) => log.error({ err }, "Quote expiry sweep failed"));
 	}, INTERVAL_MS);
 }

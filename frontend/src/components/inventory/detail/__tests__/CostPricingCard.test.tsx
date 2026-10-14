@@ -3,9 +3,9 @@ import { render, screen } from "@testing-library/react";
 import CostPricingCard from "../CostPricingCard";
 import type { InventoryItem } from "../../../../types/inventory";
 
-// Decimal columns can arrive as strings; the card used to compare `price !== 0`
-// on the raw value, so a "0" price divided through to "-Infinity% margin"
-// (08-frontend-inventory F13).
+// Decimal columns can arrive as strings, so the margin calc must compare the
+// numeric value rather than the raw string: a raw "0" string is truthy and
+// divides through to "-Infinity% margin".
 const item = (over: Record<string, unknown>) =>
 	({ id: "i1", name: "Widget", quantity: 3, cost: null, unit_price: null, ...over }) as InventoryItem;
 

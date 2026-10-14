@@ -2,7 +2,46 @@
  * Shared validation schemas and predicates reused across validators — line-item
  * shapes for invoices/quotes, and the stock-quantity precision rule below.
  */
-import { z } from "zod";
+import { ZodError, z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Coordinates
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical coordinate pair for every entity that carries an address.
+ *
+ * Seed data and legacy rows persisted longitude as `lng`. Loading one of those
+ * records into an edit form and saving it back unchanged used to 400, because
+ * the payload carried `lng` while the schema demanded `lon`. Accept either on
+ * the way in and store `lon`, so a round-trip can never reject its own data.
+ */
+export const coordsSchema = z.preprocess((raw) => {
+	if (raw == null || typeof raw !== "object") return raw;
+	const c = raw as { lat?: unknown; lon?: unknown; lng?: unknown };
+	if (c.lon === undefined && typeof c.lng === "number") {
+		return { lat: c.lat, lon: c.lng };
+	}
+	return raw;
+}, z.object({ lat: z.number(), lon: z.number() }));
+
+// ---------------------------------------------------------------------------
+// Validation error formatting
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders a ZodError for the API's `error.message`. Includes the field path —
+ * the message alone collapses to a bare "Invalid input" for a nested shape,
+ * which tells the caller nothing about which field was rejected.
+ */
+export function formatZodError(e: ZodError): string {
+	const issues = e.issues.map((issue) => {
+		const path = issue.path.join(".");
+		return path ? `${path} — ${issue.message}` : issue.message;
+	});
+	return `Validation failed: ${issues.join(", ")}`;
+}
+
 
 // ---------------------------------------------------------------------------
 // Stock quantity precision
@@ -52,6 +91,21 @@ export const lineItemTypeEnum = z.enum(["labor", "material", "equipment", "other
 export const discountTypeEnum = z.enum(["percent", "amount"]);
 
 // ---------------------------------------------------------------------------
+// Stock intent (disposition)
+// ---------------------------------------------------------------------------
+
+/**
+ * Carried by visit lines and the plan lines they generate from. Quote, job and
+ * invoice lines move no stock, so they have none.
+ */
+export const dispositionFieldsSchema = {
+	// Absent means `consume`. Dropped on a freetext line.
+	disposition: z.enum(["consume", "receive", "non_stock"]).nullable().optional(),
+	// `receive` only; absent means the warehouse.
+	disposition_vehicle_id: z.string().uuid().nullable().optional(),
+} as const;
+
+// ---------------------------------------------------------------------------
 // Base line item schema — common fields for both invoices and quotes
 // ---------------------------------------------------------------------------
 
@@ -69,6 +123,10 @@ export const baseLineItemSchema = z.object({
 	sort_order: z.number().int().optional().default(0),
 	tax_group_id: z.string().uuid().nullable().optional(),
 	taxable: z.boolean().optional(),
+	// Catalog link. Reference only on quotes and invoices — neither moves stock.
+	// Ownership is NOT checked here; controllers run assertInventoryItemsInOrg
+	// before persisting, because a Zod schema has no organization in scope.
+	inventory_item_id: z.string().uuid().nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------

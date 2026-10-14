@@ -3,24 +3,16 @@ import {
 	ChevronLeft,
 	Edit2,
 	Calendar,
-	MapPin,
 	Clock,
-	TrendingUp,
 	Plus,
 	DollarSign,
 	Repeat,
-	PlayCircle,
-	PauseCircle,
-	CheckCircle2,
-	XCircle,
-	RefreshCw,
 	ExternalLink,
-	MoreVertical,
 	ChevronRight,
 	Briefcase,
 	ReceiptText,
 } from "lucide-react";
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo } from "react";
 import {
 	useRecurringPlanByIdQuery,
 	useOccurrencesByJobIdQuery,
@@ -33,13 +25,28 @@ import {
 } from "../../hooks/useRecurringPlans";
 import { useGenerateInvoiceMutation } from "../../hooks/useInvoices";
 import Card from "../../components/ui/Card";
+import { HEADER_BTN_ICON, HEADER_META } from "../../components/ui/headerActions";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import RecurringPlanNoteManager from "../../components/recurringPlans/RecurringPlanNoteManager";
 import EditRecurringPlan from "../../components/recurringPlans/EditRecurringPlan";
+import SkippedDatesCard from "../../components/recurringPlans/SkippedDatesCard";
+import BalancedOverviewGrid from "../../components/detail/BalancedOverviewGrid";
+import DetailHeader, { type DetailMenuGroup } from "../../components/detail/DetailHeader";
+import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
+import { useDetailTab } from "../../components/detail/useDetailTab";
+import DetailStatRow from "../../components/detail/DetailStatRow";
+import ActivityPanel from "../../components/detail/ActivityPanel";
+import DetailFieldGrid, { type DetailField } from "../../components/detail/DetailFieldGrid";
+import RelationCard from "../../components/detail/RelationCard";
+import LifecycleBar, { LifecycleActions } from "../../components/lifecycle/LifecycleBar";
+import TerminalDetail from "../../components/lifecycle/TerminalDetail";
+import { planActions } from "../../components/lifecycle/planActions";
+import { placeActions } from "../../components/lifecycle/placement";
+import type { LifecycleStage } from "../../components/lifecycle/types";
 import {
-	RecurringPlanStatusColors,
 	RecurringPlanStatusLabels,
+	RecurringPlanStatusColors,
 	OccurrenceStatusColors,
 	OccurrenceStatusLabels,
 	BillingModeLabels,
@@ -55,6 +62,7 @@ import {
 	type OccurrenceStatus,
 } from "../../types/recurringPlans";
 import {
+	JobStatusLabels,
 	JobStatusColors,
 	VisitStatusColors,
 	VisitStatusLabels,
@@ -62,10 +70,19 @@ import {
 	type VisitStatus,
 } from "../../types/jobs";
 import { PriorityColors } from "../../types/common";
-import { formatCurrency } from "../../util/util";
+import { formatCurrency, formatDate } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
+import ChangeHistory from "../../components/activity/ChangeHistory";
 
 const ITEMS_PER_PAGE = 10;
+
+// The plan's terms live in Overview; the occurrence schedule and the service
+// history behind it earn their own tab. Activity is last, as everywhere.
+const PLAN_TABS: readonly DetailTabDef<"overview" | "schedule" | "activity">[] = [
+	{ id: "overview", label: "Overview" },
+	{ id: "schedule", label: "Schedule" },
+	{ id: "activity", label: "Activity" },
+];
 
 function ordinalDay(n: number): string {
 	const s = ["th", "st", "nd", "rd"];
@@ -88,14 +105,13 @@ export default function RecurringPlanDetailPage() {
 	const { data: occurrences = [], isLoading: occurrencesLoading } =
 		useOccurrencesByJobIdQuery(jobContainerId || "");
 
+	const [activeTab, setActiveTab] = useDetailTab(PLAN_TABS);
 	const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [daysAhead, setDaysAhead] = useState(30);
-	const [showActionsMenu, setShowActionsMenu] = useState(false);
 	const [pendingConfirm, setPendingConfirm] = useState<"cancel" | "complete" | null>(null);
 	const [upcomingPage, setUpcomingPage] = useState(0);
 	const [pastPage, setPastPage] = useState(0);
-	const menuRef = useRef<HTMLDivElement>(null);
 
 	const pauseMutation = usePauseRecurringPlanMutation();
 	const resumeMutation = useResumeRecurringPlanMutation();
@@ -108,18 +124,6 @@ export default function RecurringPlanDetailPage() {
 	// permissions
 	const MANAGE_RECURRING_PLANS = usePermission("manage_recurring_plans");
 	const CREATE_INVOICE = usePermission("create_invoices");
-
-	useEffect(() => {
-		const handleOutsideClick = (event: MouseEvent) => {
-			if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-				setShowActionsMenu(false);
-			}
-		};
-		if (showActionsMenu) {
-			document.addEventListener("mousedown", handleOutsideClick);
-			return () => document.removeEventListener("mousedown", handleOutsideClick);
-		}
-	}, [showActionsMenu]);
 
 	const { upcomingOccurrences, serviceHistory } = useMemo(() => {
 		if (!occurrences || occurrences.length === 0) {
@@ -165,7 +169,6 @@ export default function RecurringPlanDetailPage() {
 		};
 	}, [occurrences]);
 
-
 	const isLoading = planLoading || occurrencesLoading;
 
 	if (planError) {
@@ -181,7 +184,9 @@ export default function RecurringPlanDetailPage() {
 	if (isLoading) {
 		return (
 			<div className="flex items-center justify-center h-64">
-				<div className="text-text-primary text-lg">Loading recurring plan...</div>
+				<div className="text-text-primary text-lg">
+					Loading recurring plan...
+				</div>
 			</div>
 		);
 	}
@@ -189,7 +194,9 @@ export default function RecurringPlanDetailPage() {
 	if (!plan) {
 		return (
 			<div className="flex items-center justify-center h-64">
-				<div className="text-text-primary text-lg">Recurring plan not found</div>
+				<div className="text-text-primary text-lg">
+					Recurring plan not found
+				</div>
 			</div>
 		);
 	}
@@ -197,6 +204,12 @@ export default function RecurringPlanDetailPage() {
 	const lineItems: RecurringPlanLineItem[] = plan.line_items || [];
 	const hasLineItems = lineItems.length > 0;
 	const templateTotal = calculateTemplateTotal(lineItems);
+
+	// Frequency as text, for the Cadence stat tile.
+	const cadenceLabel =
+		plan.rules && plan.rules.length > 0
+			? formatRecurringSchedule(plan.rules[0])
+			: "No schedule set";
 
 	const upcomingPaginatedOccurrences = upcomingOccurrences.slice(
 		upcomingPage * ITEMS_PER_PAGE,
@@ -212,27 +225,25 @@ export default function RecurringPlanDetailPage() {
 	const pastHasPrev = pastPage > 0;
 
 	const handlePause = async () => {
-		if (!jobContainerId || !MANAGE_RECURRING_PLANS) return;
+		if (!jobContainerId) return;
 		try {
 			await pauseMutation.mutateAsync(jobContainerId);
-			setShowActionsMenu(false);
 		} catch (error) {
 			console.error("Failed to pause plan:", error);
 		}
 	};
 
 	const handleResume = async () => {
-		if (!jobContainerId || !MANAGE_RECURRING_PLANS) return;
+		if (!jobContainerId) return;
 		try {
 			await resumeMutation.mutateAsync(jobContainerId);
-			setShowActionsMenu(false);
 		} catch (error) {
 			console.error("Failed to resume plan:", error);
 		}
 	};
 
 	const handleCancel = () => {
-		if (!jobContainerId || !MANAGE_RECURRING_PLANS) return;
+		if (!jobContainerId) return;
 		setPendingConfirm("cancel");
 	};
 
@@ -249,17 +260,10 @@ export default function RecurringPlanDetailPage() {
 			} else if (pendingConfirm === "complete") {
 				await completeMutation.mutateAsync(jobContainerId);
 			}
-			setShowActionsMenu(false);
 			setPendingConfirm(null);
 		} catch (error) {
 			console.error(`Failed to ${pendingConfirm} plan:`, error);
 		}
-	};
-
-	const handleEdit = () => {
-		if (!MANAGE_RECURRING_PLANS) return;
-		setShowActionsMenu(false);
-		setIsEditModalOpen(true);
 	};
 
 	const handleGenerateOccurrences = async () => {
@@ -270,7 +274,6 @@ export default function RecurringPlanDetailPage() {
 				input: { days_ahead: daysAhead },
 			});
 			setIsGenerateModalOpen(false);
-			setShowActionsMenu(false);
 		} catch (error) {
 			console.error("Failed to generate occurrences:", error);
 		}
@@ -283,7 +286,6 @@ export default function RecurringPlanDetailPage() {
 				source: "recurring_plan",
 				plan_id: recurringPlanId,
 			});
-			setShowActionsMenu(false);
 			navigate(`/dispatch/invoices/${result.invoice.id}`);
 		} catch (error) {
 			console.error("Failed to generate invoice:", error);
@@ -303,62 +305,352 @@ export default function RecurringPlanDetailPage() {
 		}
 	};
 
-	const JobContainerCard = plan.job_container ? (
-		<button
-			onClick={() => navigate(`/dispatch/jobs/${plan.job_container!.id}`)}
-			className="w-full p-4 bg-base hover:bg-surface rounded-lg border border-border-subtle hover:border-border-strong transition-all text-left group"
-		>
-			<div className="grid grid-cols-3 gap-4">
-				<div className="col-span-2 flex flex-col gap-2">
-					<p className="text-text-muted text-xs uppercase tracking-wide font-semibold">
-						Job Container
-					</p>
-					<div className="flex items-center gap-3 min-w-0">
-						<Briefcase
-							size={16}
-							className="text-text-tertiary flex-shrink-0"
-						/>
-						<div className="min-w-0">
-							<p className="text-text-primary font-semibold text-sm group-hover:text-primary-text transition-colors">
-								{plan.job_container.job_number}
-							</p>
-							{plan.job_container.name && (
-								<p className="text-text-tertiary text-sm truncate">
-									{plan.job_container.name}
-								</p>
-							)}
-						</div>
-					</div>
-				</div>
-				<div className="col-span-1 flex items-center justify-end gap-3">
-					<span
-						className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${
-							JobStatusColors[
-								plan.job_container
-									.status as JobStatus
-							] ||
-							"bg-surface-raised text-text-tertiary border-border-strong"
-						}`}
-					>
-						{plan.job_container.status}
-					</span>
-					<ChevronRight
-						size={16}
-						className="text-text-tertiary group-hover:text-primary-text group-hover:translate-x-1 transition-all flex-shrink-0"
-					/>
-				</div>
-			</div>
-		</button>
+	// variant="state", not a stepper: Active, Paused, Completed and Cancelled are
+	// modes, not a march, so a step track would sit permanently at one end.
+	const stage: LifecycleStage =
+		plan.status === "Completed" || plan.status === "Cancelled" ? "terminal" : "normal";
+
+	const actions = planActions({
+		status: plan.status,
+		canManage: MANAGE_RECURRING_PLANS,
+		hasJobContainer: Boolean(jobContainerId),
+		handlers: {
+			pause: handlePause,
+			resume: handleResume,
+			generate: () => setIsGenerateModalOpen(true),
+			complete: handleComplete,
+			cancel: handleCancel,
+		},
+	});
+
+	const { headerActions, barActions, overflow, showBar } = placeActions(stage, actions);
+
+	const menuGroups: DetailMenuGroup[] = [
+		{
+			id: "lifecycle",
+			label: "Lifecycle",
+			items: overflow.map((a) => ({
+				id: a.id,
+				label: a.label,
+				intent: a.intent === "primary" ? "neutral" : a.intent,
+				disabled: a.disabled,
+				disabledReason: a.disabledReason,
+				onSelect: a.onSelect,
+			})),
+		},
+		{
+			id: "plan",
+			label: "Plan",
+			items: [
+				{
+					id: "edit",
+					label: "Edit Plan",
+					icon: <Edit2 size={16} />,
+					disabled: !MANAGE_RECURRING_PLANS,
+					disabledReason: MANAGE_RECURRING_PLANS
+						? undefined
+						: "You don't have permission to perform this action",
+					onSelect: () => setIsEditModalOpen(true),
+				},
+				...(plan.invoice_schedule?.is_active
+					? [
+							{
+								id: "generate-invoice",
+								label: generateInvoiceMutation.isPending
+									? "Generating…"
+									: "Generate Invoice",
+								icon: <ReceiptText size={16} />,
+								disabled:
+									generateInvoiceMutation.isPending ||
+									!CREATE_INVOICE,
+								disabledReason: CREATE_INVOICE
+									? undefined
+									: "You don't have permission to perform this action",
+								onSelect: handleGenerateInvoice,
+							},
+						]
+					: []),
+			],
+		},
+	];
+
+	// A terminal plan can still have rows in upcomingOccurrences — nothing goes
+	// back and cancels them — but will never generate a visit from them. Both
+	// tiles say so together, or a live date beside a count of zero reads as a bug.
+	const upcomingCount = stage === "terminal" ? 0 : upcomingOccurrences.length;
+	const nextOccurrence = stage === "terminal" ? undefined : upcomingOccurrences[0];
+
+	const statTiles = [
+		{
+			label: "Next",
+			icon: <Calendar size={13} />,
+			value: nextOccurrence
+				? formatDate(nextOccurrence.occurrence_start_at)
+				: "None scheduled",
+		},
+		{
+			label: "Upcoming",
+			icon: <Repeat size={13} />,
+			value: `${upcomingCount}`,
+			hint: upcomingCount === 1 ? "occurrence" : "occurrences",
+		},
+		{
+			label: "Cadence",
+			icon: <Repeat size={13} />,
+			value: cadenceLabel,
+			hint: plan.ends_at != null ? `until ${formatDate(plan.ends_at)}` : "no end date",
+		},
+		{
+			label: "Template Total",
+			icon: <DollarSign size={13} />,
+			value: formatCurrency(templateTotal),
+			hint: "per occurrence",
+		},
+	];
+
+	const clientCard = <ClientDetailsCard fill client_id={plan.client_id} client={plan.client} />;
+
+	const jobContainerCard = plan.job_container ? (
+		<RelationCard
+			eyebrow="Linked Job"
+			to={`/dispatch/jobs/${plan.job_container.id}`}
+			emptyLabel="No linked job yet"
+			icon={<Briefcase />}
+			title={plan.job_container.job_number}
+			subtitle={plan.job_container.name ?? undefined}
+			trailing={
+				<span
+					className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${
+						JobStatusColors[plan.job_container.status as JobStatus] ||
+						"bg-surface-raised text-text-tertiary border-border-strong"
+					}`}
+				>
+					{JobStatusLabels[plan.job_container.status as JobStatus] ??
+						plan.job_container.status}
+				</span>
+			}
+		/>
 	) : null;
 
-	const UpcomingOccurrencesCard = (
+	const infoFields: DetailField[] = [
+		{ label: "Address", value: plan.address },
+		{ label: "Started", value: formatDate(plan.starts_at) },
+		{ label: "Invoicing", value: BillingModeLabels[plan.billing_mode] },
+	];
+
+	if (plan.billing_mode !== "none") {
+		infoFields.push(
+			{ label: "Trigger", value: InvoiceTimingLabels[plan.invoice_timing] },
+			{ label: "Auto Invoice", value: plan.auto_invoice ? "Yes" : "No" }
+		);
+
+		if (plan.invoice_schedule) {
+			infoFields.push(
+				{
+					label: "Frequency",
+					value: (
+						<>
+							{
+								InvoiceScheduleFrequencyLabels[
+									plan.invoice_schedule.frequency
+								]
+							}
+							{(plan.invoice_schedule.frequency === "weekly" ||
+								plan.invoice_schedule.frequency === "biweekly") &&
+								plan.invoice_schedule.day_of_week && (
+									<span className="mt-0.5 block text-xs text-text-tertiary">
+										{
+											WeekdayLabels[
+												plan.invoice_schedule
+													.day_of_week
+											]
+										}
+									</span>
+								)}
+							{(plan.invoice_schedule.frequency === "monthly" ||
+								plan.invoice_schedule.frequency === "quarterly") &&
+								plan.invoice_schedule.day_of_month != null && (
+									<span className="mt-0.5 block text-xs text-text-tertiary">
+										{ordinalDay(
+											plan.invoice_schedule.day_of_month
+										)}{" "}
+										of{" "}
+										{plan.invoice_schedule.frequency ===
+										"monthly"
+											? "month"
+											: "quarter"}
+									</span>
+								)}
+						</>
+					),
+				},
+				{
+					label: "Billing Basis",
+					value: (
+						<>
+							{
+								InvoiceScheduleBillingBasisLabels[
+									plan.invoice_schedule.billing_basis
+								]
+							}
+							{plan.invoice_schedule.billing_basis === "fixed_amount" &&
+								plan.invoice_schedule.fixed_amount != null && (
+									<span className="mt-0.5 block text-xs text-text-tertiary">
+										{"$" +
+											Number(
+												plan.invoice_schedule
+													.fixed_amount
+											).toFixed(2)}
+									</span>
+								)}
+						</>
+					),
+				},
+				{
+					label: "Payment Terms",
+					value:
+						plan.invoice_schedule.payment_terms_days != null
+							? "Net " + plan.invoice_schedule.payment_terms_days
+							: "—",
+				}
+			);
+		}
+	}
+
+	const infoCard = (
+		<Card className="flex-1" title="Plan Information">
+			<DetailFieldGrid
+				fill
+				lead={
+					<p className="break-words text-text-primary">
+						{plan.description || "No description provided"}
+					</p>
+				}
+				fields={infoFields}
+			/>
+			{plan.rules && plan.rules.length > 0 && (
+				<p className="mt-4 border-t border-border-subtle pt-4 text-sm text-text-tertiary">
+					{/* The cadence itself is the Cadence tile; what the tile
+					    cannot carry is the day-and-time detail. */}
+					{formatScheduleConstraints(plan.rules[0])}
+				</p>
+			)}
+		</Card>
+	);
+
+	const templatePricingCard = (
+		<Card
+			title="Template Pricing"
+			headerAction={
+				hasLineItems ? (
+					<span className="text-xs text-text-tertiary tabular-nums">
+						{lineItems.length} {lineItems.length === 1 ? "item" : "items"}
+					</span>
+				) : undefined
+			}
+		>
+			{!hasLineItems ? (
+				<div className="text-center py-8">
+					<DollarSign
+						size={40}
+						className="mx-auto text-text-faint mb-3"
+					/>
+					<h3 className="text-text-tertiary text-sm font-medium mb-1">
+						No Line Items
+					</h3>
+					<p className="text-text-muted text-xs">
+						Edit this recurring plan to add template line items.
+					</p>
+				</div>
+			) : (
+				<div className="space-y-1">
+					<div className="grid grid-cols-12 gap-2 pb-2 border-b border-border text-xs uppercase tracking-wide font-semibold text-text-tertiary">
+						<div className="col-span-5">
+							Description
+						</div>
+						<div className="col-span-1 text-center">
+							Type
+						</div>
+						<div className="col-span-2 text-right">
+							Qty
+						</div>
+						<div className="col-span-2 text-right">
+							Unit Price
+						</div>
+						<div className="col-span-2 text-right">
+							Amount
+						</div>
+					</div>
+
+					{lineItems.map((item, index) => (
+						<div
+							key={item.id || index}
+							className="grid grid-cols-12 gap-2 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors duration-150 ease-out"
+						>
+							<div className="col-span-5 text-sm">
+								<p className="text-text-primary font-medium">
+									{item.name}
+								</p>
+								{item.description && (
+									<p className="text-text-tertiary text-xs mt-0.5">
+										{
+											item.description
+										}
+									</p>
+								)}
+							</div>
+							<div className="col-span-1 flex items-center justify-center">
+								{item.item_type && (
+									<span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-surface-raised text-text-secondary border border-border-strong">
+										{
+											item.item_type
+										}
+									</span>
+								)}
+							</div>
+							<div className="col-span-2 text-right text-sm text-text-primary tabular-nums flex items-center justify-end">
+								{Number(
+									item.quantity
+								).toLocaleString(
+									"en-US",
+									{
+										minimumFractionDigits: 0,
+										maximumFractionDigits: 2,
+									}
+								)}
+							</div>
+							<div className="col-span-2 text-right text-sm text-text-primary tabular-nums flex items-center justify-end">
+								{formatCurrency(
+									Number(
+										item.unit_price
+									)
+								)}
+							</div>
+							<div className="col-span-2 text-right text-sm text-text-primary font-medium tabular-nums flex items-center justify-end">
+								{formatCurrency(
+									Number(
+										item.quantity
+									) *
+										Number(
+											item.unit_price
+										)
+								)}
+							</div>
+						</div>
+					))}
+				</div>
+			)}
+		</Card>
+	);
+
+	const upcomingOccurrencesCard = (
 		<Card
 			className="h-full"
 			title="Upcoming Occurrences"
 			headerAction={
 				upcomingOccurrences.length > 0 && (
-					<div className="flex items-center gap-2">
-						<span className="text-sm text-text-tertiary">
+					<div className="flex items-center gap-1">
+						<span className={`${HEADER_META} mr-1`}>
 							{upcomingPage * ITEMS_PER_PAGE + 1}-
 							{Math.min(
 								(upcomingPage + 1) * ITEMS_PER_PAGE,
@@ -376,7 +668,7 @@ export default function RecurringPlanDetailPage() {
 								)
 							}
 							disabled={!upcomingHasPrev}
-							className="p-1 hover:bg-surface rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronLeft size={16} />
 						</button>
@@ -385,7 +677,7 @@ export default function RecurringPlanDetailPage() {
 								setUpcomingPage(upcomingPage + 1)
 							}
 							disabled={!upcomingHasNext}
-							className="p-1 hover:bg-surface rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronRight size={16} />
 						</button>
@@ -411,7 +703,7 @@ export default function RecurringPlanDetailPage() {
 					{upcomingPaginatedOccurrences.map((occurrence) => (
 						<div
 							key={occurrence.id}
-							className="p-2 bg-surface border border-border rounded-md hover:border-border-strong transition-colors"
+							className="p-2 bg-surface border border-border rounded-md hover:border-border-strong transition-colors duration-150 ease-out"
 						>
 							<div className="flex items-start justify-between gap-2 mb-1">
 								<div className="flex-1 min-w-0">
@@ -456,17 +748,25 @@ export default function RecurringPlanDetailPage() {
 								{occurrence.status ===
 									"planned" && (
 									<button
-										title={!MANAGE_RECURRING_PLANS ? "You don't have permission to perform this action" : "Generate visit from this occurrence"}
+										title={
+											!MANAGE_RECURRING_PLANS
+												? "You don't have permission to perform this action"
+												: "Generate visit from this occurrence"
+										}
 										onClick={() => {
-											if (!MANAGE_RECURRING_PLANS) return;
+											if (
+												!MANAGE_RECURRING_PLANS
+											)
+												return;
 											handleGenerateVisit(
 												occurrence.id
-											)
+											);
 										}}
 										disabled={
-											generateVisitMutation.isPending || !MANAGE_RECURRING_PLANS
+											generateVisitMutation.isPending ||
+											!MANAGE_RECURRING_PLANS
 										}
-										className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-primary-hover hover:enabled:bg-primary-active text-on-primary rounded text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+										className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-primary-hover hover:enabled:bg-primary-active text-on-primary rounded text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed"
 									>
 										<Plus size={12} />
 										Create
@@ -485,7 +785,7 @@ export default function RecurringPlanDetailPage() {
 													);
 												}
 											}}
-											className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-surface-raised hover:bg-surface-raised rounded text-xs font-medium transition-colors"
+											className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-surface-raised hover:bg-surface-raised rounded text-xs font-medium transition-colors duration-150 ease-out"
 										>
 											<ExternalLink
 												size={
@@ -503,14 +803,14 @@ export default function RecurringPlanDetailPage() {
 		</Card>
 	);
 
-	const ServiceHistoryCard = (
+	const serviceHistoryCard = (
 		<Card
 			className="h-full"
 			title="Service History"
 			headerAction={
 				serviceHistory.length > 0 && (
-					<div className="flex items-center gap-2">
-						<span className="text-sm text-text-tertiary">
+					<div className="flex items-center gap-1">
+						<span className={`${HEADER_META} mr-1`}>
 							{pastPage * ITEMS_PER_PAGE + 1}-
 							{Math.min(
 								(pastPage + 1) * ITEMS_PER_PAGE,
@@ -525,14 +825,14 @@ export default function RecurringPlanDetailPage() {
 								)
 							}
 							disabled={!pastHasPrev}
-							className="p-1 hover:bg-surface rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronLeft size={16} />
 						</button>
 						<button
 							onClick={() => setPastPage(pastPage + 1)}
 							disabled={!pastHasNext}
-							className="p-1 hover:bg-surface rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronRight size={16} />
 						</button>
@@ -547,55 +847,87 @@ export default function RecurringPlanDetailPage() {
 						No visits recorded yet
 					</h3>
 					<p className="text-text-muted text-xs">
-						Past visits generated from this plan will appear here.
+						Past visits generated from this plan will appear
+						here.
 					</p>
 				</div>
 			) : (
 				<div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
 					{historyPaginatedOccurrences.map((occurrence) => {
-						const visitDate = occurrence.job_visit?.scheduled_start_at
-							? new Date(occurrence.job_visit.scheduled_start_at)
+						const visitDate = occurrence.job_visit
+							?.scheduled_start_at
+							? new Date(
+									occurrence.job_visit
+										.scheduled_start_at
+								)
 							: new Date(occurrence.occurrence_start_at);
-						const visitStatus = occurrence.job_visit?.status as VisitStatus | undefined;
+						const visitStatus = occurrence.job_visit?.status as
+							| VisitStatus
+							| undefined;
 						return (
 							<div
 								key={occurrence.id}
-								className="p-2 bg-surface border border-border rounded-md opacity-75 hover:opacity-100 transition-opacity"
+								className="p-2 bg-surface border border-border rounded-md opacity-75 hover:opacity-100 transition-opacity duration-150 ease-out"
 							>
 								<div className="flex items-start justify-between gap-2 mb-1">
 									<div className="flex-1 min-w-0">
 										<p className="text-text-primary text-xs font-medium truncate">
-											{visitDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+											{visitDate.toLocaleDateString(
+												"en-US",
+												{
+													month: "short",
+													day: "numeric",
+													year: "numeric",
+												}
+											)}
 											{" · "}
-											{visitDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+											{visitDate.toLocaleTimeString(
+												"en-US",
+												{
+													hour: "numeric",
+													minute: "2-digit",
+												}
+											)}
 										</p>
 										<p className="text-text-tertiary text-xs truncate">
-											{occurrence.job_visit?.name ?? "\u00A0"}
+											{occurrence
+												.job_visit
+												?.name ??
+												" "}
 										</p>
 									</div>
 									{visitStatus && (
 										<span
 											className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border flex-shrink-0 ${
-												VisitStatusColors[visitStatus] ||
+												VisitStatusColors[
+													visitStatus
+												] ||
 												"bg-surface-raised text-text-tertiary border-border-strong"
 											}`}
 										>
-											{VisitStatusLabels[visitStatus] || visitStatus}
+											{VisitStatusLabels[
+												visitStatus
+											] ||
+												visitStatus}
 										</span>
 									)}
 								</div>
 								<div className="flex gap-1 mt-2">
 									<button
 										onClick={() => {
-											if (jobContainerId) {
+											if (
+												jobContainerId
+											) {
 												navigate(
 													`/dispatch/jobs/${jobContainerId}/visits/${occurrence.job_visit_id}`
 												);
 											}
 										}}
-										className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-surface-raised hover:bg-surface-raised rounded text-xs font-medium transition-colors"
+										className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-surface-raised hover:bg-surface-raised rounded text-xs font-medium transition-colors duration-150 ease-out"
 									>
-										<ExternalLink size={12} />
+										<ExternalLink
+											size={12}
+										/>
 										View Visit
 									</button>
 								</div>
@@ -608,551 +940,132 @@ export default function RecurringPlanDetailPage() {
 	);
 
 	return (
-		<div className="text-text-primary space-y-6">
-			{/* Header */}
-			<div className="grid grid-cols-2 gap-4 mb-6 items-center">
-				<div>
-					<div className="flex items-center gap-2 mb-2">
-						<Repeat size={24} className="text-primary-text" />
-						<h1 className="text-3xl font-bold text-text-primary">
-							{plan.name}
-						</h1>
-					</div>
-					{plan.job_container && (
-						<p className="text-text-tertiary text-sm">
-							{plan.job_container.job_number}
-						</p>
-					)}
-				</div>
-
-				<div className="justify-self-end flex items-center gap-3">
-					<span
-						className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${
-							RecurringPlanStatusColors[plan.status] ||
-							"bg-surface-raised text-text-tertiary border-border-strong"
-						}`}
-					>
-						{RecurringPlanStatusLabels[plan.status] ||
-							plan.status}
-					</span>
-
-					<div className="relative" ref={menuRef}>
-						<button
-							data-testid="recurring-plan-actions-menu"
-							onClick={() =>
-								setShowActionsMenu(!showActionsMenu)
-							}
-							className="p-2 hover:bg-surface rounded-md transition-colors border border-border hover:border-border-strong"
+		<div className="text-text-primary pb-4 md:pb-6">
+			<div className="space-y-4">
+				<DetailHeader
+					title={plan.name}
+					meta={plan.client?.name}
+					badges={
+						<span
+							className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${PriorityColors[plan.priority]}`}
 						>
-							<MoreVertical size={20} />
-						</button>
+							{plan.priority}
+						</span>
+					}
+					statusPill={
+						<span
+							className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${RecurringPlanStatusColors[plan.status]}`}
+						>
+							{RecurringPlanStatusLabels[plan.status]}
+						</span>
+					}
+					inlineActions={<LifecycleActions actions={headerActions} />}
+					menuGroups={menuGroups}
+					menuLabel="Plan actions"
+				/>
 
-						{showActionsMenu && (
-							<div className="absolute right-0 mt-2 w-56 bg-base border border-border-subtle rounded-lg shadow-xl z-50">
-								<div className="py-1">
-										<button
-											title={!MANAGE_RECURRING_PLANS ? "You don't have permission to perform this action" : ""}
-											disabled={!MANAGE_RECURRING_PLANS}
-											onClick={handleEdit}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Edit2 size={16} />
-											Edit Plan
-										</button>
-									{plan.status ===
-										"Active" && (
-										<>
-											<button
-												title={!MANAGE_RECURRING_PLANS ? "You don't have permission to perform this action" : ""}
-												onClick={() => {
-													if (!MANAGE_RECURRING_PLANS) return;
-													setShowActionsMenu(
-														false
-													);
-													setIsGenerateModalOpen(
-														true
-													);
-												}}
-												disabled={
-													generateMutation.isPending || !MANAGE_RECURRING_PLANS
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<RefreshCw
-													size={
-														16
-													}
-												/>
-												Generate
-												Occurrences
-											</button>
-											<button
-												onClick={
-													handlePause
-												}
-												disabled={
-													pauseMutation.isPending || !MANAGE_RECURRING_PLANS
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<PauseCircle
-													size={
-														16
-													}
-												/>
-												Pause
-												Plan
-											</button>
-										</>
-									)}
-
-									{plan.invoice_schedule?.is_active && (
-										<>
-											<div className="border-t border-border-subtle my-1" />
-											<button
-												title={!CREATE_INVOICE ? "You don't have permission to perform this action" : ""}
-												onClick={handleGenerateInvoice}
-												disabled={generateInvoiceMutation.isPending || !CREATE_INVOICE}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<ReceiptText size={16} />
-												{generateInvoiceMutation.isPending ? "Generating…" : "Generate Invoice"}
-											</button>
-										</>
-									)}
-
-									{plan.status ===
-										"Paused" && (
-											<button
-												title={!MANAGE_RECURRING_PLANS ? "You don't have permission to perform this action" : ""}
-												onClick={
-													handleResume
-												}
-												disabled={
-													resumeMutation.isPending || !MANAGE_RECURRING_PLANS
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<PlayCircle
-													size={
-														16
-													}
-												/>
-												Resume Plan
-											</button>
-									)}
-
-									{(plan.status ===
-										"Active" ||
-										plan.status ===
-											"Paused") && (
-										<>
-											<button
-												title={!MANAGE_RECURRING_PLANS ? "You don't have permission to perform this action" : ""}
-												onClick={
-													handleComplete
-												}
-												disabled={
-													completeMutation.isPending || !MANAGE_RECURRING_PLANS
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<CheckCircle2
-													size={
-														16
-													}
-												/>
-												Complete
-												Plan
-											</button>
-											{!MANAGE_RECURRING_PLANS && (
-												<>
-													<div className="border-t border-border-subtle my-1" />
-													<button
-														onClick={
-															handleCancel
-														}
-														disabled={
-															cancelMutation.isPending || !MANAGE_RECURRING_PLANS
-														}
-														className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-error-bg transition-colors flex items-center gap-2 text-error-text disabled:opacity-40 disabled:cursor-not-allowed"
-													>
-														<XCircle
-															size={
-																16
-															}
-														/>
-														Cancel
-														Plan
-													</button>
-												</>
-											)}
-										</>
-									)}
-								</div>
-							</div>
-						)}
-					</div>
-				</div>
-			</div>
-
-			{/* Plan Information (2/3) and Client Details + Job Container (1/3) */}
-			<div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-				<div className="lg:col-span-2 flex flex-col">
-					<Card title="Plan Information" className="flex-1">
-						<div className="space-y-4">
-							<div>
-								<h3 className="text-text-tertiary text-sm mb-1">
-									Description
-								</h3>
-								<p className="text-text-primary break-words">
-									{plan.description ||
-										"No description provided"}
-								</p>
-							</div>
-
-							<div>
-								<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-									<MapPin size={14} />
-									Address
-								</h3>
-								<p className="text-text-primary break-words">
-									{plan.address}
-								</p>
-							</div>
-
-							<div className="pt-4 border-t border-border">
-								<h3 className="text-text-tertiary text-sm mb-2 flex items-center gap-2">
-									<Repeat size={14} />
-									Schedule
-								</h3>
-								{plan.rules &&
-									plan.rules.length > 0 && (
-										<div className="space-y-2">
-											<p className="text-text-primary font-medium">
-												{formatRecurringSchedule(
-													plan
-														.rules[0]
-												)}
-											</p>
-											<p className="text-sm text-text-tertiary">
-												{formatScheduleConstraints(
-													plan
-														.rules[0]
-												)}
-											</p>
-										</div>
-									)}
-							</div>
-
-							<div className="grid grid-cols-2 gap-4 pt-4 border-t border-border">
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<TrendingUp
-											size={14}
-										/>
-										Priority
-									</h3>
-									<p
-										className={`font-medium capitalize ${
-											PriorityColors[
-												plan
-													.priority
-											]
-												?.replace(
-													/bg-\S+/,
-													""
-												)
-												.trim() ||
-											"text-primary-text"
-										}`}
-									>
-										{plan.priority ||
-											"normal"}
-									</p>
-								</div>
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<Calendar
-											size={14}
-										/>
-										Started
-									</h3>
-									<p className="text-text-primary">
-										{new Date(
-											plan.starts_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												year: "numeric",
-												month: "short",
-												day: "numeric",
-											}
-										)}
-									</p>
-								</div>
-							</div>
-
-							{plan.ends_at && (
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1">
-										Ends
-									</h3>
-									<p className="text-text-primary">
-										{new Date(
-											plan.ends_at
-										).toLocaleDateString(
-											"en-US",
-											{
-												year: "numeric",
-												month: "short",
-												day: "numeric",
-											}
-										)}
-									</p>
-								</div>
-							)}
-
-							{/* Invoicing */}
-							<div className="pt-4 border-t border-border">
-								<h3 className="text-text-tertiary text-sm mb-2 flex items-center gap-2">
-									<ReceiptText size={14} />
-									Invoicing
-								</h3>
-								{plan.billing_mode === "none" ? (
-									<p className="text-text-primary text-sm">
-										{BillingModeLabels[plan.billing_mode]}
-									</p>
-								) : (
-									<div className="grid grid-cols-3 gap-x-4 gap-y-3">
-										{/* Row 1 */}
-										<div>
-											<p className="text-text-tertiary text-xs mb-0.5">Billing Mode</p>
-											<p className="text-text-primary text-sm">{BillingModeLabels[plan.billing_mode]}</p>
-										</div>
-										<div>
-											<p className="text-text-tertiary text-xs mb-0.5">Trigger</p>
-											<p className="text-text-primary text-sm">{InvoiceTimingLabels[plan.invoice_timing]}</p>
-										</div>
-										<div>
-											<p className="text-text-tertiary text-xs mb-0.5">Auto Invoice</p>
-											<p className="text-text-primary text-sm">{plan.auto_invoice ? "Yes" : "No"}</p>
-										</div>
-
-										{/* Row 2 */}
-										{plan.invoice_schedule && (
-											<>
-												<div>
-													<p className="text-text-tertiary text-xs mb-0.5">Frequency</p>
-													<p className="text-text-primary text-sm">{InvoiceScheduleFrequencyLabels[plan.invoice_schedule.frequency]}</p>
-													{(plan.invoice_schedule.frequency === "weekly" || plan.invoice_schedule.frequency === "biweekly") &&
-														plan.invoice_schedule.day_of_week && (
-														<p className="text-text-tertiary text-xs mt-0.5">{WeekdayLabels[plan.invoice_schedule.day_of_week]}</p>
-													)}
-													{(plan.invoice_schedule.frequency === "monthly" || plan.invoice_schedule.frequency === "quarterly") &&
-														plan.invoice_schedule.day_of_month != null && (
-														<p className="text-text-tertiary text-xs mt-0.5">{ordinalDay(plan.invoice_schedule.day_of_month)} of {plan.invoice_schedule.frequency === "monthly" ? "month" : "quarter"}</p>
-													)}
-												</div>
-												<div>
-													<p className="text-text-tertiary text-xs mb-0.5">Billing Basis</p>
-													<p className="text-text-primary text-sm">{InvoiceScheduleBillingBasisLabels[plan.invoice_schedule.billing_basis]}</p>
-													{plan.invoice_schedule.billing_basis === "fixed_amount" && plan.invoice_schedule.fixed_amount != null && (
-														<p className="text-text-tertiary text-xs mt-0.5">{"$" + Number(plan.invoice_schedule.fixed_amount).toFixed(2)}</p>
-													)}
-												</div>
-												<div>
-													<p className="text-text-tertiary text-xs mb-0.5">Payment Terms</p>
-													<p className="text-text-primary text-sm">{plan.invoice_schedule.payment_terms_days != null ? "Net " + plan.invoice_schedule.payment_terms_days : "—"}</p>
-												</div>
-											</>
-										)}
-									</div>
-								)}
-							</div>
-						</div>
-					</Card>
-				</div>
-
-				<div className="lg:col-span-1 flex flex-col gap-6">
-					<ClientDetailsCard
-						client_id={plan.client_id}
-						client={plan.client}
+				{showBar && (
+					<LifecycleBar
+						variant="state"
+						stage={stage}
+						currentStatus={RecurringPlanStatusLabels[plan.status]}
+						tone={plan.status === "Cancelled" ? "error" : undefined}
+						actions={barActions}
+						detail={
+							<TerminalDetail
+								reason={null}
+								at={null}
+								noReasonLabel={
+									plan.status === "Completed"
+										? "This plan ran to its end date."
+										: "Cancelled — no further occurrences will be generated."
+								}
+							/>
+						}
 					/>
-					{JobContainerCard}
-				</div>
-			</div>
-
-			{/* Template Pricing - Full Width */}
-			<Card title="Template Pricing">
-				{!hasLineItems ? (
-					<div className="text-center py-8">
-						<DollarSign
-							size={40}
-							className="mx-auto text-text-faint mb-3"
-						/>
-						<h3 className="text-text-tertiary text-sm font-medium mb-1">
-							No Line Items
-						</h3>
-						<p className="text-text-muted text-xs">
-							Edit this recurring plan to add template
-							line items.
-						</p>
-					</div>
-				) : (
-					<div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-						<div className="lg:col-span-2">
-							<h3 className="text-text-tertiary text-xs uppercase tracking-wide font-semibold mb-4">
-								Template Line Items
-							</h3>
-							<div className="space-y-1">
-								<div className="grid grid-cols-12 gap-2 pb-2 border-b border-border text-xs uppercase tracking-wide font-semibold text-text-tertiary">
-									<div className="col-span-5">
-										Description
-									</div>
-									<div className="col-span-1 text-center">
-										Type
-									</div>
-									<div className="col-span-2 text-right">
-										Qty
-									</div>
-									<div className="col-span-2 text-right">
-										Unit Price
-									</div>
-									<div className="col-span-2 text-right">
-										Amount
-									</div>
-								</div>
-
-								{lineItems.map((item, index) => (
-									<div
-										key={
-											item.id ||
-											index
-										}
-										className="grid grid-cols-12 gap-2 py-3 border-b border-border-subtle hover:bg-surface-raised transition-colors"
-									>
-										<div className="col-span-5 text-sm">
-											<p className="text-text-primary font-medium">
-												{
-													item.name
-												}
-											</p>
-											{item.description && (
-												<p className="text-text-tertiary text-xs mt-0.5">
-													{
-														item.description
-													}
-												</p>
-											)}
-										</div>
-										<div className="col-span-1 flex items-center justify-center">
-											{item.item_type && (
-												<span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-surface-raised text-text-secondary border border-border-strong">
-													{
-														item.item_type
-													}
-												</span>
-											)}
-										</div>
-										<div className="col-span-2 text-right text-sm text-text-primary tabular-nums flex items-center justify-end">
-											{Number(
-												item.quantity
-											).toLocaleString(
-												"en-US",
-												{
-													minimumFractionDigits: 0,
-													maximumFractionDigits: 2,
-												}
-											)}
-										</div>
-										<div className="col-span-2 text-right text-sm text-text-primary tabular-nums flex items-center justify-end">
-											{formatCurrency(
-												Number(
-													item.unit_price
-												)
-											)}
-										</div>
-										<div className="col-span-2 text-right text-sm text-text-primary font-medium tabular-nums flex items-center justify-end">
-											{formatCurrency(
-												Number(
-													item.quantity
-												) *
-													Number(
-														item.unit_price
-													)
-											)}
-										</div>
-									</div>
-								))}
-							</div>
-						</div>
-
-						<div className="lg:col-span-1 space-y-6">
-							<div className="p-4 bg-surface/50 rounded-lg border border-border space-y-2">
-								<div className="flex justify-between text-sm">
-									<span className="text-text-tertiary">
-										Total Items:
-									</span>
-									<span className="text-text-primary font-medium tabular-nums">
-										{lineItems.length}
-									</span>
-								</div>
-								<div className="flex justify-between text-sm">
-									<span className="text-text-tertiary">
-										Billing Mode:
-									</span>
-									<span className="text-text-primary font-medium capitalize">
-										{plan.billing_mode.replace(
-											"_",
-											" "
-										)}
-									</span>
-								</div>
-							</div>
-
-							<div className="flex items-center justify-between px-4 py-3 bg-primary/10 rounded-lg border-2 border-primary/30">
-								<div>
-									<p className="text-text-secondary text-xs uppercase tracking-wide font-semibold mb-0.5">
-										Template Total
-									</p>
-									<p className="text-xs text-primary-text">
-										Per visit estimate
-									</p>
-								</div>
-								<p className="text-2xl font-bold text-primary-text tabular-nums">
-									{formatCurrency(
-										templateTotal
-									)}
-								</p>
-							</div>
-
-							<div className="px-4 py-3 bg-surface/50 border border-border rounded-lg">
-								<p className="text-xs text-text-tertiary italic">
-									This template is applied to
-									each generated visit. Actual
-									costs may vary per visit.
-								</p>
-							</div>
-						</div>
-					</div>
 				)}
-			</Card>
 
-			{/* Occurrences + Job Container */}
-			<div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-				{/* Left column: upcoming occurrences — stretches to match right column height */}
-				<div className="flex flex-col">
-					<div className="flex-1">{UpcomingOccurrencesCard}</div>
-				</div>
-
-				{/* Right column: service history */}
-				<div className="flex flex-col">
-					<div className="flex-1">{ServiceHistoryCard}</div>
-				</div>
+				<DetailTabs
+					tabs={PLAN_TABS}
+					activeTab={activeTab}
+					onSelect={setActiveTab}
+					label="Plan sections"
+				/>
 			</div>
 
-			{jobContainerId && <RecurringPlanNoteManager jobId={jobContainerId} />}
+			{activeTab === "overview" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-overview"
+					aria-labelledby="tab-overview"
+					className="mt-6 space-y-4"
+				>
+					<h2 className="sr-only">Overview</h2>
+					<DetailStatRow tiles={statTiles} />
+
+					<BalancedOverviewGrid
+						recordId={plan.id}
+						infoCard={infoCard}
+						block={jobContainerCard}
+						railCard={clientCard}
+					/>
+
+					{templatePricingCard}
+				</div>
+			)}
+
+			{activeTab === "schedule" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-schedule"
+					aria-labelledby="tab-schedule"
+					className="mt-6 space-y-4"
+				>
+					<h2 className="sr-only">Schedule</h2>
+					{/* Stretched: both cards are h-full, so the shorter one carries
+					    its slack inside its border and the pair ends on one line. */}
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+						{upcomingOccurrencesCard}
+						{serviceHistoryCard}
+					</div>
+					<SkippedDatesCard jobId={jobContainerId || undefined} />
+				</div>
+			)}
+
+			{activeTab === "activity" && (
+				<ActivityPanel
+					notes={
+						jobContainerId ? (
+							<RecurringPlanNoteManager
+								jobId={jobContainerId}
+							/>
+						) : (
+							/* The note manager is keyed by the plan's job container,
+							   which does not exist until the first occurrence is
+							   generated. The rail must still render something: an
+							   empty column beside a populated history reads as a
+							   load failure. */
+							<Card title="Notes">
+								<p className="rounded-lg border border-dashed border-border-subtle p-6 text-center text-sm text-text-tertiary">
+									Notes open once this plan
+									generates its first
+									occurrence.
+								</p>
+							</Card>
+						)
+					}
+					lifecycle={null}
+					history={
+						<ChangeHistory
+							scope={{
+								kind: "entity",
+								type: "recurring_plan",
+								id: recurringPlanId ?? "",
+							}}
+						/>
+					}
+				/>
+			)}
 
 			{plan && (
 				<EditRecurringPlan
@@ -1203,7 +1116,7 @@ export default function RecurringPlanDetailPage() {
 										false
 									)
 								}
-								className="flex-1 px-4 py-2 bg-surface-raised hover:bg-surface-raised rounded-md text-sm font-medium transition-colors"
+								className="flex-1 px-4 py-2 bg-surface-raised hover:bg-surface-raised rounded-md text-sm font-medium transition-colors duration-150 ease-out"
 							>
 								Cancel
 							</button>
@@ -1212,7 +1125,7 @@ export default function RecurringPlanDetailPage() {
 								disabled={
 									generateMutation.isPending
 								}
-								className="flex-1 px-4 py-2 bg-primary-hover hover:bg-primary-active text-on-primary rounded-md text-sm font-medium transition-colors disabled:opacity-50"
+								className="flex-1 px-4 py-2 bg-primary-hover hover:bg-primary-active text-on-primary rounded-md text-sm font-medium transition-colors duration-150 ease-out disabled:opacity-50"
 							>
 								{generateMutation.isPending
 									? "Generating..."
@@ -1225,13 +1138,19 @@ export default function RecurringPlanDetailPage() {
 
 			<ConfirmDialog
 				open={pendingConfirm !== null}
-				title={pendingConfirm === "cancel" ? "Cancel Plan" : "Complete Plan"}
+				title={
+					pendingConfirm === "cancel"
+						? "Cancel Plan"
+						: "Complete Plan"
+				}
 				body={
 					pendingConfirm === "cancel"
 						? "Are you sure you want to cancel this recurring plan? All future planned occurrences will be cancelled."
 						: "Are you sure you want to mark this recurring plan as completed?"
 				}
-				confirmLabel={pendingConfirm === "cancel" ? "Cancel Plan" : "Complete"}
+				confirmLabel={
+					pendingConfirm === "cancel" ? "Cancel Plan" : "Complete"
+				}
 				tone={pendingConfirm === "cancel" ? "destructive" : "primary"}
 				pending={cancelMutation.isPending || completeMutation.isPending}
 				onConfirm={confirmPendingAction}

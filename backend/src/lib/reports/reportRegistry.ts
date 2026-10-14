@@ -24,6 +24,11 @@ import {
 	getRevenueLineItemsReport,
 	getRevenueLineItemsReportPage,
 	reportInstant,
+	getProjectsReport,
+	getProjectsReportPage,
+	getCogsByItemReport,
+	getCogsByJobReport,
+	getJobProfitabilityReport
 } from "../../controllers/reportsController.js";
 import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
@@ -43,6 +48,17 @@ export interface ReportDefinition {
 		query: ReportQuery,
 	) => Promise<{ rows: ReportRow[]; summary?: Record<string, unknown> }>;
 	filteredSummary?: (rows: ReportRow[]) => Record<string, unknown>;
+	/**
+	 * Row keys free-text search may look at. Server-side only — it must never be
+	 * client-supplied, so it is absent from paginateParamsSchema and
+	 * exportServerSchema. Omitted means `filterRows` falls back to every key
+	 * except "id", which makes UUIDs and currency figures searchable.
+	 *
+	 * ⚠️ Only valid on a definition with NO `loadPage`: a loadPage report pushes
+	 * search into SQL, where searchability is already per-column, so setting both
+	 * makes page-1 search diverge from export search. Enforced below.
+	 */
+	searchKeys?: string[];
 	loadPage?: (
 		orgId: string,
 		query: ReportQuery,
@@ -120,6 +136,9 @@ type RecurringRaw = Awaited<ReturnType<typeof getRecurringRevenueReport>>["plans
 type FtfrRaw = Awaited<ReturnType<typeof getFirstTimeFixReport>>[number];
 type LineItemTypeRaw = Awaited<ReturnType<typeof getRevenueByLineItemType>>[number];
 type RevenueLineItemRaw = Awaited<ReturnType<typeof getRevenueLineItemsReport>>["rows"][number];
+type ProjectRaw = Awaited<ReturnType<typeof getProjectsReport>>[number];
+type CogsByJobRow = Awaited<ReturnType<typeof getCogsByJobReport>>["rows"][number];
+type CogsByItemRow = Awaited<ReturnType<typeof getCogsByItemReport>>["rows"][number];
 
 const jobRow = (job: JobRaw): ReportRow => ({
 	id: job.id,
@@ -294,6 +313,21 @@ const forecastRow = (r: ForecastRaw): ReportRow => ({
 	unit: unitDisplay(r.unit).label,
 	observedDays: r.observedDays,
 	qtyConsumed: r.qtyConsumed ?? UNIT_BREAK_SHORT,
+	// Who to buy it from. A "~" marks a vendor INFERRED from the last purchase
+	// rather than one anybody chose — the report may suggest, but it must not
+	// pass a guess off as a decision.
+	buyFrom: r.preferredSupplierName
+		? r.vendorSource === "preferred"
+			? r.preferredSupplierName
+			: `~${r.preferredSupplierName}`
+		: "—",
+	// Export-only, like unit/observedDays above: the part number you actually
+	// order by, and what closing the gap to the reorder point would cost.
+	vendorSku: r.vendorSku ?? "—",
+	estimatedCost:
+		r.estimatedShortfallCost != null && r.shortfallQty != null
+			? `$${r.estimatedShortfallCost.toFixed(2)} (${fmtQty(r.shortfallQty)} @ ${r.priceSource})`
+			: "—",
 });
 
 const receivableRow = (r: ReceivableRaw): ReportRow => ({
@@ -303,6 +337,7 @@ const receivableRow = (r: ReceivableRaw): ReportRow => ({
 	bucket31_60: r.bucket31_60,
 	bucket61_90: r.bucket61_90,
 	bucket90plus: r.bucket90plus,
+	disputed: r.disputed,
 	total: r.total,
 });
 
@@ -390,6 +425,55 @@ const revenueLineItemRow = (r: RevenueLineItemRaw): ReportRow => ({
 	unitPrice: r.unitPrice,
 	total: r.total,
 	itemType: r.itemType,
+});
+
+const projectRow = (p: ProjectRaw): ReportRow => ({
+	id: p.id,
+	projectNumber: p.projectNumber,
+	name: p.name,
+	clientName: p.clientName,
+	status: p.status,
+	priority: p.priority,
+	managerName: p.managerName ?? "—",
+	address: p.address || "—",
+	budget: p.budget ?? "—",
+	startsAt: fmtDate(p.startsAt),
+	targetEndAt: fmtDate(p.targetEndAt),
+	createdAt: fmtDate(p.createdAt),
+	completedAt: fmtDate(p.completedAt),
+	cancelledAt: fmtDate(p.cancelledAt),
+	estimatedTotal: p.estimatedTotal ?? "—",
+	actualTotal: p.actualTotal ?? "—",
+	variance: p.variance ?? "—",
+	jobCount: p.jobCount,
+})
+
+const cogsByJobRow = (r: CogsByJobRow): ReportRow => ({
+	id: r.id,
+	jobNumber: r.jobNumber,
+	name: r.name,
+	clientName: r.clientName,
+	status: r.status,
+	totalCogs: r.totalCogs ?? "—",
+	costCoverage: r.costCoverage,
+	itemCount: r.itemCount,
+	qtyConsumed: r.qtyConsumed,
+	lastConsumedAt: fmtDate(r.lastConsumedAt),
+});
+
+const cogsByItemRow = (r: CogsByItemRow): ReportRow => ({
+	id: r.id,
+	itemName: r.name,
+	sku: r.sku ?? "—",
+	category: r.category ?? "—",
+	unit: r.unit,
+	quantity: r.quantity,
+	totalCogs: r.totalCogs ?? "—",
+	avgUnitCost: r.avgUnitCost ?? "—",
+	costCoverage: r.costCoverage,
+	qtyConsumed: r.qtyConsumed,
+	jobCount: r.jobCount,
+	lastConsumedAt: fmtDate(r.lastConsumedAt),
 });
 
 const mapPage = <T>(
@@ -565,6 +649,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 			bucket31_60: round2(rows.reduce((s, r) => s + num(r.bucket31_60), 0)),
 			bucket61_90: round2(rows.reduce((s, r) => s + num(r.bucket61_90), 0)),
 			bucket90plus: round2(rows.reduce((s, r) => s + num(r.bucket90plus), 0)),
+			disputed: round2(rows.reduce((s, r) => s + num(r.disputed), 0)),
 			total: round2(rows.reduce((s, r) => s + num(r.total), 0)),
 		}),
 	},
@@ -648,7 +733,61 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				revenueLineItemRow,
 			),
 	},
+	projects: {
+		load: async (orgId, q) => ({
+			rows: (await getProjectsReport(q.startDate, q.endDate, orgId)).map(projectRow)
+		}),
+		loadPage: async (orgId, q, params) => 
+			mapPage(await getProjectsReportPage(q.startDate, q.endDate, orgId, params), projectRow),
+	},
+	"cogs-by-job": {
+		load: async (orgId, q) => {
+			const { rows, truncated, trend } = await getCogsByJobReport(q.startDate, q.endDate, orgId);
+			return { rows: rows.map(cogsByJobRow), summary: { truncated, trend } };
+		},
+		filteredSummary: (rows) => ({
+			totalCogs: round2(rows.reduce((s, r) => s + num(r.totalCogs), 0)),
+			jobCount: rows.length,
+			jobsMissingCostData: rows.filter(r => r.costCoverage !== "Full").length,
+		}),
+	},
+	"cogs-by-item": { 
+		load: async (orgId, q) => {
+			const { rows, truncated, trend } = await getCogsByItemReport(q.startDate, q.endDate, orgId);
+			return { rows: rows.map(cogsByItemRow), summary: { truncated, trend } };
+		},
+		filteredSummary: (rows) => ({
+			totalCogs: round2(rows.reduce((s, r) => s + num(r.totalCogs), 0)),
+			itemCount: rows.length,
+			itemsMissingCostData: rows.filter(r => r.costCoverage !== "Full").length,
+		}),
+	},
+	"job-profitability": {
+		load: async (orgId, q) => {
+			const { rows, truncated } = await getJobProfitabilityReport(q.startDate, q.endDate, orgId);
+			return { rows, summary: { truncated } };
+		},
+		filteredSummary: (rows) => ({
+			totalProfit: round2(rows.reduce((s, r) => s + num(r.profit), 0)),
+			jobCount: rows.length,
+		}),
+		// Rows key on jobId, so the default "every key but id" fallback makes job
+		// UUIDs searchable and a search for "500" match a revenue figure. This is
+		// not new policy — it makes the in-memory path obey the same "only text
+		// columns are searchable" rule the SQL path already has.
+		searchKeys: ["jobNumber", "jobName", "clientName"],
+	}
 };
+
+// A loadPage report resolves search in SQL, so an in-memory searchKeys list would
+// only apply to the fallback path and silently diverge from it. Fail at import
+// rather than serve two different search behaviours for one report.
+for (const [key, def] of Object.entries(REPORT_DEFINITIONS)) {
+	if (def.searchKeys && def.loadPage)
+		throw new Error(
+			`report "${key}" sets both searchKeys and loadPage — searchKeys is only valid on reports without a SQL pushdown path`,
+		);
+}
 
 export const getReportDefinition = (key: string): ReportDefinition | undefined =>
 	REPORT_DEFINITIONS[key];

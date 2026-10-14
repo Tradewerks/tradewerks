@@ -1,8 +1,27 @@
 ﻿import { memo, useState, useRef, useEffect, useMemo } from "react";
-import { Trash2, RotateCcw, X, Briefcase, ChevronDown, ChevronRight, MapPin } from "lucide-react";
-import { LineItemTypeValues, LineItemTypeLabels, type BaseLineItem } from "../../../types/common";
+import {
+	Trash2,
+	RotateCcw,
+	X,
+	Briefcase,
+	ChevronDown,
+	ChevronRight,
+	MapPin,
+	Link2,
+	AlertTriangle,
+	Plus,
+} from "lucide-react";
+import {
+	LineItemTypeValues,
+	LineItemTypeLabels,
+	LineItemDispositionLabels,
+	type BaseLineItem,
+	type LineItemDisposition,
+} from "../../../types/common";
 import type { InventoryItem } from "../../../types/inventory";
+import { formatQty } from "../../../lib/units";
 import type { TaxGroup } from "../../../types/tax";
+import { useCreateProvisionalItemMutation } from "../../../hooks/useInventory";
 import Dropdown from "../../ui/Dropdown";
 import TaxGroupSelector from "./TaxGroupSelector";
 
@@ -53,25 +72,131 @@ interface LineItemCardProps {
 	originalLineItemsMap?: Map<string, BaseLineItem>;
 	sourceJobs?: SourceJob[];
 	inventoryItems?: InventoryItem[];
+	onLinkInventory?: (
+		id: string,
+		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+	) => void;
 	taxGroups?: TaxGroup[];
 	clientExempt?: boolean;
 	onTaxChange?: (id: string, groupId: string | null, taxable: boolean) => void;
+	/** Visit and recurring-plan forms only; other line kinds move no stock. */
+	showDisposition?: boolean;
+	/** Destinations a `receive` can land on, besides the warehouse. */
+	vehicles?: { id: string; name: string }[];
+	onDispositionChange?: (
+		id: string,
+		disposition: LineItemDisposition | null,
+		vehicleId?: string | null,
+	) => void;
 }
 
-function InventoryAutofillInput({
+function DispositionPicker({
+	item,
+	vehicles,
+	onChange,
+	disabled,
+}: {
+	item: BaseLineItem;
+	vehicles: { id: string; name: string }[];
+	onChange: (
+		id: string,
+		disposition: LineItemDisposition | null,
+		vehicleId?: string | null,
+	) => void;
+	disabled: boolean;
+}) {
+	// Undefined and null both read as `consume`.
+	const value: LineItemDisposition = item.disposition ?? "consume";
+
+	return (
+		<div className="mt-1 flex flex-wrap items-center gap-1.5">
+			<select
+				value={value}
+				disabled={disabled}
+				aria-label="Stock effect"
+				onChange={(e) => {
+					const next = e.target.value as LineItemDisposition;
+					onChange(
+						item.id,
+						next,
+						next === "receive" ? (item.disposition_vehicle_id ?? null) : null,
+					);
+				}}
+				className="border border-border px-1.5 h-[22px] rounded bg-base text-[10px] text-text-secondary focus:outline-none focus:border-primary disabled:opacity-50 [&>option]:bg-base [&>option]:text-text-primary"
+			>
+				{(Object.keys(LineItemDispositionLabels) as LineItemDisposition[]).map((d) => (
+					<option key={d} value={d}>
+						{LineItemDispositionLabels[d]}
+					</option>
+				))}
+			</select>
+
+			{value === "receive" && (
+				<select
+					value={item.disposition_vehicle_id ?? ""}
+					disabled={disabled}
+					aria-label="Receive into"
+					onChange={(e) => onChange(item.id, "receive", e.target.value || null)}
+					className="border border-border px-1.5 h-[22px] rounded bg-base text-[10px] text-text-secondary focus:outline-none focus:border-primary disabled:opacity-50 [&>option]:bg-base [&>option]:text-text-primary"
+				>
+					{/* Defaulted by actor: a dispatcher filling this in is at the
+					    warehouse. A tech's own purchase is already in their hands,
+					    which is what the field-purchase flow defaults to. */}
+					<option value="">Warehouse</option>
+					{vehicles.map((v) => (
+						<option key={v.id} value={v.id}>
+							{v.name}
+						</option>
+					))}
+				</select>
+			)}
+
+			{value === "non_stock" && (
+				<span className="text-[10px] text-text-muted">
+					Billed, never in our stock — nothing is deducted
+				</span>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Catalog picker for material and equipment lines. Selecting stores the
+ * item's ID: the completion deduction, readiness gaps and charged-price
+ * history all key off it, and a matching NAME alone is invisible to them.
+ */
+function InventoryPicker({
 	item,
 	inventoryItems,
 	isLoading,
 	onUpdate,
+	onLink,
 	onUndo,
 	showUndo,
+	untyped = false,
+	showDisposition = false,
+	vehicles = [],
+	onDispositionChange,
 }: {
 	item: BaseLineItem;
 	inventoryItems: InventoryItem[];
 	isLoading: boolean;
 	onUpdate: (id: string, field: keyof BaseLineItem, value: string | number) => void;
+	onLink: (
+		id: string,
+		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+	) => void;
 	onUndo?: (id: string, field: keyof BaseLineItem) => void;
 	showUndo: boolean;
+	/** No item type chosen yet — the line may still turn out to be labor. */
+	untyped?: boolean;
+	showDisposition?: boolean;
+	vehicles?: { id: string; name: string }[];
+	onDispositionChange?: (
+		id: string,
+		disposition: LineItemDisposition | null,
+		vehicleId?: string | null,
+	) => void;
 }) {
 	const [isOpen, setIsOpen] = useState(false);
 	const ref = useRef<HTMLDivElement>(null);
@@ -101,14 +226,60 @@ function InventoryAutofillInput({
 		[inventoryItems, item.name],
 	);
 
-	const handleSelect = (invItem: InventoryItem) => {
-		onUpdate(item.id, "name", invItem.name);
-		if (invItem.unit_price != null) {
-			onUpdate(item.id, "unit_price", Number(invItem.unit_price));
+	// A just-quick-added item is provisional and the catalog list excludes
+	// provisional rows, so a missing row is not an absent link.
+	const isLinked = !!item.inventory_item_id;
+	const linked = item.inventory_item_id
+		? inventoryItems.find((i) => i.id === item.inventory_item_id)
+		: undefined;
+
+	// Shown inline because the price is editable right here — a dispatcher
+	// discounting a part can see the floor before they cross it.
+	const margin = useMemo(() => {
+		const charged = Number(item.unit_price);
+		if (!linked || linked.cost == null || charged <= 0) return null;
+		const cost = Number(linked.cost);
+		return { cost, charged, pct: ((charged - cost) / charged) * 100 };
+	}, [linked, item.unit_price]);
+
+	const quickAdd = useCreateProvisionalItemMutation();
+	const typed = item.name.trim();
+	// Hidden on an exact catalog name, which would only invite duplicates.
+	const canQuickAdd =
+		!isLinked &&
+		typed.length > 0 &&
+		!inventoryItems.some((i) => i.name.trim().toLowerCase() === typed.toLowerCase());
+
+	const handleQuickAdd = async () => {
+		try {
+			const created = await quickAdd.mutateAsync({
+				name: typed,
+				unit_price: item.unit_price > 0 ? Number(item.unit_price) : undefined,
+			});
+			onLink(item.id, {
+				inventory_item_id: created.id,
+				name: created.name,
+				// The new item was created from this price; re-applying it would clobber
+				// a hand-edit.
+				unit_price: null,
+			});
+			setIsOpen(false);
+		} catch {
+			// Left open: the failure message renders in it.
 		}
+	};
+
+	const handleSelect = (invItem: InventoryItem) => {
+		onLink(item.id, {
+			inventory_item_id: invItem.id,
+			name: invItem.name,
+			unit_price: invItem.unit_price != null ? Number(invItem.unit_price) : null,
+		});
 		setIsOpen(false);
 	};
 
+	// Retyping the name breaks the link; useLineItems clears it on the same
+	// update.
 	const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		onUpdate(item.id, "name", e.target.value);
 		setIsOpen(true);
@@ -136,7 +307,7 @@ function InventoryAutofillInput({
 					<RotateCcw size={14} />
 				</button>
 			)}
-			{isOpen && filtered.length > 0 && (
+			{isOpen && (filtered.length > 0 || canQuickAdd) && (
 				<div className="absolute top-full left-0 right-0 mt-1 bg-base border border-border rounded-lg shadow-xl z-50 overflow-hidden">
 					<div className="max-h-44 overflow-y-auto">
 						{filtered.map((invItem) => (
@@ -152,14 +323,112 @@ function InventoryAutofillInput({
 								<div className="text-sm text-text-primary truncate">{invItem.name}</div>
 								<div className="text-[10px] text-text-muted">
 									{invItem.sku && `${invItem.sku} · `}
-									Qty: {invItem.quantity}
+									Qty: {formatQty(invItem.quantity, invItem.unit)}
 									{invItem.unit_price != null &&
 										` · $${Number(invItem.unit_price).toFixed(2)}`}
 								</div>
 							</button>
 						))}
+
+						{/* Escape hatch. A dispatcher pricing a job on the phone
+						    must never be blocked because a part isn't catalogued
+						    yet — that's what makes people type junk. This adds
+						    it as provisional and links the line in one click. */}
+						{canQuickAdd && (
+							<button
+								type="button"
+								onMouseDown={(e) => {
+									e.preventDefault();
+									void handleQuickAdd();
+								}}
+								disabled={quickAdd.isPending}
+								className="w-full px-3 py-2 text-left border-t border-border hover:bg-surface transition-colors disabled:opacity-50"
+							>
+								<div className="flex items-center gap-1.5 text-sm text-primary-text">
+									<Plus size={12} className="flex-shrink-0" />
+									<span className="truncate">
+										{quickAdd.isPending
+											? "Adding…"
+											: `Add "${item.name.trim()}" to inventory`}
+									</span>
+								</div>
+								<div className="text-[10px] text-text-muted">
+									Saved for review — needs cost and unit later
+								</div>
+							</button>
+						)}
+						{quickAdd.error instanceof Error && (
+							<div className="px-3 py-2 border-t border-border text-[10px] text-error-text">
+								{quickAdd.error.message}
+							</div>
+						)}
 					</div>
 				</div>
+			)}
+
+			{/* Link status. An unlinked material is billable but invisible to
+			    stock — say so here rather than letting it pass silently. */}
+			<div className="mt-1 flex items-center gap-1.5 min-w-0">
+				{isLinked ? (
+					<>
+						<span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 border border-primary/40 text-[10px] text-primary-text min-w-0">
+							<Link2 size={10} className="flex-shrink-0" />
+							<span className="truncate">
+								{linked ? (linked.sku ?? linked.name) : item.name}
+							</span>
+						</span>
+						<span className="text-[10px] text-text-muted flex-shrink-0">
+							{linked
+								? `${formatQty(linked.quantity, linked.unit)} on hand`
+								: "awaiting review"}
+						</span>
+						{margin && (
+							<span
+								title={`Catalog cost $${margin.cost.toFixed(2)} vs charged $${margin.charged.toFixed(2)}`}
+								className={`text-[10px] flex-shrink-0 tabular-nums ${
+									margin.pct < 0
+										? "text-error-text"
+										: margin.pct < 20
+											? "text-warning-text"
+											: "text-success-text"
+								}`}
+							>
+								{margin.pct.toFixed(0)}% margin
+							</span>
+						)}
+						<button
+							type="button"
+							title="Unlink from inventory"
+							onClick={() => onLink(item.id, null)}
+							disabled={isLoading}
+							className="text-text-muted hover:text-error-text transition-colors flex-shrink-0"
+						>
+							<X size={11} />
+						</button>
+					</>
+				) : untyped ? (
+					// Untyped: the line may still turn out to be labor, so prompt rather than
+					// warn about a consequence it may never have.
+					<span className="text-[10px] text-text-muted">
+						Search the catalog, or set a type below
+					</span>
+				) : (
+					<span className="inline-flex items-center gap-1 text-[10px] text-warning-text">
+						<AlertTriangle size={10} className="flex-shrink-0" />
+						Not linked — won&apos;t deduct from stock
+					</span>
+				)}
+			</div>
+
+			{/* Only for a linked line: an unlinked one has no stock effect to
+			    choose between, so the control would be inert. */}
+			{showDisposition && isLinked && onDispositionChange && (
+				<DispositionPicker
+					item={item}
+					vehicles={vehicles}
+					onChange={onDispositionChange}
+					disabled={isLoading}
+				/>
 			)}
 		</div>
 	);
@@ -188,9 +457,13 @@ const LineItemCard = memo(
 		originalLineItemsMap,
 		sourceJobs = [],
 		inventoryItems,
+		onLinkInventory,
 		taxGroups = [],
 		clientExempt = false,
 		onTaxChange,
+		showDisposition = false,
+		vehicles = [],
+		onDispositionChange,
 	}: LineItemCardProps) => {
 		const isDirty = (field: string) => dirtyFields[`li:${item.id}:${field}`];
 		const showUndo = (field: keyof BaseLineItem) => !!onUndo && isDirty(field);
@@ -268,9 +541,15 @@ const LineItemCard = memo(
 			});
 		};
 
+		// Untyped lines get the picker too: people type WHAT THE THING IS before
+		// they classify it, and picking an item sets the type itself. Choosing
+		// labor or another non-stock type explicitly drops back to plain text,
+		// since those corrupt every consumption-rate and reorder figure.
 		const isInventoryType =
-			(item.item_type === "material" || item.item_type === "equipment") &&
-			!!inventoryItems?.length;
+			!!onLinkInventory &&
+			(!item.item_type ||
+				item.item_type === "material" ||
+				item.item_type === "equipment");
 
 		return (
 			<div className="p-2.5 lg:p-3 bg-surface rounded border border-border">
@@ -298,13 +577,18 @@ const LineItemCard = memo(
 					{/* Row 1: Name */}
 					<div className="relative min-w-0">
 						{isInventoryType ? (
-							<InventoryAutofillInput
+							<InventoryPicker
 								item={item}
-								inventoryItems={inventoryItems!}
+								inventoryItems={inventoryItems ?? []}
 								isLoading={isLoading}
 								onUpdate={onUpdate}
+								onLink={onLinkInventory}
+								untyped={!item.item_type}
 								onUndo={onUndo}
 								showUndo={showUndo("name")}
+								showDisposition={showDisposition}
+								vehicles={vehicles}
+								onDispositionChange={onDispositionChange}
 							/>
 						) : (
 							<>

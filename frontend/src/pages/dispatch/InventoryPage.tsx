@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { Plus, FileSpreadsheet, Settings2, ChevronDown, ChevronUp, Barcode, X } from "lucide-react";
+import { Plus, FileSpreadsheet, Barcode, Truck, X, AlertTriangle } from "lucide-react";
 import { BarcodeScanner } from "../../components/inventory/BarcodeScanner";
 import { useBarcodeScanner } from "../../hooks/useBarcodeScanner";
 import { useScanDispatcher } from "../../hooks/useScanDispatcher";
@@ -11,12 +11,11 @@ import InventoryImportExport from "../../components/inventory/InventoryImportExp
 import TagPicker from "../../components/inventory/TagPicker";
 import TagManagerModal from "../../components/inventory/TagManagerModal";
 import FilterChips, { type FilterChip } from "../../components/ui/FilterChips";
-import PendingPartsQueue from "../../components/inventory/PendingPartsQueue";
 import {
 	useAllInventoryQuery,
 	useDeleteInventoryItemMutation,
 	useInventoryTagsQuery,
-	useProvisionalItemsQuery,
+	useReconcileQueueQuery,
 } from "../../hooks/useInventory";
 import type { InventoryItem, InventorySortOption } from "../../types/inventory";
 import LoadSvg from "../../assets/icons/loading.svg?react";
@@ -24,6 +23,7 @@ import SearchBar from "../../components/ui/SearchBar";
 import ViewToggle from "../../components/ui/ViewToggle";
 import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
+import { moneyRound } from "../../components/reconcile/reconcileFormat";
 import PageHeader from "../../components/ui/PageHeader";
 import { usePermission } from "../../hooks/usePermission";
 import PageReportSection from "../../components/reports/PageReportSection";
@@ -35,6 +35,7 @@ import LinkQBItemModal from "../../components/quickbooks/LinkQBItemModal";
 import LabelQueueToast from "../../components/inventory/labels/LabelQueueToast";
 import LabelQueueButton from "../../components/inventory/labels/LabelQueueButton";
 import { useInventoryViewMode } from "../../hooks/useInventoryViewMode";
+import UntrackedStockNotice from "../../components/entitlements/UntrackedStockNotice";
 
 const SORT_OPTIONS: { value: InventorySortOption; label: string }[] = [
 	{ value: "name", label: "Name A-Z" },
@@ -50,6 +51,7 @@ export default function InventoryPage() {
 	const [sort, setSort] = useState<InventorySortOption>("name");
 	const [search, setSearch] = useState("");
 	const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+	const [unassignedOnly, setUnassignedOnly] = useState(false);
 	const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
 	const [isCreateOpen, setIsCreateOpen] = useState(false);
 	const [isImportExportOpen, setIsImportExportOpen] = useState(false);
@@ -63,7 +65,6 @@ export default function InventoryPage() {
 	const qbConnected = !!useQBStatusQuery().data?.connected;
 	const [linkItem, setLinkItem] = useState<InventoryItem | null>(null);
 	
-	const [isPendingOpen, setIsPendingOpen] = useState(false);
 	const [isScannerOpen, setIsScannerOpen] = useState(false);
 	const [scanNotFoundCode, setScanNotFoundCode] = useState<string | null>(null);
 	const [createPrefillBarcode, setCreatePrefillBarcode] = useState<string | undefined>(undefined);
@@ -72,7 +73,11 @@ export default function InventoryPage() {
 	const MANAGE_INVENTORY = usePermission("manage_inventory");
 
 	const { data: inventoryItems = [], isLoading, error } = useAllInventoryQuery(sort);
-	const { data: provisionalItems = [] } = useProvisionalItemsQuery();
+	// The reconcile page reads this same cached query, so arriving costs no
+	// extra round trip. Value not count: this chip has to earn a click.
+	const { data: reconcile } = useReconcileQueueQuery(undefined, MANAGE_INVENTORY);
+	const reconcileCount = (reconcile?.provisional_total ?? 0) + (reconcile?.unmapped_total ?? 0);
+	const reconcileValue = (reconcile?.unmapped_value ?? 0) + (reconcile?.provisional_value ?? 0);
 
 	const { data: mappedItems = [] } = useQBMappedItemsQuery(qbConnected);
 
@@ -101,7 +106,7 @@ export default function InventoryPage() {
 					item.name.toLowerCase().includes(q) ||
 					(item.sku && item.sku.toLowerCase().includes(q)) ||
 					(item.barcode && item.barcode.toLowerCase().includes(q)) ||
-					item.location.toLowerCase().includes(q) ||
+					(item.location?.toLowerCase().includes(q) ?? false) ||
 					// Matches the technician vehicle page and AdjustStockModal,
 					// which already searched category — this page was the outlier.
 					(item.category?.toLowerCase().includes(q) ?? false) ||
@@ -115,8 +120,12 @@ export default function InventoryPage() {
 			);
 		}
 
+		if (unassignedOnly) {
+			items = items.filter((item) => item.location == null);
+		}
+
 		return items;
-	}, [inventoryItems, search, selectedTagIds]);
+	}, [inventoryItems, search, selectedTagIds, unassignedOnly]);
 
 	const mappedIds = useMemo(() => {
 		return new Set(mappedItems.map((item) => item.inventory_item_id));
@@ -131,6 +140,14 @@ export default function InventoryPage() {
 			onRemove: () => setSelectedTagIds((prev) => prev.filter((i) => i !== id)),
 		}];
 	});
+
+	if (unassignedOnly) {
+		activeTagChips.push({
+			label: "Unassigned location",
+			color: "blue" as const,
+			onRemove: () => setUnassignedOnly(false),
+		});
+	}
 
 	const scrollAndHighlight = useCallback((itemId: string) => {
 		cardRefs.current
@@ -239,14 +256,32 @@ export default function InventoryPage() {
 		<div className="flex h-full text-text-primary">
 			{/* Main content */}
 			<div className="flex-1 overflow-y-auto p-4 mr-7">
+				<UntrackedStockNotice module="inventory" />
 				<PageHeader title="Inventory">
 						<LabelQueueButton />
+						{/* Value-carrying, and absent entirely when there is nothing
+						    to reconcile — a chip that is always there stops being
+						    read. */}
+						{MANAGE_INVENTORY && reconcileCount > 0 && (
+							<button
+								onClick={() => navigate("/dispatch/inventory/reconcile")}
+								className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-warning/15 hover:bg-warning/25 border border-warning/40 text-sm font-medium text-warning-text transition-colors"
+							>
+								<AlertTriangle size={14} />
+								Reconcile {reconcileCount}
+								{reconcileValue > 0 && (
+									<span className="tabular-nums opacity-80">
+										· {moneyRound(reconcileValue)}
+									</span>
+								)}
+							</button>
+						)}
 						<button
-						onClick={() => setIsTagManagerOpen(true)}
+							onClick={() => navigate("/dispatch/inventory/suppliers")}
 						className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface hover:bg-surface-raised border border-border text-sm font-medium text-text-secondary transition-colors"
-						title="Manage tags"
 					>
-						<Settings2 size={14} />
+						<Truck size={14} />
+						Suppliers
 					</button>
 					<button
 						onClick={() => setIsImportExportOpen(true)}
@@ -295,6 +330,7 @@ export default function InventoryPage() {
 								tags={allTags}
 								selectedIds={selectedTagIds}
 								onChange={setSelectedTagIds}
+								onManage={() => setIsTagManagerOpen(true)}
 							/>
 							<StatusFilter
 								placeholder="Sort"
@@ -309,6 +345,19 @@ export default function InventoryPage() {
 								options={SORT_OPTIONS}
 								exclusive
 							/>
+							<button
+								type="button"
+								onClick={() => setUnassignedOnly((v) => !v)}
+								aria-pressed={unassignedOnly}
+								title="Show only items with no location assigned"
+								className={`flex items-center h-9 px-3 rounded-md border text-sm transition-colors cursor-pointer whitespace-nowrap ${
+									unassignedOnly
+										? "bg-primary-bg border-primary text-primary-text"
+										: "bg-base border-border text-text-tertiary hover:text-text-primary"
+								}`}
+							>
+								Unassigned location
+							</button>
 						</div>
 					}
 					right={
@@ -325,37 +374,9 @@ export default function InventoryPage() {
 					onClearAll={() => {
 						setSearch("");
 						setSelectedTagIds([]);
+						setUnassignedOnly(false);
 					}}
 				/>
-
-				{/* Pending Parts section — manage_inventory only */}
-				{MANAGE_INVENTORY && (
-					<div className="mb-4 rounded-xl border border-border bg-base overflow-hidden">
-						<button
-							onClick={() => setIsPendingOpen((o) => !o)}
-							className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-text-primary hover:bg-surface transition-colors"
-						>
-							<div className="flex items-center gap-2">
-								<span>Pending Parts</span>
-								{provisionalItems.length > 0 && (
-									<span className="inline-flex items-center justify-center h-5 min-w-5 rounded-full bg-primary text-on-primary text-xs font-bold px-1.5">
-										{provisionalItems.length}
-									</span>
-								)}
-							</div>
-							{isPendingOpen ? (
-								<ChevronUp size={16} className="text-text-muted" />
-							) : (
-								<ChevronDown size={16} className="text-text-muted" />
-							)}
-						</button>
-						{isPendingOpen && (
-							<div className="border-t border-border px-4 pb-4 pt-3">
-								<PendingPartsQueue />
-							</div>
-						)}
-					</div>
-				)}
 
 				<div>
 					{/* @container/list lets each list row decide whether it has

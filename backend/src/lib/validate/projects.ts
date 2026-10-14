@@ -1,4 +1,12 @@
 import z from "zod";
+import { isOwnBucketUrl } from "../../services/wasabiService.js";
+
+// Note photos must live in our own storage bucket: the URL is signed blindly on
+// read, so an arbitrary URL would let a caller mint signed links for any key.
+const notePhotoUrl = z
+    .string()
+    .url()
+    .refine(isOwnBucketUrl, { message: "photo_url must point to the configured storage bucket" });
 
 export const projectStatusEnum = z.enum([
   "Planning", "Active", "OnHold", "Completed", "Cancelled",
@@ -89,6 +97,45 @@ export const attachJobSchema = z
         path: ["jobId"],
     });
 
+export const createProjectNoteSchema = z
+    .object({
+        content: z.string(),
+        notify_technician: z.boolean().default(false),
+        photos: z
+            .array(
+                z.object({
+                    photo_url: notePhotoUrl,
+                    photo_label: z.enum(["Before", "After", "Other"]),
+                }),
+            )
+            .optional()
+            .default([]),
+    })
+    .refine(
+        (data) => data.content.trim().length > 0 || (data.photos ?? []).length > 0,
+        { message: "Content or at least one photo is required", path: ["content"] },
+    )
+    .transform((data) => ({
+        content: data.content,
+        notify_technician: data.notify_technician ?? false,
+        photos: data.photos ?? [],
+    }));
+
+export const updateProjectNoteSchema = z.object({
+    content: z.string().min(1, "Content is required").optional(),
+    photos: z
+        .array(
+            z.object({
+                id: z.string().uuid().optional(),
+                photo_url: notePhotoUrl,
+                photo_label: z.enum(["Before", "After", "Other"]),
+            }),
+        )
+        .optional(),
+});
+
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type AttachJobInput = z.infer<typeof attachJobSchema>;
+export type CreateProjectNoteInput = z.infer<typeof createProjectNoteSchema>;
+export type UpdateProjectNoteInput = z.infer<typeof updateProjectNoteSchema>;

@@ -78,12 +78,18 @@ export const goAvailable = async (technicianId: string): Promise<Technician> => 
 	return response.data.data!;
 };
 
-export const goOffline = async (technicianId: string): Promise<Technician> => {
-	const response = await api.post<ApiResponse<Technician>>(`/technicians/${technicianId}/offline`);
+export const goOffline = async (technicianId: string, techCoords?: { lat: number; lon: number }): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${technicianId}/offline`, {
+		...(techCoords ? { tech_coords: techCoords } : {}),
+	});
 	if (!response.data.success) {
 		throw new Error(response.data.error?.message || 'Failed to go offline');
 	}
 	return response.data.data!;
+};
+
+export const pingLocation = async (technicianId: string, coords: { lat: number; lon: number }): Promise<void> => {
+	await api.post(`/technicians/${technicianId}/ping`, { coords });
 };
 
 export const goOnBreak = async (technicianId: string, reason: string): Promise<Technician> => {
@@ -102,6 +108,14 @@ export const markDone = async (technicianId: string): Promise<Technician> => {
 	return response.data.data!;
 };
 
+export const returnFromJob = async (technicianId: string): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${technicianId}/head-back`);
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || 'Failed to return');
+	}
+	return response.data.data!;
+}
+
 export const changeTechnicianPassword = async (id: string, data: { current_password: string; new_password: string }): Promise<Technician> => {
 	try {
 		const response = await api.post<ApiResponse<Technician>>(`/technicians/${id}/change-password`, data);
@@ -116,4 +130,20 @@ export const changeTechnicianPassword = async (id: string, data: { current_passw
 			'Failed to change password';
 		throw new Error(message);
 	}
+};
+
+export const deactivateTechnician = async (id: string): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${id}/deactivate`);
+	if (!response.data.success || !response.data.data) {
+		throw new Error(response.data.error?.message || "Failed to deactivate technician");
+	}
+	return response.data.data;
+};
+
+export const reactivateTechnician = async (id: string): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${id}/reactivate`);
+	if (!response.data.success || !response.data.data) {
+		throw new Error(response.data.error?.message || "Failed to reactivate technician");
+	}
+	return response.data.data;
 };

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X, Camera, Keyboard, Loader2, CircleCheck, Flashlight, FlashlightOff } from "lucide-react";
 import { useCameraScanner } from "../../hooks/useCameraScanner";
+import { usePinchZoom } from "../../hooks/usePinchZoom";
 
 interface BarcodeScannerProps {
 	onScan: (code: string) => void;
@@ -8,19 +9,8 @@ interface BarcodeScannerProps {
 	continuous?: boolean;
 }
 
-function pointerDistance(a: { x: number; y: number }, b: { x: number; y: number }): number {
-	return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
 export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeScannerProps) {
 	const [manualCode, setManualCode] = useState("");
-	const [zoomIndicator, setZoomIndicator] = useState<string | null>(null);
-	const [pinchHint, setPinchHint] = useState<string | null>(null);
-	const zoomIndicatorTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const pinchHintTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const containerRef = useRef<HTMLDivElement>(null);
-	const pointers = useRef(new Map<number, { x: number; y: number }>());
-	const pinchStart = useRef<{ dist: number; zoom: number } | null>(null);
 	const closeButtonRef = useRef<HTMLButtonElement>(null);
 
 	useEffect(() => {
@@ -52,59 +42,12 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [onClose]);
 
-	// Belt-and-braces: iOS Safari can let a two-finger pinch leak through to page zoom
-	// even with touch-action: none, unless touchmove is preventDefault'd non-passively.
-	useEffect(() => {
-		const el = containerRef.current;
-		if (!el) return;
-		const handler = (e: TouchEvent) => {
-			if (e.touches.length > 1) e.preventDefault();
-		};
-		el.addEventListener("touchmove", handler, { passive: false });
-		return () => el.removeEventListener("touchmove", handler);
-	}, []);
-
-	const showZoomIndicator = (level: number) => {
-		setZoomIndicator(`${level.toFixed(1)}×`);
-		if (zoomIndicatorTimeout.current) clearTimeout(zoomIndicatorTimeout.current);
-		zoomIndicatorTimeout.current = setTimeout(() => setZoomIndicator(null), 1000);
-	};
-
-	const showPinchHint = () => {
-		setPinchHint("Zoom not supported — move the phone closer");
-		if (pinchHintTimeout.current) clearTimeout(pinchHintTimeout.current);
-		pinchHintTimeout.current = setTimeout(() => setPinchHint(null), 1500);
-	};
-
-	const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-		(e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-		pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-		if (pointers.current.size === 2) {
-			const [p1, p2] = [...pointers.current.values()];
-			pinchStart.current = { dist: pointerDistance(p1, p2), zoom: zoomLevel };
-		}
-	};
-
-	const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-		if (!pointers.current.has(e.pointerId)) return;
-		pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-		if (pointers.current.size === 2 && pinchStart.current) {
-			if (!zoomCaps) {
-				showPinchHint();
-				return;
-			}
-			const [p1, p2] = [...pointers.current.values()];
-			const dist = pointerDistance(p1, p2);
-			const nextZoom = pinchStart.current.zoom * (dist / pinchStart.current.dist);
-			setZoom(nextZoom);
-			showZoomIndicator(nextZoom);
-		}
-	};
-
-	const clearPointer = (e: React.PointerEvent<HTMLDivElement>) => {
-		pointers.current.delete(e.pointerId);
-		if (pointers.current.size < 2) pinchStart.current = null;
-	};
+	const { containerRef, zoomIndicator, pinchHint, pinchHandlers } = usePinchZoom({
+		zoomCaps,
+		zoomLevel,
+		setZoom,
+		enabled: status !== "error",
+	});
 
 	const handleManualSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
@@ -144,19 +87,23 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 
 				<div
 					ref={containerRef}
-					onPointerDown={handlePointerDown}
-					onPointerMove={handlePointerMove}
-					onPointerUp={clearPointer}
-					onPointerCancel={clearPointer}
+					{...pinchHandlers}
 					className="relative bg-black aspect-square flex items-center justify-center touch-none overflow-hidden"
 				>
 					{status !== "error" ? (
 						<>
-							<video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+							<video
+								ref={videoRef}
+								className="w-full h-full object-cover"
+								muted
+								playsInline
+							/>
 
 							<div
 								className={`pointer-events-none absolute inset-8 rounded-lg border-2 transition-colors ${
-									status === "found" ? "border-success-border" : "border-primary/70"
+									status === "found"
+										? "border-success-border"
+										: "border-primary/70"
 								}`}
 							>
 								{status === "scanning" && (
@@ -168,13 +115,19 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 
 							{status === "starting" && (
 								<div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/30">
-									<Loader2 size={28} className="text-text-faint motion-safe:animate-spin" />
+									<Loader2
+										size={28}
+										className="text-text-faint motion-safe:animate-spin"
+									/>
 								</div>
 							)}
 
 							{status === "found" && (
 								<div className="pointer-events-none absolute inset-0 flex items-center justify-center motion-safe:animate-[scanFoundFlash_200ms_ease-out]">
-									<CircleCheck size={40} className="text-success-bright-text" />
+									<CircleCheck
+										size={40}
+										className="text-success-bright-text"
+									/>
 								</div>
 							)}
 
@@ -193,13 +146,29 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 							{torchSupported && (
 								<button
 									type="button"
-									onClick={() => setTorch(!torchOn)}
+									onClick={() =>
+										setTorch(!torchOn)
+									}
 									className={`absolute bottom-3 right-3 w-11 h-11 flex items-center justify-center rounded-full bg-black/50 transition-colors ${
-										torchOn ? "text-primary" : "text-white"
+										torchOn
+											? "text-primary"
+											: "text-white"
 									}`}
-									aria-label={torchOn ? "Turn torch off" : "Turn torch on"}
+									aria-label={
+										torchOn
+											? "Turn torch off"
+											: "Turn torch on"
+									}
 								>
-									{torchOn ? <FlashlightOff size={18} /> : <Flashlight size={18} />}
+									{torchOn ? (
+										<FlashlightOff
+											size={18}
+										/>
+									) : (
+										<Flashlight
+											size={18}
+										/>
+									)}
 								</button>
 							)}
 
@@ -211,7 +180,9 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 							</div>
 						</>
 					) : (
-						<div className="px-6 py-10 text-center text-sm text-text-muted">{errorMessage}</div>
+						<div className="px-6 py-10 text-center text-sm text-text-muted">
+							{errorMessage}
+						</div>
 					)}
 				</div>
 
@@ -219,7 +190,10 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 					onSubmit={handleManualSubmit}
 					className="flex items-center gap-2 px-5 py-3.5 border-t border-border flex-shrink-0"
 				>
-					<Keyboard size={14} className="text-text-faint flex-shrink-0" />
+					<Keyboard
+						size={14}
+						className="text-text-faint flex-shrink-0"
+					/>
 					<input
 						type="text"
 						value={manualCode}
@@ -227,7 +201,9 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 						placeholder="Or type barcode manually…"
 						aria-label="Barcode"
 						className={`flex-1 text-sm bg-surface border rounded-md px-3 py-1.5 text-text-primary placeholder:text-faint outline-none focus:border-primary transition-colors ${
-							status === "error" ? "border-primary/40" : "border-border-input"
+							status === "error"
+								? "border-primary/40"
+								: "border-border-input"
 						}`}
 					/>
 					<button

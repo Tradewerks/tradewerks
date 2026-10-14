@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BarcodeDetector, prepareZXingModule } from "barcode-detector/ponyfill";
 import wasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
+import { useCameraStream, type CameraZoomCaps } from "./useCameraStream";
 
 // Self-hosted WASM — avoids a jsDelivr dependency on job sites with poor signal.
 prepareZXingModule({ overrides: { locateFile: () => wasmUrl } });
@@ -10,14 +11,11 @@ const DETECT_INTERVAL_MS = 100;
 const SAME_CODE_COOLDOWN_MS = 2000;
 const ANY_CODE_COOLDOWN_MS = 800;
 const FOUND_RESET_MS = 1200;
+const MANUAL_HINT = "Enter the code manually below.";
 
 export type CameraScannerStatus = "starting" | "scanning" | "found" | "error";
 
-export interface CameraScannerZoomCaps {
-	min: number;
-	max: number;
-	step: number;
-}
+export type CameraScannerZoomCaps = CameraZoomCaps;
 
 interface UseCameraScannerOptions {
 	onScan: (code: string) => void;
@@ -45,30 +43,19 @@ export function useCameraScanner({
 	const continuousRef = useRef(continuous);
 	continuousRef.current = continuous;
 
-	const videoRef = useRef<HTMLVideoElement>(null);
-	const trackRef = useRef<MediaStreamTrack | null>(null);
-	const [status, setStatus] = useState<CameraScannerStatus>("starting");
-	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [zoomCaps, setZoomCaps] = useState<CameraScannerZoomCaps | null>(null);
-	const [zoomLevel, setZoomLevel] = useState(1);
-	const [torchSupported, setTorchSupported] = useState(false);
-	const [torchOn, setTorchOn] = useState(false);
+	const camera = useCameraStream({ resolution: "scan", fallbackHint: MANUAL_HINT });
+	const { videoRef, status: cameraStatus, fail } = camera;
+	const [found, setFound] = useState(false);
 
 	useEffect(() => {
-		const videoEl = videoRef.current;
+		if (cameraStatus !== "live") return;
+
 		let cancelled = false;
-		let stream: MediaStream | null = null;
 		let intervalId: ReturnType<typeof setInterval> | null = null;
 		let foundTimeout: ReturnType<typeof setTimeout> | null = null;
 		let busy = false;
 		let lastCode: string | null = null;
 		let lastHitTime = 0;
-
-		const fail = (message: string) => {
-			if (cancelled) return;
-			setStatus("error");
-			setErrorMessage(message);
-		};
 
 		const handleHit = (rawValue: string) => {
 			const now = performance.now();
@@ -78,7 +65,7 @@ export function useCameraScanner({
 			lastCode = rawValue;
 			lastHitTime = now;
 
-			setStatus("found");
+			setFound(true);
 			try {
 				navigator.vibrate?.(80);
 			} catch {
@@ -89,156 +76,63 @@ export function useCameraScanner({
 			if (continuousRef.current) {
 				if (foundTimeout) clearTimeout(foundTimeout);
 				foundTimeout = setTimeout(() => {
-					if (!cancelled) setStatus("scanning");
+					if (!cancelled) setFound(false);
 				}, FOUND_RESET_MS);
 			} else {
 				if (intervalId) clearInterval(intervalId);
 			}
 		};
 
-		const start = async () => {
-			// Step 1: Add secure-context preflight check
-			if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
-				fail(
-					window.isSecureContext
-						? "Camera not supported on this device. Enter the code manually below."
-						: "Camera requires a secure (HTTPS) connection. Enter the code manually below.",
-				);
-				return;
-			}
+		let detector: BarcodeDetector;
+		try {
+			detector = new BarcodeDetector({ formats: [...SCAN_FORMATS] });
+		} catch {
+			// zxing WASM failed to load/instantiate — don't strand the spinner with a
+			// live camera; surface the manual-entry fallback instead.
+			fail("Scanner failed to load.");
+			return;
+		}
 
+		intervalId = setInterval(async () => {
+			if (busy || cancelled || !videoRef.current) return;
+			busy = true;
 			try {
-				stream = await navigator.mediaDevices.getUserMedia({
-					video: {
-						facingMode: { ideal: "environment" },
-						width: { ideal: 1280 },
-						height: { ideal: 720 },
-						focusMode: "continuous",
-					},
-				});
-			} catch (e) {
-				fail(
-					e instanceof Error && e.name === "NotAllowedError"
-						? "Camera permission denied. Enter the code manually below."
-						: "Could not start camera. Enter the code manually below.",
-				);
-				return;
-			}
-
-			if (cancelled) {
-				stream.getTracks().forEach((t) => t.stop());
-				return;
-			}
-
-			const track = stream.getVideoTracks()[0] ?? null;
-			trackRef.current = track;
-			if (track) {
-				track.addEventListener("ended", () => {
-					fail("Camera stopped. Enter the code manually below.");
-				});
-
-				if ("getCapabilities" in track) {
-					const caps = track.getCapabilities();
-					if (caps.zoom) {
-						setZoomCaps({ min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step });
-						setZoomLevel(track.getSettings().zoom ?? caps.zoom.min);
-					}
-					setTorchSupported(Boolean(caps.torch));
+				const codes = await detector.detect(videoRef.current);
+				if (codes.length > 0 && !cancelled) {
+					handleHit(codes[0].rawValue);
 				}
-			}
-
-			const video = videoRef.current;
-			if (!video) {
-				fail("Could not start camera. Enter the code manually below.");
-				return;
-			}
-			video.srcObject = stream;
-			try {
-				await video.play();
-			} catch (e) {
-				if (e instanceof Error && e.name !== "AbortError") {
-					fail("Could not start camera. Enter the code manually below.");
-					return;
-				}
-			}
-
-			if (cancelled) return;
-
-			// Step 2: Guard the detector construction and stop the stream on failure
-			let detector: BarcodeDetector;
-			try {
-				detector = new BarcodeDetector({ formats: [...SCAN_FORMATS] });
 			} catch {
-				// zxing WASM failed to load/instantiate — don't strand the spinner
-				// with a live camera; surface the manual-entry fallback instead.
-				stream?.getTracks().forEach((t) => t.stop());
-				fail("Scanner failed to load. Enter the code manually below.");
-				return;
+				// frame not ready — normal during warmup, ignore
+			} finally {
+				busy = false;
 			}
-			setStatus("scanning");
-
-			intervalId = setInterval(async () => {
-				if (busy || cancelled || !videoRef.current) return;
-				busy = true;
-				try {
-					const codes = await detector.detect(videoRef.current);
-					if (codes.length > 0 && !cancelled) {
-						handleHit(codes[0].rawValue);
-					}
-				} catch {
-					// frame not ready — normal during warmup, ignore
-				} finally {
-					busy = false;
-				}
-			}, DETECT_INTERVAL_MS);
-		};
-
-		// Step 3: Catch anything else escaping `start`
-		start().catch(() => {
-			stream?.getTracks().forEach((t) => t.stop());
-			fail("Could not start camera. Enter the code manually below.");
-		});
+		}, DETECT_INTERVAL_MS);
 
 		return () => {
 			cancelled = true;
 			if (intervalId) clearInterval(intervalId);
 			if (foundTimeout) clearTimeout(foundTimeout);
-			stream?.getTracks().forEach((t) => t.stop());
-			trackRef.current = null;
-			if (videoEl) videoEl.srcObject = null;
 		};
-	}, []);
+	}, [cameraStatus, fail, videoRef]);
 
-	const setZoom = (level: number) => {
-		const track = trackRef.current;
-		if (!track || !zoomCaps) return;
-		const clamped = Math.min(zoomCaps.max, Math.max(zoomCaps.min, level));
-		setZoomLevel(clamped);
-		track.applyConstraints({ advanced: [{ zoom: clamped }] }).catch(() => {
-			// constraint rejected by device — ignore, UI stays optimistic
-		});
-	};
-
-	const setTorch = (on: boolean) => {
-		const track = trackRef.current;
-		if (!track || !torchSupported) return;
-		track
-			.applyConstraints({ advanced: [{ torch: on }] })
-			.then(() => setTorchOn(on))
-			.catch(() => {
-				// torch constraint rejected — leave state unchanged
-			});
-	};
+	const status: CameraScannerStatus =
+		cameraStatus === "error"
+			? "error"
+			: cameraStatus === "starting"
+				? "starting"
+				: found
+					? "found"
+					: "scanning";
 
 	return {
 		videoRef,
 		status,
-		errorMessage,
-		zoomCaps,
-		zoomLevel,
-		setZoom,
-		torchSupported,
-		torchOn,
-		setTorch,
+		errorMessage: camera.errorMessage,
+		zoomCaps: camera.zoomCaps,
+		zoomLevel: camera.zoomLevel,
+		setZoom: camera.setZoom,
+		torchSupported: camera.torchSupported,
+		torchOn: camera.torchOn,
+		setTorch: camera.setTorch,
 	};
 }

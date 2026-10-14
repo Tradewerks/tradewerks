@@ -3,6 +3,179 @@ import { normalizeUnitCode } from "./units.js";
 
 export type StockStatus = "sufficient" | "low" | "out_of_stock" | null;
 
+/** Accepts the singleton client and a transaction client alike. */
+interface InventoryItemReader {
+	inventory_item: {
+		findMany(args: {
+			where: { id: { in: string[] }; organization_id: string };
+			select: { id: true };
+		}): Promise<{ id: string }[]>;
+	};
+}
+
+/**
+ * Inventory item ids not in this org. Zod can only prove the id is a UUID;
+ * without this a crafted payload links one tenant's line to another
+ * tenant's catalog item, leaking its name and cost back through detail
+ * reads. Returns rather than throws so callers keep their own error shape.
+ */
+export async function findForeignInventoryItemIds(
+	client: InventoryItemReader,
+	organizationId: string,
+	ids: readonly (string | null | undefined)[],
+): Promise<string[]> {
+	const wanted = [...new Set(ids.filter((id): id is string => !!id))];
+	if (wanted.length === 0) return [];
+	const found = await client.inventory_item.findMany({
+		where: { id: { in: wanted }, organization_id: organizationId },
+		select: { id: true },
+	});
+	const ok = new Set(found.map((i) => i.id));
+	return wanted.filter((id) => !ok.has(id));
+}
+
+/**
+ * Vehicle ids not in this org. A `receive` pointed at another tenant's van
+ * would deposit our stock onto their truck.
+ */
+export async function foreignDispositionVehicleIds(
+	client: { vehicle: { findMany(args: unknown): Promise<{ id: string }[]> } },
+	organizationId: string,
+	ids: readonly (string | null | undefined)[],
+): Promise<string[]> {
+	const wanted = [...new Set(ids.filter((id): id is string => !!id))];
+	if (wanted.length === 0) return [];
+	const found = await client.vehicle.findMany({
+		where: { id: { in: wanted }, organization_id: organizationId },
+		select: { id: true },
+	});
+	const ok = new Set(found.map((v) => v.id));
+	return wanted.filter((id) => !ok.has(id));
+}
+
+/**
+ * Avoids the words "not found": every route file maps that substring to a
+ * 404, and a bad id in a payload is a bad request.
+ */
+export function unknownInventoryItemsMessage(ids: readonly string[]): string {
+	return `Validation failed: unknown inventory item ${ids.join(", ")}`;
+}
+
+/** Throwing form of {@link findForeignInventoryItemIds}. */
+export async function assertInventoryItemsInOrg(
+	client: InventoryItemReader,
+	organizationId: string,
+	ids: readonly (string | null | undefined)[],
+): Promise<void> {
+	const foreign = await findForeignInventoryItemIds(client, organizationId, ids);
+	if (foreign.length > 0) {
+		throw new Error(unknownInventoryItemsMessage(foreign));
+	}
+}
+
+/** Throwing form of {@link foreignDispositionVehicleIds}. */
+export async function assertDispositionVehiclesInOrg(
+	client: { vehicle: { findMany(args: unknown): Promise<{ id: string }[]> } },
+	organizationId: string,
+	ids: readonly (string | null | undefined)[],
+): Promise<void> {
+	const foreign = await foreignDispositionVehicleIds(client, organizationId, ids);
+	if (foreign.length > 0) {
+		throw new Error(`Validation failed: unknown vehicle ${foreign.join(", ")}`);
+	}
+}
+
+/**
+ * Lifecycle columns for a visit line, derived from its catalog link. A
+ * freetext line gets NULLs so it stays outside the fulfillment lifecycle
+ * rather than sitting in it permanently unreconcilable. Shared by dispatch
+ * entry and plan generation, so both land in the same state.
+ */
+export function plannedLineItemFields(
+	inventoryItemId: string | null | undefined,
+	quantity: number,
+	disposition?: LineDispositionInput,
+) {
+	if (!inventoryItemId) {
+		return {
+			inventory_item_id: null,
+			fulfillment_status: null,
+			qty_planned: null,
+			...NO_DISPOSITION,
+		} as const;
+	}
+	return {
+		inventory_item_id: inventoryItemId,
+		fulfillment_status: "planned" as const,
+		qty_planned: quantity,
+		...dispositionFields(disposition),
+	};
+}
+
+/**
+ * Stock intent for a recurring-plan line, which is only ever copied into a
+ * generated visit. Dropping the part has to clear the intent with it.
+ */
+export function templateDispositionFields(
+	inventoryItemId: string | null | undefined,
+	disposition?: LineDispositionInput,
+) {
+	return inventoryItemId ? dispositionFields(disposition) : NO_DISPOSITION;
+}
+
+/**
+ * Loose on purpose: satisfied by a validated request body and by a
+ * recurring_plan_line_item row read straight from the database, which is
+ * what lets a generated visit inherit its template's intent untranslated.
+ */
+export interface LineDispositionInput {
+	disposition?: LineDisposition | null;
+	disposition_location?: StockLocation | null;
+	disposition_vehicle_id?: string | null;
+}
+
+type LineDisposition = "consume" | "receive" | "non_stock";
+type StockLocation = "warehouse" | "vehicle" | "consumed" | "adjustment" | "external";
+
+const NO_DISPOSITION = {
+	disposition: null,
+	disposition_location: null,
+	disposition_vehicle_id: null,
+} as const;
+
+/**
+ * Stock intent for a line that HAS a catalog link.
+ *
+ * A destination only means something for `receive`; carrying one elsewhere
+ * leaves a stale vehicle behind after a change. Absent intent stays NULL
+ * rather than defaulting to `consume` — NULL is what every pre-2026-08-20
+ * row holds and the completion path reads the two identically.
+ */
+export function dispositionFields(input?: LineDispositionInput) {
+	const disposition = input?.disposition ?? null;
+	if (disposition !== "receive") {
+		return { ...NO_DISPOSITION, disposition };
+	}
+	const vehicleId = input?.disposition_vehicle_id ?? null;
+	return {
+		disposition,
+		disposition_location: (vehicleId ? "vehicle" : "warehouse") as StockLocation,
+		disposition_vehicle_id: vehicleId,
+	};
+}
+
+/**
+ * Visit lines meaning "this part must be on the van tomorrow". Shared by
+ * readiness and tomorrow-requirements so the two cannot drift apart again.
+ * `receive` brings stock in and `non_stock` never enters inventory, so neither
+ * is something to load; NULL spells `consume`.
+ */
+export const READINESS_LINE_ITEM_WHERE = {
+	inventory_item_id: { not: null },
+	fulfillment_status: { not: "voided" },
+	OR: [{ disposition: null }, { disposition: "consume" }],
+} satisfies Prisma.job_visit_line_itemWhereInput;
+
 /**
  * A stock quantity as it can arrive here: a plain number from a validated request
  * body, or a Prisma `Decimal` read out of a `numeric(10,2)` column.

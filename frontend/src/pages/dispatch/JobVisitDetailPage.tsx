@@ -1,88 +1,262 @@
-﻿import { useParams, useNavigate } from "react-router-dom";
+﻿import { useMemo, useState } from "react";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import {
 	Edit2,
 	Clock,
 	Users,
-	CheckCircle2,
-	XCircle,
-	Pause,
-	Play,
-	MoreVertical,
-	Receipt,
-	Calendar,
 	Briefcase,
-	Plus,
+	DollarSign,
+	MapPin,
+	ArrowUpRight,
+	AlertTriangle,
+	X,
+	Loader2,
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
 import {
 	useJobVisitByIdQuery,
-	useStartJobVisitMutation,
-	usePauseJobVisitMutation,
-	useResumeJobVisitMutation,
+	useJobByIdQuery,
+	useVisitTransitionMutation,
 	useCompleteJobVisitMutation,
 	useCancelJobVisitMutation,
 	useDelayJobVisitMutation,
-	useJobByIdQuery,
 } from "../../hooks/useJobs";
 import { useInvoicesByVisitIdQuery } from "../../hooks/useInvoices";
-import { InvoiceStatusColors, InvoiceStatusLabels, type InvoiceStatus } from "../../types/invoices";
 import Card from "../../components/ui/Card";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import FullPopup from "../../components/ui/FullPopup";
+import ReasonField from "../../components/ui/ReasonField";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import EditJobVisit from "../../components/jobs/EditJobVisit";
 import JobNoteManager from "../../components/jobs/JobNoteManager";
+import JobFieldPurchases from "../../components/fieldPurchases/JobFieldPurchases";
 import CreateInvoice from "../../components/invoices/CreateInvoice";
-import { VisitStatusColors, type VisitStatus, type VisitLineItem } from "../../types/jobs";
-import { formatCurrency, formatDate, formatDateTime, FALLBACK_TIMEZONE } from "../../util/util";
+import LinkedInvoicesCard from "../../components/invoices/LinkedInvoicesCard";
 import FinancialSummary from "../../components/pagesections/FinancialSummary";
+import DetailHeader, { type DetailMenuGroup } from "../../components/detail/DetailHeader";
+import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
+import { useDetailTab } from "../../components/detail/useDetailTab";
+import DetailStatRow from "../../components/detail/DetailStatRow";
+import ActivityPanel from "../../components/detail/ActivityPanel";
+import DetailFieldGrid, { type DetailField } from "../../components/detail/DetailFieldGrid";
+import LifecycleBar, {
+	LifecycleActions,
+	LifecycleRule,
+} from "../../components/lifecycle/LifecycleBar";
+import TerminalDetail from "../../components/lifecycle/TerminalDetail";
+import {
+	visitActions,
+	VISIT_STEPS,
+	isVisitTerminal,
+	isVisitNonTerminalOffRamp,
+} from "../../components/lifecycle/visitActions";
+import { placeActions } from "../../components/lifecycle/placement";
+import type { LifecycleStage } from "../../components/lifecycle/types";
+import { HEADER_PILL } from "../../components/documents/DocumentLineage";
+import { VisitStatusColors, VisitStatusLabels, type VisitLineItem } from "../../types/jobs";
+import {
+	formatCurrency,
+	formatDate,
+	formatDateTime,
+	errorMessage,
+	FALLBACK_TIMEZONE,
+} from "../../util/util";
 import { useAuthStore } from "../../auth/authStore";
-import { usePermission } from "../../hooks/usePermission";
+import { usePermission, useAnyPermission } from "../../hooks/usePermission";
+import { useActiveTechCount } from "../../hooks/useRecordMapData";
+import RecordMap from "../../components/ui/maps/RecordMap";
+import VisitArrivalCard from "../../components/arrivals/VisitArrivalCard";
+import { useToast } from "../../components/ui/useToast";
+
+// Overview holds what a dispatcher opens a visit to check: when it is, who is
+// on it, what happened. Financials is a separate body of work, not context for
+// the schedule. Activity is last, as on every detail page.
+// Map sits beside Overview: "where is everyone" is the same glance as "who is on it".
+const VISIT_TABS: readonly DetailTabDef<"overview" | "map" | "financials" | "activity">[] = [
+	{ id: "overview", label: "Overview" },
+	{ id: "map", label: "Map" },
+	{ id: "financials", label: "Financials" },
+	{ id: "activity", label: "Activity" },
+];
+
+// The exact set VALID_PAUSE_REASONS accepts in jobVisitsController. pause_reason
+// is a strict Prisma enum, so free text vanishes server-side — toPauseReason()
+// returns undefined for anything else. VisitActionButtons' technician-side
+// picker is missing "Break" and needs reconciling with this list.
+const PAUSE_REASONS = [
+	{ value: "AwaitingMaterials", label: "Awaiting Materials" },
+	{ value: "EquipmentIssue", label: "Equipment Issue" },
+	{ value: "Break", label: "Break" },
+	{ value: "Other", label: "Other" },
+] as const;
+
+interface VisitReasonModalProps {
+	open: boolean;
+	/** Cancel's reason is a required free string on job_visit. Pause's is the
+	 *  enum above, optional and stored per clocked-in tech
+	 *  (visit_tech_time_entry). One shell, branching on `mode` below. */
+	mode: "pause" | "cancel";
+	pending: boolean;
+	error: string | null;
+	onSubmit: (reason: string) => void;
+	onClose: () => void;
+}
+
+function VisitReasonModal({
+	open,
+	mode,
+	pending,
+	error,
+	onSubmit,
+	onClose,
+}: VisitReasonModalProps) {
+	const [reason, setReason] = useState("");
+
+	const handleClose = () => {
+		setReason("");
+		onClose();
+	};
+
+	const title = mode === "cancel" ? "Cancel Visit" : "Pause Visit";
+	const submitDisabled = pending || (mode === "cancel" && reason.trim().length === 0);
+
+	const content = (
+		<div className="flex flex-col">
+			<div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+				<div className="flex items-center gap-2">
+					<AlertTriangle size={18} className="text-warning-text" />
+					<h2 className="text-base font-semibold text-text-primary">
+						{title}
+					</h2>
+				</div>
+				<button
+					onClick={handleClose}
+					className="p-1.5 hover:bg-surface rounded-md transition-colors duration-150 ease-out text-text-tertiary hover:text-text-primary"
+				>
+					<X size={16} />
+				</button>
+			</div>
+
+			<div className="px-6 py-5 space-y-5">
+				{mode === "cancel" ? (
+					<ReasonField
+						value={reason}
+						onChange={setReason}
+						placeholder="Why is this visit being cancelled?"
+					/>
+				) : (
+					<div>
+						<p className="block text-xs font-medium text-text-tertiary uppercase tracking-wide mb-2">
+							Reason (optional)
+						</p>
+						<div className="grid grid-cols-2 gap-2">
+							{PAUSE_REASONS.map((r) => (
+								<button
+									key={r.value}
+									type="button"
+									onClick={() =>
+										setReason(
+											reason ===
+												r.value
+												? ""
+												: r.value
+										)
+									}
+									className={`py-2.5 px-2.5 rounded-lg text-sm font-medium border text-center transition-colors duration-150 ease-out ${
+										reason === r.value
+											? "border-primary bg-primary/10 text-primary-text"
+											: "border-border bg-surface text-text-secondary hover:bg-surface-raised"
+									}`}
+								>
+									{r.label}
+								</button>
+							))}
+						</div>
+					</div>
+				)}
+				{error && (
+					<div className="flex items-center gap-2 p-3 bg-error/10 border border-error/20 rounded-md">
+						<AlertTriangle
+							size={14}
+							className="text-error-text flex-shrink-0"
+						/>
+						<p className="text-sm text-error-text">{error}</p>
+					</div>
+				)}
+			</div>
+
+			<div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-subtle">
+				<button
+					onClick={handleClose}
+					disabled={pending}
+					className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-surface rounded-md transition-colors duration-150 ease-out disabled:opacity-50"
+				>
+					Cancel
+				</button>
+				<button
+					onClick={() => onSubmit(reason)}
+					disabled={submitDisabled}
+					className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary-hover hover:bg-primary disabled:opacity-50 disabled:cursor-not-allowed text-on-primary rounded-md transition-colors duration-150 ease-out"
+				>
+					{pending && <Loader2 size={14} className="animate-spin" />}
+					{title}
+				</button>
+			</div>
+		</div>
+	);
+
+	return <FullPopup content={content} isModalOpen={open} onClose={handleClose} size="md" />;
+}
 
 export default function JobVisitDetailPage() {
 	const { jobId, visitId } = useParams<{ jobId: string; visitId: string }>();
 	const navigate = useNavigate();
 	const { user } = useAuthStore();
+	const toast = useToast();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 	const { data: visit, isLoading: visitLoading } = useJobVisitByIdQuery(visitId!);
 	const { data: job, isLoading: jobLoading } = useJobByIdQuery(jobId!);
+
+	const [activeTab, setActiveTab] = useDetailTab(VISIT_TABS);
+	const activeTechCount = useActiveTechCount(visitId ? [visitId] : []);
+	// A stale EnRoute/OnSite in the feed must not light a closed visit's Map tab.
+	const visitOpen = visit?.status !== "Completed" && visit?.status !== "Cancelled";
+	const tabs = useMemo(
+		() =>
+			VISIT_TABS.map((t) =>
+				t.id === "map" ? { ...t, live: visitOpen && activeTechCount > 0 } : t,
+			),
+		[activeTechCount, visitOpen],
+	);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-	const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
 	const [isCreateInvoiceOpen, setIsCreateInvoiceOpen] = useState(false);
 	const [pendingConfirm, setPendingConfirm] = useState<"complete" | "delay" | null>(null);
-	const optionsMenuRef = useRef<HTMLDivElement>(null);
+	const [reasonModal, setReasonModal] = useState<"pause" | "cancel" | null>(null);
 
-	const { data: linkedInvoices = [] } = useInvoicesByVisitIdQuery(jobId!, visitId!);
+	const {
+		data: linkedInvoices = [],
+		isLoading: invoicesLoading,
+	} = useInvoicesByVisitIdQuery(jobId!, visitId!);
 
-	const startVisitMutation = useStartJobVisitMutation();
-	const pauseVisitMutation = usePauseJobVisitMutation();
-	const resumeVisitMutation = useResumeJobVisitMutation();
+	// Drive/arrive/start/resume/pause share the one transition endpoint;
+	// complete, delay and cancel have their own dedicated mutations.
+	const transitionMutation = useVisitTransitionMutation();
 	const completeVisitMutation = useCompleteJobVisitMutation();
-	const cancelVisitMutation = useCancelJobVisitMutation();
 	const delayVisitMutation = useDelayJobVisitMutation();
+	const cancelVisitMutation = useCancelJobVisitMutation();
 
 	const isLoading = visitLoading || jobLoading;
 
 	// permissions
 	const EDIT_VISIT = usePermission("edit_jobs");
 	const CREATE_INVOICE = usePermission("create_invoices");
-
-	useEffect(() => {
-		const handleClickOutside = (event: MouseEvent) => {
-			if (
-				optionsMenuRef.current &&
-				!optionsMenuRef.current.contains(event.target as Node)
-			) {
-				setIsOptionsMenuOpen(false);
-			}
-		};
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
+	const UPDATE_VISIT = useAnyPermission(["edit_jobs", "update_visit_status"]);
 
 	if (isLoading) {
 		return (
 			<div className="flex items-center justify-center h-64">
-				<div className="text-text-primary text-lg">Loading visit details...</div>
+				<div className="text-text-primary text-lg">
+					Loading visit details...
+				</div>
 			</div>
 		);
 	}
@@ -95,54 +269,37 @@ export default function JobVisitDetailPage() {
 		);
 	}
 
-	const handleStartVisit = async () => {
+	const applyVerb = async (verb: "drive" | "arrive" | "start" | "resume") => {
 		try {
-			await startVisitMutation.mutateAsync(visitId!);
-			setIsOptionsMenuOpen(false);
+			await transitionMutation.mutateAsync({ visitId: visitId!, action: verb });
 		} catch (error) {
-			console.error("Failed to start visit:", error);
+			console.error(`Failed to ${verb} visit:`, error);
 		}
 	};
 
-	const handlePauseVisit = async () => {
+	const handlePauseSubmit = async (reason: string) => {
 		try {
-			await pauseVisitMutation.mutateAsync(visitId!);
-			setIsOptionsMenuOpen(false);
+			await transitionMutation.mutateAsync({
+				visitId: visitId!,
+				action: "pause",
+				pauseReason: reason.trim() || undefined,
+			});
+			setReasonModal(null);
 		} catch (error) {
 			console.error("Failed to pause visit:", error);
 		}
 	};
 
-	const handleResumeVisit = async () => {
+	const handleCancelSubmit = async (reason: string) => {
 		try {
-			await resumeVisitMutation.mutateAsync(visitId!);
-			setIsOptionsMenuOpen(false);
+			await cancelVisitMutation.mutateAsync({
+				visitId: visitId!,
+				cancellationReason: reason.trim(),
+			});
+			setReasonModal(null);
 		} catch (error) {
-			console.error("Failed to resume visit:", error);
+			console.error("Failed to cancel visit:", error);
 		}
-	};
-
-	const handleCompleteVisit = () => {
-		setPendingConfirm("complete");
-	};
-
-	const handleCancelVisit = async () => {
-		const reason = window.prompt("Please provide a reason for cancelling this visit:");
-		if (reason) {
-			try {
-				await cancelVisitMutation.mutateAsync({
-					visitId: visitId!,
-					cancellationReason: reason,
-				});
-				setIsOptionsMenuOpen(false);
-			} catch (error) {
-				console.error("Failed to cancel visit:", error);
-			}
-		}
-	};
-
-	const handleDelayVisit = () => {
-		setPendingConfirm("delay");
 	};
 
 	const confirmPendingAction = async () => {
@@ -152,7 +309,6 @@ export default function JobVisitDetailPage() {
 			} else if (pendingConfirm === "delay") {
 				await delayVisitMutation.mutateAsync(visitId!);
 			}
-			setIsOptionsMenuOpen(false);
 			setPendingConfirm(null);
 		} catch (error) {
 			console.error(`Failed to ${pendingConfirm} visit:`, error);
@@ -160,6 +316,7 @@ export default function JobVisitDetailPage() {
 	};
 
 	const lineItems: VisitLineItem[] = visit.line_items || [];
+	const lineItemCount = lineItems.length;
 
 	const formatConstraintTime = (time: string | null | undefined): string => {
 		if (!time) return "";
@@ -170,74 +327,8 @@ export default function JobVisitDetailPage() {
 		return `${displayHours}${displayMinutes} ${period}`;
 	};
 
-	const formatVisitConstraints = (): string => {
-		const {
-			arrival_constraint,
-			finish_constraint,
-			arrival_time,
-			arrival_window_start,
-			arrival_window_end,
-			finish_time,
-		} = visit;
-
-		let arrivalStr = "";
-		switch (arrival_constraint) {
-			case "anytime":
-				arrivalStr = "Arrive anytime";
-				break;
-			case "at":
-				arrivalStr = `Arrive at ${formatConstraintTime(arrival_time)}`;
-				break;
-			case "between":
-				arrivalStr = `Arrive between ${formatConstraintTime(arrival_window_start)} - ${formatConstraintTime(arrival_window_end)}`;
-				break;
-			case "by":
-				arrivalStr = `Arrive by ${formatConstraintTime(arrival_window_end)}`;
-				break;
-		}
-
-		let finishStr = "";
-		switch (finish_constraint) {
-			case "when_done":
-				finishStr = "finish when done";
-				break;
-			case "at":
-				finishStr = `finish at ${formatConstraintTime(finish_time)}`;
-				break;
-			case "by":
-				finishStr = `finish by ${formatConstraintTime(finish_time)}`;
-				break;
-		}
-
-		return `${arrivalStr}, ${finishStr}`;
-	};
-
 	const openEnded = visit.finish_constraint === "when_done";
-	const hasActuals = !!(visit.actual_start_at && visit.actual_end_at);
-
-	const calculateDuration = (): { minutes: number; label: string } | null => {
-		if (hasActuals) {
-			return {
-				minutes: Math.round(
-					(new Date(visit.actual_end_at!).getTime() -
-						new Date(visit.actual_start_at!).getTime()) /
-						(1000 * 60)
-				),
-				label: "Job Duration",
-			};
-		}
-		if (!openEnded && visit.scheduled_start_at && visit.scheduled_end_at) {
-			return {
-				minutes: Math.round(
-					(new Date(visit.scheduled_end_at).getTime() -
-						new Date(visit.scheduled_start_at).getTime()) /
-						(1000 * 60)
-				),
-				label: "Est. Duration",
-			};
-		}
-		return null;
-	};
+	const hasActuals = Boolean(visit.actual_start_at && visit.actual_end_at);
 
 	const formatDuration = (minutes: number): string => {
 		const hours = Math.floor(minutes / 60);
@@ -247,577 +338,520 @@ export default function JobVisitDetailPage() {
 		return `${hours} ${hours === 1 ? "hour" : "hours"} ${mins} ${mins === 1 ? "minute" : "minutes"}`;
 	};
 
-	const duration = calculateDuration();
+	const actualMinutes = hasActuals
+		? Math.round(
+				(new Date(visit.actual_end_at!).getTime() -
+					new Date(visit.actual_start_at!).getTime()) /
+					(1000 * 60)
+			)
+		: null;
 
-	return (
-		<div className="text-text-primary space-y-6">
-			{/* Header */}
-			<div className="grid grid-cols-2 gap-4 mb-6 items-center">
-				<div>
-					<h1 className="text-3xl font-bold text-text-primary mb-1">
-						{visit.name || "Job Visit"}
-					</h1>
-					<div className="flex items-center text-sm text-text-tertiary">
-						<span>{formatDate(visit.scheduled_start_at, tz)}</span>
-						{job && (
-							<>
-								<span className="mx-2 text-border-strong">·</span>
-								<button
-									onClick={() => navigate(`/dispatch/jobs/${jobId}`)}
-									className="inline-flex items-center gap-1 text-primary-text hover:text-text-primary transition-colors"
-								>
-									<Briefcase size={12} className="opacity-70" />
-									<span>Job #{job.job_number} · {job.name}</span>
-								</button>
-							</>
-						)}
-					</div>
-				</div>
+	const scheduledMinutes =
+		!openEnded && visit.scheduled_start_at && visit.scheduled_end_at
+			? Math.round(
+					(new Date(visit.scheduled_end_at).getTime() -
+						new Date(visit.scheduled_start_at).getTime()) /
+						(1000 * 60)
+				)
+			: null;
 
-				<div className="justify-self-end flex items-center gap-3">
-					<span
-						className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${
-							VisitStatusColors[
-								visit.status as VisitStatus
-							] ||
-							"bg-surface-raised text-text-tertiary border-border-strong"
-						}`}
-					>
-						{visit.status}
-					</span>
+	const requireTech = (fn: () => void) => () => {
+		if (!visit.visit_techs?.length) {
+			toast.warning("Assign a technician to this visit before updating its status.");
+			return;
+		}
+		fn();
+	};
 
-					<div className="relative" ref={optionsMenuRef}>
-						<button
-							onClick={() =>
-								setIsOptionsMenuOpen(
-									!isOptionsMenuOpen
-								)
-							}
-							className="p-2 hover:bg-surface rounded-md transition-colors border border-border hover:border-border-strong"
-						>
-							<MoreVertical size={20} />
-						</button>
+	const actions = visitActions({
+		status: visit.status,
+		canUpdateStatus: UPDATE_VISIT,
+		handlers: {
+			drive: requireTech(() => applyVerb("drive")),
+			arrive: requireTech(() => applyVerb("arrive")),
+			start: requireTech(() => applyVerb("start")),
+			pause: requireTech(() => setReasonModal("pause")),
+			resume: requireTech(() => applyVerb("resume")),
+			delay: () => setPendingConfirm("delay"),
+			complete: requireTech(() => setPendingConfirm("complete")),
+			cancel: () => setReasonModal("cancel"),
+		},
+	});
 
-						{isOptionsMenuOpen && (
-							<div className="absolute right-0 mt-2 w-56 bg-base border border-border-subtle rounded-lg shadow-xl z-50">
-								<div className="py-1">
-										<button
-											title={!EDIT_VISIT ? "You don't have permission to perform this action" : ""}
-											disabled={!EDIT_VISIT}
-											onClick={() => {
-												if (!EDIT_VISIT) return;
-												setIsEditModalOpen(
-													true
-												);
-												setIsOptionsMenuOpen(
-													false
-												);
-											}}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Edit2 size={16} />
-											Edit Visit
-										</button>
-									{visit.status ===
-										"Scheduled" && (
-											<button
-												title ={!EDIT_VISIT ? "You don't have permission to perform this action" : ""}
-												onClick={
-													handleStartVisit
-												}
-												disabled={
-													startVisitMutation.isPending || !EDIT_VISIT
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<Play
-													size={
-														16
-													}
-												/>
-												Start Visit
-											</button>
-									)}
+	const stage: LifecycleStage = isVisitTerminal(visit.status) ? "terminal" : "normal";
+	// Feeds placeActions — the Rule 2 inversion that promotes the one live exit
+	// ahead of dead buttons — and the rule's offRamp prop, so the rail claims
+	// no position.
+	const isOffRamp = isVisitNonTerminalOffRamp(visit.status);
+	const { headerActions, barActions, overflow, showBar } = placeActions(stage, actions, {
+		offRamp: isOffRamp,
+	});
 
-									{visit.status ===
-										"InProgress" && (
-										<>
-											<button
-												title={!EDIT_VISIT ? "You don't have permission to perform this action" : ""}
-												onClick={
-													handlePauseVisit
-												}
-												disabled={
-													pauseVisitMutation.isPending || !EDIT_VISIT
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<Pause
-													size={
-														16
-													}
-												/>
-												Pause
-												Visit
-											</button>
-											<button
-												onClick={
-													handleCompleteVisit
-												}
-												disabled={
-													completeVisitMutation.isPending || !EDIT_VISIT
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<CheckCircle2
-													size={
-														16
-													}
-												/>
-												Complete
-												Visit
-											</button>
-										</>
-									)}
+	const menuGroups: DetailMenuGroup[] = [
+		{
+			id: "lifecycle",
+			label: "Lifecycle",
+			items: overflow.map((a) => ({
+				id: a.id,
+				label: a.label,
+				intent: a.intent === "primary" ? "neutral" : a.intent,
+				disabled: a.disabled,
+				disabledReason: a.disabledReason,
+				onSelect: a.onSelect,
+			})),
+		},
+		{
+			id: "visit",
+			label: "Visit",
+			items: [
+				{
+					id: "edit",
+					label: "Edit Visit",
+					icon: <Edit2 size={16} />,
+					disabled: !EDIT_VISIT,
+					disabledReason: EDIT_VISIT
+						? undefined
+						: "You don't have permission to perform this action",
+					onSelect: () => setIsEditModalOpen(true),
+				},
+			],
+		},
+	];
 
-									{visit.status ===
-										"Paused" && (
-										<>
-											<button
-												title={!EDIT_VISIT ? "You don't have permission to perform this action" : ""}
-												onClick={
-													handleResumeVisit
-												}
-												disabled={
-													resumeVisitMutation.isPending || !EDIT_VISIT
-												}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<Play
-													size={
-														16
-													}
-												/>
-												Resume Visit
-											</button>
-										</>
-									)}
+	// Cancellation is the only visit status with a "terminal" stage — Paused and
+	// Delayed stay normal, with live exits — and the only off-ramp whose reason
+	// the visit stores itself, so it is the only case `detail` renders.
+	const offRampDetail = (
+		<TerminalDetail
+			reason={visit.cancellation_reason}
+			at={null}
+			noReasonLabel="Cancelled with no reason recorded."
+		/>
+	);
 
-									{(visit.status === "Scheduled" ||
-										visit.status === "Driving" ||
-										visit.status === "OnSite") && (
-											<button
-												title={!EDIT_VISIT ? "You don't have permission to perform this action" : ""}
-												onClick={handleDelayVisit}
-												disabled={delayVisitMutation.isPending || !EDIT_VISIT}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<Clock size={16} />
-												Mark Delayed
-											</button>
-									)}
+	const statTiles = [
+		{
+			label: "Visit Total",
+			icon: <DollarSign size={13} />,
+			value: formatCurrency(Number(visit.total ?? 0)),
+			hint: `${lineItemCount} ${lineItemCount === 1 ? "line item" : "line items"}`,
+		},
+		{
+			label: "Duration",
+			icon: <Clock size={13} />,
+			value:
+				actualMinutes != null
+					? formatDuration(actualMinutes)
+					: "Not started",
+			hint:
+				scheduledMinutes != null
+					? `${formatDuration(scheduledMinutes)} scheduled`
+					: "no window set",
+		},
+		{
+			label: "Drive",
+			icon: <MapPin size={13} />,
+			value:
+				visit.estimated_drive_miles != null
+					? `${visit.estimated_drive_miles.toFixed(1)} mi`
+					: "Not recorded",
+		},
+		{
+			label: "Technicians",
+			icon: <Users size={13} />,
+			value: `${visit.visit_techs?.length ?? 0}`,
+		},
+	];
 
-									{(visit.status === "Scheduled" ||
-										visit.status === "InProgress" ||
-										visit.status === "Paused" ||
-										visit.status === "Delayed") && (
-										<>
-											<div className="border-t border-border-subtle my-1" />
-											<button
-												title={!EDIT_VISIT ? "You don't have permission to perform this action" : ""}
-												onClick={
-													handleCancelVisit
-												}
-												disabled={
-													cancelVisitMutation.isPending || !EDIT_VISIT
-												}
-												className="w-full px-4 py-2 text-left text-sm text-error-text hover:bg-surface transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<XCircle
-													size={
-														16
-													}
-												/>
-												Cancel
-												Visit
-											</button>
-										</>
-									)}
-								</div>
-							</div>
-						)}
-					</div>
-				</div>
-			</div>
-
-			{/* Visit Information (2/3) + Client Details (1/3) */}
-			<div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-				<div className="lg:col-span-2">
-					<Card title="Visit Information" className="h-full">
-						<div className="space-y-4">
-							{/* Description — full width */}
-							{visit.description && (
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1">
-										Description
-									</h3>
-									<p className="text-text-primary break-words">
-										{visit.description}
-									</p>
-								</div>
-							)}
-
-							{/* Scheduling fields — 2-col grid */}
-							<div className="grid grid-cols-2 gap-x-6 gap-y-4">
-								{/* Left: Constraints + Duration */}
-								<div className="space-y-4">
-									<div>
-										<h3 className="text-text-tertiary text-sm mb-1">
-											Schedule Constraints
-										</h3>
-										<p className="text-text-primary font-medium">
-											{formatVisitConstraints()}
-										</p>
-									</div>
-									{duration !== null && (
-										<div>
-											<h3 className="text-text-tertiary text-sm mb-1">
-												{duration.label}
-											</h3>
-											<p className="text-text-primary font-medium">
-												{formatDuration(duration.minutes)}
-											</p>
-										</div>
-									)}
-								</div>
-
-								{/* Right: Scheduled Time */}
-								<div>
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-2">
-										<Clock size={14} />
-										Scheduled Time
-									</h3>
-									<div className="space-y-1">
-										<p className="text-text-primary">
-											{formatDate(visit.scheduled_start_at, tz)}
-										</p>
-										{visit.arrival_constraint === "at" && visit.arrival_time && (
-											<p className="text-text-tertiary text-sm">
-												Arrive at: {formatConstraintTime(visit.arrival_time)}
-											</p>
-										)}
-										{visit.arrival_constraint === "between" &&
-											visit.arrival_window_start &&
-											visit.arrival_window_end && (
-												<p className="text-text-tertiary text-sm">
-													Arrival window: {formatConstraintTime(visit.arrival_window_start)} –{" "}
-													{formatConstraintTime(visit.arrival_window_end)}
-												</p>
-											)}
-										{visit.arrival_constraint === "by" && visit.arrival_window_end && (
-											<p className="text-text-tertiary text-sm">
-												Arrive by: {formatConstraintTime(visit.arrival_window_end)}
-											</p>
-										)}
-										{visit.finish_constraint === "at" && visit.finish_time && (
-											<p className="text-text-tertiary text-sm">
-												Finish at: {formatConstraintTime(visit.finish_time)}
-											</p>
-										)}
-										{visit.finish_constraint === "by" && visit.finish_time && (
-											<p className="text-text-tertiary text-sm">
-												Finish by: {formatConstraintTime(visit.finish_time)}
-											</p>
-										)}
-									</div>
-								</div>
-							</div>
-
-							{/* Footer: Actual Times — 2-col grid */}
-							{(visit.actual_start_at || visit.actual_end_at) && (
-								<div className="pt-4 border-t border-border">
-									<h3 className="text-text-tertiary text-sm mb-2">
-										Actual Times
-									</h3>
-									<div className="grid grid-cols-2 gap-x-6">
-										{visit.actual_start_at && (
-											<div>
-												<p className="text-text-tertiary text-xs mb-0.5">
-													Started
-												</p>
-												<p className="text-text-primary text-sm">
-													{formatDateTime(visit.actual_start_at, tz)}
-												</p>
-											</div>
-										)}
-										{visit.actual_end_at && (
-											<div>
-												<p className="text-text-tertiary text-xs mb-0.5">
-													Ended
-												</p>
-												<p className="text-text-primary text-sm">
-													{formatDateTime(visit.actual_end_at, tz)}
-												</p>
-											</div>
-										)}
-									</div>
-								</div>
-							)}
-
-							{/* Footer: Drive Mileage */}
-							{visit.estimated_drive_miles != null && visit.estimated_drive_miles > 0 && (
-								<div className="pt-4 border-t border-border">
-									<h3 className="text-text-tertiary text-sm mb-1 flex items-center gap-1">
-										Drive Distance
-									</h3>
-									<p className="text-text-primary font-medium">
-										{visit.estimated_drive_miles.toFixed(1)} mi
-										{visit.visit_techs && visit.visit_techs.length > 0 && (
-											<span className="text-text-tertiary font-normal ml-2">
-												· {visit.visit_techs.map((vt) => vt.tech.name).join(", ")}
-											</span>
-										)}
-									</p>
-								</div>
-							)}
-
-							{/* Footer: Cancellation Reason — full width */}
-							{visit.cancellation_reason && (
-								<div className="pt-4 border-t border-border">
-									<h3 className="text-text-tertiary text-sm mb-1">
-										Cancellation Reason
-									</h3>
-									<p className="text-text-primary">
-										{visit.cancellation_reason}
-									</p>
-								</div>
-							)}
-						</div>
-					</Card>
-				</div>
-
-				<div className="lg:col-span-1">
-					{job ? (
-						<ClientDetailsCard
-							client_id={job.client_id}
-							client={job.client}
-						/>
-					) : (
-						<Card title="Client Details" className="h-full">
-							<p className="text-text-muted text-sm">
-								Loading client details...
-							</p>
-						</Card>
-					)}
-				</div>
-			</div>
-
-			{/* Visit Financial Summary */}
-			<FinancialSummary
-				lineItems={lineItems}
-				taxSnapshot={visit.tax_snapshot}
-				legacyTaxRate={visit.tax_rate != null ? Number(visit.tax_rate) : null}
-				legacyTaxAmount={visit.tax_amount != null ? Number(visit.tax_amount) : null}
-				subtotal={visit.subtotal != null ? Number(visit.subtotal) : null}
-				discountAmount={visit.discount_amount != null ? Number(visit.discount_amount) : null}
-				discountType={visit.discount_type ?? null}
-				discountValue={visit.discount_value != null ? Number(visit.discount_value) : null}
-				metaLabel="Visit Date"
-				metaValue={formatDateTime(visit.scheduled_start_at, tz).split(" at ")[0]}
-				cardTitle="Visit Financial Summary"
-				noLineItemsDescription="No line items have been added to this visit yet."
-				totalsContent={
-					<div className="flex items-center justify-between px-4 py-3 bg-surface rounded-lg border border-border">
-						<div>
-							<p className="text-text-tertiary text-xs uppercase tracking-wide font-semibold mb-0.5">
-								Visit Total
-							</p>
-							<p className="text-xs text-text-muted">Final amount</p>
-						</div>
-						<p className="text-2xl font-bold text-primary-text tabular-nums">
-							{formatCurrency(Number(visit.total ?? 0))}
-						</p>
-					</div>
-				}
-			/>
-
-			<div className={`flex flex-col lg:flex-row gap-6 ${linkedInvoices.length >= 2 ? "items-start" : ""}`}>
-				<div className="w-full lg:w-80 flex-shrink-0 flex flex-col">
-				{/* Linked Invoices */}
-				<Card
-					title="Linked Invoices" className="h-full"
-					headerAction={
-						CREATE_INVOICE && (
-						<button
-							onClick={() => setIsCreateInvoiceOpen(true)}
-							className="flex items-center gap-1 text-xs text-primary-text hover:text-primary-text transition-colors"
-						>
-							<Plus size={12} />
-							Create Invoice
-						</button>
-					)}
-				>
-				{(() => {
-					const committedRefs = visit.invoice_visits?.filter(
-						(iv) => !["Draft", "Void"].includes(iv.invoice.status)
-					) ?? [];
-					const totalCommitted = committedRefs.reduce(
-						(sum, iv) => sum + (iv.billed_amount ?? 0),
-						0
-					);
-					const visitTotal = visit.line_items?.reduce(
-						(sum, item) => sum + Number(item.total ?? 0),
-						0
-					) ?? 0;
-					const billingStatus =
-						committedRefs.length === 0
-							? "unbilled"
-							: visitTotal > 0 && totalCommitted >= visitTotal
-							? "fully-billed"
-							: "partially-billed";
-
-					return committedRefs.length > 0 ? (
-						<div className="mb-3 flex items-center gap-2 text-xs">
-							<span
-								className={`inline-flex items-center px-2 py-0.5 rounded font-medium border ${
-									billingStatus === "fully-billed"
-										? "bg-success-bg text-success-text border-success-border"
-										: "bg-warning-bg text-warning-text border-warning-border"
-								}`}
-							>
-								{billingStatus === "fully-billed" ? "Fully Billed" : "Partially Billed"}
-							</span>
-							<span className="text-text-tertiary">
-								{formatCurrency(totalCommitted)} committed on {committedRefs.length} invoice{committedRefs.length !== 1 ? "s" : ""}
-							</span>
-						</div>
-					) : null;
-				})()}
-				{linkedInvoices.length === 0 ? (
-					<div className="flex items-center gap-2 text-text-muted text-sm py-1">
-						<Receipt size={14} className="flex-shrink-0" />
-						<span>No invoices linked to this visit</span>
-					</div>
-				) : (
-					<div className="flex flex-wrap gap-3">
-						{linkedInvoices.map((invoice) => {
-							const visitBilling = invoice.visits?.find((v) => v.visit_id === visitId);
-							const billedAmount = visitBilling
-								? Number(visitBilling.billed_amount)
-								: null;
-							return (
-								<button
-									key={invoice.id}
-									onClick={() => navigate(`/dispatch/invoices/${invoice.id}`)}
-									className="bg-surface border border-border rounded-lg p-3 hover:border-primary hover:bg-surface-raised transition-all cursor-pointer text-left group w-full"
-								>
-									<div className="flex items-center justify-between gap-6 mb-2">
-										<span className="text-text-primary font-semibold text-sm group-hover:text-primary-text transition-colors tabular-nums">
-											{invoice.invoice_number}
-										</span>
-										<span
-											className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${
-												InvoiceStatusColors[invoice.status as InvoiceStatus] ??
-												"bg-surface-raised text-text-tertiary border-border-strong"
-											}`}
-										>
-											{InvoiceStatusLabels[invoice.status as InvoiceStatus] ?? invoice.status}
-										</span>
-									</div>
-									<div className="flex items-center gap-1.5 text-xs text-text-tertiary mb-2">
-										<Calendar size={11} />
-										<span>
-											{invoice.issue_date
-												? new Date(invoice.issue_date).toLocaleDateString("en-US", {
-													month: "short",
-													day: "numeric",
-													year: "numeric",
-												  })
-												: "—"}
-										</span>
-									</div>
-									<div className="flex items-baseline gap-2">
-										{billedAmount !== null ? (
-											<>
-												<span className="text-text-primary font-semibold text-sm tabular-nums">
-													{formatCurrency(billedAmount)}
-												</span>
-												<span className="text-xs text-text-muted">billed this visit</span>
-											</>
-										) : (
-											<span className="text-text-primary font-semibold text-sm tabular-nums">
-												{formatCurrency(Number(invoice.total))}
-											</span>
-										)}
-									</div>
-								</button>
-							);
-						})}
-					</div>
+	const constraintLines = (
+		<div className="space-y-1">
+			<p>{formatDate(visit.scheduled_start_at, tz)}</p>
+			{visit.arrival_constraint === "at" && visit.arrival_time && (
+				<p className="text-xs text-text-tertiary">
+					Arrive at {formatConstraintTime(visit.arrival_time)}
+				</p>
+			)}
+			{visit.arrival_constraint === "between" &&
+				visit.arrival_window_start &&
+				visit.arrival_window_end && (
+					<p className="text-xs text-text-tertiary">
+						Arrival window{" "}
+						{formatConstraintTime(visit.arrival_window_start)} –{" "}
+						{formatConstraintTime(visit.arrival_window_end)}
+					</p>
 				)}
-			</Card>
+			{visit.arrival_constraint === "by" && visit.arrival_window_end && (
+				<p className="text-xs text-text-tertiary">
+					Arrive by {formatConstraintTime(visit.arrival_window_end)}
+				</p>
+			)}
+			{visit.finish_constraint === "at" && visit.finish_time && (
+				<p className="text-xs text-text-tertiary">
+					Finish at {formatConstraintTime(visit.finish_time)}
+				</p>
+			)}
+			{visit.finish_constraint === "by" && visit.finish_time && (
+				<p className="text-xs text-text-tertiary">
+					Finish by {formatConstraintTime(visit.finish_time)}
+				</p>
+			)}
+		</div>
+	);
 
-				</div>
-				<div className="flex-1 min-w-0 flex flex-col">
-				{/* Assigned Technicians */}
-			<Card
-				title="Assigned Technicians" className="h-full"
-				headerAction={
-					visit.visit_techs && visit.visit_techs.length > 0 ? (
-						<span className="text-sm text-text-tertiary">
-							{visit.visit_techs.length}{" "}
-							{visit.visit_techs.length === 1
-								? "technician"
-								: "technicians"}
-						</span>
+	const visitClosed = visit.status === "Completed" || visit.status === "Cancelled";
+
+	// Drive distance is a stat tile and the cancellation reason is the lifecycle
+	// bar's terminal detail, so neither appears here. Constraints are already
+	// carried by constraintLines, which qualifies the Scheduled time.
+	const infoFields: DetailField[] = [
+		{ label: "Scheduled", value: constraintLines },
+		...(visit.actual_start_at
+			? [{ label: "Started", value: formatDateTime(visit.actual_start_at, tz) }]
+			: []),
+		...(visit.actual_end_at
+			? [{ label: "Ended", value: formatDateTime(visit.actual_end_at, tz) }]
+			: []),
+	];
+
+	const infoCard = (
+		<Card className="flex-1" title="Visit Information">
+			<DetailFieldGrid
+				fill
+				lead={
+					visit.description ? (
+						<p className="break-words text-text-primary">
+							{visit.description}
+						</p>
 					) : undefined
 				}
-			>
-				{!visit.visit_techs || visit.visit_techs.length === 0 ? (
-					<div className="text-center py-8">
-						<Users
-							size={40}
-							className="mx-auto text-text-faint mb-3"
-						/>
-						<h3 className="text-text-tertiary text-sm font-medium mb-1">
-							No Technicians Assigned
-						</h3>
-						<p className="text-text-muted text-xs">
-							Edit this visit to assign technicians.
-						</p>
-					</div>
-				) : (
-					<div className="flex flex-wrap gap-3">
-						{visit.visit_techs.map((vt) => (
-							<button
-						
-								key={vt.tech_id}
-								onClick={() => navigate(`/dispatch/technicians/${vt.tech_id}`)}
-								className="relative bg-surface hover:bg-surface-raised border border-border hover:border-border-strong rounded-lg p-3 transition-all cursor-pointer text-left group w-52 flex-shrink-0"
-							>
-								<div className={`absolute top-2.5 right-2.5 w-2 h-2 rounded-full ${vt.tech.status === "Available" ? "bg-success" : vt.tech.status === "Busy" ? "bg-error" : vt.tech.status === "Offline" ? "bg-border" : "bg-info"}`} />
-								<div className="flex items-center gap-2 mb-2">
-									<div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0 text-white text-xs font-semibold">
-										{vt.tech.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)}
-									</div>
-									<div className="flex-1 min-w-0 pr-3">
-										<h4 className="text-text-primary font-medium text-sm truncate group-hover:text-primary-text transition-colors">{vt.tech.name}</h4>
-										<p className="text-text-tertiary text-xs truncate">{vt.tech.title}</p>
-									</div>
-								</div>
-								<div className="space-y-1 text-xs">
-									{vt.tech.email && <p className="text-text-tertiary truncate">{vt.tech.email}</p>}
-									{vt.tech.phone && <p className="text-text-tertiary">{vt.tech.phone}</p>}
-								</div>
-							</button>
-						))}
-					</div>
-				)}
-				</Card>
+				fields={infoFields}
+			/>
+		</Card>
+	);
+
+	const clientCard = job ? (
+		<ClientDetailsCard fill client_id={job.client_id} client={job.client} />
+	) : (
+		<Card className="flex-1" title="Client Details">
+			<p className="text-text-muted text-sm">Loading client details...</p>
+		</Card>
+	);
+
+	const techniciansCard = (
+		<Card
+			title="Assigned Technicians"
+			headerAction={
+				visit.visit_techs && visit.visit_techs.length > 0 ? (
+					<span className="text-sm text-text-tertiary">
+						{visit.visit_techs.length}{" "}
+						{visit.visit_techs.length === 1
+							? "technician"
+							: "technicians"}
+					</span>
+				) : undefined
+			}
+		>
+			{!visit.visit_techs || visit.visit_techs.length === 0 ? (
+				<div className="text-center py-8">
+					<Users size={40} className="mx-auto text-text-faint mb-3" />
+					<h3 className="text-text-tertiary text-sm font-medium mb-1">
+						No Technicians Assigned
+					</h3>
+					<p className="text-text-muted text-xs">
+						Edit this visit to assign technicians.
+					</p>
 				</div>
+			) : (
+				<div className="flex flex-wrap gap-3">
+					{visit.visit_techs.map((vt) => (
+						<button
+							key={vt.tech_id}
+							onClick={() =>
+								navigate(
+									`/dispatch/technicians/${vt.tech_id}`
+								)
+							}
+							className="relative bg-surface hover:bg-surface-raised border border-border hover:border-border-strong rounded-lg p-3 transition-colors duration-150 ease-out cursor-pointer text-left group w-52 flex-shrink-0"
+						>
+							<div
+								className={`absolute top-2.5 right-2.5 w-2 h-2 rounded-full ${vt.tech.status === "Available" ? "bg-success" : vt.tech.status === "Busy" ? "bg-error" : vt.tech.status === "Offline" ? "bg-border" : "bg-info"}`}
+							/>
+							<div className="flex items-center gap-2 mb-2">
+								<div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary to-plan flex items-center justify-center flex-shrink-0 text-on-primary text-xs font-semibold">
+									{vt.tech.name
+										.split(" ")
+										.map((n) => n[0])
+										.join("")
+										.toUpperCase()
+										.slice(0, 2)}
+								</div>
+								<div className="flex-1 min-w-0 pr-3">
+									<h4 className="text-text-primary font-medium text-sm truncate group-hover:text-primary-text transition-colors duration-150 ease-out">
+										{vt.tech.name}
+									</h4>
+									<p className="text-text-tertiary text-xs truncate">
+										{vt.tech.title}
+									</p>
+								</div>
+							</div>
+							<div className="space-y-1 text-xs">
+								{vt.tech.email && (
+									<p className="text-text-tertiary truncate">
+										{vt.tech.email}
+									</p>
+								)}
+								{vt.tech.phone && (
+									<p className="text-text-tertiary">
+										{vt.tech.phone}
+									</p>
+								)}
+							</div>
+						</button>
+					))}
+				</div>
+			)}
+		</Card>
+	);
+
+	const visitFinancialBlock = (
+		<FinancialSummary
+			lineItems={lineItems}
+			taxSnapshot={visit.tax_snapshot}
+			legacyTaxRate={visit.tax_rate != null ? Number(visit.tax_rate) : null}
+			legacyTaxAmount={visit.tax_amount != null ? Number(visit.tax_amount) : null}
+			subtotal={visit.subtotal != null ? Number(visit.subtotal) : null}
+			discountAmount={
+				visit.discount_amount != null ? Number(visit.discount_amount) : null
+			}
+			discountType={visit.discount_type ?? null}
+			discountValue={
+				visit.discount_value != null ? Number(visit.discount_value) : null
+			}
+			metaLabel="Visit Date"
+			metaValue={formatDateTime(visit.scheduled_start_at, tz).split(" at ")[0]}
+			cardTitle="Visit Financial Summary"
+			noLineItemsDescription="No line items have been added to this visit yet."
+			totalsContent={
+				// A plain ledger line, not the highlighted card the quote and
+				// invoice pages use: that would restate the Visit Total tile.
+				<div className="flex items-center justify-between text-sm">
+					<span className="text-text-primary font-semibold">
+						Total:
+					</span>
+					<span className="text-text-primary font-semibold tabular-nums">
+						{formatCurrency(Number(visit.total ?? 0))}
+					</span>
+				</div>
+			}
+		/>
+	);
+
+	// Denominator for the billing verdict. The card derives everything else
+	// from the invoice payload itself.
+	const visitTotal = lineItems.reduce(
+		(sum, item) => sum + Number(item.total ?? 0),
+		0
+	);
+
+	const reasonModalPending =
+		reasonModal === "cancel"
+			? cancelVisitMutation.isPending
+			: transitionMutation.isPending;
+	const reasonModalError =
+		reasonModal === "cancel"
+			? cancelVisitMutation.error
+				? errorMessage(
+						cancelVisitMutation.error,
+						"Something went wrong. Please try again."
+					)
+				: null
+			: reasonModal === "pause" && transitionMutation.error
+				? errorMessage(
+						transitionMutation.error,
+						"Something went wrong. Please try again."
+					)
+				: null;
+
+	return (
+		<div className="text-text-primary pb-4 md:pb-6">
+			<div className="space-y-4">
+				<DetailHeader
+					title={visit.name ?? "Job Visit"}
+					badges={
+						job ? (
+							<Link
+								to={`/dispatch/jobs/${visit.job_id}`}
+								className={`${HEADER_PILL} border-border bg-surface text-primary-text hover:border-border-strong`}
+							>
+								<Briefcase size={13} />
+								{job.job_number} · {job.name}
+							</Link>
+						) : undefined
+					}
+					meta={job?.client?.name}
+					statusPill={
+						<span
+							className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium border ${VisitStatusColors[visit.status]}`}
+						>
+							{VisitStatusLabels[visit.status]}
+						</span>
+					}
+					inlineActions={<LifecycleActions actions={headerActions} />}
+					menuGroups={menuGroups}
+					menuLabel="Visit actions"
+				/>
+
+				{showBar && (
+					<LifecycleBar
+						steps={VISIT_STEPS}
+						stepLabels={VisitStatusLabels}
+						tone={
+							visit.status === "Cancelled"
+								? "error"
+								: undefined
+						}
+						stage={stage}
+						currentStatus={visit.status}
+						track={false}
+						actions={barActions}
+						detail={offRampDetail}
+					/>
+				)}
+
+				<DetailTabs
+					tabs={tabs}
+					activeTab={activeTab}
+					onSelect={setActiveTab}
+					label="Visit sections"
+					progress={
+						<LifecycleRule
+							steps={VISIT_STEPS}
+							stepLabels={VisitStatusLabels}
+							currentStatus={visit.status}
+							offRamp={isOffRamp}
+						/>
+					}
+				/>
 			</div>
 
-			<JobNoteManager jobId={jobId!} visits={[visit]} visitId={visitId!} />
+			{activeTab === "overview" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-overview"
+					aria-labelledby="tab-overview"
+					className="mt-6 space-y-4"
+				>
+					<h2 className="sr-only">Overview</h2>
+					<DetailStatRow tiles={statTiles} />
+
+					{/* Both cells stretched. This page's main column is usually the
+					    taller one, so the slack lands in the client card's footer
+					    gutter; at four or more technicians the technicians card
+					    wraps and the rail ends early, which is the declared
+					    extreme case. */}
+					<div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+						<div className="lg:col-span-2 flex flex-col gap-4">
+							{infoCard}
+							<VisitArrivalCard visitId={visit.id} />
+							{techniciansCard}
+						</div>
+						<div className="lg:col-span-1 flex flex-col">{clientCard}</div>
+					</div>
+				</div>
+			)}
+
+			{activeTab === "map" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-map"
+					aria-labelledby="tab-map"
+					className="mt-6"
+				>
+					<h2 className="sr-only">Map</h2>
+					<RecordMap
+						site={{
+							coords: job?.coords ?? visit.job?.coords,
+							label: job?.client?.name ?? job?.name ?? "Job site",
+						}}
+						address={job?.address ?? ""}
+						techIds={visit.visit_techs.map((vt) => vt.tech_id)}
+						focusVisitIds={[visit.id]}
+						hideTechs={visitClosed}
+						hiddenNote={visitClosed ? "Visit closed — live positions hidden." : undefined}
+					/>
+				</div>
+			)}
+
+			{activeTab === "financials" && (
+				<div
+					role="tabpanel"
+					id="tabpanel-financials"
+					aria-labelledby="tab-financials"
+					className="mt-6 space-y-4"
+				>
+					<h2 className="sr-only">Financials</h2>
+					{visitFinancialBlock}
+					{/* Stretched so the pair ends on one line. Field purchases is
+					    absent for a viewer who may not see it; invoices then takes
+					    the whole row instead of half of it. */}
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:[&>:only-child]:col-span-2">
+						<LinkedInvoicesCard
+							invoices={linkedInvoices}
+							isLoading={invoicesLoading}
+							scope={{
+								kind: "visit",
+								visitId: visitId!,
+							}}
+							scopeTotal={visitTotal}
+							canCreate={CREATE_INVOICE}
+							onCreate={() =>
+								setIsCreateInvoiceOpen(true)
+							}
+							tz={tz}
+						/>
+						<JobFieldPurchases
+							jobId={jobId!}
+							visitId={visitId!}
+						/>
+					</div>
+				</div>
+			)}
+
+			{activeTab === "activity" && (
+				<ActivityPanel
+					notes={
+						<JobNoteManager
+							jobId={jobId!}
+							visits={[visit]}
+							visitId={visitId!}
+						/>
+					}
+					lifecycle={null}
+					history={
+						/* The change log is grouped by job, not by visit — ENTITY_GROUPS
+						   in logsController has no job_visit key, so a visit-scoped query
+						   has nothing to resolve. Rather than mount a control that can
+						   only ever be empty, the column points at the log that does
+						   hold this visit's rows. */
+						<Card title="Change History">
+							<div className="rounded-lg border border-dashed border-border-subtle p-6 text-center">
+								<p className="text-sm text-text-tertiary">
+									Changes to this visit are
+									recorded in the job's
+									history.
+								</p>
+								<Link
+									to={`/dispatch/jobs/${visit.job_id}?tab=activity`}
+									className="mt-2 inline-flex items-center gap-1 text-sm text-primary-text underline transition-colors duration-150 ease-out hover:text-text-primary"
+								>
+									Open job history
+									<ArrowUpRight size={14} />
+								</Link>
+							</div>
+						</Card>
+					}
+				/>
+			)}
 
 			{visit && job && isEditModalOpen && (
 				<EditJobVisit
@@ -839,16 +873,41 @@ export default function JobVisitDetailPage() {
 
 			<ConfirmDialog
 				open={pendingConfirm !== null}
-				title={pendingConfirm === "complete" ? "Complete Visit" : "Delay Visit"}
+				title={
+					pendingConfirm === "complete"
+						? "Complete Visit"
+						: "Delay Visit"
+				}
 				body={
 					pendingConfirm === "complete"
 						? "Are you sure you want to mark this visit as completed? This will record the actual end time."
 						: "Mark this visit as Delayed? The technician will remain in their current state until the visit is resumed."
 				}
 				confirmLabel={pendingConfirm === "complete" ? "Complete" : "Delay"}
-				pending={completeVisitMutation.isPending || delayVisitMutation.isPending}
+				pending={
+					completeVisitMutation.isPending ||
+					delayVisitMutation.isPending
+				}
 				onConfirm={confirmPendingAction}
 				onCancel={() => setPendingConfirm(null)}
+			/>
+
+			<VisitReasonModal
+				open={reasonModal !== null}
+				mode={reasonModal ?? "pause"}
+				pending={reasonModalPending}
+				error={reasonModalError}
+				onSubmit={(reason) => {
+					if (reasonModal === "cancel")
+						void handleCancelSubmit(reason);
+					else if (reasonModal === "pause")
+						void handlePauseSubmit(reason);
+				}}
+				onClose={() => {
+					setReasonModal(null);
+					transitionMutation.reset();
+					cancelVisitMutation.reset();
+				}}
 			/>
 		</div>
 	);

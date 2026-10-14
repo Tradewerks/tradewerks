@@ -18,6 +18,9 @@ vi.mock("../../db.js", () => {
 
 vi.mock("../appLogger.js", () => ({ log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 
+const mockNotify = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+vi.mock("../../controllers/notificationsController.js", () => ({ notifyDispatchers: mockNotify }));
+
 const mockDb = db as unknown as {
 	followup_send: { findUnique: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
 	followup_enrollment: { update: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> };
@@ -78,6 +81,33 @@ describe("handlePostmarkWebhook — auth", () => {
 });
 
 describe("handlePostmarkWebhook — Open", () => {
+	const orgSend = (opened_at: Date | null) => ({
+		id: "s1",
+		organization_id: "org-1",
+		enrollment_id: "e1",
+		recipient_email: "harper@example.com",
+		opened_at,
+		enrollment: {
+			status: "active",
+			sequence: { stop_on_open: false, name: "Quote Chase" },
+			client: { name: "Harper Residence" },
+		},
+	});
+
+	it("notifies dispatchers on the first open only", async () => {
+		mockDb.followup_send.findUnique.mockResolvedValue(orgSend(null));
+		await handlePostmarkWebhook(makeReq({ RecordType: "Open", MessageID: "m1" }, { secret: SECRET }), makeRes());
+		expect(mockNotify).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "followup_email_opened", title: "Harper Residence opened a follow-up" }),
+			"org-1",
+		);
+
+		mockNotify.mockClear();
+		mockDb.followup_send.findUnique.mockResolvedValue(orgSend(new Date("2026-07-01T00:00:00Z")));
+		await handlePostmarkWebhook(makeReq({ RecordType: "Open", MessageID: "m1" }, { secret: SECRET }), makeRes());
+		expect(mockNotify).not.toHaveBeenCalled();
+	});
+
 	it("first open sets opened_at, increments count, and completes when stop_on_open", async () => {
 		mockDb.followup_send.findUnique.mockResolvedValue({
 			id: "s1",

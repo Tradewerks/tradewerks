@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Coordinates } from "./location";
-import { type Priority, PriorityValues } from "./common";
+import { type Priority, PriorityValues, type BaseNote } from "./common";
 
 export const ProjectStatusValues = ["Planning","Active","OnHold","Completed","Cancelled"] as const;
 export type ProjectStatus = (typeof ProjectStatusValues)[number];
@@ -150,4 +150,33 @@ export interface ProjectRef {
 	project_number: string;
 	name: string;
 	status: ProjectStatus;
+}
+
+// ============================================================================
+// NOTE TYPES
+// ============================================================================
+
+export interface ProjectNotePhoto {
+    id: string;
+    note_id: string;
+    photo_url: string;
+    photo_label: "Before" | "After" | "Other";
+    created_at: string;
+}
+
+export interface ProjectNote extends BaseNote {
+    project_id: string;
+    notify_technician: boolean;
+    photos?: ProjectNotePhoto[];
+}
+
+export interface CreateProjectNoteInput {
+    content: string;
+    notify_technician?: boolean;
+    photos?: { photo_url: string; photo_label: string }[];
+}
+
+export interface UpdateProjectNoteInput {
+    content?: string;
+    photos?: { id?: string; photo_url: string; photo_label: string }[];
 }

@@ -1,5 +1,5 @@
 import LoadSvg from "../../assets/icons/loading.svg?react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ZodError } from "zod";
 import FullPopup from "../ui/FullPopup";
 import { CreateClientSchema, type CreateClientInput } from "../../types/clients";
@@ -8,6 +8,7 @@ import AddressForm from "../ui/AddressForm";
 import { X } from "lucide-react";
 import { useQBCustomerQuery, useQBMappedCustomersQuery, useQBStatusQuery } from "../../hooks/useQuickbooks";
 import { useAllClientsQuery } from "../../hooks/useClients";
+import { TemplateSearch, type TemplateSearchResult } from "../ui/forms/TemplateSearch";
 
 interface CreateClientProps {
 	isModalOpen: boolean;
@@ -32,12 +33,34 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 	const { data: customers, isLoading: loadingCustomers } = useQBCustomerQuery(
 		qbStatus?.connected,
 	);
-	const { data: mappedIds } = useQBMappedCustomersQuery(qbStatus?.connected);
+	const { data: mappedCustomers } = useQBMappedCustomersQuery(qbStatus?.connected);
+	const mappedIds = mappedCustomers?.map((m) => m.external_id);
 	const { data: existingClients } = useAllClientsQuery();
 
-	const existingNames = new Set(existingClients?.map((c) => c.name.toLowerCase()) ?? []);
+	const existingNames = useMemo(
+		() => new Set(existingClients?.map((c) => c.name.toLowerCase()) ?? []),
+		[existingClients],
+	);
 
 	const selectedCustomer = customers?.find((c) => c.Id === selectedQBId);
+
+	const templateResults = useMemo((): TemplateSearchResult[] => {
+		return (customers ?? [])
+			.filter(
+				(c) =>
+					!mappedIds?.includes(c.Id) &&
+					!existingNames.has(c.DisplayName.toLowerCase()),
+			)
+			.map((c) => ({
+				id: c.Id,
+				title: c.DisplayName,
+				subtitle: c.PrimaryEmailAddr?.Address,
+				detail:
+					[c.BillAddr?.Line1, c.BillAddr?.City, c.BillAddr?.CountrySubDivisionCode]
+						.filter(Boolean)
+						.join(", ") || undefined,
+			}));
+	}, [customers, mappedIds, existingNames]);
 
 	const handleChangeAddress = (result: GeocodeResult) => {
 		setGeoData({ address: result.address, coords: result.coords });
@@ -46,24 +69,30 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 	const handleModeChange = (next: "new" | "import") => {
 		setMode(next);
 		setSelectedQBId("");
-		if (nameRef.current) nameRef.current.value = "";
 		setGeoData(undefined);
 		setErrors(null);
 		setSubmitError(null);
 	};
 
 	const handleCustomerSelect = (id: string) => {
-		if (id === "") {
-			setSelectedQBId("");
-			if (nameRef.current) nameRef.current.value = "";
-			setGeoData(undefined);
-			return;
-		}
 		setSelectedQBId(id);
-		const customer = customers?.find((c) => c.Id === id);
-		if (customer && nameRef.current) {
-			nameRef.current.value = customer.DisplayName;
-		}
+		setGeoData(undefined);
+	};
+
+	// CreateClient is never unmounted between opens (only FullPopup's visibility
+	// toggles), so its state — mode, the picked QB customer, geoData — otherwise
+	// survives across closes and reappears stale the next time the modal opens.
+	const resetForm = () => {
+		setMode("new");
+		setSelectedQBId("");
+		setGeoData(undefined);
+		setErrors(null);
+		setSubmitError(null);
+	};
+
+	const handleClose = () => {
+		setIsModalOpen(false);
+		resetForm();
 	};
 
 	const invokeCreate = async () => {
@@ -98,7 +127,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 		setIsLoading(true);
 		try {
 			await createClient(newClient);
-			setIsModalOpen(false);
+			handleClose();
 		} catch (e) {
 			setSubmitError(e instanceof Error ? e.message : "Failed to create client.");
 		} finally {
@@ -128,7 +157,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 					New Client
 				</h2>
 				<button
-					onClick={() => setIsModalOpen(false)}
+					onClick={handleClose}
 					className="p-1.5 text-text-tertiary hover:text-text-primary hover:bg-surface rounded transition-colors"
 					disabled={isLoading}
 				>
@@ -166,72 +195,85 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 					</div>
 				)}
 
-				{/* QB customer select ─ import mode only */}
-				{mode === "import" && (
-					<div>
-						<label className={LABEL}>QuickBooks Customer *</label>
-						<select
-							value={selectedQBId}
-							onChange={(e) => handleCustomerSelect(e.target.value)}
-							className={INPUT}
-							disabled={loadingCustomers}
+				{/* QB customer search ─ import mode, until a customer is picked. Shown
+				    on its own (not alongside Name/Address below) so its results list
+				    doesn't push the rest of the form off the modal. */}
+				{mode === "import" && !selectedQBId && (
+					<TemplateSearch
+						heading="Import from QuickBooks"
+						headingHint="Select a customer to import"
+						placeholder="Search QuickBooks customers by name or email..."
+						results={templateResults}
+						clients={[]}
+						isLoading={loadingCustomers}
+						onSelect={handleCustomerSelect}
+						onClose={() => handleModeChange("new")}
+						emptyHint="No unlinked QuickBooks customers available to import"
+					/>
+				)}
+
+				{/* Picked customer summary ─ import mode, after a pick */}
+				{mode === "import" && selectedQBId && selectedCustomer && (
+					<div className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-raised px-3 py-2">
+						<div className="min-w-0">
+							<p className="truncate text-sm font-medium text-text-primary">
+								{selectedCustomer.DisplayName}
+							</p>
+							{qbAddressHint && (
+								<p className="truncate text-xs text-text-tertiary">{qbAddressHint}</p>
+							)}
+							{selectedCustomer.PrimaryEmailAddr?.Address && (
+								<p className="truncate text-xs text-text-tertiary">
+									Will create primary contact: &ensp;
+									{selectedCustomer.PrimaryEmailAddr.Address}
+									{selectedCustomer.PrimaryPhone?.FreeFormNumber && (
+										<> · {selectedCustomer.PrimaryPhone.FreeFormNumber}</>
+									)}
+								</p>
+							)}
+						</div>
+						<button
+							type="button"
+							onClick={() => handleCustomerSelect("")}
+							className="flex-shrink-0 text-xs font-medium text-primary-text hover:text-primary-hover"
 						>
-							<option value="">─Select a customer─</option>
-							{customers
-							?.filter((c) =>
-								!mappedIds?.includes(c.Id) &&
-								!existingNames.has(c.DisplayName.toLowerCase())
-							)
-							.map((c) => (
-								<option key={c.Id} value={c.Id}>
-									{c.DisplayName}
-								</option>
-							))}
-						</select>
-						{qbAddressHint && (
-							<p className="mt-1 text-xs text-text-tertiary">
-								QB address: {qbAddressHint}
-							</p>
-						)}
-						 {selectedCustomer?.PrimaryEmailAddr?.Address && (
-							<p className="mt-1 text-xs text-text-tertiary">
-								Will create primary contact: &ensp;
-								{selectedCustomer.PrimaryEmailAddr.Address}
-								{selectedCustomer.PrimaryPhone?.FreeFormNumber && (
-									<> · {selectedCustomer.PrimaryPhone.FreeFormNumber}</>
-								)}
-							</p>
-						)}
+							Change
+						</button>
 					</div>
 				)}
 
-				{/* Name */}
-				<div>
-					<label className={LABEL}>Client Name *</label>
-					<input
-						type="text"
-						placeholder="e.g. Riverside Properties"
-						className={INPUT}
-						disabled={isLoading}
-						ref={nameRef}
-					/>
-					{nameErrors.map((err) => (
-						<p className="mt-1 text-xs text-error-text" key={err.message}>
-							{err.message}
-						</p>
-					))}
-				</div>
+				{/* Name + Address ─ "new" mode, or "import" mode once a customer is picked */}
+				{(mode === "new" || selectedQBId) && (
+					<>
+						<div>
+							<label className={LABEL}>Client Name *</label>
+							<input
+								key={selectedQBId || "new"}
+								type="text"
+								placeholder="e.g. Riverside Properties"
+								className={INPUT}
+								disabled={isLoading}
+								defaultValue={selectedCustomer?.DisplayName ?? ""}
+								ref={nameRef}
+							/>
+							{nameErrors.map((err) => (
+								<p className="mt-1 text-xs text-error-text" key={err.message}>
+									{err.message}
+								</p>
+							))}
+						</div>
 
-				{/* Address */}
-				<div>
-					<label className={LABEL}>Address *</label>
-					<AddressForm handleChange={handleChangeAddress} />
-					{addressErrors.map((err) => (
-						<p className="mt-1 text-xs text-error-text" key={err.message}>
-							{err.message}
-						</p>
-					))}
-				</div>
+						<div>
+							<label className={LABEL}>Address *</label>
+							<AddressForm handleChange={handleChangeAddress} />
+							{addressErrors.map((err) => (
+								<p className="mt-1 text-xs text-error-text" key={err.message}>
+									{err.message}
+								</p>
+							))}
+						</div>
+					</>
+				)}
 			</div>
 
 			{/* Footer */}
@@ -246,7 +288,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 				) : (
 					<div className="flex items-center gap-2">
 						<button
-							onClick={() => setIsModalOpen(false)}
+							onClick={handleClose}
 							className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border bg-transparent text-sm font-medium text-text-tertiary hover:text-text-primary hover:bg-surface hover:border-border-strong transition-colors whitespace-nowrap"
 						>
 							Cancel
@@ -267,7 +309,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 		<FullPopup
 			content={content}
 			isModalOpen={isModalOpen}
-			onClose={() => setIsModalOpen(false)}
+			onClose={handleClose}
 			overflowVisible
 		/>
 	);

@@ -1,4 +1,4 @@
-import type { ReorderSeverity } from './reports';
+import type { ReorderSeverity, VendorSuggestion } from "./reports";
 
 export type StockStatus = 'sufficient' | 'low' | 'out_of_stock' | null;
 
@@ -14,7 +14,7 @@ export interface InventoryItem {
 	id: string;
 	name: string;
 	description: string;
-	location: string;
+	location: string | null;
 	quantity: number;
 	unit_price: number | null;
 	cost: number | null;
@@ -49,7 +49,7 @@ export type InventorySortOption =
 export interface CreateInventoryItemInput {
 	name: string;
 	description: string;
-	location: string;
+	location?: string | null;
 	quantity: number;
 	unit?: string;
 	unit_price?: number | null;
@@ -65,6 +65,12 @@ export interface CreateInventoryItemInput {
 	alert_email?: string | null;
 	is_serialized?: boolean;
 	is_batch_tracked?: boolean;
+	/**
+	 * Vendor for the opening quantity's receipt. Ignored server-side when
+	 * `quantity` is 0 — nothing moves, so there is nothing to attribute.
+	 */
+	supplier_id?: string;
+	supplier_name?: string;
 }
 
 export type UpdateInventoryItemInput = Partial<CreateInventoryItemInput> & {
@@ -195,7 +201,7 @@ export interface ItemConsumptionTrend {
 // active but produced no forecastable row (no recorded usage in the window).
 // Rendering "unavailable for inactive items" over an active item is simply
 // wrong, so callers branch on `reason` rather than assuming.
-export interface ItemForecast {
+export interface ItemForecast extends VendorSuggestion {
 	itemId: string;
 	itemName: string;
 	sku: string | null;
@@ -301,6 +307,51 @@ export interface ChargedPricePoint {
 	revenue: number;
 	// null when nothing sold in the bucket — a zero-filled period has no price.
 	avgUnitPrice: number | null;
+	// How many line items made up the bucket. Shown beside the range so a
+	// two-sale spread can't be read with the confidence of a twenty-sale one.
+	sales: number;
+	// Cheapest and dearest unit price billed in the bucket. BOTH null unless the
+	// bucket held more than one sale AT DIFFERENT PRICES — a zero-height band
+	// would otherwise claim a spread that was never measured.
+	//
+	// Unweighted, per SALE: one 1-unit sale at $900 stretches the band as far as
+	// a 50-unit one. That's the point (it exposes the wholesale/retail split),
+	// but it means avgUnitPrice — which IS quantity-weighted — can sit anywhere
+	// inside the band, including on the far side of the median.
+	low: number | null;
+	high: number | null;
+	median: number | null;
+	// Who was billed the low and the high. Null whenever the band is null.
+	lowClient: string | null;
+	highClient: string | null;
+}
+
+// One vendor's purchasing in the window. `unattributed` marks the single
+// catch-all row for receipts that name nobody — a real gap in the record, kept
+// visible rather than dropped so the rollup can't imply full coverage.
+export interface SupplierCostRollup {
+	// Null for the unattributed row AND for a legacy free-text vendor the
+	// backfill couldn't resolve to an entity — `supplierName` still names it.
+	supplierId: string | null;
+	supplierName: string;
+	unattributed: boolean;
+	receipts: number;
+	spend: number;
+	firstAt: string;
+	lastAt: string;
+	// Null on a unit break: money sums across denominations, per-unit figures
+	// don't (10 boxes at $18 plus 4 units at $3 has a real spend, no real average).
+	qty: number | null;
+	avgUnitCost: number | null;
+	minUnitCost: number | null;
+	maxUnitCost: number | null;
+	// From the vendor's self-maintaining price list (supplier_item), not from
+	// receipts in this window — a fact about the vendor relationship, unaffected
+	// by whatever range chip is selected. Null/"none" for the unattributed row
+	// and any legacy free-text vendor, since neither has a supplierId to key on.
+	lastPaid: number | null;
+	priceSource: "contract" | "observed" | "none";
+	isPreferred: boolean;
 }
 
 export interface PaidCostReceipt {
@@ -313,13 +364,39 @@ export interface PaidCostReceipt {
 	// of borrowing the item's current unit.
 	unit: string;
 	batchNumber: string | null;
+	// Who sold it. Resolved movement → lot entity → lot legacy free text, so a
+	// name can arrive with a null id (pre-migration text the backfill couldn't
+	// match). Both null means the origin was genuinely never recorded.
+	supplierId: string | null;
+	supplierName: string | null;
+}
+
+export interface RecentSale {
+	at: string;
+	unitPrice: number;
+	clientName: string | null;
 }
 
 export interface PriceHistory {
 	cost: { current: number | null; points: PricePoint[] };
 	price: { current: number | null; points: PricePoint[] };
-	charged: { bucket: "week" | "month"; points: ChargedPricePoint[] };
+	charged: {
+		bucket: "week" | "month";
+		points: ChargedPricePoint[];
+		// Every sale in the window, unaggregated — what the tooltip lists per
+		// bucket (price · client · date) instead of just `points`' average and
+		// two extremes. Same shape as `recentSales` (it's the same underlying
+		// fact), just the full window instead of the last two.
+		sales: RecentSale[];
+	};
+	// The 1-2 most recent individual sales, unaveraged — newest first. What the
+	// "Charged Price (latest)" headline reads; `charged.points` stays a bucketed
+	// average and should never be mistaken for this.
+	recentSales: RecentSale[];
 	receipts: PaidCostReceipt[];
+	// Per-vendor rollup of those receipts, sorted by spend with the unattributed
+	// row forced last.
+	bySupplier: SupplierCostRollup[];
 	// Empty on a unit break: the average divides spend by a quantity, and a plotted
 	// line invites the eye to read a trend off it no matter what a note says.
 	wac: { at: string; value: number }[];
@@ -331,7 +408,15 @@ export interface PriceHistory {
 	// priced receipts the running average is built from — an average over ALL
 	// history, only DISPLAYED for the window, so the same instant reads the same
 	// on every range chip. Receipts with no recorded cost count here but are excluded from wac.
-	costCoverage: { receipts: number; withCost: number; wacBasisReceipts: number };
+	// withSupplier is a SEPARATE gap from withCost: a receipt can record what was
+	// paid and still name nobody, so the chart states attribution coverage rather
+	// than letting the supplier rollup imply it.
+	costCoverage: {
+		receipts: number;
+		withCost: number;
+		wacBasisReceipts: number;
+		withSupplier: number;
+	};
 	coverageStart: string | null;
 	// Where the charged series starts, and whether older sales fell outside the
 	// bucket cap. A leading zero-filled bucket is indistinguishable from a cut-off

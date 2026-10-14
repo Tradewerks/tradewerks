@@ -113,6 +113,25 @@ export function centsToDollars(cents: number): number {
 }
 
 /**
+ * Truncate toward zero, so the same magnitude rounds the same way whichever
+ * sign it carries.
+ *
+ * `Math.floor` is sign-biased: it rounds a positive amount toward zero but a
+ * negative one away from it. Credit adjustments carry negative line totals, so
+ * with a bare floor a -$1.00 line at 8.25% credited 9c of tax where the
+ * matching +$1.00 charge only ever collected 8c — a systematic over-refund,
+ * always in the client's favour, on every credit line. Symmetric rounding is
+ * the standard answer precisely because it is free of that bias.
+ *
+ * For a positive amount this is identical to `Math.floor`, so every quote,
+ * invoice, job and visit that existed before credits did computes the same tax
+ * it always has.
+ */
+export function floorTowardZero(value: number): number {
+	return value < 0 ? -Math.floor(-value) : Math.floor(value);
+}
+
+/**
  * Map a Prisma tax group (with nested rates) to a plain TaxGroupConfig.
  * Rates are sorted by sort_order ascending before mapping.
  */
@@ -238,7 +257,7 @@ export function calculateDocumentTax(
 		// Compute tax for each rate, summing with floor per rate
 		let line_tax = 0;
 		for (const taxRate of tax_group.rates) {
-			line_tax += Math.floor(effective_taxable * taxRate.rate);
+			line_tax += floorTowardZero(effective_taxable * taxRate.rate);
 		}
 
 		line_item_tax_amounts[li.id] = line_tax;

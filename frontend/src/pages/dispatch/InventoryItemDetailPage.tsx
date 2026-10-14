@@ -14,6 +14,7 @@ import {
 import { unitDef } from "../../lib/units";
 import ImageCarousel from "../../components/inventory/ImageCarousel";
 import { TrackingBadges } from "../../components/inventory/TrackingBadges";
+import LocationValue from "../../components/inventory/LocationValue";
 import AddToLabelQueueButton from "../../components/inventory/labels/AddToLabelQueueButton";
 import LabelQueueButton from "../../components/inventory/labels/LabelQueueButton";
 import LabelQueueToast from "../../components/inventory/labels/LabelQueueToast";
@@ -33,6 +34,7 @@ import StockLevelChart from "../../components/inventory/detail/StockLevelChart";
 import ReorderHealthCard from "../../components/inventory/detail/ReorderHealthCard";
 import ReorderHealthMini from "../../components/inventory/detail/ReorderHealthMini";
 import StockPlacementCard from "../../components/inventory/detail/StockPlacementCard";
+import ItemSuppliersCard from "../../components/inventory/detail/ItemSuppliersCard";
 import UntrackedAllocationCard from "../../components/inventory/detail/UntrackedAllocationCard";
 import UnitTrackingEmptyState from "../../components/inventory/detail/UnitTrackingEmptyState";
 import CostPriceTrendChart from "../../components/inventory/detail/CostPriceTrendChart";
@@ -117,8 +119,10 @@ export default function InventoryItemDetailPage() {
 		const next = new URLSearchParams(searchParams);
 		if (tab === "overview") next.delete("tab");
 		else next.set("tab", tab);
-		// push, not replace — the back button should return to the previous tab
-		setSearchParams(next);
+		// replace, not push — same reasoning as `?serial=` and `?range=`: tabs are
+		// a lens on one page, and pushing buried the page the dispatcher came from
+		// behind every tab they had read through.
+		setSearchParams(next, { replace: true });
 	};
 
 	// Serial drill-in is a drawer over this page, not a route away from it —
@@ -152,7 +156,7 @@ export default function InventoryItemDetailPage() {
 		setSearchParams(params, { replace: true });
 	};
 	const range = HISTORY_RANGES.find((r) => r.id === historyRange) ?? HISTORY_RANGES[1];
-	// Sent to the three range-aware endpoints as `created_after`; undefined = all.
+	// Sent to the four range-aware endpoints as `created_after`; undefined = all.
 	const historyCreatedAfter =
 		range.days != null
 			? new Date(Date.now() - range.days * DAY_MS).toISOString()
@@ -277,7 +281,7 @@ export default function InventoryItemDetailPage() {
 					overviewLayout === "split" ? "lg:grid-cols-4" : ""
 				}`}
 			>
-				<Field label="Location" value={item.location} />
+				<Field label="Location" value={<LocationValue location={item.location} />} />
 				<Field label="Category" value={item.category} />
 				{/* The configured value, so this one DOES name the unit — but as
 				    its catalog label ("Each", "Feet"), not the stored code. */}
@@ -393,11 +397,21 @@ export default function InventoryItemDetailPage() {
 	// it started roughly 1000px down the page — below the fold on a 900px viewport.
 	// The carousel is reference material, so it follows and also lost 64px.
 	const railStack = (
-		<div className="lg:col-span-1 space-y-6">
-			<ReorderHealthMini
-				itemId={item.id}
-				onViewHistory={() => setActiveTab("history")}
-			/>
+		<div className="lg:col-span-1 flex h-full flex-col gap-6">
+			{/* `flex-1 grid` with a `max-h` clamp: three short lines of text
+			    stretched to match a tall StockPlacementCard just reads as
+			    broken, all padding and no content. Capped, it takes a little
+			    of the surplus height (clean, bounded) and the flex algorithm
+			    hands the rest to StockPlacementCard below automatically once
+			    this one freezes at its cap — no manual ratio to keep in sync.
+			    The carousel stays a fixed h-56 either way — stretching a
+			    photo frame would distort the image, not just add room. */}
+			<div className="flex-1 grid max-h-28">
+				<ReorderHealthMini
+					itemId={item.id}
+					onViewHistory={() => setActiveTab("history")}
+				/>
+			</div>
 
 			{hasImages && (
 				<ImageCarousel
@@ -412,14 +426,31 @@ export default function InventoryItemDetailPage() {
 			    to sit here restating the same warehouse-vs-vehicle axis from a
 			    different source. `archived` = tracking off but units/lots survive,
 			    which is the one state where the live split and the historical
-			    records are both worth having. */}
-			<StockPlacementCard
-				item={item}
-				archived={!isTracked && hasArchivedTracking}
-				onViewAll={() => setActiveTab("tracking")}
-			/>
+			    records are both worth having.
+
+			    Wrapped in `flex-1 grid`, same as the strip above: `flex-1` grows
+			    the wrapper to close the gap when the other column runs taller
+			    (the grid row is stretched — see the two `grid-cols-3` wrappers
+			    below); `grid` then stretches the Card itself to fill that
+			    wrapper on BOTH axes, so it stays full column width instead of
+			    shrinking to its content width the way a row-flex child would. */}
+			<div className="flex-1 grid">
+				<StockPlacementCard
+					item={item}
+					archived={!isTracked && hasArchivedTracking}
+					onViewAll={() => setActiveTab("tracking")}
+				/>
+			</div>
 		</div>
 	);
+
+	// Full width, below both the main stack and the rail, in either layout. Its
+	// row count doesn't track with Details or Cost: an unbounded block in the
+	// rail would let a long supplier list end the rail column somewhere the
+	// main column never could. Full width, it's the tab's closing element
+	// instead: whichever column ran taller above it, the page always finishes
+	// on the same wide edge.
+	const suppliersBand = <ItemSuppliersCard itemId={item.id} unit={item.unit} />;
 
 	return (
 		<div className="text-text-primary space-y-6">
@@ -654,23 +685,40 @@ export default function InventoryItemDetailPage() {
 
 							{/* Cost & Pricing paired against the rail: ~230px of
 							    metrics beside ~260px of placement + reorder, so
-							    neither side trails a column of whitespace. */}
-							<div className="grid grid-cols-1 gap-6 items-start lg:grid-cols-3">
-								<div className="lg:col-span-2">
+							    neither side trails a column of whitespace. Row
+							    stretches (no `items-start`) so whichever side is
+							    naturally shorter grows to match — Cost fills the
+							    whole column here since it's alone in it. `grid`,
+							    not `flex`, on the wrapper: a row-flex child sizes
+							    to its own content width and leaves the rest of the
+							    column blank, where grid's default stretch fills
+							    the wrapper on both axes. */}
+							<div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+								<div className="grid lg:col-span-2">
 									{costCard}
 								</div>
 								{railStack}
 							</div>
 						</>
 					) : (
-						<div className="grid grid-cols-1 gap-6 items-start lg:grid-cols-3">
-							<div className="space-y-6 lg:col-span-2">
-								{detailsCard}
-								{costCard}
+						<div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+							{/* Both cards get `flex-1 grid` here, not just Cost:
+							    when the rail runs taller, the extra height splits
+							    evenly across Details and Cost instead of dumping
+							    it all into whichever card happens to be last. */}
+							<div className="flex flex-col gap-6 lg:col-span-2">
+								<div className="flex-1 grid">
+									{detailsCard}
+								</div>
+								<div className="flex-1 grid">
+									{costCard}
+								</div>
 							</div>
 							{railStack}
 						</div>
 					)}
+
+					{suppliersBand}
 				</div>
 			)}
 
@@ -831,15 +879,27 @@ export default function InventoryItemDetailPage() {
 					className="space-y-6"
 				>
 					<h2 className="sr-only">History</h2>
-					{/* One range control for the tab. It drives the two charts
-					    and the ledger; the forecast card keeps its own fixed 90d
-					    window and says so on its face. */}
-					<div className="flex items-center justify-between gap-3">
-						<span className="text-xs font-medium text-text-muted">
-							Showing{" "}
-							{range.label === "All"
-								? "all history"
-								: `the last ${range.label}`}
+					{/* One range control for the tab. It drives the two charts,
+					    the stock ledger, and the usage-by-job list; the forecast
+					    card keeps its own fixed 90d window and says so on its
+					    face.
+					    Boxed as its own toolbar (mirrors PageReportSection's
+					    filter bar), not a bare flex row — unboxed and sitting
+					    directly above ReorderHealthCard's bordered Card, it read
+					    as that card's header rather than a control for the whole
+					    tab. Three columns, not two spans crowded together: the
+					    caption stays pinned left so it reads as a label, not
+					    part of the sentence, and the resolved value gets its own
+					    centered column and real weight — it's the answer to
+					    "what am I looking at", so it should be the thing that
+					    pops, not a quiet aside next to its own caption. One row
+					    throughout; the grid's height is still set by the toggle. */}
+					<div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-border-subtle bg-base px-3 py-2">
+						<span className="text-sm font-semibold uppercase tracking-wider text-text-primary">
+							History range
+						</span>
+						<span className="text-center text-sm font-semibold text-text-primary">
+							{range.label === "All" ? "All history" : `Last ${range.label}`}
 						</span>
 						<SegmentedToggle<HistoryRangeId>
 							ariaLabel="History range"
@@ -875,11 +935,13 @@ export default function InventoryItemDetailPage() {
 					    down. The charts still line up at rest because their at-rest
 					    bodies share one fixed height (CHART_BODY_H), and both lists
 					    stay at half width — narrow-content rows that stretched a 1fr
-					    middle column into dead space at full width.
+					    middle column into dead space at full width. The columns
+					    stretch and each list fills what is left of its column, so
+					    the two still end on one line.
 
 					    Stacked order on narrow screens follows the columns:
 					    stock chart → stock ledger → consumption chart → usage. */}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 						<div className="flex flex-col gap-6">
 							<StockLevelChart
 								itemId={item.id}
@@ -888,10 +950,12 @@ export default function InventoryItemDetailPage() {
 								createdAfter={historyCreatedAfter}
 								xDomain={historyXDomain}
 							/>
-							<StockMovementList
-								itemId={item.id}
-								createdAfter={historyCreatedAfter}
-							/>
+							<div className="flex-1 grid">
+								<StockMovementList
+									itemId={item.id}
+									createdAfter={historyCreatedAfter}
+								/>
+							</div>
 						</div>
 						<div className="flex flex-col gap-6">
 							<ConsumptionTrendChart
@@ -901,7 +965,9 @@ export default function InventoryItemDetailPage() {
 								range={consumptionRange}
 								xDomain={historyXDomain}
 							/>
-							<UsageReport itemId={item.id} />
+							<div className="flex-1 grid">
+								<UsageReport itemId={item.id} createdAfter={historyCreatedAfter} />
+							</div>
 						</div>
 					</div>
 				</div>

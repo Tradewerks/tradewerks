@@ -19,10 +19,47 @@ import PartsUsedSection from "../../components/technicianComponents/PartsUsedSec
 import CustomerHistorySection from "../../components/technicianComponents/CustomerHistorySection";
 import InvoicePreview from "../../components/technicianComponents/InvoicePreview";
 import { VisitStatusColors, VisitStatusLabels, type VisitStatus } from "../../types/jobs";
-import { QuoteStatusColors } from "../../types/quotes";
+import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
 import { formatDateTime, formatTime, FALLBACK_TIMEZONE } from "../../util/util";
+import { formatElapsed, resolveWorkTimerStart } from "../../util/elapsedUtil";
 import { useAuthStore } from "../../auth/authStore";
 import { ProjectStatusColors, ProjectStatusLabels } from "../../types/project";
+import StartPurchaseButton from "../../components/technician/procurement/StartPurchaseButton";
+import RequestApprovalButton from "../../components/technician/procurement/RequestApprovalButton";
+import TechPage from "../../components/technician/TechPage";
+
+// ── Field purchases ───────────────────────────────────────────────────────────
+
+/**
+ * Both ways a part gets bought mid-visit, the same fork the purchases page offers.
+ * A technician on the job can ask dispatch first or record a receipt after paying
+ * — not just the already-paid half, which would otherwise be the one case where
+ * their own money is at stake with no way to ask first.
+ */
+function FieldPurchaseActions({ jobId, visitId }: { jobId: string | null; visitId: string }) {
+	return (
+		<section className="space-y-2" aria-labelledby="field-purchases-heading">
+			<div>
+				<h2
+					id="field-purchases-heading"
+					className="text-xs font-semibold uppercase tracking-wide text-text-secondary"
+				>
+					Field Purchases
+				</h2>
+				<p className="mt-1 text-xs text-text-muted">
+					Parts bought at a store or supply house. Parts off your truck go
+					in Parts Used.
+				</p>
+			</div>
+			<StartPurchaseButton
+				job={jobId ? { id: jobId, visitId } : null}
+				label="Record a field purchase"
+				hint="Already paid at the counter. Photograph the receipt to get reimbursed and put the cost on the job."
+			/>
+			<RequestApprovalButton preselectedJobId={jobId} />
+		</section>
+	);
+}
 
 // ── Elapsed Timer ─────────────────────────────────────────────────────────────
 
@@ -32,19 +69,14 @@ function ElapsedTimer({ startAt }: { startAt: string }) {
 	);
 
 	useEffect(() => {
+		setElapsed(Math.floor((Date.now() - new Date(startAt).getTime()) / 1000));
 		const id = setInterval(() => {
 			setElapsed(Math.floor((Date.now() - new Date(startAt).getTime()) / 1000));
 		}, 1000);
 		return () => clearInterval(id);
 	}, [startAt]);
 
-	const h = Math.floor(elapsed / 3600);
-	const m = Math.floor((elapsed % 3600) / 60);
-	const s = elapsed % 60;
-	const label =
-		h > 0
-			? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
-			: `${m}:${String(s).padStart(2, "0")}`;
+	const label = formatElapsed(elapsed);
 
 	return (
 		<div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-success-bg border border-success/20">
@@ -223,7 +255,10 @@ function JobContextSection({
 										"bg-neutral/20 text-text-secondary border-border-strong/30"
 									}`}
 								>
-									{job.quote.status}
+									{QuoteStatusLabels[
+										job.quote
+											.status as keyof typeof QuoteStatusLabels
+									] ?? job.quote.status}
 								</span>
 								<ChevronRight
 									size={14}
@@ -453,12 +488,12 @@ export default function TechnicianVisitDetailPage() {
 
 	if (isLoading) {
 		return (
-			<div className="max-w-lg mx-auto space-y-4 animate-pulse">
+			<TechPage className="space-y-4 animate-pulse">
 				<div className="h-7 w-48 bg-surface rounded" />
 				<div className="h-4 w-32 bg-surface rounded" />
 				<div className="h-24 bg-surface rounded-xl" />
 				<div className="h-32 bg-surface rounded-xl" />
-			</div>
+			</TechPage>
 		);
 	}
 
@@ -475,6 +510,7 @@ export default function TechnicianVisitDetailPage() {
 	const clientId = job?.client_id ?? null;
 
 	const lineItems = visit.line_items ?? [];
+	const timerStartAt = resolveWorkTimerStart(visit, user?.userId);
 	const subtotal = Number(visit.subtotal ?? 0);
 	const taxRate = Number(visit.tax_rate ?? 0);
 	const taxAmount = Number(visit.tax_amount ?? 0);
@@ -594,18 +630,15 @@ export default function TechnicianVisitDetailPage() {
 							jobId={visit.job_id}
 							visitId={visitId!}
 						/>
+						<FieldPurchaseActions jobId={visit.job_id} visitId={visit.id} />
 					</>
 				);
 
 			case "InProgress":
 				return (
 					<>
-						{visit.actual_start_at && (
-							<ElapsedTimer
-								startAt={
-									visit.actual_start_at as string
-								}
-							/>
+						{timerStartAt && (
+							<ElapsedTimer startAt={timerStartAt} />
 						)}
 						<WorkPerformedSection
 							jobId={visit.job_id}
@@ -615,6 +648,7 @@ export default function TechnicianVisitDetailPage() {
 							visitId={visitId!}
 							lineItems={lineItems}
 						/>
+						<FieldPurchaseActions jobId={visit.job_id} visitId={visit.id} />
 						<JobContextSection
 							visit={visit}
 							tz={tz}
@@ -701,7 +735,7 @@ export default function TechnicianVisitDetailPage() {
 			: undefined;
 
 	return (
-		<div className="max-w-lg mx-auto pb-28">
+		<TechPage className="pb-28">
 			{/* Header */}
 			<div className="mb-5">
 				<h1 className="text-xl font-bold text-text-primary leading-snug">
@@ -736,7 +770,7 @@ export default function TechnicianVisitDetailPage() {
 {/* Sticky footer CTA */}
 			{status !== "Completed" && status !== "Cancelled" && (
 				<div className="fixed bottom-16 left-0 right-0 z-40 px-4 pb-3 bg-gradient-to-t from-canvas via-canvas/95 to-transparent pt-6">
-					<div className="max-w-lg mx-auto flex gap-2">
+					<TechPage className="flex gap-2">
 						<div className="flex-1">
 							<VisitActionButtons
 								visit={visit}
@@ -753,9 +787,9 @@ export default function TechnicianVisitDetailPage() {
 								<Phone size={18} />
 							</a>
 						)}
-					</div>
+					</TechPage>
 				</div>
 			)}
-		</div>
+		</TechPage>
 	);
 }

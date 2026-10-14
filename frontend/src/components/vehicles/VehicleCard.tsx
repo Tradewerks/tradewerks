@@ -85,6 +85,7 @@ export default function VehicleCard({ vehicle, onEdit, readiness, onReadinessCli
 					<div className="text-xs text-text-muted mt-0.5 truncate">
 						{[vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ")}
 						{vehicle.license_plate && ` · ${vehicle.license_plate}`}
+						{vehicle.current_odometer_mi != null && ` · ${vehicle.current_odometer_mi.toLocaleString()} mi`}
 					</div>
 				</div>
 			</div>

@@ -1,6 +1,6 @@
 ﻿import { X, MapPin, Calendar, AlertCircle } from "lucide-react";
 import { useQuoteByIdQuery } from "../../hooks/useQuotes";
-import { QuoteStatusColors } from "../../types/quotes";
+import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
 import { formatDateTime } from "../../util/util";
 
 interface TechnicianQuoteModalProps {
@@ -38,7 +38,7 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 										"bg-neutral/20 text-text-secondary border-border-strong/30"
 									}`}
 								>
-									{quote.status}
+									{QuoteStatusLabels[quote.status] ?? quote.status}
 								</span>
 							</>
 						)}

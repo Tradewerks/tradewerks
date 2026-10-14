@@ -16,13 +16,20 @@ const PAGE_SIZE = 20;
 // Offset-paginated (see usageQuerySchema on the backend — these are GROUP BY
 // aggregate rows, not raw ledger rows with a stable cursor id). Pages live in
 // the infinite query, same as StockMovementList, so "Load more" can't append
-// a page twice. Rows mirror that component's two-line shape rather than
-// BatchDetailPage's four-column grid: the two cards sit side by side at half
-// width each, where a 600px column floor would have forced a nested
-// horizontal scrollbar.
-export default function UsageReport({ itemId }: { itemId: string }) {
+// a page twice. `createdAfter` folds into the query key, so a range change
+// naturally starts the infinite query over at page 0 — no manual reset needed.
+// Rows mirror that component's two-line shape rather than BatchDetailPage's
+// four-column grid: the two cards sit side by side at half width each, where
+// a 600px column floor would have forced a nested horizontal scrollbar.
+export default function UsageReport({
+	itemId,
+	createdAfter,
+}: {
+	itemId: string;
+	createdAfter?: string;
+}) {
 	const { data, isLoading, isFetching, isError, refetch, hasNextPage, fetchNextPage } =
-		useItemUsageQuery(itemId, { limit: PAGE_SIZE });
+		useItemUsageQuery(itemId, { limit: PAGE_SIZE, createdAfter });
 
 	const rows: ItemUsageRow[] = useMemo(
 		() => data?.pages.flatMap((p) => p.usage) ?? [],
@@ -55,8 +62,12 @@ export default function UsageReport({ itemId }: { itemId: string }) {
 			{!isFirstLoad && !isError && rows.length === 0 && (
 				<EmptyState
 					icon={<ClipboardList size={26} />}
-					title="No usage yet"
-					description="Once this item is used on a job visit, the jobs and clients it was consumed on will show up here."
+					title={createdAfter ? "No usage in this range" : "No usage yet"}
+					description={
+						createdAfter
+							? "Widen the range above to see more of this item's usage history."
+							: "Once this item is used on a job visit, the jobs and clients it was consumed on will show up here."
+					}
 				/>
 			)}
 

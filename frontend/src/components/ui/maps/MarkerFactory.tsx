@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { StaticMarker } from "../../../types/location";
-import { Users, Wrench } from "lucide-react";
+import { Building2, MapPin, Timer, TriangleAlert, Users, Wrench } from "lucide-react";
 
 const iconStyles = "m-auto h-full text-white";
 
@@ -18,6 +18,18 @@ const CreateMarker = (m: StaticMarker) => {
 		case "TECHNICIAN": {
 			bgColor = " [background-color:var(--color-orange)] ";
 			icon = <Wrench className={iconStyles} size={20} />;
+			break;
+		}
+
+		case "SITE": {
+			bgColor = " bg-primary ";
+			icon = <MapPin className={iconStyles} size={20} />;
+			break;
+		}
+
+		case "WAREHOUSE": {
+			bgColor = " bg-neutral ";
+			icon = <Building2 className={iconStyles} size={18} />;
 			break;
 		}
 	}
@@ -49,9 +61,17 @@ const CreateMarker = (m: StaticMarker) => {
 
 			{m.label && (
 				<div
-					className="mt-1 px-2 py-0.5 rounded-md bg-base border border-border text-text-primary text-xs font-semibold whitespace-nowrap shadow-md"
+					className={`mt-1 px-2 py-0.5 rounded-md bg-base text-xs font-semibold whitespace-nowrap shadow-md flex items-center gap-1 ${
+						m.alert === "late"
+							? "border-2 border-error text-error-text"
+							: m.alert === "at_risk"
+								? "border-2 border-warning text-warning-text"
+								: "border border-border text-text-primary"
+					}`}
 					style={{ pointerEvents: "none" }}
 				>
+					{m.alert === "late" && <TriangleAlert size={12} aria-hidden="true" />}
+					{m.alert === "at_risk" && <Timer size={12} aria-hidden="true" />}
 					{m.label}
 				</div>
 			)}

@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from "react";
+﻿import { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, ArrowRight, RotateCcw, RotateCw } from "lucide-react";
 import TimePicker from "../TimePicker";
@@ -7,12 +7,16 @@ import type { ArrivalConstraint, FinishConstraint } from "../../../types/recurri
 import type { Technician } from "../../../types/technicians";
 import type { VisitWithJob } from "./dashboardCalendarUtils";
 import {
+	alignScheduleToConstraints,
 	formatDateDisplay,
 	dateToHHMM,
 	hhmmToPickerDate,
 	POPUP_LABEL_STYLE,
 	POPUP_MUTED_STYLE,
 	POPUP_SELECT_STYLE,
+	RESCHEDULE_POPUP_W,
+	constraintPayload,
+	getAnchoredPopupPos,
 } from "./scheduleBoardUtils";
 
 interface ConflictRow {
@@ -46,28 +50,6 @@ function formatTimeSimple(d: Date): string {
 	const period = h >= 12 ? "PM" : "AM";
 	const displayH = h % 12 || 12;
 	return m === 0 ? `${displayH} ${period}` : `${displayH}:${String(m).padStart(2, "0")} ${period}`;
-}
-
-function hhmmToDate(newDateStr: string, hhmm: string): Date | null {
-	if (!hhmm) return null;
-	const [h, m] = hhmm.split(":").map(Number);
-	if (Number.isNaN(h) || Number.isNaN(m)) return null;
-	const [y, mo, d] = newDateStr.split("-").map(Number);
-	return new Date(y, mo - 1, d, h, m, 0, 0);
-}
-
-function computeNewTimes(
-	newDateStr: string,
-	oldStartAt: string | Date,
-	oldEndAt: string | Date,
-): { newStart: Date; newEnd: Date } {
-	const oldStart = typeof oldStartAt === "string" ? new Date(oldStartAt) : oldStartAt;
-	const oldEnd = typeof oldEndAt === "string" ? new Date(oldEndAt) : oldEndAt;
-	const durationMs = oldEnd.getTime() - oldStart.getTime();
-	const [y, mo, d] = newDateStr.split("-").map(Number);
-	const newStart = new Date(y, mo - 1, d, oldStart.getHours(), oldStart.getMinutes(), 0, 0);
-	const newEnd = new Date(newStart.getTime() + durationMs);
-	return { newStart, newEnd };
 }
 
 function detectConflicts(
@@ -173,30 +155,36 @@ export default function ReschedulePopup({
 		finishConstraint   !== (visit.finish_constraint    as FinishConstraint) ||
 		finishTime         !== (visit.finish_time          ?? "");
 
+	const edited = useMemo(
+		() =>
+			constraintPayload({
+				arrival_constraint: arrivalConstraint,
+				arrival_time: arrivalTime,
+				arrival_window_start: arrivalWindowStart,
+				arrival_window_end: arrivalWindowEnd,
+				finish_constraint: finishConstraint,
+				finish_time: finishTime,
+			}),
+		[
+			arrivalConstraint,
+			arrivalTime,
+			arrivalWindowStart,
+			arrivalWindowEnd,
+			finishConstraint,
+			finishTime,
+		]
+	);
+
 	// Run conflict detection whenever timing constraints change
 	useEffect(() => {
 		setConflictState("checking");
 		const timer = setTimeout(() => {
-			const { newStart, newEnd } = computeNewTimes(
+			const { start: checkStart, end: checkEnd } = alignScheduleToConstraints(
 				newDateStr,
-				visit.scheduled_start_at,
-				visit.scheduled_end_at,
+				{ start: visit.scheduled_start_at, end: visit.scheduled_end_at },
+				visit,
+				edited
 			);
-
-			// Override start if user has set an explicit arrival time
-			let checkStart = newStart;
-			if (arrivalConstraint === "at" && arrivalTime) {
-				checkStart = hhmmToDate(newDateStr, arrivalTime) ?? newStart;
-			} else if (arrivalConstraint === "between" && arrivalWindowStart) {
-				checkStart = hhmmToDate(newDateStr, arrivalWindowStart) ?? newStart;
-			} else if (arrivalConstraint === "by" && arrivalWindowEnd) {
-				checkStart = hhmmToDate(newDateStr, arrivalWindowEnd) ?? newStart;
-			}
-
-			let checkEnd = newEnd;
-			if ((finishConstraint === "at" || finishConstraint === "by") && finishTime) {
-				checkEnd = hhmmToDate(newDateStr, finishTime) ?? newEnd;
-			}
 
 			const rows = detectConflicts(
 				visit.id,
@@ -211,15 +199,12 @@ export default function ReschedulePopup({
 			setConflictState(rows.length > 0 ? "error" : "ok");
 		}, 150);
 		return () => clearTimeout(timer);
-	}, [arrivalConstraint, arrivalTime, arrivalWindowStart, arrivalWindowEnd, finishConstraint, finishTime]);
+	}, [edited]);
 
-	// Smart popup position: right of cell if space allows, else left
-	const popupW = 308;
-	const popupLeft =
-		anchorRect.right + 8 + popupW < window.innerWidth
-			? anchorRect.right + 8
-			: anchorRect.left - popupW - 8;
-	const popupTop = Math.max(8, Math.min(anchorRect.top, window.innerHeight - 520));
+	const { top: popupTop, left: popupLeft } = getAnchoredPopupPos(anchorRect, {
+		popupW: RESCHEDULE_POPUP_W,
+		popupH: 512,
+	});
 
 	function handleUndo() {
 		setArrivalConstraint(visit.arrival_constraint as ArrivalConstraint);
@@ -231,20 +216,16 @@ export default function ReschedulePopup({
 	}
 
 	function handleSave() {
-		const { newStart, newEnd } = computeNewTimes(
+		const { start, end } = alignScheduleToConstraints(
 			newDateStr,
-			visit.scheduled_start_at,
-			visit.scheduled_end_at,
+			{ start: visit.scheduled_start_at, end: visit.scheduled_end_at },
+			visit,
+			edited
 		);
 		const data: UpdateJobVisitInput = {
-			scheduled_start_at: newStart.toISOString(),
-			scheduled_end_at: newEnd.toISOString(),
-			arrival_constraint: arrivalConstraint,
-			finish_constraint: finishConstraint,
-			arrival_time: arrivalConstraint === "at" ? (arrivalTime || null) : null,
-			arrival_window_start: arrivalConstraint === "between" ? (arrivalWindowStart || null) : null,
-			arrival_window_end: (arrivalConstraint === "between" || arrivalConstraint === "by") ? (arrivalWindowEnd || null) : null,
-			finish_time: (finishConstraint === "at" || finishConstraint === "by") ? (finishTime || null) : null,
+			scheduled_start_at: start.toISOString(),
+			scheduled_end_at: end.toISOString(),
+			...edited,
 			...(isRecurring && { reschedule_scope: recurringScope }),
 		};
 		onSave(data);
@@ -265,7 +246,7 @@ export default function ReschedulePopup({
 					position: "fixed",
 					top: popupTop,
 					left: popupLeft,
-					width: popupW,
+					width: RESCHEDULE_POPUP_W,
 					zIndex: 1001,
 					backgroundColor: "var(--color-popup-bg)",
 					border: "1px solid var(--color-border)",

@@ -187,7 +187,12 @@ export default function StockPlacementCard({
 					{item.is_serialized && (
 						<div>
 							<GroupHeading>{SERIAL_GROUP_HEADING}</GroupHeading>
-							<div className="flex gap-3">
+							{/* Wraps rather than overflows: two 140px-min tiles plus
+							    gap can exceed the rail's width at in-between
+							    breakpoints, and Card's `overflow-hidden` was
+							    clipping the second tile flush against the edge —
+							    reading as the card losing its right-side padding. */}
+							<div className="flex flex-wrap gap-3">
 								<PlacementTile
 									icon={serialWarehouseMeta.icon}
 									label={serialWarehouseMeta.label}
@@ -208,7 +213,7 @@ export default function StockPlacementCard({
 					{item.is_batch_tracked && (
 						<div>
 							<GroupHeading>{BATCH_GROUP_HEADING}</GroupHeading>
-							<div className="flex gap-3">
+							<div className="flex flex-wrap gap-3">
 								<PlacementTile
 									icon={batchWarehouseMeta.icon}
 									label={batchWarehouseMeta.label}

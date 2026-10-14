@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { Technician } from "../../../types/technicians";
-import type { JobVisit } from "../../../types/jobs";
+import type { JobVisit, UpdateJobVisitInput } from "../../../types/jobs";
+import type { ArrivalConstraint, FinishConstraint } from "../../../types/recurringPlans";
 
 // ─── Shared constants (scroll zones) ─────────────────────────────────────────
 
@@ -73,30 +74,6 @@ export interface OverlapSlot<T> {
 }
 
 /**
- * Derive the visual end hour used for overlap detection.
- * For open-ended (when_done) visits, scheduled_end_at is arbitrary — use the
- * fixed 2-hour display window instead so overlap groups match what the user sees.
- */
-function visitEndHours(visit: {
-	finish_constraint?: string;
-	arrival_constraint: string;
-	arrival_time?: string | null;
-	arrival_window_start?: string | null;
-	arrival_window_end?: string | null;
-	scheduled_start_at: string | Date;
-	scheduled_end_at: string | Date;
-}): number {
-	if (visit.finish_constraint === "when_done") {
-		return Math.min(visitStartHours(visit) + 2, DAY_END);
-	}
-	const e =
-		typeof visit.scheduled_end_at === "string"
-			? new Date(visit.scheduled_end_at)
-			: visit.scheduled_end_at;
-	return e.getHours() + e.getMinutes() / 60;
-}
-
-/**
  * Time-local overlap layout: assigns each visit a lane via greedy slot-packing,
  * then expands each visit rightward into lanes that are free during its time range.
  *
@@ -120,24 +97,16 @@ function visitEndHours(visit: {
  *   C: direct overlaps A(0),B(1)      → no right    → span=1 → 1/3 width
  *   D: direct overlaps A(0) only      → no right    → span=2 → 2/3 width
  */
-export function resolveOverlapLayout<
-	T extends {
-		id: string;
-		finish_constraint?: string;
-		arrival_constraint: string;
-		arrival_time?: string | null;
-		arrival_window_start?: string | null;
-		arrival_window_end?: string | null;
-		scheduled_start_at: string | Date;
-		scheduled_end_at: string | Date;
-	},
->(visits: T[], colWidth: number): OverlapSlot<T>[] {
+export function resolveOverlapLayout<T extends { id: string; span: CardSpan }>(
+	visits: T[],
+	colWidth: number
+): OverlapSlot<T>[] {
 	if (visits.length === 0) return [];
 
 	const GAP = 2;
 	const usableWidth = colWidth - LEFT_PAD - RIGHT_PAD;
 
-	const sorted = [...visits].sort((a, b) => visitStartHours(a) - visitStartHours(b));
+	const sorted = [...visits].sort((a, b) => a.span.startH - b.span.startH);
 	const n = sorted.length;
 
 	// ── Step 1: assign lanes ───────────────────────────────────────────────────
@@ -148,8 +117,8 @@ export function resolveOverlapLayout<
 	const eH: number[] = [];
 
 	for (let i = 0; i < n; i++) {
-		const s = visitStartHours(sorted[i]);
-		const e = visitEndHours(sorted[i]);
+		const s = sorted[i].span.startH;
+		const e = Math.max(sorted[i].span.endH, s + MIN_CARD_HOURS);
 		sH.push(s);
 		eH.push(e);
 
@@ -232,69 +201,86 @@ export function resolveOverlapLayout<
 /**
  * Parse an "HH:MM" constraint string to fractional hours. Returns null if invalid.
  */
-function hhmmToHours(hhmm: string | null | undefined): number | null {
+export function hhmmToHours(hhmm: string | null | undefined): number | null {
 	if (!hhmm) return null;
 	const [h, m] = hhmm.split(":").map(Number);
 	if (Number.isNaN(h) || Number.isNaN(m)) return null;
 	return h + m / 60;
 }
 
+// ─── Card span (single source of truth for top, height and lanes) ─────────────
+
+export interface CardSpan {
+	startH: number;
+	endH: number;
+	openEnded: boolean;
+}
+
+/** Drawn minimum in hours; lanes use it too so a 5-minute card still claims its drawn height. */
+const MIN_CARD_HOURS = 0.5;
+
 /**
- * Derive the display start hour for a visit from its arrival constraint fields
- * (timezone-independent HH:MM strings), falling back to scheduled_start_at local time.
- *
- * Uses the same priority as the detail page:
- *   "at"      → arrival_time
- *   "between" → arrival_window_start
- *   "by"      → arrival_window_end (best available; no dedicated start stored)
- *   "anytime" → scheduled_start_at
+ * Drawn length of a `when_done` card. Its stored end is not a real estimate yet (forms write
+ * start + 2h, seed/imports write anything), so it is ignored until an editable estimate exists.
  */
-export function visitStartHours(visit: {
-	arrival_constraint: string;
-	arrival_time?: string | null;
-	arrival_window_start?: string | null;
-	arrival_window_end?: string | null;
-	scheduled_start_at: string | Date;
-}): number {
-	let h: number | null = null;
-	if (visit.arrival_constraint === "at") {
-		h = hhmmToHours(visit.arrival_time);
-	} else if (visit.arrival_constraint === "between") {
-		h = hhmmToHours(visit.arrival_window_start);
-	} else if (visit.arrival_constraint === "by") {
-		h = hhmmToHours(visit.arrival_window_end);
+export const WHEN_DONE_DEFAULT_H = 2;
+
+function toDate(at: string | Date | null | undefined): Date {
+	if (at == null) return new Date(NaN);
+	return typeof at === "string" ? new Date(at) : at;
+}
+
+/**
+ * Local wall-clock span of a stored schedule. Wall-clock, not elapsed ms, because the grid's
+ * hour lines are wall-clock — a DST day must still line up.
+ */
+export function cardSpan(item: {
+	start: string | Date;
+	end: string | Date;
+	finish_constraint?: string;
+}): CardSpan {
+	const s = toDate(item.start);
+	const e = toDate(item.end);
+	const rawStart = s.getHours() + s.getMinutes() / 60;
+	const startH = Number.isFinite(rawStart) ? rawStart : DAY_START;
+	if (item.finish_constraint === "when_done") {
+		return { startH, endH: Math.min(DAY_END, startH + WHEN_DONE_DEFAULT_H), openEnded: true };
 	}
-	if (h !== null) return h;
-	// Fallback: local time from scheduled_start_at
-	const d =
-		typeof visit.scheduled_start_at === "string"
-			? new Date(visit.scheduled_start_at)
-			: visit.scheduled_start_at;
-	return d.getHours() + d.getMinutes() / 60;
+	let endH: number;
+	// `!(a > b)` also catches an unparseable end (NaN), which would otherwise fail the day check.
+	if (!(e.getTime() > s.getTime())) endH = startH;
+	else if (localDateKey(e) !== localDateKey(s)) endH = DAY_END;
+	else endH = e.getHours() + e.getMinutes() / 60;
+	return { startH, endH, openEnded: false };
 }
 
-/**
- * Top offset in px for a plain datetime (occurrences, popup anchoring).
- * Uses local browser time — appropriate when the datetime is already stored correctly.
- */
-export function calcTopFromDatetime(at: string | Date): number {
-	const d = typeof at === "string" ? new Date(at) : at;
-	const hoursFromStart = d.getHours() + d.getMinutes() / 60 - DAY_START;
-	return Math.max(0, hoursFromStart * SLOT_H);
-}
-
-/**
- * Top offset in px from the top of the time-grid, derived from visit constraint fields.
- */
-export function calcCardTop(visit: {
-	arrival_constraint: string;
-	arrival_time?: string | null;
-	arrival_window_start?: string | null;
-	arrival_window_end?: string | null;
+export function visitSpan(v: {
 	scheduled_start_at: string | Date;
-}): number {
-	const hoursFromStart = visitStartHours(visit) - DAY_START;
-	return Math.max(0, hoursFromStart * SLOT_H);
+	scheduled_end_at: string | Date;
+	finish_constraint?: string;
+}): CardSpan {
+	return cardSpan({
+		start: v.scheduled_start_at,
+		end: v.scheduled_end_at,
+		finish_constraint: v.finish_constraint,
+	});
+}
+
+export function occurrenceSpan(o: {
+	occurrence_start_at: string | Date;
+	occurrence_end_at: string | Date;
+	finish_constraint?: string;
+}): CardSpan {
+	return cardSpan({
+		start: o.occurrence_start_at,
+		end: o.occurrence_end_at,
+		finish_constraint: o.finish_constraint,
+	});
+}
+
+/** Top offset in px from the top of the time grid. */
+export function calcCardTop(span: CardSpan): number {
+	return Math.max(0, (span.startH - DAY_START) * SLOT_H);
 }
 
 /** Format a visit's start time from constraint HH:MM fields (timezone-free), falling back to local time from scheduled_start_at. */
@@ -364,42 +350,217 @@ export function visitConstraintTimeLabel(visit: {
 	return `${start} – ${visitEndLabel(visit)}`;
 }
 
-/** Height in px for a visit. Minimum is one half-slot (30 min = SLOT_H/2) for clean display.
- *  Uses constraint-derived start hours for the start anchor so height is consistent
- *  with calcCardTop. When openEnded (finish_constraint = "when_done"), caps at 4 hours.
- */
-export function calcCardHeight(
-	visit: {
-		arrival_constraint: string;
-		arrival_time?: string | null;
-		arrival_window_start?: string | null;
-		arrival_window_end?: string | null;
-		scheduled_start_at: string | Date;
-		scheduled_end_at: string | Date;
-	},
-	openEnded = false
-): number {
-	const startHours = visitStartHours(visit);
-	const maxHours = DAY_END - startHours;
+/** Height in px. Open-ended cards draw WHEN_DONE_DEFAULT_H; the dashed edge marks them. */
+export function calcCardHeight(span: CardSpan): number {
+	return Math.max(MIN_CARD_HOURS * SLOT_H, (span.endH - span.startH) * SLOT_H);
+}
 
-	// Open-ended visits have unknown duration — use a fixed 2-hour display height
-	// so all "when_done" cards are visually consistent regardless of scheduled_end_at.
-	if (openEnded) {
-		return Math.min(2 * SLOT_H, maxHours * SLOT_H);
+// ─── Reschedule helpers ───────────────────────────────────────────────────────
+
+export interface ConstraintTimes {
+	arrival_constraint: string;
+	arrival_time?: string | null;
+	arrival_window_start?: string | null;
+	arrival_window_end?: string | null;
+	finish_constraint: string;
+	finish_time?: string | null;
+}
+
+/** Constraint form state; empty strings are unset times. */
+export interface ConstraintDraft {
+	arrival_constraint: ArrivalConstraint;
+	arrival_time: string;
+	arrival_window_start: string;
+	arrival_window_end: string;
+	finish_constraint: FinishConstraint;
+	finish_time: string;
+}
+
+/** Save payload: times the chosen constraints don't use are nulled so stale values aren't kept. */
+export function constraintPayload(c: ConstraintDraft) {
+	const arrival = c.arrival_constraint;
+	const finish = c.finish_constraint;
+	return {
+		arrival_constraint: arrival,
+		finish_constraint: finish,
+		arrival_time: arrival === "at" ? c.arrival_time || null : null,
+		arrival_window_start: arrival === "between" ? c.arrival_window_start || null : null,
+		arrival_window_end:
+			arrival === "between" || arrival === "by" ? c.arrival_window_end || null : null,
+		finish_time: finish === "at" || finish === "by" ? c.finish_time || null : null,
+	};
+}
+
+function hhmmToMinutes(hhmm: string | null | undefined): number | null {
+	const h = hhmmToHours(hhmm);
+	return h === null ? null : Math.round(h * 60);
+}
+
+const LAST_MINUTE = 23 * 60 + 59;
+
+function clampToDay(mins: number): number {
+	return Math.max(0, Math.min(mins, LAST_MINUTE));
+}
+
+/** Local minutes from midnight. */
+export function minutesOfDay(d: Date): number {
+	return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Local Date on a "YYYY-MM-DD" key at `mins` past midnight (parsed by parts, never as UTC). */
+export function dateKeyAt(key: string, mins = 0): Date {
+	const [y, mo, d] = key.split("-").map(Number);
+	return new Date(y, mo - 1, d, Math.floor(mins / 60), mins % 60, 0, 0);
+}
+
+/** Minutes from midnight → "HH:MM", clamped to the day (constraint times cannot cross midnight). */
+function minutesToHHMM(mins: number): string {
+	const c = clampToDay(mins);
+	return `${String(Math.floor(c / 60)).padStart(2, "0")}:${String(c % 60).padStart(2, "0")}`;
+}
+
+type ShiftedField = "arrival_time" | "arrival_window_start" | "arrival_window_end" | "finish_time";
+export type ShiftedTimes = Partial<Record<ShiftedField, string>>;
+
+/** Moves every constraint time the constraint actually uses by `deltaMin`; null fields stay unset. */
+export function shiftConstraintTimes(c: ConstraintTimes, deltaMin: number): ShiftedTimes {
+	const out: ShiftedTimes = {};
+	const shift = (field: ShiftedField, hhmm: string | null | undefined) => {
+		const m = hhmmToMinutes(hhmm);
+		if (m !== null) out[field] = minutesToHHMM(m + deltaMin);
+	};
+	if (c.arrival_constraint === "at") shift("arrival_time", c.arrival_time);
+	else if (c.arrival_constraint === "between") {
+		shift("arrival_window_start", c.arrival_window_start);
+		shift("arrival_window_end", c.arrival_window_end);
+	} else if (c.arrival_constraint === "by") shift("arrival_window_end", c.arrival_window_end);
+	if (c.finish_constraint === "at" || c.finish_constraint === "by") {
+		shift("finish_time", c.finish_time);
 	}
+	return out;
+}
 
-	// Timed visits: derive height from scheduled duration (timezone-relative offset).
-	const e =
-		typeof visit.scheduled_end_at === "string"
-			? new Date(visit.scheduled_end_at)
-			: visit.scheduled_end_at;
-	const s =
-		typeof visit.scheduled_start_at === "string"
-			? new Date(visit.scheduled_start_at)
-			: visit.scheduled_start_at;
-	const durationHours =
-		e.getHours() + e.getMinutes() / 60 - (s.getHours() + s.getMinutes() / 60);
-	return Math.max(SLOT_H / 2, Math.min(durationHours, maxHours) * SLOT_H);
+export interface VisitDragPayload {
+	startMs: number;
+	durationMs: number;
+	arrival_constraint?: string;
+	arrival_time?: string | null;
+	arrival_window_start?: string | null;
+	arrival_window_end?: string | null;
+	finish_constraint?: string;
+	finish_time?: string | null;
+}
+
+/** Update body for a visit dropped on the time grid at `dropMins` (minutes from midnight). */
+export function visitDropUpdate(
+	drag: VisitDragPayload,
+	newStart: Date,
+	dropMins: number
+): UpdateJobVisitInput {
+	const data: UpdateJobVisitInput = {
+		scheduled_start_at: newStart.toISOString(),
+		scheduled_end_at: new Date(newStart.getTime() + drag.durationMs).toISOString(),
+	};
+	if (drag.arrival_constraint === "anytime") {
+		return {
+			...data,
+			arrival_constraint: "at",
+			arrival_time: minutesToHHMM(dropMins),
+			finish_constraint: "when_done",
+			finish_time: null,
+		};
+	}
+	if (!drag.arrival_constraint) return data;
+	const deltaMin = dropMins - minutesOfDay(new Date(drag.startMs));
+	return {
+		...data,
+		...shiftConstraintTimes(
+			{
+				...drag,
+				arrival_constraint: drag.arrival_constraint,
+				finish_constraint: drag.finish_constraint ?? "when_done",
+			},
+			deltaMin
+		),
+	};
+}
+
+/** "After" time label for a visit drop, on the same basis as the "before" label (by = deadline). */
+export function visitDropLabel(
+	drag: VisitDragPayload,
+	data: UpdateJobVisitInput,
+	newStart: Date,
+	newEnd: Date
+): string {
+	return visitConstraintTimeLabel({
+		arrival_time: drag.arrival_time,
+		arrival_window_start: drag.arrival_window_start,
+		arrival_window_end: drag.arrival_window_end,
+		finish_time: drag.finish_time,
+		...data,
+		arrival_constraint: data.arrival_constraint ?? drag.arrival_constraint ?? "anytime",
+		finish_constraint: data.finish_constraint ?? drag.finish_constraint ?? "when_done",
+		scheduled_start_at: newStart,
+		scheduled_end_at: newEnd,
+	});
+}
+
+/** "After" label for an occurrence drop; shifts constraint times by the start delta, like the popup. */
+export function occurrenceDropLabel(drag: VisitDragPayload, newStart: Date, newEnd: Date): string {
+	const deltaMin = minutesOfDay(newStart) - minutesOfDay(new Date(drag.startMs));
+	const shifted = shiftConstraintTimes(
+		{
+			...drag,
+			arrival_constraint: drag.arrival_constraint ?? "anytime",
+			finish_constraint: drag.finish_constraint ?? "when_done",
+		},
+		deltaMin
+	);
+	return visitDropLabel(drag, shifted, newStart, newEnd);
+}
+
+/** Lead a `by` arrival gets before its deadline, as the create form stores it. */
+const BY_LEAD_MIN = 240;
+
+function arrivalAnchorMins(c: ConstraintTimes): number | null {
+	if (c.arrival_constraint === "at") return hhmmToMinutes(c.arrival_time);
+	if (c.arrival_constraint === "between") return hhmmToMinutes(c.arrival_window_start);
+	if (c.arrival_constraint === "by") return hhmmToMinutes(c.arrival_window_end);
+	return null;
+}
+
+/**
+ * Local start/end on `dateStr` after a popup edit. The card is drawn from scheduled_*, so an
+ * edited arrival or finish time must move the schedule with it.
+ */
+export function alignScheduleToConstraints(
+	dateStr: string,
+	orig: { start: string | Date; end: string | Date },
+	before: ConstraintTimes,
+	after: ConstraintTimes
+): { start: Date; end: Date } {
+	const s0 = toDate(orig.start);
+	const e0 = toDate(orig.end);
+	const durMs = Math.max(0, e0.getTime() - s0.getTime()) || 0;
+	let startMins = minutesOfDay(s0);
+	const a0 = arrivalAnchorMins(before);
+	const a1 = arrivalAnchorMins(after);
+	if (a1 !== null) {
+		if (after.arrival_constraint === before.arrival_constraint) {
+			if (a0 !== null) startMins += a1 - a0;
+		} else {
+			startMins = after.arrival_constraint === "by" ? a1 - BY_LEAD_MIN : a1;
+		}
+	}
+	const start = dateKeyAt(dateStr, clampToDay(startMins));
+
+	const f =
+		after.finish_constraint === "at" || after.finish_constraint === "by"
+			? hhmmToMinutes(after.finish_time)
+			: null;
+	const fixedEnd = f !== null ? dateKeyAt(dateStr, f) : null;
+	const end = fixedEnd && fixedEnd > start ? fixedEnd : new Date(start.getTime() + durMs);
+	return { start, end };
 }
 
 // ─── Tech display ─────────────────────────────────────────────────────────────
@@ -416,13 +577,20 @@ export function getTechInitials(name: string): string {
 
 // ─── Data grouping ────────────────────────────────────────────────────────────
 
+/** Local-calendar day key ("YYYY-MM-DD"). Pass an instant, never a key: a bare
+ *  "YYYY-MM-DD" string parses as UTC midnight and lands on the previous day west of UTC. */
+export function localDateKey(input: Date | string): string {
+	const d = typeof input === "string" ? new Date(input) : input;
+	const month = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	return `${d.getFullYear()}-${month}-${day}`;
+}
+
 /** Group visits by their start date "YYYY-MM-DD". Generic so subtypes (VisitWithJob) are preserved. */
 export function groupVisitsByDay<T extends JobVisit>(visits: T[]): Record<string, T[]> {
 	return visits.reduce(
 		(acc, visit) => {
-			const dateStr = new Date(visit.scheduled_start_at)
-				.toISOString()
-				.split("T")[0];
+			const dateStr = localDateKey(visit.scheduled_start_at);
 			if (!acc[dateStr]) acc[dateStr] = [];
 			acc[dateStr].push(visit);
 			return acc;
@@ -439,7 +607,7 @@ export function getWeekDays(date: Date): string[] {
 	return Array.from({ length: 7 }, (_, i) => {
 		const d = new Date(monday);
 		d.setDate(monday.getDate() + i);
-		return d.toISOString().split("T")[0];
+		return localDateKey(d);
 	});
 }
 
@@ -464,6 +632,54 @@ export function hhmmToPickerDate(hhmm: string): Date | null {
 	const d = new Date();
 	d.setHours(h, m, 0, 0);
 	return d;
+}
+
+/** Rendered width of the click-detail popups (VisitClickPopup / OccurrenceClickPopup) */
+export const CLICK_POPUP_W = 280;
+/** Tallest the click-detail popups get (2-line title + all facts + description), for viewport clamps. */
+export const CLICK_POPUP_H = 320;
+/** Rendered width of the drag/click reschedule popups. */
+export const RESCHEDULE_POPUP_W = 308;
+
+/** Read once per mount; callers don't react to the OS setting changing mid-session. */
+export function prefersReducedMotion(): boolean {
+	return (
+		typeof window.matchMedia === "function" &&
+		window.matchMedia("(prefers-reduced-motion: reduce)").matches
+	);
+}
+
+/**
+ * Viewport coordinates for a popup anchored beside an element.
+ *
+ * VisitClickPopup renders through a portal on document.body, so callers must
+ * supply viewport (position: fixed) coordinates — offsets relative to a day
+ * column resolve against the page instead and land in the wrong column.
+ */
+export function getAnchoredPopupPos(
+	anchor: { left: number; right: number; top: number },
+	{
+		popupH,
+		popupW = CLICK_POPUP_W,
+		viewport,
+	}: {
+		popupH: number;
+		popupW?: number;
+		viewport?: { width: number; height: number };
+	},
+): { top: number; left: number } {
+	const PAD = 8;
+	const GAP = 4;
+	const vw = viewport?.width ?? window.innerWidth;
+	const vh = viewport?.height ?? window.innerHeight;
+
+	const fitsRight = anchor.right + GAP + popupW + PAD <= vw;
+	const left = fitsRight
+		? anchor.right + GAP
+		: Math.max(PAD, anchor.left - popupW - GAP);
+	const top = Math.max(PAD, Math.min(anchor.top, vh - popupH - PAD));
+
+	return { top, left };
 }
 
 /** Shared style for column-label headings inside reschedule popups */

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { CheckCircle2 } from "lucide-react";
 import {
     useQBMappedItemsQuery,
     useQBItemsQuery,
@@ -35,100 +36,71 @@ export default function QBItemMappingCard() {
     );
 
     return (
-        <div className="rounded-lg border border-border-subtle bg-base px-5 py-5">
-            <h2 className="mb-1 text-lg font-semibold text-text-primary">QuickBooks Item Mapping</h2>
-            <p className="mb-4 text-xs text-text-muted">
-                Link inventory items to QuickBooks items so synced invoice lines post to the right product
-                instead of the generic “Services”.
+        <div>
+            <p className="mb-4 text-xs text-text-muted leading-relaxed w-fit">
+                Link inventory items to QuickBooks items so synced invoice lines post to the right product instead of the generic “Services”.
             </p>
 
-            <div className="overflow-x-auto">
-                <table className="w-full min-w-[480px]">
-                    <thead>
-                        <tr className="border-b border-border-subtle">
-                            <th className="px-5 py-2.5 text-left text-xs font-medium text-text-muted">Inventory Item</th>
-                            <th className="px-3 py-2.5 text-left text-xs font-medium text-text-muted">QuickBooks Item</th>
-                            <th className="px-3 py-2.5 text-left text-xs font-medium text-text-muted">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {inventoryItems?.length ? (
-                            inventoryItems.map((item, idx) => {
-                                const externalId = mappedByItemId.get(item.id);
-                                const linked = externalId != null;
-                                return (
-                                    <tr
-                                        key={item.id}
-                                        className={`border-b border-border-subtle/50 transition-colors hover:bg-surface/40 ${idx === inventoryItems.length - 1 ? "border-b-0" : ""}`}
-                                    >
-                                        <td className="px-5 py-3 text-sm font-medium text-text-primary">
-                                            {item.name}
-                                            {item.sku && <span className="ml-2 text-xs text-text-muted">{item.sku}</span>}
-                                        </td>
-                                        {linked ? (
-                                        <>
-                                            <td className="px-3 py-3">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="inline-flex items-center rounded-full bg-success-bg px-2.5 py-1 text-xs font-medium text-success-text">
-                                                        Linked: {qbNameById.get(externalId!) ?? `#${externalId}`}
-                                                    </span>
-                                                </div>
-                                            </td>
-                                            <td className="px-3 py-3">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => unlink.mutate({ inventory_item_id: item.id })}
-                                                    disabled={!MANAGE_INVENTORY || unlink.isPending}
-                                                    title={!MANAGE_INVENTORY ? NO_PERMISSION_TITLE : undefined}
-                                                    className="rounded-md border border-border bg-surface-raised px-2.5 py-1 text-xs font-medium text-text-muted transition-colors hover:border-border-strong hover:bg-surface hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    Unlink
-                                                </button>
-                                            </td>
-                                        </>
-                                        ) : (
-                                        <>
-                                            <td className="px-3 py-3">
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setLinkItem(item)}
-                                                        disabled={!MANAGE_INVENTORY}
-                                                        title={!MANAGE_INVENTORY ? NO_PERMISSION_TITLE : undefined}
-                                                        className="rounded-md border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
-                                                    >
-                                                        Link
-                                                    </button>
-                                                </div>
-                                            </td>
-                                            <td className="px-3 py-3">
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => push.mutate({ itemId: item.id })}
-                                                        disabled={!MANAGE_INVENTORY || push.isPending}
-                                                        title={!MANAGE_INVENTORY ? NO_PERMISSION_TITLE : undefined}
-                                                        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                                                    >
-                                                        Push to QB
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </>
-                                        )}
-                                    </tr>
-                                );
-                            })
-                        ) : (
-                            <tr>
-                                <td colSpan={2} className="px-5 py-8 text-center text-sm text-text-muted">
-                                    No inventory items yet.
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
-            </div>
+            {inventoryItems?.length ? (
+                <div className="grid gap-3 [grid-template-columns:repeat(2,minmax(0,1fr))]">
+                    {inventoryItems.map((item) => {
+                        const externalId = mappedByItemId.get(item.id);
+                        const linked = externalId != null;
+                        return (
+                            <div key={item.id} className="flex flex-col gap-2 rounded-lg border border-border-subtle p-3.5">
+                                <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium text-text-primary" title={item.name}>
+                                        {item.name}
+                                    </div>
+                                    {item.sku && <div className="truncate text-xs text-text-muted" title={item.sku}>{item.sku}</div>}
+                                </div>
+                                {linked ? (
+                                    <div className="flex items-center justify-between gap-2 border-t border-surface-raised pt-2">
+                                        <span className="flex min-w-0 items-center gap-1.5 truncate text-xs font-medium text-success-text">
+                                            <CheckCircle2 size={11} className="flex-shrink-0" />
+                                            <span className="truncate">{qbNameById.get(externalId!) ?? `#${externalId}`}</span>
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => unlink.mutate({ inventory_item_id: item.id })}
+                                            disabled={!MANAGE_INVENTORY || unlink.isPending}
+                                            title={!MANAGE_INVENTORY ? NO_PERMISSION_TITLE : undefined}
+                                            className="flex-shrink-0 rounded-md border border-border bg-surface-raised px-2 py-1 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:bg-surface hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Unlink
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-2 border-t border-surface-raised pt-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setLinkItem(item)}
+                                            disabled={!MANAGE_INVENTORY}
+                                            title={!MANAGE_INVENTORY ? NO_PERMISSION_TITLE : undefined}
+                                            className="rounded-md border border-border bg-surface-raised px-2.5 py-1 text-xs font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Link
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => push.mutate({ itemId: item.id })}
+                                            disabled={!MANAGE_INVENTORY || push.isPending}
+                                            title={!MANAGE_INVENTORY ? NO_PERMISSION_TITLE : undefined}
+                                            className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Push to QB
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            ) : (
+                <div className="rounded-lg border border-border-subtle px-5 py-8 text-center text-sm text-text-muted">
+                    No inventory items yet.
+                </div>
+            )}
 
             {linkItem && (
                 <LinkQBItemModal item={linkItem} isOpen={!!linkItem} onClose={() => setLinkItem(null)} />

@@ -55,8 +55,9 @@ describe("getPageSummary — page validation", () => {
 	});
 });
 
-// Review R1/R2: Total/Issued were counting Draft and Void invoices, and
-// Collected came off invoice.paid_at/amount_paid (only set on full payment).
+// Total and Issued exclude Draft and Void invoices; Collected comes off
+// invoice_payment.amount (partial payments included), not
+// invoice.paid_at/amount_paid, which is only set on full payment.
 describe("getPageSummary — invoices", () => {
 	beforeEach(() => {
 		mockDb.invoice.count.mockResolvedValue(4);
@@ -114,28 +115,59 @@ describe("getPageSummary — invoices", () => {
 	});
 });
 
-// Review R1: Open Balance and Avg Income were summing Draft/Void invoices.
+// Open Balance and Avg Income exclude Draft and Void invoices — only issued,
+// unpaid invoices with a positive balance count as open receivables. Disputed
+// invoices are still owed, so Open Balance is the sum of a non-disputed aging
+// aggregate and a disputed aggregate — mirroring the aged-receivables reports,
+// where Disputed is carved out of the ageing population but stays in the total.
 describe("getPageSummary — clients", () => {
 	beforeEach(() => {
 		mockDb.client.count.mockResolvedValue(10);
 		mockDb.client.groupBy.mockResolvedValue([]);
 		mockDb.invoice.aggregate
-			.mockResolvedValueOnce({ _sum: { balance_due: 250 } })
+			.mockResolvedValueOnce({ _sum: { balance_due: 200 } })
+			.mockResolvedValueOnce({ _sum: { balance_due: 50 } })
 			.mockResolvedValueOnce({ _sum: { total: 5000 } });
 	});
 
-	it("Open Balance mirrors aged receivables: issued, unpaid, with a positive balance", async () => {
+	// `not: 0` rather than `gt: 0`: an unapplied credit adjustment carries a
+	// negative balance_due, and a positive-only filter left it out entirely, so
+	// Open Balance overstated what the client owed by the whole credit.
+	it("Open Balance mirrors aged receivables: issued, with a non-zero balance, plus any disputed balance", async () => {
 		const res = await getPageSummary(ORG, "clients");
-		const openArgs = mockDb.invoice.aggregate.mock.calls[0][0];
-		expect(openArgs.where.status).toEqual({ notIn: ["Draft", "Paid", "Void"] });
-		expect(openArgs.where.balance_due).toEqual({ gt: 0 });
-		expect(openArgs._sum).toEqual({ balance_due: true });
+		const agingArgs = mockDb.invoice.aggregate.mock.calls[0][0];
+		expect(agingArgs.where.status).toEqual({ notIn: ["Draft", "Paid", "Void", "Disputed"] });
+		expect(agingArgs.where.balance_due).toEqual({ not: 0 });
+		expect(agingArgs._sum).toEqual({ balance_due: true });
+
+		const disputedArgs = mockDb.invoice.aggregate.mock.calls[1][0];
+		expect(disputedArgs.where.status).toEqual({ equals: "Disputed" });
+		expect(disputedArgs.where.balance_due).toEqual({ not: 0 });
+		expect(disputedArgs._sum).toEqual({ balance_due: true });
+
 		expect(stat(res, "Open Balance")).toBe(250);
+	});
+
+	it("lets a credit reduce Open Balance instead of vanishing from it", async () => {
+		mockDb.invoice.aggregate.mockReset();
+		mockDb.invoice.aggregate
+			// $2,000 owed less a $500 credit, both inside the filter: the DB
+			// sums both only because the where clause reads `not: 0`, not
+			// `gt: 0` — asserted below, or this mocked total proves nothing.
+			.mockResolvedValueOnce({ _sum: { balance_due: 1500 } })
+			.mockResolvedValueOnce({ _sum: { balance_due: 0 } })
+			.mockResolvedValueOnce({ _sum: { total: 5000 } });
+
+		const res = await getPageSummary(ORG, "clients");
+
+		const agingArgs = mockDb.invoice.aggregate.mock.calls[0][0];
+		expect(agingArgs.where.balance_due).toEqual({ not: 0 });
+		expect(stat(res, "Open Balance")).toBe(1500);
 	});
 
 	it("Avg Income spreads issued (non-Draft, non-Void) billing over the whole client book", async () => {
 		const res = await getPageSummary(ORG, "clients");
-		const incomeArgs = mockDb.invoice.aggregate.mock.calls[1][0];
+		const incomeArgs = mockDb.invoice.aggregate.mock.calls[2][0];
 		expect(incomeArgs.where.status).toEqual(ISSUED);
 		expect(incomeArgs._sum).toEqual({ total: true });
 		expect(stat(res, "Avg. Income")).toBe(500);

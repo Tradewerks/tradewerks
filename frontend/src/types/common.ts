@@ -90,6 +90,15 @@ export interface RequestReference {
 	title: string;
 	status: string;
 	created_at: Date | string;
+	/** The request's quote-derived jobs only — the evidence a sibling quote was
+	 *  sold. The server produces that refusal now (disputeList.sold_refusal). */
+	jobs?: RequestJobReference[];
+}
+
+/** A job hanging off a request, carrying the quote it came from (if any). */
+export interface RequestJobReference {
+	id: string;
+	quote_id: string | null;
 }
 
 export interface RequestSummary extends RequestReference {
@@ -201,7 +210,29 @@ export interface BaseLineItem {
 	taxable?: boolean;
 	tax_group_id?: string | null;
 	tax_amount?: number | null;
+	/**
+		 * Null means freetext — correct for labor and fees, a gap for materials:
+		 * only a linked line is settled against stock and counted by readiness.
+		 */
+	inventory_item_id?: string | null;
+	/**
+	 * Carried by visit forms and the plan templates they generate from. Absent
+	 * means `consume`.
+	 */
+	disposition?: LineItemDisposition | null;
+	/** Destination for `receive` only. Null means the warehouse. */
+	disposition_vehicle_id?: string | null;
 }
+
+/** Stock effect of a line at visit completion. Mirrors the backend enum. */
+export const LineItemDispositionValues = ["consume", "receive", "non_stock"] as const;
+export type LineItemDisposition = (typeof LineItemDispositionValues)[number];
+
+export const LineItemDispositionLabels: Record<LineItemDisposition, string> = {
+	consume: "Consumed from stock",
+	receive: "Received into stock",
+	non_stock: "Not from stock",
+};
 
 //Extended line item for edit forms - tracks new/deleted items
 export interface EditableLineItem extends BaseLineItem {

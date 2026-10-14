@@ -20,11 +20,13 @@ import { usePermission } from "../../hooks/usePermission";
 import PageReportSection from "../../components/reports/PageReportSection"
 import SortControl from "../../components/ui/SortControl";
 import type { SortDir } from "../../util/sortUtil";
-import { 
+import {
 	withDir,
 	compareByOrder,
 	compareDateNullsLast,
-	comparePriority
+	comparePriority,
+	compareString,
+	compareNumber
 } from "../../util/sortUtil";
 import { PriorityLabels, PriorityValues, PriorityColors, type Priority } from "../../types/common";
 
@@ -43,6 +45,16 @@ const sortLabels: Record<string, string> = {
 	priority: "Priority",
 	status: "Status",
 	date: "Date",
+	client: "Client",
+	quoteNumber: "Quote #",
+	total: "Total",
+};
+
+// "created" and "quoteNumber" columns aren't the raw sortable value directly —
+// "created" is already driven by "date"; "quoteNumber" sorts on the raw
+// `quote_number` field (the column also embeds the title on a second line).
+const COLUMN_SORT_KEY: Record<string, string> = {
+	created: "date",
 };
 
 export default function QuotesPage() {
@@ -143,6 +155,12 @@ export default function QuotesPage() {
 				? withDir((a, b) => compareByOrder(a.status, b.status, QuoteStatusValues), dir)
 				: sortParam === "date"
 				? (a, b) => compareDateNullsLast(dir)(a.created_at, b.created_at)
+				: sortParam === "client"
+				? withDir((a, b) => compareString(a.client?.name, b.client?.name), dir)
+				: sortParam === "quoteNumber"
+				? withDir((a, b) => compareString(a.quote_number, b.quote_number), dir)
+				: sortParam === "total"
+				? withDir((a, b) => compareNumber(Number(a.total), Number(b.total)), dir)
 				: (a, b) => {
 					const statusDiff =
 					QuoteStatusValues.indexOf(a.status as QuoteStatus) -
@@ -179,6 +197,18 @@ export default function QuotesPage() {
 		next.delete("sort");
 		next.delete("dir");
 		navigate(`/dispatch/quotes${next.toString() ? `?${next.toString()}` : ""}`);
+	};
+
+	const handleSortChange = (col: string) => {
+		const key = COLUMN_SORT_KEY[col] ?? col;
+		const next = new URLSearchParams(location.search);
+		if (next.get("sort") === key) {
+			next.set("dir", next.get("dir") === "asc" ? "desc" : "asc");
+		} else {
+			next.set("sort", key);
+			next.set("dir", "asc");
+		}
+		navigate(`/dispatch/quotes?${next.toString()}`);
 	};
 
 	const clearAllFilters = () => {
@@ -234,8 +264,11 @@ export default function QuotesPage() {
 								{ value: "priority", label: "Priority" },
 								{ value: "status", label: "Status" },
 								{ value: "date", label: "Date" },
+								{ value: "client", label: "Client" },
+								{ value: "quoteNumber", label: "Quote #" },
+								{ value: "total", label: "Total" },
 							]}
-							defaultDirByField={{ priority: "desc", status: "asc", date: "desc" }}
+							defaultDirByField={{ priority: "desc", status: "asc", date: "desc", total: "desc" }}
 						/>
 					</div>
 				}
@@ -308,6 +341,17 @@ export default function QuotesPage() {
 							</div>
 						),
 					}}
+					sortableColumns={{
+						status: true,
+						priority: true,
+						client: true,
+						quoteNumber: true,
+						created: true,
+						total: true,
+					}}
+					sortKey={sortParam === "date" ? "created" : (sortParam ?? "")}
+					sortDir={dirParam === "asc" ? "asc" : "desc"}
+					onSortChange={handleSortChange}
 				/>
 			</div>
 

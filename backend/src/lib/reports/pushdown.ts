@@ -184,10 +184,10 @@ function buildOrderSql(
 		const col = columns[params.sortKey];
 		if (!col || !col.sortable) return null;
 		const dir = params.sortDir === "desc" ? "DESC" : "ASC";
-		return `${col.expr} ${dir}, ${idExpr} ASC`;
+		return `${col.expr} ${dir} NULLS LAST, ${idExpr} ASC`;
 	}
 	const dir = defaultOrder.dir === "desc" ? "DESC" : "ASC";
-	return `${defaultOrder.expr} ${dir}, ${idExpr} ASC`;
+	return `${defaultOrder.expr} ${dir} NULLS LAST, ${idExpr} ASC`;
 }
 
 export function buildSqlParts(

@@ -1,655 +1,392 @@
-﻿import { useState, useRef, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import {
-	Edit,
-	Briefcase,
-	MapPin,
-	Clock,
-	MoreVertical,
-	Trash2,
-	ChevronDown,
-	ExternalLink,
-	Mail,
-	Phone,
-	Calendar,
-	KeyRound,
-	RotateCcw,
-} from "lucide-react";
-import Card from "../../components/ui/Card";
+import { useId, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { isAxiosError } from "axios";
+import { ArrowLeft, BarChart3, CalendarPlus } from "lucide-react";
+import DetailHeader from "../../components/detail/DetailHeader";
+import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
+import { useDetailTab } from "../../components/detail/useDetailTab";
 import EditTechnicianModal from "../../components/technicians/EditTechnician";
-import { useTechnicianByIdQuery, useDeleteTechnicianMutation } from "../../hooks/useTechnicians";
-import { TechnicianStatusColors, TechnicianStatusDotColors } from "../../types/technicians";
+import TechnicianNowStrip from "../../components/technicians/TechnicianNowStrip";
+import TechnicianAccessTab from "../../components/technicians/detail/TechnicianAccessTab";
+import TechnicianActivityTab from "../../components/technicians/detail/TechnicianActivityTab";
+import TechnicianOverviewTab from "../../components/technicians/detail/TechnicianOverviewTab";
+import TechnicianScheduleTab from "../../components/technicians/detail/TechnicianScheduleTab";
+import TechnicianVehicleTab from "../../components/technicians/detail/TechnicianVehicleTab";
+import { NAV_BUTTON } from "../../components/technicians/detail/navButtons";
+import { Avatar, MfaMark } from "../../components/technicians/TechnicianBits";
+import { formatHireDate, formatTenure } from "../../components/technicians/technicianFormat";
+import { countActiveVisits } from "../../components/technicians/technicianSchedule";
 import {
-	JobStatusColors,
-	JobStatusLabels,
-	VisitStatusColors,
-	VisitStatusLabels,
-	type JobStatus,
-	type VisitStatus,
-} from "../../types/jobs";
-import { usePermission } from "../../hooks/usePermission";
-import ChangeHistory from "../../components/activity/ChangeHistory";
-import AccessCard from "../../components/roles/AccessCard";
-import { requestPasswordResetCall } from "../../api/authenticate";
+	armedAnnouncement,
+	technicianMenuGroups,
+	useArmedConfirm,
+} from "../../components/technicians/technicianActions";
+import { NO_PERMISSION } from "../../components/lifecycle/actionBuilder";
+import {
+	useTechnicianByIdQuery,
+	useDeleteTechnicianMutation,
+	useDeactivateTechnicianMutation,
+	useReactivateTechnicianMutation,
+} from "../../hooks/useTechnicians";
 import { useResetMfaMutation } from "../../hooks/useMfa";
+import { usePermission } from "../../hooks/usePermission";
 import { useToast } from "../../components/ui/useToast";
+import { requestPasswordResetCall } from "../../api/authenticate";
+import { TechnicianStatusColors, TechnicianStatusLabels } from "../../types/technicians";
+import { errorMessage } from "../../util/util";
+
+type TechTab = "overview" | "schedule" | "vehicle" | "access" | "activity";
+
+const TECH_TABS: readonly DetailTabDef<TechTab>[] = [
+	{ id: "overview", label: "Overview" },
+	{ id: "schedule", label: "Schedule" },
+	{ id: "vehicle", label: "Vehicle" },
+	{ id: "access", label: "Access" },
+	{ id: "activity", label: "Activity" },
+];
+
+// LifecycleBar's primary ActionButton — the button JobDetailPage's header renders —
+// so the one primary move on every detail page reads identically.
+const PRIMARY_BUTTON =
+	"inline-flex items-center gap-1.5 rounded-md bg-primary-hover px-3 py-1.5 text-sm font-medium text-on-primary transition-colors duration-150 ease-out hover:bg-primary";
+// LifecycleBar's DISABLED_CLASSES: muted chrome and text token, never opacity.
+const DISABLED_BUTTON =
+	"inline-flex cursor-not-allowed items-center gap-1.5 rounded-md border border-border-subtle bg-transparent px-3 py-1.5 text-sm font-medium text-text-muted";
+
+function PageSkeleton() {
+	return (
+		<div aria-busy="true" aria-label="Loading technician" className="space-y-4">
+			<div className="flex items-center gap-4">
+				<div className="h-14 w-14 animate-pulse rounded-xl bg-surface" />
+				<div className="h-7 w-56 animate-pulse rounded bg-surface" />
+			</div>
+			<div className="h-20 animate-pulse rounded-xl bg-surface" />
+			<div className="h-10 animate-pulse rounded-lg bg-surface" />
+		</div>
+	);
+}
 
 export default function TechnicianDetailsPage() {
 	const { technicianId } = useParams<{ technicianId: string }>();
 	const navigate = useNavigate();
-
-	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-	const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
-	const [deleteConfirm, setDeleteConfirm] = useState(false);
-	const [confirmResetPassword, setConfirmResetPassword] = useState(false);
-	const [isResettingPassword, setIsResettingPassword] = useState(false);
-	const [confirmResetMFA, setConfirmResetMFA] = useState(false);
-	const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
-	const toggleJob = (jobId: string) =>
-		setExpandedJobs((prev) => {
-			const next = new Set(prev);
-			if (next.has(jobId)) next.delete(jobId);
-			else next.add(jobId);
-			return next;
-		});
-
-	const optionsMenuRef = useRef<HTMLDivElement>(null);
-	const deleteTechnician = useDeleteTechnicianMutation();
-	const { mutateAsync: resetMFA, isPending: isResettingMFA } = useResetMfaMutation();
 	const toast = useToast();
+	const assignReasonId = useId();
+	const [activeTab, setActiveTab] = useDetailTab(TECH_TABS);
+	const [isEditOpen, setIsEditOpen] = useState(false);
+	const { armed, confirm, disarm } = useArmedConfirm();
+	const [sendingReset, setSendingReset] = useState(false);
 
-	const { data: technician, isLoading, error } = useTechnicianByIdQuery(technicianId);
-	const lastLogin = technician?.last_login ?
-								`${new Date(technician.last_login).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}, ${new Date(technician.last_login).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
-								: "Never";
+	const canManage = usePermission("manage_technicians");
+	const canSeeReports = usePermission("view_reports");
+	const {
+		data: technician,
+		isLoading,
+		error,
+		refetch,
+	} = useTechnicianByIdQuery(technicianId);
+	const deleteTechnician = useDeleteTechnicianMutation();
+	const deactivateMutation = useDeactivateTechnicianMutation();
+	const reactivateMutation = useReactivateTechnicianMutation();
+	const { mutateAsync: resetMFA, isPending: resettingMfa } = useResetMfaMutation();
 
-	// permissions
-	const MANAGE_TECHNICIANS = usePermission("manage_technicians");
-
-	useEffect(() => {
-		const handleClickOutside = (e: MouseEvent) => {
-			if (
-				optionsMenuRef.current &&
-				!optionsMenuRef.current.contains(e.target as Node)
-			) {
-				setIsOptionsMenuOpen(false);
-				setDeleteConfirm(false);
-				setConfirmResetPassword(false);
-				setConfirmResetMFA(false);
-			}
-		};
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
-
-	const handleDelete = async () => {
-		if (!MANAGE_TECHNICIANS) return;
-		if (!deleteConfirm) {
-			setDeleteConfirm(true);
-			return;
-		}
-		try {
-			navigate("/dispatch/technicians", { replace: true });
-			await deleteTechnician.mutateAsync(technician!.id);
-		} catch (error) {
-			console.error("Failed to delete technician:", error);
-		}
-	};
-
-	const handleResetPassword = async () => {
-		if (!MANAGE_TECHNICIANS || !technician) return;
-		if (!confirmResetPassword) {
-			setConfirmResetPassword(true);
-			return;
-		}
-		setIsResettingPassword(true);
-		try {
-			await requestPasswordResetCall(technician.id, "technician");
-			setConfirmResetPassword(false);
-			setIsOptionsMenuOpen(false);
-			toast.success(`Password reset email sent to ${technician.email}`);
-		} catch (error) {
-			setConfirmResetPassword(false);
-			toast.error(error instanceof Error ? error.message : "Failed to send the reset email");
-		} finally {
-			setIsResettingPassword(false);
-		}
-	};
-
-	const handleResetMFA = async () => {
-		if (!MANAGE_TECHNICIANS || !technician) return;
-		if (!confirmResetMFA) {
-			setConfirmResetMFA(true);
-			return;
-		}
-		try {
-			await resetMFA({ userId: technician.id, role: "technician" });
-			setConfirmResetMFA(false);
-			setIsOptionsMenuOpen(false);
-			toast.success("MFA reset");
-		} catch (error) {
-			setConfirmResetMFA(false);
-			toast.error(error instanceof Error ? error.message : "Failed to reset MFA");
-		}
-	};
-
-	if (isLoading) {
-		return (
-			<div className="flex items-center justify-center min-h-[400px]">
-				<div className="text-text-tertiary">Loading...</div>
-			</div>
-		);
-	}
+	if (isLoading) return <PageSkeleton />;
 
 	if (error || !technician) {
+		const notFound =
+			!error ||
+			(isAxiosError(error) && error.response?.status === 404) ||
+			error.message === "Technician not found";
 		return (
-			<div className="p-6">
-				<button
-					onClick={() => navigate("/dispatch/technicians")}
-					className="text-text-tertiary hover:text-text-primary mb-4 transition-colors"
-				>
-					← Back to Technicians
-				</button>
-				<div className="text-text-primary">Technician not found</div>
+			<div className="space-y-3">
+				<p className="text-text-primary">
+					{notFound
+						? "Technician not found"
+						: "Couldn't load this technician."}
+				</p>
+				{notFound ? (
+					<Link to="/dispatch/technicians" className={NAV_BUTTON}>
+						<ArrowLeft size={14} aria-hidden /> Back to
+						Technicians
+					</Link>
+				) : (
+					<button
+						type="button"
+						onClick={() => refetch()}
+						className={NAV_BUTTON}
+					>
+						Retry
+					</button>
+				)}
 			</div>
 		);
 	}
 
-	const visitTechs = technician.visit_techs ?? [];
-
-	const jobMap = new Map<
-		string,
-		{
-			job: (typeof visitTechs)[0]["visit"]["job"];
-			visits: (typeof visitTechs)[0]["visit"][];
-		}
-	>();
-	for (const vt of visitTechs) {
-		const entry = jobMap.get(vt.visit.job_id);
-		if (entry) entry.visits.push(vt.visit);
-		else jobMap.set(vt.visit.job_id, { job: vt.visit.job, visits: [vt.visit] });
-	}
-	const groupedJobs = Array.from(jobMap.values()).sort((a, b) => {
-		const aLatest = Math.max(
-			...a.visits.map((v) => new Date(v.scheduled_start_at).getTime())
-		);
-		const bLatest = Math.max(
-			...b.visits.map((v) => new Date(v.scheduled_start_at).getTime())
-		);
-		return bLatest - aLatest;
+	const menuGroups = technicianMenuGroups({
+		name: technician.name,
+		canManage,
+		mfaEnabled: !!technician.mfaEnabled,
+		activeVisitCount: countActiveVisits(technician.visit_techs ?? []),
+		deactivated: !!technician.deactivated_at,
+		armed,
+		pending: {
+			resetPassword: sendingReset,
+			resetMfa: resettingMfa,
+			delete: deleteTechnician.isPending,
+			toggleActive: deactivateMutation.isPending || reactivateMutation.isPending,
+		},
+		on: {
+			edit: () => setIsEditOpen(true),
+			"reset-password": confirm("reset-password", async () => {
+				setSendingReset(true);
+				try {
+					await requestPasswordResetCall(technician.id, "technician");
+					toast.success(
+						`Password reset email sent to ${technician.email}`
+					);
+				} catch (e) {
+					toast.error(
+						e instanceof Error
+							? e.message
+							: "Failed to send the reset email"
+					);
+				} finally {
+					setSendingReset(false);
+				}
+			}),
+			"reset-mfa": confirm("reset-mfa", async () => {
+				try {
+					await resetMFA({
+						userId: technician.id,
+						role: "technician",
+					});
+					toast.success("MFA reset");
+				} catch (e) {
+					toast.error(
+						e instanceof Error
+							? e.message
+							: "Failed to reset MFA"
+					);
+				}
+			}),
+			deactivate: confirm("deactivate", async () => {
+				try {
+					await deactivateMutation.mutateAsync(technician.id);
+					toast.success(
+						`${technician.name} deactivated. Signed out within 30 seconds and removed from scheduling; history is kept.`
+					);
+				} catch (e) {
+					toast.error(errorMessage(e, "Couldn't deactivate"));
+				}
+			}),
+			reactivate: async () => {
+				try {
+					await reactivateMutation.mutateAsync(technician.id);
+					toast.success(`${technician.name} reactivated.`);
+				} catch (e) {
+					toast.error(errorMessage(e, "Couldn't reactivate"));
+				}
+			},
+			// Navigate only on success so a failed delete leaves the dispatcher here with the error.
+			delete: confirm("delete", async () => {
+				try {
+					await deleteTechnician.mutateAsync(technician.id);
+					navigate("/dispatch/technicians", { replace: true });
+				} catch (e) {
+					toast.error(
+						e instanceof Error
+							? e.message
+							: "Failed to delete technician"
+					);
+				}
+			}),
+		},
 	});
 
-	const hasActiveVisits = visitTechs.some((vt) =>
-		["Scheduled", "InProgress", "OnSite", "Driving", "Paused", "Delayed"].includes(vt.visit.status)
-	);
-	const fmtTime = (d: Date | string) =>
-		new Date(d).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-	const fmtDate = (d: Date | string) =>
-		new Date(d).toLocaleDateString("en-US", {
-			month: "short",
-			day: "numeric",
-			year: "numeric",
-		});
+	// A refetch can shut the armed item (the delete guard gaining a visit); a
+	// stale arm would otherwise fire on the first press once it reopens.
+	const armedItem = armed
+		? menuGroups.flatMap((g) => g.items).find((i) => i.id === armed)
+		: undefined;
+	if (armedItem?.disabled) disarm();
 
-	const statCards = [
-		{ label: "Total Jobs", value: groupedJobs.length, color: "text-text-primary" },
-		{
-			label: "Completed",
-			value: visitTechs.filter((vt) => vt.visit.status === "Completed").length,
-			color: "text-success-text",
-		},
-		{
-			label: "In Progress",
-			value: visitTechs.filter((vt) => vt.visit.status === "InProgress").length,
-			color: "text-warning-text",
-		},
-		{
-			label: "Scheduled",
-			value: visitTechs.filter((vt) => vt.visit.status === "Scheduled").length,
-			color: "text-primary-text",
-		},
-	];
+	const hired = formatHireDate(technician.hire_date);
+	const assignBlocked = canManage
+		? technician.deactivated_at
+			? "Inactive technicians can't be scheduled."
+			: null
+		: NO_PERMISSION;
 
 	return (
-		<div className="text-text-primary space-y-6 p-6">
-			{/* Header */}
-			<div className="flex items-start justify-between gap-4">
-				<div className="flex items-center gap-4 min-w-0">
-					<div className="relative flex-shrink-0">
-						<div className="w-14 h-14 rounded-xl bg-gradient-to-br from-border to-border-strong flex items-center justify-center text-white font-bold text-xl">
-							{technician.name.charAt(0).toUpperCase()}
-						</div>
-						<div
-							className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 ${TechnicianStatusDotColors[technician.status]} rounded-full border-2 border-canvas`}
-						/>
-					</div>
-					<div className="min-w-0">
-						<h1 className="text-2xl sm:text-3xl font-bold text-text-primary truncate">
-							{technician.name}
-						</h1>
-						<p className="text-text-tertiary text-sm mt-0.5">
-							{technician.title}
-						</p>
-					</div>
-				</div>
-
-				<div className="flex items-center gap-2 flex-shrink-0">
-					<span
-						className={`px-3 py-1 rounded-full text-xs font-semibold border ${TechnicianStatusColors[technician.status]}`}
-					>
-						{technician.status}
-					</span>
-					<div className="relative" ref={optionsMenuRef}>
-						<button
-							onClick={() => {
-								setIsOptionsMenuOpen((v) => !v);
-								setDeleteConfirm(false);
-							}}
-							className="p-2 hover:bg-surface rounded-md transition-colors border border-border hover:border-border-strong"
-						>
-							<MoreVertical size={18} />
-						</button>
-						{isOptionsMenuOpen && (
-							<div className="absolute right-0 mt-2 w-52 bg-base border border-border-subtle rounded-lg shadow-xl z-50">
-								<div className="py-1">
-										<button
-											title={!MANAGE_TECHNICIANS ? "You don't have permission to perform this action" : undefined}
-											disabled={!MANAGE_TECHNICIANS}
-											onClick={() => {
-												if (!MANAGE_TECHNICIANS) return;
-												setIsEditModalOpen(
-													true
-												);
-												setIsOptionsMenuOpen(
-													false
-												);
-												setDeleteConfirm(
-													false
-												);
-											}}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<Edit size={14} />
-											Edit Technician
-										</button>
-										<button
-											title={!MANAGE_TECHNICIANS ? "You don't have permission to perform this action" : undefined}
-											disabled={!MANAGE_TECHNICIANS || isResettingPassword}
-											onClick={handleResetPassword}
-											onMouseLeave={() => setConfirmResetPassword(false)}
-											className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
-										>
-											<KeyRound size={14} />
-											{isResettingPassword
-												? "Sending..."
-												: confirmResetPassword
-													? "Click Again to Confirm"
-													: "Reset Password"}
-										</button>
-										{technician.mfaEnabled && (
-											<button
-												title={!MANAGE_TECHNICIANS ? "You don't have permission to perform this action" : undefined}
-												disabled={!MANAGE_TECHNICIANS || isResettingMFA}
-												onClick={handleResetMFA}
-												onMouseLeave={() => setConfirmResetMFA(false)}
-												className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<RotateCcw size={14} />
-												{isResettingMFA
-													? "Resetting..."
-													: confirmResetMFA
-														? "Click Again to Confirm"
-														: "Reset MFA"}
-											</button>
-										)}
-									{MANAGE_TECHNICIANS && !hasActiveVisits && (
-									  <>
-									  	<div className="my-1 border-t border-border-subtle" />
-									  	<button
-											onClick={
-												handleDelete
+		<div className="pb-4 text-text-primary md:pb-6">
+			<div className="space-y-4">
+				{/* DetailHeader has no leading slot, so the avatar sits beside it. */}
+				<div className="flex items-start gap-4">
+					<Avatar technician={technician} size="xl" />
+					<div className="min-w-0 flex-1">
+						<DetailHeader
+							title={technician.name}
+							badges={
+								<>
+									{technician
+										.organization_role
+										?.name && (
+										<span className="rounded-full border border-border px-2 py-0.5 text-xs text-text-secondary">
+											{
+												technician
+													.organization_role
+													.name
 											}
-											onMouseLeave={() =>
-												setDeleteConfirm(
-													false
-												)
-											}
-											disabled={
-												deleteTechnician.isPending
-											}
-											className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
-												deleteConfirm
-													? "bg-error hover:bg-error-strong text-on-primary"
-													: "text-error-text hover:bg-surface hover:text-error-text"
-											} disabled:opacity-40 disabled:cursor-not-allowed`}
-										>
-											<Trash2 size={14} />
-											{deleteTechnician.isPending
-												? "Deleting..."
-												: deleteConfirm
-													? "Click Again to Confirm"
-													: "Delete Technician"}
-										</button>
-									  </>
+										</span>
 									)}
-								</div>
-							</div>
-						)}
-					</div>
-				</div>
-			</div>
-
-			{/* Stat Row */}
-			<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-				{statCards.map((s) => (
-					<div
-						key={s.label}
-						className="bg-base border border-border-subtle rounded-lg p-4 text-center"
-					>
-						<p className={`text-2xl font-bold mb-1 ${s.color}`}>
-							{s.value}
-						</p>
-						<p className="text-xs text-text-muted uppercase tracking-wider">
-							{s.label}
-						</p>
-					</div>
-				))}
-			</div>
-
-			{/* Info + Recent Jobs */}
-			<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-				{/* Basic Information */}
-				<Card title="Information">
-					<div className="space-y-4">
-						{[
-							{
-								icon: Mail,
-								label: "Email",
-								value: technician.email,
-							},
-							{
-								icon: Phone,
-								label: "Phone",
-								value: technician.phone,
-							},
-							{
-								icon: Calendar,
-								label: "Hire Date",
-								value: new Date(
-									technician.hire_date
-								).toLocaleDateString("en-US", {
-									year: "numeric",
-									month: "long",
-									day: "numeric",
-								}),
-							},
-							{
-								icon: Clock,
-								label: "Last Login",
-								value: lastLogin,
-							},
-						].map(({ icon: Icon, label, value }) => (
-							<div
-								key={label}
-								className="flex items-center gap-3"
-							>
-								<div className="w-8 h-8 rounded-lg bg-surface flex items-center justify-center flex-shrink-0">
-									<Icon
-										size={14}
-										className="text-text-tertiary"
+									<MfaMark
+										enabled={
+											technician.mfaEnabled
+										}
 									/>
-								</div>
-								<div className="min-w-0">
-									<p className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">
-										{label}
-									</p>
-									<p className="text-sm text-text-primary truncate">
-										{value}
-									</p>
-								</div>
-							</div>
-						))}
-						{technician.description && (
-							<div className="pt-3 border-t border-border-subtle">
-								<p className="text-[10px] text-text-muted uppercase tracking-wider mb-1.5">
-									Description
-								</p>
-								<p className="text-sm text-text-secondary leading-relaxed">
-									{technician.description}
-								</p>
-							</div>
-						)}
-					</div>
-				</Card>
-
-				{/* Jobs Accordion */}
-				<Card title="Jobs">
-					{groupedJobs.length === 0 ? (
-						<div className="py-10 text-center">
-							<div className="inline-flex items-center justify-center w-12 h-12 bg-surface rounded-full mb-3">
-								<Briefcase
-									size={20}
-									className="text-text-muted"
-								/>
-							</div>
-							<p className="text-sm text-text-tertiary">
-								No jobs assigned
-							</p>
-						</div>
-					) : (
-						<div className="overflow-y-auto scrollbar-on-hover max-h-[520px] -mt-4 -mx-4">
-							{groupedJobs.map(({ job, visits }) => {
-								const isExpanded = expandedJobs.has(
-									job.id
-								);
-								const jobColor =
-									JobStatusColors[
-										job.status as JobStatus
-									] ??
-									"bg-neutral/20 text-text-tertiary border-border-strong/30";
-								const jobLabel =
-									JobStatusLabels[
-										job.status as JobStatus
-									] ?? job.status;
-								return (
-									<div
-										key={job.id}
-										className="border-b border-border-subtle"
-									>
-										{/* Job row*/}
-										<div className="flex items-stretch">
-											<button
-												onClick={() =>
-													navigate(
-														`/dispatch/jobs/${job.id}`
-													)
+								</>
+							}
+							meta={
+								<span className="tabular-nums">
+									{[
+										technician.title,
+										`Hired ${hired} (${formatTenure(technician.hire_date)})`,
+										technician
+											.current_vehicle
+											?.name ??
+											"No vehicle",
+									]
+										.filter(Boolean)
+										.join(" · ")}
+								</span>
+							}
+							statusPill={
+								<span
+									className={`inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium ${TechnicianStatusColors[technician.status]}`}
+								>
+									{
+										TechnicianStatusLabels[
+											technician
+												.status
+										]
+									}
+								</span>
+							}
+							inlineActions={
+								<>
+									{canSeeReports && (
+										<Link
+											to={`/dispatch/reporting/technician-scorecard?techId=${technician.id}`}
+											className={
+												NAV_BUTTON
+											}
+										>
+											<BarChart3
+												size={
+													14
 												}
-												className="w-1/4 flex items-center gap-2 pl-4 pr-3 py-2.5 border-r border-border-subtle hover:bg-surface/60 transition-colors text-left group flex-shrink-0"
+												aria-hidden
+											/>{" "}
+											Scorecard
+										</Link>
+									)}
+									{!assignBlocked ? (
+										<Link
+											to={`/dispatch/technicians/${technician.id}/assign`}
+											className={
+												PRIMARY_BUTTON
+											}
+										>
+											<CalendarPlus
+												size={
+													14
+												}
+												aria-hidden
+											/>{" "}
+											Assign
+											Visits
+										</Link>
+									) : (
+										<div className="flex flex-col items-end">
+											{/* Focusable, not a dead span, so keyboard users
+											    reach the button and hear its reason. */}
+											<button
+												type="button"
+												aria-disabled="true"
+												aria-describedby={
+													assignReasonId
+												}
+												className={
+													DISABLED_BUTTON
+												}
 											>
-												<Briefcase
+												<CalendarPlus
 													size={
 														14
 													}
-													className="text-text-muted group-hover:text-text-secondary transition-colors flex-shrink-0"
-												/>
-												<div className="min-w-0">
-													<p className="text-xs font-medium text-text-secondary group-hover:text-text-primary transition-colors truncate leading-tight">
-														{
-															job.name
-														}
-													</p>
-													<p className="text-[11px] text-text-muted truncate leading-tight">
-														{
-															job
-																.client
-																.name
-														}
-													</p>
-												</div>
+													aria-hidden
+												/>{" "}
+												Assign
+												Visits
 											</button>
-
-											<button
-												onClick={() =>
-													toggleJob(
-														job.id
-													)
+											<span
+												id={
+													assignReasonId
 												}
-												className="flex-1 flex items-center gap-2 px-3 py-2.5 hover:bg-surface/40 transition-colors text-left group min-w-0"
+												className="mt-0.5 text-xs text-text-muted"
 											>
-												<div className="flex-1 min-w-0">
-													{job.address && (
-														<p className="text-xs text-text-muted truncate flex items-center gap-1">
-															<MapPin
-																size={
-																	10
-																}
-																className="flex-shrink-0"
-															/>
-															{
-																job.address
-															}
-														</p>
-													)}
-												</div>
-												<span className="text-[10px] text-text-muted bg-surface border border-border rounded px-1.5 py-0.5 whitespace-nowrap flex-shrink-0">
-													{
-														visits.length
-													}{" "}
-													visit
-													{visits.length !==
-													1
-														? "s"
-														: ""}
-												</span>
-												<span
-													className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border flex-shrink-0 ${jobColor}`}
-												>
-													{
-														jobLabel
-													}
-												</span>
-												<ChevronDown
-													size={
-														13
-													}
-													className={`text-text-muted group-hover:text-text-secondary transition-transform duration-200 flex-shrink-0 ${isExpanded ? "rotate-180" : ""}`}
-												/>
-											</button>
+												{
+													assignBlocked
+												}
+											</span>
 										</div>
-
-										{/* Expanded visit rows */}
-										{isExpanded && (
-											<div className="border-t border-border-subtle">
-												{visits.map(
-													(
-														visit
-													) => {
-														const visitColor =
-															VisitStatusColors[
-																visit.status as VisitStatus
-															] ??
-															"bg-neutral/20 text-text-tertiary border-border-strong/30";
-														const visitLabel =
-															VisitStatusLabels[
-																visit.status as VisitStatus
-															] ??
-															visit.status;
-														return (
-															<button
-																key={
-																	visit.id
-																}
-																onClick={() =>
-																	navigate(
-																		`/dispatch/jobs/${job.id}/visits/${visit.id}`
-																	)
-																}
-																className="w-full flex items-center gap-3 pl-10 pr-4 py-2 border-b border-border-subtle/60 last:border-b-0 hover:bg-surface/40 transition-colors text-left group"
-															>
-																<div className="flex-1 min-w-0">
-																	<div className="flex items-center gap-1.5 flex-wrap">
-																		<span className="text-xs font-medium text-text-secondary group-hover:text-text-primary transition-colors">
-																			{fmtDate(
-																				visit.scheduled_start_at
-																			)}
-																		</span>
-																		<span className="text-border">
-																			·
-																		</span>
-																		<span className="text-xs text-text-muted">
-																			{fmtTime(
-																				visit.scheduled_start_at
-																			)}{" "}
-																			–{" "}
-																			{fmtTime(
-																				visit.scheduled_end_at
-																			)}
-																		</span>
-																	</div>
-																	{visit.actual_start_at && (
-																		<p className="text-[11px] text-text-faint mt-0.5">
-																			Actual:{" "}
-																			{fmtTime(
-																				visit.actual_start_at
-																			)}
-																			{visit.actual_end_at
-																				? ` – ${fmtTime(visit.actual_end_at)}`
-																				: " (ongoing)"}
-																		</p>
-																	)}
-																</div>
-																<div className="flex items-center gap-1.5 flex-shrink-0">
-																	<span
-																		className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${visitColor}`}
-																	>
-																		{
-																			visitLabel
-																		}
-																	</span>
-																	<ExternalLink
-																		size={
-																			11
-																		}
-																		className="text-text-faint group-hover:text-text-tertiary transition-colors"
-																	/>
-																</div>
-															</button>
-														);
-													}
-												)}
-											</div>
-										)}
-									</div>
-								);
-							})}
-						</div>
-					)}
-				</Card>
-			</div>
-
-			{/* Location placeholder */}
-			<Card title="Current Location">
-				<div className="w-full h-48 bg-surface/50 rounded-lg border border-border flex items-center justify-center">
-					<div className="text-center">
-						<MapPin
-							size={36}
-							className="text-text-faint mx-auto mb-2"
+									)}
+								</>
+							}
+							menuGroups={menuGroups}
+							menuLabel="Technician actions"
+							onMenuClose={disarm}
 						/>
-						<p className="text-text-tertiary text-sm">Map view</p>
-						<p className="text-text-muted text-xs mt-1">
-							Location tracking integration pending
-						</p>
 					</div>
 				</div>
-			</Card>
+				{technician.deactivated_at && (
+					<div
+						role="status"
+						className="rounded border border-border bg-surface-inset px-3 py-2 text-sm text-text-secondary"
+					>
+						Inactive — this technician can&apos;t sign in or be scheduled.
+					</div>
+				)}
+				{/* The armed label changes inside an open menu, which a screen reader
+				    doesn't re-read on its own. */}
+				<p aria-live="polite" className="sr-only">
+					{armedAnnouncement(armed, technician.name)}
+				</p>
+				<TechnicianNowStrip technician={technician} />
+				<DetailTabs
+					tabs={TECH_TABS}
+					activeTab={activeTab}
+					onSelect={setActiveTab}
+					label="Technician sections"
+				/>
+			</div>
 
-			<AccessCard user={technician} tier="technician" />
-
-			<ChangeHistory scope={{ kind: "actor", type: "technician", id: technicianId ?? "" }} />
+			{activeTab === "overview" && (
+				<TechnicianOverviewTab technician={technician} />
+			)}
+			{activeTab === "schedule" && (
+				<TechnicianScheduleTab technician={technician} />
+			)}
+			{activeTab === "vehicle" && (
+				<TechnicianVehicleTab technician={technician} />
+			)}
+			{activeTab === "access" && <TechnicianAccessTab technician={technician} />}
+			{activeTab === "activity" && (
+				<TechnicianActivityTab technician={technician} />
+			)}
 
 			<EditTechnicianModal
-				isOpen={isEditModalOpen}
-				onClose={() => setIsEditModalOpen(false)}
+				isOpen={isEditOpen}
+				onClose={() => setIsEditOpen(false)}
 				technician={technician}
 			/>
 		</div>

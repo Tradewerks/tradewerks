@@ -1,428 +1,323 @@
-﻿import { Phone, Mail, Briefcase, Clock, MoreHorizontal, Trash2, ShieldCheck } from "lucide-react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { CalendarPlus, Clock, Mail, Phone, ShieldCheck, Truck } from "lucide-react";
 import type { Technician } from "../../types/technicians";
-import { TechnicianStatusColors, TechnicianStatusDotColors, TechnicianStatusLabels } from "../../types/technicians";
-import { useRef, useState, useEffect } from "react";
+import { TechnicianStatusLabels } from "../../types/technicians";
+import { VisitStatusColors, VisitStatusLabels } from "../../types/jobs";
 import { usePermission } from "../../hooks/usePermission";
-import { useDeleteTechnicianMutation } from "../../hooks/useTechnicians";
-import { useResetMfaMutation } from "../../hooks/useMfa";
-import { requestPasswordResetCall } from "../../api/authenticate";
-import { useToast } from "../ui/useToast";
+import TechnicianActionsMenu from "./TechnicianActionsMenu";
+import { getTechnicianActivity, type TechnicianActivity } from "./technicianActivity";
+import { TECH_COL_VISIBILITY, TECH_ROW_COLS } from "./technicianRosterLayout";
+import { capitalizeWords, formatLastLogin, formatTime, visitLabel } from "./technicianFormat";
+import { Avatar, MfaMark, NowText, StatusPill, TodayProgress } from "./TechnicianBits";
 
 interface TechnicianCardProps {
-  technician: Technician;
-  onClick?: () => void;
-  onEdit?: (technician: Technician) => void;
-  onAssignRole?: (technician: Technician) => void;
-  viewMode?: "card" | "list";
+	technician: Technician;
+	onClick?: () => void;
+	onEdit?: (technician: Technician) => void;
+	// Admin Users section assigns roles through its own modal; the roster edits role in EditTechnician.
+	onAssignRole?: (technician: Technician) => void;
+	viewMode?: "card" | "list";
+	// "roster" rows sit flush inside the roster's bordered container; "standalone"
+	// rows carry their own border for lists that mix in other card types.
+	rowStyle?: "roster" | "standalone";
 }
 
-function capitalizeWords(str: string) {
-  return str
-    .toLowerCase()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+function stop(e: MouseEvent) {
+	e.stopPropagation();
 }
 
-function formatLastLogin(raw: unknown) {
-  if (!raw) return "Never";
+// Card view has room to wrap the title, so the one-word status moves into a corner chip.
+// The chip floats so lines past the first reclaim the full box width.
+function NowBox({ activity }: { activity: TechnicianActivity }) {
+	const vt = activity.current ?? activity.next;
+	if (!vt) {
+		return (
+			<div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+				<p className="text-sm text-text-muted">No upcoming visits today</p>
+			</div>
+		);
+	}
 
-  let d: Date;
+	const isCurrent = vt === activity.current;
+	const jobName = vt.visit.job?.name;
+	const clientName = vt.visit.job?.client?.name;
+	const chip = isCurrent
+		? { text: VisitStatusLabels[vt.visit.status], tone: VisitStatusColors[vt.visit.status] }
+		: {
+				text: `Next ${formatTime(vt.visit.scheduled_start_at)}`,
+				tone: "bg-surface-raised/40 text-text-tertiary border-border-strong/40",
+			};
 
-  if (raw instanceof Date) {
-    d = raw;
-  } else if (typeof raw === "string") {
-    d = new Date(raw);
-  } else {
-    d = new Date(String(raw));
-  }
-
-  if (isNaN(d.getTime())) {
-    return "Never";
-  }
-
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMins / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffMins < 5) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-
-  return d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+	return (
+		<div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
+			<p
+				title={visitLabel(vt)}
+				className={`line-clamp-3 break-words text-sm leading-5 ${
+					isCurrent ? "text-text-primary" : "text-text-secondary"
+				}`}
+			>
+				<span
+					className={`float-right ml-2 mt-px whitespace-nowrap rounded border px-1.5 text-[11px] font-medium leading-4 ${chip.tone}`}
+				>
+					{chip.text}
+				</span>
+				{jobName || clientName || "Visit"}
+				{jobName && clientName && (
+					<span className="text-text-tertiary"> · {clientName}</span>
+				)}
+			</p>
+		</div>
+	);
 }
 
-export default function TechnicianCard({ technician, onClick, onEdit, onAssignRole, viewMode }: TechnicianCardProps) {
-  const navigate = useNavigate();
+function ContactLinks({ technician, displayName }: { technician: Technician; displayName: string }) {
+	const link =
+		"flex h-7 w-7 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-raised hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
+	return (
+		<>
+			{technician.phone && (
+				<a
+					href={`tel:${technician.phone}`}
+					onClick={stop}
+					aria-label={`Call ${displayName}`}
+					title={technician.phone}
+					className={link}
+				>
+					<Phone size={15} />
+				</a>
+			)}
+			{technician.email && (
+				<a
+					href={`mailto:${technician.email}`}
+					onClick={stop}
+					aria-label={`Email ${displayName}`}
+					title={technician.email}
+					className={link}
+				>
+					<Mail size={15} />
+				</a>
+			)}
+		</>
+	);
+}
 
-  const displayName = capitalizeWords(technician.name);
-  const lastLoginText = formatLastLogin(technician.last_login);
-  const statusColorClass = TechnicianStatusColors[technician.status];
-  const mfaBadge = technician.mfaEnabled ? (
-    <span
-      title="Two-factor authentication enabled"
-      className="inline-flex items-center gap-1 rounded-full border border-success-border bg-success-bg px-2 py-0.5 text-xs font-medium text-success-text"
-    >
-      <ShieldCheck size={12} /> MFA
-    </span>
-  ) : null;
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const [confirmResetMFA, setConfirmResetMFA] = useState(false);
-  const [confirmResetPassword, setConfirmResetPassword] = useState(false);
-  const [isResettingPassword, setIsResettingPassword] = useState(false);
-  const { mutateAsync: deleteTechnician, isPending: isDeleting } = useDeleteTechnicianMutation();
-  const { mutateAsync: resetMFA, isPending: isResetingMFA } = useResetMfaMutation();
-  const toast = useToast();
+export default function TechnicianCard({
+	technician,
+	onClick,
+	onEdit,
+	onAssignRole,
+	viewMode = "card",
+	rowStyle = "standalone",
+}: TechnicianCardProps) {
+	const navigate = useNavigate();
+	const MANAGE_TECHNICIANS = usePermission("manage_technicians");
+	const VIEW_TECHNICIANS = usePermission("view_technicians");
 
-  // permissions
-  const MANAGE_TECHNICIAN = usePermission("manage_technicians");
-  const VIEW_TECHNICIAN = usePermission("view_technicians");
+	const displayName = capitalizeWords(technician.name);
+	const lastLoginText = formatLastLogin(technician.last_login);
+	const activity = getTechnicianActivity(technician);
+	const { todayCount, todayDone } = activity;
+	const vehicleName = technician.current_vehicle?.name ?? null;
+	const subtitle = [technician.title, technician.organization_role?.name].filter(Boolean).join(" · ");
+	const openable = VIEW_TECHNICIANS && !!onClick;
+	const inactive = !!technician.deactivated_at;
+	const inactiveBadge = inactive && (
+		<span className="rounded-full border border-border px-2 py-0.5 text-xs font-medium text-text-tertiary">
+			Inactive
+		</span>
+	);
 
-  const hasActiveVisits = (technician.visit_techs ?? []).some((vt) =>
-    ["Scheduled", "InProgress", "OnSite", "Driving", "Paused", "Delayed"].includes(vt.visit.status)
-  );
-
-  const handleDelete = async () => {
-		if (!MANAGE_TECHNICIAN) return;
-		if (!technician) return;
-		if (!deleteConfirm) {
-			setDeleteConfirm(true);
-			return;
-		}
-		try {
-			await deleteTechnician(technician.id);
-			setDeleteConfirm(false);
-		} catch (error) {
-			console.error("Failed to delete technician:", error);
+	// Only the row/card itself — Enter on a nested link or button already acts on its own.
+	const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+		if (!openable || e.target !== e.currentTarget) return;
+		if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			onClick?.();
 		}
 	};
 
-  const handleResetPassword = async () => {
-    if (!MANAGE_TECHNICIAN || !technician) return;
-    if (!confirmResetPassword) {
-      setConfirmResetPassword(true);
-      return;
-    }
-    setIsResettingPassword(true);
-    try {
-      await requestPasswordResetCall(technician.id, "technician");
-      setConfirmResetPassword(false);
-      setDropdownOpen(false);
-      toast.success(`Password reset email sent to ${technician.email}`);
-    } catch (error) {
-      setConfirmResetPassword(false);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to send the reset email"
-      );
-    } finally {
-      setIsResettingPassword(false);
-    }
-  };
+	const interactive = openable
+		? {
+				// "button", not "link": activation is a JS navigate with no href to open in a new tab.
+				role: "button" as const,
+				tabIndex: 0,
+				"aria-label": `Open ${displayName}`,
+				onClick,
+				onKeyDown: handleKeyDown,
+			}
+		: {};
 
-  const handleResetMFA = async (technician: Technician) => {
-    if (!MANAGE_TECHNICIAN) return;
-    if (!technician) return;
-        if (!confirmResetMFA) {
-            setConfirmResetMFA(true);
-            return;
-        }
-        try {
-            await resetMFA({userId: technician.id, role: "technician"});
-            setConfirmResetMFA(false);
-            setDropdownOpen(false);
-        }catch (error) {
-      console.error("Failed to reset MFA:", error);
-      setConfirmResetMFA(false);
-      alert(
-        error instanceof Error
-          ? "Failed to reset MFA: " + error.message
-          : "Failed to reset MFA."
-      );
-    }
-  }
+	const assignButton = MANAGE_TECHNICIANS && !inactive && (
+		<button
+			type="button"
+			onClick={(e) => {
+				e.stopPropagation();
+				navigate(`/dispatch/technicians/${technician.id}/assign`);
+			}}
+			aria-label={`Assign visits to ${displayName}`}
+			className={`${viewMode === "list" ? "hidden sm:flex" : "flex"} h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}
+		>
+			<CalendarPlus size={14} aria-hidden />
+			Assign Visits
+		</button>
+	);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+	const actions = (
+		<>
+			{assignButton}
+			<TechnicianActionsMenu
+				technician={technician}
+				displayName={displayName}
+				onEdit={onEdit}
+				onAssignRole={onAssignRole}
+				assignInMenuBelowSm={viewMode === "list"}
+			/>
+		</>
+	);
 
-  const handleAssignClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigate(`/dispatch/technicians/${technician.id}/assign`);
-  };
+	if (viewMode === "list") {
+		return (
+			<div
+				{...interactive}
+				className={`${TECH_ROW_COLS} px-4 ${
+					rowStyle === "roster"
+						? "border-b border-border-subtle last:border-b-0"
+						: "rounded-lg border border-border bg-base"
+				} py-2.5 ${
+					openable
+						? "cursor-pointer transition-colors duration-100 hover:bg-surface focus-visible:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+						: ""
+				}`}
+			>
+				<div className="flex min-w-0 items-center gap-3">
+					<Avatar technician={technician} size="md" />
+					<div className="min-w-0">
+						<p className="truncate text-sm font-medium text-text-primary">{displayName}</p>
+						{/* Below sm the status column is hidden, so status rides on this line. */}
+						<p className={`truncate text-xs text-text-tertiary ${subtitle ? "" : "sm:hidden"}`}>
+							<span className="sm:hidden">
+								{inactive ? "Inactive" : TechnicianStatusLabels[technician.status]}
+								{subtitle && " · "}
+							</span>
+							{subtitle}
+						</p>
+					</div>
+				</div>
 
-  const OPTIONS = (
-                  <div className="absolute right-0 mt-1 w-44 bg-surface border border-border rounded-lg shadow-lg z-50 overflow-hidden">
-                      <button
-                          onClick={(e) => {
-                              e.stopPropagation();
-                              setDropdownOpen(false);
-                              onClick?.();
-                          }}
-                          className="w-full text-left px-4 py-2 text-sm text-text-primary hover:bg-surface-raised transition-colors"
-                      >
-                          View Details
-                      </button>
-                      <button
-                          title={!MANAGE_TECHNICIAN ? "You don't have permission to perform this action" : undefined}
-                          disabled={!MANAGE_TECHNICIAN || isResettingPassword}
-                          onClick={(e) => {
-                              e.stopPropagation();
-                              handleResetPassword();
-                          }}
-                          onMouseLeave={() => setConfirmResetPassword(false)}
-                          className="w-full text-left px-4 py-2 text-sm text-text-primary hover:enabled:bg-surface-raised transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                          {isResettingPassword
-                              ? "Sending..."
-                              : confirmResetPassword
-                                  ? "Click to Confirm"
-                                  : "Reset Password"}
-                      </button>
-                      <button
-                          onClick={(e) => {
-                              e.stopPropagation();
-                              setDropdownOpen(false);
-                              onEdit?.(technician);
-                          }}
-                          className="w-full text-left px-4 py-2 text-sm text-text-primary hover:bg-surface-raised transition-colors"
-                      >
-                          Update User
-                      </button>
-                      <button
-                          onClick={(e) => {
-                              e.stopPropagation();
-                              setDropdownOpen(false);
-                              onAssignRole?.(technician);
-                          }}
-                          className="w-full text-left px-4 py-2 text-sm text-text-primary hover:bg-surface-raised transition-colors"
-                      >
-                          Assign Role
-                      </button>
-                      {technician.mfaEnabled && (
-                        <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            handleResetMFA(technician)
-                        }}
-                        onMouseLeave={()=> setConfirmResetMFA(false)}
-                        disabled={isResetingMFA}
-                        className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
-                            confirmResetMFA
-                                ? "bg-error hover:bg-error-strong text-on-primary"
-                                : "text-text-primary hover:bg-surface-raised hover:text-error-text"
-                            } disabled:opacity-40 disabled:cursor-not-allowed`}
-                        >
-                            {isResetingMFA
-                                ? "Reseting MFA..."
-                                : confirmResetMFA
-                                    ? "Click Again to Confirm"
-                                    : "Reset MFA"}
-                        </button>
-                      )}
-                      {!hasActiveVisits && (
-                        <>
-                          <div className="my-1 border-t border-border-subtle" />
-                          <button
-                            onClick={handleDelete}
-                            onMouseLeave={() => setDeleteConfirm(false)}
-                            disabled={isDeleting}
-                            className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
-                              deleteConfirm
-                                ? "bg-error hover:bg-error-strong text-on-primary"
-                                : "text-error-text hover:bg-surface-raised hover:text-error-text"
-                            } disabled:opacity-40 disabled:cursor-not-allowed`}
-                          >
-                            <Trash2 size={16} />
-                            {isDeleting
-                              ? "Deleting..."
-                              : deleteConfirm
-                                ? "Click Again to Confirm"
-                                : "Delete Technician"}
-                          </button>
-                        </>
-                      )}
-                  </div>
-                );
+				<div className={`items-center gap-1.5 ${TECH_COL_VISIBILITY.status}`}>
+					<StatusPill technician={technician} />
+					<MfaMark enabled={technician.mfaEnabled} />
+					{inactiveBadge}
+				</div>
 
-  if (viewMode === "list") {
-      return (
-          <div
-              onClick={VIEW_TECHNICIAN ? onClick : undefined}
-              className="w-full bg-base rounded-lg border border-border shadow-sm px-5 py-3 flex items-center gap-4 cursor-pointer hover:shadow-md transition"
-          >
-              {/* Avatar */}
-              <div className="w-10 h-10 flex-shrink-0 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-semibold text-lg">
-                  {technician.name.charAt(0).toUpperCase()}
-              </div>
+				<div
+					className={`min-w-0 truncate text-sm ${TECH_COL_VISIBILITY.vehicle} ${
+						vehicleName ? "text-text-secondary" : "text-text-muted"
+					}`}
+					title={vehicleName ?? undefined}
+				>
+					{vehicleName ?? "—"}
+				</div>
 
-              {/* Name */}
-              <div className="flex-1 min-w-0">
-                  <h3 className="text-text-primary font-semibold text-lg truncate">{displayName}</h3>
-              </div>
+				<div className={`min-w-0 ${TECH_COL_VISIBILITY.now}`}>
+					<NowText activity={activity} />
+				</div>
 
-              {/* Status + role */}
-              <div className="w-40 flex-shrink-0 flex flex-col gap-0.5">
-                  <div className="flex items-center gap-1.5">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border w-fit ${statusColorClass}`}>
-                          {TechnicianStatusLabels[technician.status]}
-                      </span>
-                      {mfaBadge}
-                  </div>
-                  {technician.organization_role && (
-                      <span className="text-xs text-text-tertiary truncate">{technician.organization_role.name}</span>
-                  )}
-              </div>
+				<div className={TECH_COL_VISIBILITY.today}>
+					<TodayProgress done={todayDone} total={todayCount} />
+				</div>
 
-              {/* Email */}
-              <div className="flex-1 min-w-0 hidden sm:flex items-center gap-2 text-sm text-text-secondary">
-                  <Mail size={16} className="text-text-tertiary flex-shrink-0" />
-                  <span className="truncate">{technician.email}</span>
-              </div>
+				<div className={`items-center gap-0.5 ${TECH_COL_VISIBILITY.contact}`}>
+					<ContactLinks technician={technician} displayName={displayName} />
+				</div>
 
-              {/* Title */}
-              <div className="flex-1 min-w-0 hidden md:flex items-center gap-2 text-sm text-text-secondary">
-                  <Briefcase size={16} className="text-text-tertiary flex-shrink-0" />
-                  <span className="truncate">{technician.title}</span>
-              </div>
+				<div className={`truncate text-xs text-text-tertiary ${TECH_COL_VISIBILITY.lastLogin}`}>
+					{lastLoginText}
+				</div>
 
-              {/* Last Login */}
-              <div className="flex-1 min-w-0 hidden lg:flex items-center gap-2 text-sm text-text-secondary">
-                  <Clock size={13} className="opacity-70 flex-shrink-0" />
-                  <span className="truncate">Last login: {lastLoginText}</span>
-              </div>
+				<div className="flex items-center justify-end gap-1.5">{actions}</div>
+			</div>
+		);
+	}
 
-              {/* Actions */}
-              {MANAGE_TECHNICIAN && (
-                <div className="flex-shrink-0 relative" ref={dropdownRef}>
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setDropdownOpen((prev) => !prev);
-                        }}
-                        className="flex items-center gap-2 p-2 bg-surface hover:bg-surface-raised text-text-secondary rounded-md transition-colors border border-border"
-                    >
-                        <MoreHorizontal size={18} />
-                        <span className="text-sm font-medium">Options</span>
-                    </button>
+	return (
+		<div
+			{...interactive}
+			className={`flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-base p-4 ${
+				openable
+					? "cursor-pointer transition-colors duration-100 hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+					: ""
+			}`}
+		>
+			<div className="flex items-start gap-3">
+				<Avatar technician={technician} size="lg" />
+				<div className="min-w-0 flex-1">
+					<p className="truncate text-sm font-semibold text-text-primary">{displayName}</p>
+					{subtitle && <p className="truncate text-xs text-text-tertiary">{subtitle}</p>}
+				</div>
+				<div className="flex shrink-0 flex-col items-end gap-1">
+					<StatusPill technician={technician} />
+					{inactiveBadge}
+				</div>
+			</div>
 
-                    {dropdownOpen && OPTIONS}
-                </div>
-              )}
-          </div>
-      );
-  }
+			<NowBox activity={activity} />
 
-  return (
-    <div
-      className="
-        bg-base border border-border rounded-lg p-5
-        hover:border-border-strong hover:shadow-lg transition-all
-        w-full max-w-[360px] flex flex-col gap-4
-      "
-    >
-      <div className="flex items-start gap-3">
-        <div className="relative">
-          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-semibold text-lg">
-            {technician.name.charAt(0).toUpperCase()}
-          </div>
-          
-            <div className={`absolute bottom-0 right-0 w-4 h-4 border-2 border-base rounded-full ${TechnicianStatusDotColors[technician.status]}`} />
-        </div>
+			<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-tertiary">
+				<span className="tabular-nums">
+					<span className={todayCount > 0 ? "text-text-primary" : undefined}>
+						{todayCount}
+					</span>{" "}
+					{todayCount === 1 ? "visit" : "visits"} today
+				</span>
+				<span className="flex min-w-0 items-center gap-1">
+					<Truck size={13} aria-hidden className="shrink-0" />
+					<span className="truncate">{vehicleName ?? "No vehicle"}</span>
+				</span>
+				{technician.mfaEnabled && (
+					<span className="flex items-center gap-1 text-success-text">
+						<ShieldCheck size={13} aria-hidden /> MFA
+					</span>
+				)}
+			</div>
 
-        <div className="flex-1 min-w-0">
-          <h3 className="text-text-primary font-semibold text-lg truncate">{displayName}</h3>
-          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${statusColorClass}`}>
-              {TechnicianStatusLabels[technician.status]}
-            </span>
-            {mfaBadge}
-            {technician.organization_role && (
-              <span className="text-xs text-text-tertiary">{technician.organization_role.name}</span>
-            )}
-          </div>
-        </div>
-      </div>
+			{(technician.phone || technician.email) && (
+				<div className="flex min-w-0 flex-col gap-1 text-xs">
+					{technician.phone && (
+						<a
+							href={`tel:${technician.phone}`}
+							onClick={stop}
+							className="flex w-fit max-w-full items-center gap-2 text-text-secondary hover:text-text-primary"
+						>
+							<Phone size={13} aria-hidden className="shrink-0 text-text-tertiary" />
+							<span className="truncate">{technician.phone}</span>
+						</a>
+					)}
+					{technician.email && (
+						<a
+							href={`mailto:${technician.email}`}
+							onClick={stop}
+							className="flex w-fit max-w-full items-center gap-2 text-text-secondary hover:text-text-primary"
+						>
+							<Mail size={13} aria-hidden className="shrink-0 text-text-tertiary" />
+							<span className="truncate">{technician.email}</span>
+						</a>
+					)}
+				</div>
+			)}
 
-      <div className="space-y-2.5">
-        <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <Phone size={16} className="text-text-tertiary flex-shrink-0" />
-          <span className="truncate">{technician.phone}</span>
-        </div>
-
-        <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <Mail size={16} className="text-text-tertiary flex-shrink-0" />
-          <span className="truncate">{technician.email}</span>
-        </div>
-
-        <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <Briefcase size={16} className="text-text-tertiary flex-shrink-0" />
-          <span className="truncate">{technician.title}</span>
-        </div>
-        
-        <div className="flex items-start gap-2 text-sm text-text-tertiary min-h-[1.2rem]">
-          <div className="w-4 flex-shrink-0" /> 
-          <p className="line-clamp-2 text-xs leading-relaxed">
-            {technician.description}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 text-xs text-text-tertiary pt-2 border-t border-border-subtle mt-auto">
-        <Clock size={13} className="opacity-70" />
-        <span>Last login: {lastLoginText}</span>
-      </div>
-      
-      
-      <div className="flex gap-2 mt-1">
-        {VIEW_TECHNICIAN && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick?.();
-            }}
-            className="flex-1 px-4 py-2 bg-surface hover:bg-surface-raised text-text-secondary text-sm font-medium rounded-md transition-colors border border-border"
-          >
-            View Details
-          </button>
-        )}
-        {MANAGE_TECHNICIAN && (
-          <button
-            onClick={handleAssignClick}
-            className="flex-1 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active text-on-primary text-sm font-medium rounded-md transition-colors"
-          >
-            Assign Visits
-          </button>
-        )}
-
-        {MANAGE_TECHNICIAN && (
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setDropdownOpen((prev) => !prev);
-              }}
-              className="flex items-center justify-center h-full px-3 py-2 bg-surface hover:bg-surface-raised text-text-secondary rounded-md transition-colors border border-border"
-            >
-              <MoreHorizontal size={18} />
-            </button>
-
-            {dropdownOpen && OPTIONS}
-          </div>  
-        )}
-      </div>
-    </div>
-  );
+			<div className="mt-auto flex items-center justify-between gap-2 border-t border-border-subtle pt-3">
+				<span
+					title="Last login"
+					className="flex min-w-0 items-center gap-1.5 text-xs text-text-tertiary"
+				>
+					<Clock size={12} aria-hidden className="shrink-0" />
+					<span className="sr-only">Last login:</span>
+					<span className="truncate">{lastLoginText}</span>
+				</span>
+				<div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+			</div>
+		</div>
+	);
 }

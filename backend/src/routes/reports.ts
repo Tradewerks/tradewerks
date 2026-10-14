@@ -1,3 +1,9 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
+import {
+	PAGE_SUMMARY_MODULE,
+	REPORT_MODULE,
+	ownerReadRefusal,
+} from "../lib/entitlements/ownership.js";
 import { Router, type Response } from 'express';
 import { z } from "zod";
 import {
@@ -71,7 +77,9 @@ const handlePaginatedReport = async (
 		// Fallback: fetch-all then filter/sort/paginate in memory (computed-column
 		// filters/sorts, or reports without a pushdown path).
 		const { rows, summary } = await def.load(orgId, query);
-		const filtered = filterRows(rows, params);
+		// searchKeys is server-side policy, never client input — inject it here so
+		// it cannot be widened by a query param.
+		const filtered = filterRows(rows, { ...params, searchKeys: def.searchKeys });
 		const page = slicePage(filtered, params);
 		const filteredSummary = def.filteredSummary?.(filtered);
 		const mergedSummary =
@@ -223,7 +231,7 @@ router.get("/job-backlog", requirePermission("view_reports"), async (req, res, n
 	}
 });
 
-router.get("/quote-pipeline", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/quote-pipeline", requireModule("quotes"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { startDate, endDate } = req.query as {
@@ -317,7 +325,7 @@ router.get("/timesheets", requirePermission("view_reports"), async (req, res, ne
 	}
 });
 
-router.get("/jobs", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/jobs", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -331,7 +339,7 @@ router.get("/jobs", requirePermission("view_reports"), async (req, res, next) =>
 	}
 });
 
-router.get("/invoices", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/invoices", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -345,7 +353,7 @@ router.get("/invoices", requirePermission("view_reports"), async (req, res, next
 	}
 });
 
-router.get("/clients", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/clients", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -415,7 +423,7 @@ router.get("/payments", requirePermission("view_reports"), async (req, res, next
 	}
 });
 
-router.get("/quote-funnel", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/quote-funnel", requireModule("quotes"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -443,7 +451,7 @@ router.get("/first-time-fix", requirePermission("view_reports"), async (req, res
 	}
 });
 
-router.get("/technician-scorecard", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/technician-scorecard", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { startDate, endDate } = req.query as {
@@ -457,7 +465,7 @@ router.get("/technician-scorecard", requirePermission("view_reports"), async (re
 	}
 });
 
-router.get("/inventory/reorder-forecast", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/inventory/reorder-forecast", requireModule("inventory"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -471,7 +479,7 @@ router.get("/inventory/reorder-forecast", requirePermission("view_reports"), asy
 	}
 });
 
-router.get("/inventory/full", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/inventory/full", requireModule("inventory"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -509,7 +517,7 @@ router.get("/receivables/aging/by-client", requirePermission("view_reports"), as
 	}
 });
 
-router.get("/recurring-revenue", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/recurring-revenue", requireModule("recurring_plans"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
@@ -556,6 +564,20 @@ router.get("/revenue-line-items", requirePermission("view_reports"), async (req,
 		const orgId = req.user!.organization_id as string;
 		const { data, meta } = await handlePaginatedReport(
 			"revenue-line-items",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.get("/job-profitability", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const { data, meta } = await handlePaginatedReport(
+			"job-profitability",
 			orgId,
 			req.query as Record<string, unknown>,
 		);
@@ -613,6 +635,17 @@ router.post("/export/server", requirePermission("view_reports"), async (req, res
 		}
 
 		const orgId = req.user!.organization_id as string;
+		const refused = await ownerReadRefusal(orgId, report, REPORT_MODULE);
+		if (refused) {
+			return res
+				.status(403)
+				.json(
+					createErrorResponse(
+						ErrorCodes.MODULE_NOT_IN_PLAN,
+						`${refused.label} is not included in your plan`,
+					),
+				);
+		}
 		const { rows } = await def.load(orgId, {
 			startDate: rest.startDate,
 			endDate: rest.endDate,
@@ -627,6 +660,9 @@ router.post("/export/server", requirePermission("view_reports"), async (req, res
 			sortKey: rest.sortKey,
 			sortDir: rest.sortDir,
 			sortType: rest.sortType,
+			// Must match the table path above, or an export search returns a
+			// different row set than the screen the user exported from.
+			searchKeys: def.searchKeys,
 		});
 
 		const mapped = filtered.map((row) =>
@@ -646,7 +682,7 @@ router.post("/export/server", requirePermission("view_reports"), async (req, res
 	}
 });
 
-router.get("/saved", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/saved", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const uid = req.user!.uid as string;
@@ -660,7 +696,7 @@ router.get("/saved", requirePermission("view_reports"), async (req, res, next) =
 	}
 });
 
-router.post("/saved", requirePermission("view_reports"), async (req, res, next) => {
+router.post("/saved", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const uid = req.user!.uid as string;
@@ -674,7 +710,7 @@ router.post("/saved", requirePermission("view_reports"), async (req, res, next) 
 	}
 });
 
-router.get("/saved/:id", requirePermission("view_reports"), async (req, res, next) => {
+router.get("/saved/:id", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const uid = req.user!.uid as string;
@@ -688,7 +724,7 @@ router.get("/saved/:id", requirePermission("view_reports"), async (req, res, nex
 	}
 });
 
-router.put("/saved/:id", requirePermission("view_reports"), async (req, res, next) => {
+router.put("/saved/:id", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const uid = req.user!.uid as string;
@@ -708,7 +744,7 @@ router.put("/saved/:id", requirePermission("view_reports"), async (req, res, nex
 	}
 });
 
-router.delete("/saved/:id", requirePermission("view_reports"), async (req, res, next) => {
+router.delete("/saved/:id", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const uid = req.user!.uid as string;
@@ -774,6 +810,48 @@ router.delete("/favorites/:id", requirePermission("view_reports"), async (req, r
 	}
 });
 
+router.get("/projects", requireModule("projects"), requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const { data, meta } = await handlePaginatedReport(
+			"projects",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch(err) {
+		next(err);
+	}
+});
+
+router.get("/cogs-by-job", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		 const { data, meta } = await handlePaginatedReport(
+			"cogs-by-job",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch(err) {
+		next(err);
+	}
+});
+
+router.get("/cogs-by-item", requireModule("advanced_reporting"), requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		 const { data, meta } = await handlePaginatedReport(
+			"cogs-by-item",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch(err) {
+		next(err);
+	}
+})
+
 // A bound is either a full ISO instant (what the frontend sends) or a bare
 // YYYY-MM-DD, which the controller widens to that UTC day.
 const reportDateParam = z.union([z.iso.datetime({ offset: true }), z.iso.date()]);
@@ -797,6 +875,18 @@ router.get("/page-summary", requirePermission("view_reports"), async (req, res, 
 				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, parsed.error.message));
 		}
 		const { page, startDate, endDate, groupBy } = parsed.data;
+
+		const refused = await ownerReadRefusal(orgId, page, PAGE_SUMMARY_MODULE);
+		if (refused) {
+			return res
+				.status(403)
+				.json(
+					createErrorResponse(
+						ErrorCodes.MODULE_NOT_IN_PLAN,
+						`${refused.label} is not included in your plan`,
+					),
+				);
+		}
 
 		const result = await getPageSummary(orgId, page, startDate, endDate, groupBy);
 

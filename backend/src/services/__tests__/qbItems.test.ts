@@ -88,7 +88,7 @@ describe("importQBItem — opening quantity", () => {
 	});
 
 	// inventory_item.quantity is numeric(10,2): a fractional QBO balance is kept,
-	// not floored (12.5 gal on hand in QuickBooks used to import as 12).
+	// not floored, so a fractional QtyOnHand imports at full precision.
 	it("keeps a fractional QtyOnHand at 2 dp instead of flooring it", async () => {
 		mockQbFetch.mockResolvedValue(qbItem({ QtyOnHand: 12.5 }));
 

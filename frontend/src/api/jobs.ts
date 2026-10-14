@@ -81,6 +81,26 @@ export const getAllJobVisits = async (): Promise<JobVisit[]> => {
 	return response.data.data || [];
 };
 
+/** One row per job the caller is on, carrying the visit a charge would land on. */
+export interface MyJobOption {
+	job_id: string;
+	job_name: string | null;
+	job_number: string | null;
+	visit_id: string;
+	visit_name: string | null;
+	scheduled_start_at: string | null;
+}
+
+/**
+ * The technician's own work, thin. `getAllJobVisits` returns every visit in the org
+ * with client, line items and time entries attached - far too much to send a phone
+ * to populate one dropdown.
+ */
+export const getMyJobs = async (): Promise<MyJobOption[]> => {
+	const response = await api.get<ApiResponse<MyJobOption[]>>("/job-visits/mine");
+	return response.data.data || [];
+};
+
 export const getClientVisitHistory = async (clientId: string, limit = 5): Promise<JobVisit[]> => {
 	const response = await api.get<ApiResponse<JobVisit[]>>("/job-visits", {
 		params: { client_id: clientId, limit, sort: "desc" },

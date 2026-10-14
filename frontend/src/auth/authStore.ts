@@ -28,6 +28,8 @@ export const useAuthStore = create<AuthState>()(
 				set({ user: { role, name, userId, orgId, orgTimezone, permissions } }),
 			logout: (remember?: boolean) => {
 				localStorage.removeItem("accessToken");
+				// The next account on this browser must not start from this org's module state.
+				localStorage.removeItem("entitlements:last");
 				if (!remember) {
 					useRememberedAccountsStore.getState().removeAccount(useAuthStore.getState().user?.userId || "");
 				}

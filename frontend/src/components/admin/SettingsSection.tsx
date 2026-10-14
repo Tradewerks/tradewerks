@@ -6,7 +6,12 @@ import {
 	useDeleteOrgLogo,
 	useUpdateOrgSettings,
 } from "../../hooks/useOrg";
-import type { OrgSettingsUpdate } from "../../api/org";
+import type {
+	OrgSettings,
+	OrgSettingsUpdate,
+	RestockMode,
+	MeasurementSystem,
+} from "../../api/org";
 import AddressForm from "../../components/ui/AddressForm";
 import type { GeocodeResult } from "../../types/location";
 import TaxSettingsSection from "./TaxSettingsSection";
@@ -50,9 +55,95 @@ const inputBase =
 const DEFAULT_BRAND_COLOR = "#1e3a5f";
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
+interface RadioOption<T extends string> {
+	value: T;
+	label: string;
+	description: string;
+}
+
+function SettingRadioGroup<T extends string>({
+	name,
+	legend,
+	help,
+	options,
+	value,
+	onChange,
+}: {
+	name: string;
+	legend: string;
+	help: string;
+	options: readonly RadioOption<T>[];
+	value: T | undefined;
+	onChange: (next: T) => void;
+}) {
+	const helpId = `${name}-help`;
+	return (
+		<fieldset aria-describedby={helpId}>
+			<legend className="mb-1 block text-xs font-medium text-text-tertiary">{legend}</legend>
+			<p id={helpId} className="mb-2 text-xs text-text-muted">
+				{help}
+			</p>
+			<div className="space-y-2">
+				{options.map((opt) => (
+					<label
+						key={opt.value}
+						className={`flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 transition-colors focus-within:ring-1 focus-within:ring-primary-border ${
+							value === opt.value
+								? "border-primary bg-primary-bg-subtle"
+								: "border-border-subtle hover:bg-surface"
+						}`}
+					>
+						<input
+							type="radio"
+							name={name}
+							value={opt.value}
+							checked={value === opt.value}
+							onChange={() => onChange(opt.value)}
+							className="mt-0.5 accent-(--color-primary)"
+						/>
+						<span>
+							<span className="block text-xs font-medium text-text-primary">
+								{opt.label}
+							</span>
+							<span className="block text-xs text-text-muted">{opt.description}</span>
+						</span>
+					</label>
+				))}
+			</div>
+		</fieldset>
+	);
+}
+
+const RESTOCK_MODE_HELP =
+	"Sets which restock path technicians and dispatch see first. Never limits what anyone can do — that's set in Roles.";
+const RESTOCK_MODE_OPTIONS = [
+	{
+		value: "tech_self_serve",
+		label: "Technician self-serve",
+		description:
+			"Techs see Fill to Standard first and restock their own vehicles from the warehouse",
+	},
+	{
+		value: "dispatch_prepared",
+		label: "Dispatch prepared",
+		description:
+			"Techs see Request Restock first; requests lead the vehicle's tabs for dispatch",
+	},
+] as const satisfies readonly RadioOption<RestockMode>[];
+
+const MEASUREMENT_SYSTEM_HELP =
+	"Puts your region's units first in the unit picker. Never converts quantities or hides a unit.";
+const MEASUREMENT_SYSTEM_OPTIONS = [
+	{ value: "imperial", label: "Imperial", description: "ft, lb, gal lead the unit picker" },
+	{ value: "metric", label: "Metric", description: "m, kg, L lead the unit picker" },
+] as const satisfies readonly RadioOption<MeasurementSystem>[];
+
 function OrgSettingsSection() {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Seed from the server once; a logo upload/remove also refetches ["org"], and
+	// reseeding then would wipe unsaved edits. Saves reseed from their own response.
+	const seededRef = useRef(false);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const [deleteError, setDeleteError] = useState<string | null>(null);
 	const [logoImgError, setLogoImgError] = useState(false);
@@ -60,6 +151,10 @@ function OrgSettingsSection() {
 	const [saveSuccess, setSaveSuccess] = useState(false);
 	const [nameError, setNameError] = useState<string | null>(null);
 	const [brandColorError, setBrandColorError] = useState<string | null>(null);
+	// Kept as text, not a number: an in-progress "1" or a cleared field are both
+	// valid states the numeric form value cannot hold.
+	const [threshold, setThreshold] = useState("");
+	const [thresholdError, setThresholdError] = useState<string | null>(null);
 
 	const { data: org, isLoading } = useOrgSettings();
 	const uploadMutation = useUploadOrgLogo();
@@ -75,26 +170,30 @@ function OrgSettingsSection() {
 		website: "",
 		mfa_required: false,
 		brand_color: DEFAULT_BRAND_COLOR,
-		followups_enabled: false,
 	});
 
+	const seedFrom = (source: OrgSettings) => {
+		setForm({
+			name: source.name,
+			phone: source.phone ?? "",
+			address: source.address ?? "",
+			coords: source.coords ?? null,
+			email: source.email ?? "",
+			website: source.website ?? "",
+			restock_mode: source.restock_mode,
+			measurement_system: source.measurement_system,
+			mfa_required: source.mfa_required,
+			brand_color: source.brand_color ?? DEFAULT_BRAND_COLOR,
+		});
+		setThreshold(source.field_purchase_second_signoff_threshold ?? "");
+	};
+
 	useEffect(() => {
-		if (org) {
-			setForm({
-				name: org.name,
-				phone: org.phone ?? "",
-				address: org.address ?? "",
-				coords: org.coords ?? null,
-				email: org.email ?? "",
-				website: org.website ?? "",
-				restock_mode: org.restock_mode,
-				measurement_system: org.measurement_system,
-				mfa_required: org.mfa_required,
-				brand_color: org.brand_color ?? DEFAULT_BRAND_COLOR,
-				followups_enabled: org.followups_enabled,
-			});
-			setLogoImgError(false);
-		}
+		if (!org) return;
+		setLogoImgError(false);
+		if (seededRef.current) return;
+		seededRef.current = true;
+		seedFrom(org);
 	}, [org]);
 
 	useEffect(() => {
@@ -140,6 +239,7 @@ function OrgSettingsSection() {
 		setSaveSuccess(false);
 		setNameError(null);
 		setBrandColorError(null);
+		setThresholdError(null);
 
 		if (!form.name?.trim()) {
 			setNameError("Organization name is required.");
@@ -151,8 +251,23 @@ function OrgSettingsSection() {
 			return;
 		}
 
+		const trimmedThreshold = threshold.trim();
+		const parsedThreshold =
+			trimmedThreshold === "" ? null : Number(trimmedThreshold);
+		if (
+			parsedThreshold !== null &&
+			(!Number.isFinite(parsedThreshold) || parsedThreshold < 0)
+		) {
+			setThresholdError("Enter an amount of 0 or more, or leave blank to disable.");
+			return;
+		}
+
 		try {
-			await updateMutation.mutateAsync({
+			// A null server color shows as the default in the picker; sending it back
+			// untouched would log a spurious null → default change.
+			const omitBrandColor =
+				org?.brand_color == null && form.brand_color === DEFAULT_BRAND_COLOR;
+			const saved = await updateMutation.mutateAsync({
 				name: form.name.trim(),
 				phone: form.phone || null,
 				address: form.address || null,
@@ -164,9 +279,10 @@ function OrgSettingsSection() {
 					? { measurement_system: form.measurement_system }
 					: {}),
 				mfa_required: !!form.mfa_required,
-				brand_color: form.brand_color || null,
-				followups_enabled: form.followups_enabled ?? false,
+				...(omitBrandColor ? {} : { brand_color: form.brand_color || null }),
+				field_purchase_second_signoff_threshold: parsedThreshold,
 			});
+			seedFrom(saved);
 			setSaveSuccess(true);
 			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 			saveTimerRef.current = setTimeout(() => setSaveSuccess(false), 3000);
@@ -406,115 +522,26 @@ function OrgSettingsSection() {
 
 				{/* Restock workflow emphasis — UX default only, never a capability gate */}
 				<div className="mt-5">
-					<span className="mb-1 block text-xs font-medium text-text-tertiary">
-						Vehicle Restock Workflow
-					</span>
-					<p className="mb-2 text-xs text-text-muted">
-						Changes which workflow the app emphasizes — it never restricts what
-						roles are allowed to do (set that in Roles).
-					</p>
-					<div className="space-y-2">
-						{(
-							[
-								{
-									value: "tech_self_serve" as const,
-									label: "Technician self-serve",
-									description: "Techs restock their own vehicles from the warehouse",
-								},
-								{
-									value: "dispatch_prepared" as const,
-									label: "Dispatch prepared",
-									description: "Techs request restocks; dispatch fulfills from the warehouse",
-								},
-							]
-						).map((opt) => (
-							<label
-								key={opt.value}
-								className={`flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-									form.restock_mode === opt.value
-										? "border-primary bg-primary-bg-subtle"
-										: "border-border-subtle hover:bg-surface"
-								}`}
-							>
-								<input
-									type="radio"
-									name="restock-mode"
-									value={opt.value}
-									checked={form.restock_mode === opt.value}
-									onChange={() =>
-										setForm((prev) => ({ ...prev, restock_mode: opt.value }))
-									}
-									className="mt-0.5 accent-(--color-primary)"
-								/>
-								<span>
-									<span className="block text-xs font-medium text-text-primary">
-										{opt.label}
-									</span>
-									<span className="block text-xs text-text-muted">
-										{opt.description}
-									</span>
-								</span>
-							</label>
-						))}
-					</div>
+					<SettingRadioGroup
+						name="restock-mode"
+						legend="Vehicle Restock Workflow"
+						help={RESTOCK_MODE_HELP}
+						options={RESTOCK_MODE_OPTIONS}
+						value={form.restock_mode}
+						onChange={(next) => setForm((prev) => ({ ...prev, restock_mode: next }))}
+					/>
 				</div>
 
 				{/* Measurement system — orders the unit picker, never converts or hides units */}
 				<div className="mt-5 border-t border-border-subtle pt-5">
-					<span className="mb-1 block text-xs font-medium text-text-tertiary">
-						Measurement System
-					</span>
-					<p className="mb-2 text-xs text-text-muted">
-						Orders unit choices for your region. Does not convert existing
-						quantities.
-					</p>
-					<div className="space-y-2">
-						{(
-							[
-								{
-									value: "imperial" as const,
-									label: "Imperial",
-									description: "ft, lb, gal lead the unit picker",
-								},
-								{
-									value: "metric" as const,
-									label: "Metric",
-									description: "mm, kg, l lead the unit picker",
-								},
-							]
-						).map((opt) => (
-							<label
-								key={opt.value}
-								className={`flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 transition-colors ${
-									form.measurement_system === opt.value
-										? "border-primary bg-primary-bg-subtle"
-										: "border-border-subtle hover:bg-surface"
-								}`}
-							>
-								<input
-									type="radio"
-									name="measurement-system"
-									value={opt.value}
-									checked={form.measurement_system === opt.value}
-									onChange={() =>
-										setForm((prev) => ({
-											...prev,
-											measurement_system: opt.value,
-										}))
-									}
-									className="mt-0.5 accent-(--color-primary)"
-								/>
-								<span>
-									<span className="block text-xs font-medium text-text-primary">
-										{opt.label}
-									</span>
-									<span className="block text-xs text-text-muted">
-										{opt.description}
-									</span>
-								</span>
-							</label>
-						))}
-					</div>
+					<SettingRadioGroup
+						name="measurement-system"
+						legend="Measurement System"
+						help={MEASUREMENT_SYSTEM_HELP}
+						options={MEASUREMENT_SYSTEM_OPTIONS}
+						value={form.measurement_system}
+						onChange={(next) => setForm((prev) => ({ ...prev, measurement_system: next }))}
+					/>
 				</div>
 
 				{/* Security — org-wide MFA enforcement */}
@@ -576,39 +603,32 @@ function OrgSettingsSection() {
 					)}
 				</div>
 
-				{/* Automated Client Followups */}
+
+				{/* Field purchase second sign-off */}
 				<div className="mt-5">
-					<label
-						className="flex cursor-pointer items-start gap-2.5"
-						onClick={() =>
-							setForm((prev) => ({
-								...prev,
-								followups_enabled: !prev.followups_enabled,
-							}))
-						}
-					>
-						<div
-							className={`relative mt-0.5 h-4 w-7 flex-shrink-0 rounded-full border transition-colors ${
-								form.followups_enabled
-									? "border-primary bg-primary"
-									: "border-border bg-surface-inset"
-							}`}
-						>
-							<span
-								className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${
-									form.followups_enabled ? "translate-x-3" : "translate-x-0.5"
-								}`}
-							/>
-						</div>
-						<span>
-							<span className="block text-xs font-medium text-text-primary">
-								Automated Client Followups
-							</span>
-							<span className="block text-xs text-text-muted">
-								Enable scheduled follow-up email sequences for quotes, invoices, and requests.
-							</span>
-						</span>
-					</label>
+					<span className="mb-1 block text-xs font-medium text-text-tertiary">
+						Second Sign-Off Threshold
+					</span>
+					<p className="mb-2 text-xs text-text-muted">
+						Field purchases at or above this amount need a second approver before
+						they are approved and stock moves. Leave blank to disable.
+					</p>
+					<div className="flex items-center gap-2">
+						<span className="text-xs text-text-muted">$</span>
+						<input
+							type="number"
+							min="0"
+							step="0.01"
+							value={threshold}
+							onChange={(e) => setThreshold(e.target.value)}
+							placeholder="Disabled"
+							aria-label="Second sign-off threshold"
+							className={`${inputBase} max-w-[140px] ${thresholdError ? "!border-error focus:!border-error focus:!ring-error" : ""}`}
+						/>
+					</div>
+					{thresholdError && (
+						<p className="mt-1 text-xs text-error-text">{thresholdError}</p>
+					)}
 				</div>
 
 				<div className="mt-5 flex items-center gap-3">

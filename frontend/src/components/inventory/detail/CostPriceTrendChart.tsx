@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
 	ComposedChart,
+	Area,
 	Line,
 	Scatter,
 	XAxis,
@@ -14,6 +15,7 @@ import {
 } from "recharts";
 import { LineChart, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { useItemPriceHistoryQuery } from "../../../hooks/useInventory";
+import type { RecentSale } from "../../../types/inventory";
 import { formatCurrency, formatDate } from "../../../util/util";
 import Card from "../../ui/Card";
 import EmptyState from "../../ui/EmptyState";
@@ -21,7 +23,10 @@ import SegmentedToggle from "../../ui/SegmentedToggle";
 import { stackLabels, valueToY, type LabelSlot } from "../../../lib/chartLabels";
 import { unitLabel } from "../../../lib/units";
 import { ChartChip, ChartTooltipShell } from "./chartShared";
-import { CHART_GRID, CHART_TICK, timeXAxis } from "./chartAxis";
+import SupplierOriginStrip from "./SupplierOriginStrip";
+import PurchaseHistoryTable from "./PurchaseHistoryTable";
+import { supplierKey } from "../../../lib/suppliers";
+import { CHART_GRID, CHART_TICK, resolveTimeDomain, timeXAxis } from "./chartAxis";
 import { useChartNotes, unitBreakNote, UNIT_BREAK_DETAIL } from "./chartNotes";
 import LoadSvg from "../../../assets/icons/loading.svg?react";
 
@@ -43,6 +48,22 @@ interface ChartRow {
 	// unit — labelling a two-year-old receipt with today's unit is a misread.
 	receiptUnit: string | null;
 	receiptBatch: string | null;
+	// Display name and match key for the receipt's vendor. Both null/"" when the
+	// origin was never recorded — see SupplierOriginStrip.supplierKey.
+	receiptSupplier: string | null;
+	receiptSupplierKey: string;
+	// [low, high] of what was actually billed in the bucket. A tuple, not two
+	// fields, because Recharts draws a range Area from one dataKey. Null (never
+	// [x, x]) when the bucket held one sale or one price — a zero-height ribbon
+	// would claim a spread nobody measured.
+	chargedBand: [number, number] | null;
+	chargedMedian: number | null;
+	chargedSales: number | null;
+	// Every individual sale in this bucket — price, client, exact date — for
+	// the tooltip to list as hard numbers. Supersedes naming just the two
+	// price extremes: `chargedSales` above is the count, this is the count's
+	// receipts, every one of them, not only the cheapest and dearest.
+	chargedSaleDetails: RecentSale[];
 	listMargin: number | null;
 	chargedMargin: number | null;
 }
@@ -51,13 +72,22 @@ interface ChartRow {
 // annotations that ride along on the same rows.
 type SeriesKey = "setCost" | "listPrice" | "wac" | "charged" | "listMargin" | "chargedMargin";
 
+// `dash` is the single source of truth for each series' stroke pattern —
+// the actual <Line> elements, the end-label column, the legend, and the
+// tooltip swatch all read it from here so a dash can't drift out of sync
+// with what's actually drawn: setCost and wac share a colour, so the dash
+// is the only thing telling configured cost from actually-paid cost apart
+// on hover.
 const SERIES = {
 	setCost: { color: "var(--color-chart-warning)", label: "Set cost" },
 	// Same hue as set cost on purpose: both are COST. Solid = configured,
 	// dashed = actually paid. A fourth hue would read as a fourth kind of thing.
-	wac: { color: "var(--color-chart-warning)", label: "Paid cost (avg)" },
+	// "running" front-loads the one non-obvious fact a dispatcher needs without
+	// a click into the info panel: this average is over ALL history, not
+	// windowed to whatever range chip is selected.
+	wac: { color: "var(--color-chart-warning)", label: "Paid cost (running avg)", dash: "2 3" },
 	listPrice: { color: "var(--color-chart-info)", label: "List price" },
-	charged: { color: "var(--color-chart-success)", label: "Charged price" },
+	charged: { color: "var(--color-chart-success)", label: "Charged price", dash: "5 4" },
 } as const;
 
 const formatMoneyAxis = (value: number) => {
@@ -72,7 +102,12 @@ const formatPercentAxis = (value: number) => `${Math.round(value)}%`;
 // Dash pattern per series so the LEGEND can draw what the plot draws.
 // Recharts' `legendType="plainline"` always renders a solid rule, which would
 // make set cost and paid cost (same hue, differ only by dash) indistinguishable.
-type LegendEntry = { label: string; color: string; dash?: string; marker?: "line" | "circle" };
+type LegendEntry = {
+	label: string;
+	color: string;
+	dash?: string;
+	marker?: "line" | "circle" | "band";
+};
 
 /** A series' final value plus the stroke that identifies it in the label column. */
 type EndSeries = { key: string; label: string; color: string; dash?: string; value: number };
@@ -82,7 +117,11 @@ function ChartLegend({ entries }: { entries: LegendEntry[] }) {
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-xs text-text-tertiary">
 			{entries.map((e) => (
 				<span key={e.label} className="inline-flex items-center gap-1.5">
-					{e.marker === "circle" ? (
+					{e.marker === "band" ? (
+						<svg width="16" height="8" aria-hidden>
+							<rect x="0" y="1" width="16" height="6" fill={e.color} opacity={0.14} />
+						</svg>
+					) : e.marker === "circle" ? (
 						<svg width="12" height="12" aria-hidden>
 							<circle
 								cx="6"
@@ -179,8 +218,23 @@ function EndLabelColumn({ series }: { series: EndSeries[] }) {
 
 // Receipts are the raw evidence; the paid-cost line is the average over them.
 // Hollow so a purchase never reads as a point ON the line it feeds.
-function ReceiptDot({ cx, cy }: { cx?: number; cy?: number }) {
+//
+// All one hue regardless of vendor: this chart already carries four series, and
+// per-supplier colours would cost more legibility than they'd buy. Origin is
+// shown by DIMMING the others while a strip row is hovered.
+function ReceiptDot({
+	cx,
+	cy,
+	payload,
+	focusKey,
+}: {
+	cx?: number;
+	cy?: number;
+	payload?: ChartRow;
+	focusKey?: string | null;
+}) {
 	if (cx == null || cy == null) return null;
+	const dimmed = focusKey != null && payload?.receiptSupplierKey !== focusKey;
 	return (
 		<circle
 			cx={cx}
@@ -189,11 +243,16 @@ function ReceiptDot({ cx, cy }: { cx?: number; cy?: number }) {
 			fill="var(--color-base)"
 			stroke={SERIES.wac.color}
 			strokeWidth={1.5}
+			opacity={dimmed ? 0.25 : 1}
 		/>
 	);
 }
 
-function TrendTooltip({
+// Exported (only) so its rendering logic — sort, cap, fallback — can be unit
+// tested directly with a synthetic ChartRow, rather than simulating a real
+// mouse hover over Recharts' internal coordinate tracking, which nothing else
+// in this file attempts.
+export function TrendTooltip({
 	active,
 	payload,
 	mode,
@@ -205,7 +264,7 @@ function TrendTooltip({
 	if (!active || !payload?.length) return null;
 	const d = payload[0].payload;
 
-	const rows: { label: string; value: string; color: string }[] = [];
+	const rows: { label: string; value: string; color: string; dash?: string }[] = [];
 	if (mode === "amounts") {
 		if (d.setCost != null)
 			rows.push({
@@ -214,7 +273,12 @@ function TrendTooltip({
 				color: SERIES.setCost.color,
 			});
 		if (d.wac != null)
-			rows.push({ label: SERIES.wac.label, value: formatCurrency(d.wac), color: SERIES.wac.color });
+			rows.push({
+				label: SERIES.wac.label,
+				value: formatCurrency(d.wac),
+				color: SERIES.wac.color,
+				dash: SERIES.wac.dash,
+			});
 		if (d.listPrice != null)
 			rows.push({
 				label: SERIES.listPrice.label,
@@ -224,8 +288,15 @@ function TrendTooltip({
 		if (d.charged != null)
 			rows.push({
 				label: SERIES.charged.label,
-				value: formatCurrency(d.charged),
+				// The range IS the headline when there was one — a single averaged
+				// figure is exactly the misread this chart exists to remove. The
+				// sale count rides along so a 2-sale spread isn't read like a 20.
+				value:
+					d.chargedBand
+						? `${formatCurrency(d.chargedBand[0])}–${formatCurrency(d.chargedBand[1])} · avg ${formatCurrency(d.charged)}`
+						: formatCurrency(d.charged),
 				color: SERIES.charged.color,
+				dash: SERIES.charged.dash,
 			});
 	} else {
 		if (d.listMargin != null)
@@ -239,6 +310,7 @@ function TrendTooltip({
 				label: "Realized margin",
 				value: `${d.chargedMargin.toFixed(1)}%`,
 				color: SERIES.charged.color,
+				dash: SERIES.charged.dash,
 			});
 	}
 
@@ -248,16 +320,66 @@ function TrendTooltip({
 		<ChartTooltipShell title={formatDate(new Date(d.ts))}>
 			{rows.map((r) => (
 				<p key={r.label} className="text-xs flex items-center gap-1.5">
-					<span className="w-2 h-2 rounded-full" style={{ background: r.color }} />
+					{/* A line swatch, not a solid dot: setCost and wac (paid cost)
+					    share a colour on purpose (both are COST) and are told apart
+					    by dash pattern on the chart — solid vs dotted. A plain filled
+					    circle here erased that distinction and made the two rows
+					    look identical. Same swatch shape ChartLegend already uses
+					    for this exact reason. */}
+					<svg width="12" height="8" aria-hidden className="shrink-0">
+						<line
+							x1="0"
+							y1="4"
+							x2="12"
+							y2="4"
+							stroke={r.color}
+							strokeWidth={2}
+							strokeDasharray={r.dash}
+						/>
+					</svg>
 					<span className="text-text-secondary">{r.label}</span>
 					<span className="font-semibold tabular-nums text-text-primary">{r.value}</span>
 				</p>
 			))}
+			{mode === "amounts" &&
+				(d.chargedSaleDetails.length > 0 ? (
+					// The line above plots the average and the band plots the range —
+					// both averages of a kind. This is neither: every sale that landed
+					// in this bucket, exact price and exact client, low to high. A 3+
+					// sale bucket needs its middle sales named too, or low/high alone
+					// names two clients and implies everyone else averaged out.
+					<div className="mt-0.5 space-y-0.5">
+						{[...d.chargedSaleDetails]
+							.sort((a, b) => a.unitPrice - b.unitPrice)
+							.slice(0, 5)
+							.map((s, i) => (
+								<p key={i} className="text-[11px] text-text-faint">
+									{formatCurrency(s.unitPrice)} · {s.clientName ?? "Unrecorded"} ·{" "}
+									{formatDate(s.at)}
+								</p>
+							))}
+						{d.chargedSaleDetails.length > 5 && (
+							<p className="text-[11px] text-text-faint italic">
+								+{d.chargedSaleDetails.length - 5} more — see ledger below
+							</p>
+						)}
+					</div>
+				) : (
+					// Fallback for the rare case the raw list and the bucket count
+					// disagree (a boundary edge case) — the count is still a real
+					// fact even without names to attach to it.
+					d.chargedSales != null && (
+						<p className="text-[11px] text-text-faint">
+							{d.chargedSales} {d.chargedSales === 1 ? "sale" : "sales"}
+						</p>
+					)
+				))}
 			{d.receiptCost != null && (
 				<p className="text-[11px] text-text-faint mt-1">
 					Received {d.receiptQty}{" "}
 					{unitLabel(d.receiptUnit, d.receiptQty ?? undefined)} @{" "}
 					{formatCurrency(d.receiptCost)}
+					{d.receiptSupplier ? ` · ${d.receiptSupplier}` : ""}
 					{d.receiptBatch ? ` · ${d.receiptBatch}` : ""}
 				</p>
 			)}
@@ -273,6 +395,7 @@ function HeadlineStat({
 	delta,
 	deltaLabel,
 	invertTone,
+	sub,
 }: {
 	label: string;
 	value: string;
@@ -281,6 +404,9 @@ function HeadlineStat({
 	// Rising cost is bad news, rising price and margin are good. Tone follows
 	// meaning, not sign.
 	invertTone?: boolean;
+	// Who/when behind the value — only "Last Paid" uses this, everything else
+	// passes null. Sits under the value+delta line rather than crowding it.
+	sub?: string | null;
 }) {
 	const flat = delta == null || Math.abs(delta) < 0.005;
 	const good = delta != null && (invertTone ? delta < 0 : delta > 0);
@@ -305,6 +431,7 @@ function HeadlineStat({
 					</span>
 				)}
 			</div>
+			{sub && <div className="mt-0.5 text-[11px] text-text-faint">{sub}</div>}
 		</div>
 	);
 }
@@ -344,6 +471,14 @@ export default function CostPriceTrendChart({
 	xDomain?: [number, number];
 }) {
 	const [mode, setMode] = useState<Mode>("amounts");
+	// Which supplier's receipts to keep at full opacity while its strip row is
+	// hovered. Null = no focus, every dot reads normally.
+	const [focusKey, setFocusKey] = useState<string | null>(null);
+	// Which supplier the purchase ledger below is pinned to, if any — a click,
+	// not a hover, so it survives the mouse moving away. Kept separate from
+	// focusKey so a hover preview never fights a pinned filter.
+	const [filterKey, setFilterKey] = useState<string | null>(null);
+	const toggleFilter = (key: string) => setFilterKey((prev) => (prev === key ? null : key));
 	const { data, isLoading } = useItemPriceHistoryQuery(itemId, { createdAfter, bucket, range });
 
 	const rows: ChartRow[] = useMemo(() => {
@@ -364,6 +499,12 @@ export default function CostPriceTrendChart({
 					receiptQty: null,
 					receiptUnit: null,
 					receiptBatch: null,
+					receiptSupplier: null,
+					receiptSupplierKey: "",
+					chargedBand: null,
+					chargedMedian: null,
+					chargedSales: null,
+					chargedSaleDetails: [],
 					listMargin: null,
 					chargedMargin: null,
 				};
@@ -381,10 +522,38 @@ export default function CostPriceTrendChart({
 			target.receiptQty = r.qty;
 			target.receiptUnit = r.unit;
 			target.receiptBatch = r.batchNumber;
+			target.receiptSupplier = r.supplierName;
+			target.receiptSupplierKey = supplierKey(r.supplierId, r.supplierName);
 		}
 		for (const p of data.charged.points) {
 			if (p.avgUnitPrice == null) continue;
-			row(p.periodStart).charged = p.avgUnitPrice;
+			const target = row(p.periodStart);
+			target.charged = p.avgUnitPrice;
+			target.chargedSales = p.sales;
+			target.chargedMedian = p.median;
+			// The server already nulls both ends unless there's a real spread, so
+			// this never has to guess whether a band is meaningful.
+			target.chargedBand = p.low != null && p.high != null ? [p.low, p.high] : null;
+		}
+
+		// Every sale, matched to the same bucket boundary the server already
+		// grouped `points` by — the last periodStart at or before the sale's own
+		// timestamp. Points are ascending by construction (generate_series), so
+		// a simple forward scan is enough; the list is bounded by the chart's
+		// own bucket count (weeks/months in the window), not by sale volume.
+		const chargedPeriods = data.charged.points.map((p) => ({
+			ts: new Date(p.periodStart).getTime(),
+			periodStart: p.periodStart,
+		}));
+		for (const s of data.charged.sales ?? []) {
+			const saleTs = new Date(s.at).getTime();
+			let bucket: { ts: number; periodStart: string } | null = null;
+			for (const period of chargedPeriods) {
+				if (period.ts <= saleTs) bucket = period;
+				else break;
+			}
+			if (!bucket) continue;
+			row(bucket.periodStart).chargedSaleDetails.push(s);
 		}
 
 		const ordered = [...byTs.values()].sort((a, b) => a.ts - b.ts);
@@ -445,6 +614,27 @@ export default function CostPriceTrendChart({
 		return out;
 	}, [rows]);
 
+	// Most recent receipt first — the concrete "what did we last pay, from whom"
+	// fact the headline stat and the itemized table below are built around.
+	// Sorted client-side rather than trusting response order: `data.receipts`
+	// is grouped for the chart's timeline merge, not guaranteed newest-first.
+	const receiptsSorted = useMemo(
+		() =>
+			[...(data?.receipts ?? [])].sort(
+				(a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
+			),
+		[data],
+	);
+	const lastReceipt = receiptsSorted[0] ?? null;
+	const previousReceipt = receiptsSorted[1] ?? null;
+
+	// The actual last sale, not a bucket average — server returns these
+	// newest-first already. The "Charged Price (latest)" headline reads this,
+	// same reasoning as lastReceipt above: "latest" means the invoice, not a
+	// blended figure nobody was actually charged.
+	const lastSale = data?.recentSales?.[0] ?? null;
+	const previousSale = data?.recentSales?.[1] ?? null;
+
 	// On a unit break the server returns an EMPTY `wac` series (can't average
 	// across denominations). Per-receipt markers survive since each is a single
 	// self-denominated fact, not an aggregate.
@@ -456,7 +646,16 @@ export default function CostPriceTrendChart({
 	// Margin needs both a cost and a price to divide; offering the toggle without
 	// them would just swap to an empty chart.
 	const canShowMargin = rows.some((r) => r.listMargin != null || r.chargedMargin != null);
+	// At least one bucket sold at more than one price — the whole reason the band
+	// exists. Drives the legend entry and the spread footnote.
+	const hasBand = rows.some((r) => r.chargedBand != null);
+	const supplierCount = (data?.bySupplier ?? []).filter((s) => !s.unattributed).length;
+	const hasReceiptOrigin = (data?.costCoverage.withSupplier ?? 0) > 0;
+	// Guards the shared shell below: an empty rollup AND an empty ledger would
+	// otherwise still render a bordered box with nothing inside it.
+	const hasSupplierBreakdown = (data?.bySupplier?.length ?? 0) > 0 || receiptsSorted.length > 0;
 	const effectiveMode: Mode = mode === "margin" && canShowMargin ? "margin" : "amounts";
+	const timeDomain = resolveTimeDomain(rows, xDomain);
 
 	const periodWord = bucket === "week" ? "week" : "month";
 
@@ -474,8 +673,8 @@ export default function CostPriceTrendChart({
 				: null,
 			"Set cost and list price are what the item is CONFIGURED at, so they're drawn as steps: each value holds until someone edits it.",
 			data?.coverageStart
-				? `Cost/price changes are recorded from ${formatDate(data.coverageStart)} — any earlier edits predate the audit log.`
-				: "No cost or price edits have been recorded for this item, so the configured lines are flat.",
+				? `The edit history behind those steps only reaches back to ${formatDate(data.coverageStart)} — a flat line before then may mean the cost never changed, or just that the record doesn't go back further.`
+				: null,
 			`Charged price is the unit price billed on visit line items, averaged per ${periodWord} and dated to when the work happened. Cancelled visits are excluded, and a ${periodWord} with no sales has no point rather than an interpolated one.`,
 			hasPaidCost && !unitBreak
 				? `The average runs over all ${data?.costCoverage.wacBasisReceipts ?? 0} priced receipts and is then trimmed to this window, so changing the range never changes a past value.`
@@ -486,6 +685,18 @@ export default function CostPriceTrendChart({
 			canShowMargin
 				? "Margin % is (price − cost) ÷ price, against paid cost where it's known and configured cost otherwise."
 				: null,
+			hasBand
+				? `The shaded band is the lowest and highest unit price billed in each ${periodWord}, so a ${periodWord} that sold at both wholesale and retail shows both instead of one averaged figure nobody paid.`
+				: null,
+			// Stated even when nobody asked, because an unweighted range looks
+			// exactly like a weighted one and would otherwise be read as a
+			// confidence interval around the average.
+			hasBand
+				? "The band counts each sale once regardless of quantity: a single unit sold at an unusual price stretches it as far as a fifty-unit order would. The plotted line stays quantity-weighted, so it can sit anywhere inside the band."
+				: null,
+			hasReceiptOrigin
+				? `${data?.costCoverage.withSupplier ?? 0} of ${data?.costCoverage.receipts ?? 0} receipts in this window name a supplier — the rest are grouped as Unrecorded rather than assigned to a likely vendor.`
+				: "No receipt in this window names a supplier — record one when receiving stock to see which vendor each cost came from.",
 		],
 	});
 
@@ -530,9 +741,37 @@ export default function CostPriceTrendChart({
 		);
 	}
 
-	// The cost basis the chart is actually reasoning about: what suppliers billed
-	// where that's recorded, the configured cost where it isn't.
-	const costEdges = hasPaidCost ? edges.wac : edges.setCost;
+	// The headline reads the actual last receipt, not the running average — a
+	// manager asking "what did we pay" wants the invoice, not a blended figure
+	// nobody paid. Falls back to configured cost only when no receipt exists.
+	// The delta is real too: last receipt vs. the one before it, not a trend
+	// line's slope.
+	const costEdges =
+		hasPaidCost && lastReceipt
+			? { first: (previousReceipt ?? lastReceipt).unitCost, last: lastReceipt.unitCost }
+			: edges.setCost;
+	// Same reasoning, same shape, for the charged-price headline: the last
+	// individual sale, not the bucket average `edges.charged` carries.
+	const chargedEdges = lastSale
+		? { first: (previousSale ?? lastSale).unitPrice, last: lastSale.unitPrice }
+		: edges.charged;
+	// Realized margin (latest) has the exact same defect as charged price did:
+	// `edges.chargedMargin` is derived from the bucket average too. Recompute it
+	// off the real last sale against the real last-known cost (costEdges.last —
+	// last paid, or configured cost with no receipt yet), same basis rule
+	// chargedMargin itself uses elsewhere on the chart.
+	const marginBasis = costEdges?.last ?? null;
+	const realizedMargin = (price: number) =>
+		marginBasis != null && price !== 0 ? ((price - marginBasis) / price) * 100 : null;
+	const lastRealizedMargin = lastSale ? realizedMargin(lastSale.unitPrice) : null;
+	const chargedMarginEdges =
+		lastRealizedMargin != null
+			? {
+					first:
+						(previousSale && realizedMargin(previousSale.unitPrice)) ?? lastRealizedMargin,
+					last: lastRealizedMargin,
+				}
+			: edges.chargedMargin;
 	const money = (d: number) => formatCurrency(Math.abs(d));
 	const percent = (v: number) => `${v.toFixed(1)}%`;
 
@@ -540,11 +779,15 @@ export default function CostPriceTrendChart({
 		effectiveMode === "amounts"
 			? [
 					{
-						label: hasPaidCost ? "Paid Cost Now" : "Set Cost Now",
+						label: hasPaidCost && lastReceipt ? "Last Paid" : "Set Cost Now",
 						edge: costEdges,
 						format: formatCurrency,
 						deltaFormat: money,
 						invertTone: true,
+						sub:
+							hasPaidCost && lastReceipt
+								? `${lastReceipt.supplierName ?? "Unrecorded"} · ${formatDate(lastReceipt.at)}`
+								: null,
 					},
 					{
 						label: "List Price Now",
@@ -552,13 +795,17 @@ export default function CostPriceTrendChart({
 						format: formatCurrency,
 						deltaFormat: money,
 						invertTone: false,
+						sub: null,
 					},
 					{
-						label: "Charged Price (latest)",
-						edge: edges.charged,
+						label: lastSale ? "Last Charged" : "Charged Price (latest)",
+						edge: chargedEdges,
 						format: formatCurrency,
 						deltaFormat: money,
 						invertTone: false,
+						sub: lastSale
+							? `${lastSale.clientName ?? "Unrecorded"} · ${formatDate(lastSale.at)}`
+							: null,
 					},
 				]
 			: [
@@ -568,13 +815,18 @@ export default function CostPriceTrendChart({
 						format: percent,
 						deltaFormat: (d: number) => `${Math.abs(d).toFixed(1)} pts`,
 						invertTone: false,
+						sub: null,
 					},
 					{
-						label: "Realized Margin (latest)",
-						edge: edges.chargedMargin,
+						label: lastRealizedMargin != null ? "Last Realized Margin" : "Realized Margin (latest)",
+						edge: chargedMarginEdges,
 						format: percent,
 						deltaFormat: (d: number) => `${Math.abs(d).toFixed(1)} pts`,
 						invertTone: false,
+						sub:
+							lastRealizedMargin != null && lastSale
+								? `${lastSale.clientName ?? "Unrecorded"} · ${formatDate(lastSale.at)}`
+								: null,
 					},
 				];
 
@@ -595,7 +847,7 @@ export default function CostPriceTrendChart({
 									key: "wac",
 									label: SERIES.wac.label,
 									color: SERIES.wac.color,
-									dash: "2 3",
+									dash: SERIES.wac.dash,
 									value: edges.wac?.last,
 								},
 							]
@@ -610,7 +862,7 @@ export default function CostPriceTrendChart({
 						key: "charged",
 						label: SERIES.charged.label,
 						color: SERIES.charged.color,
-						dash: "5 4",
+						dash: SERIES.charged.dash,
 						value: edges.charged?.last,
 					},
 				]
@@ -625,7 +877,7 @@ export default function CostPriceTrendChart({
 						key: "chargedMargin",
 						label: "Realized margin",
 						color: SERIES.charged.color,
-						dash: "5 4",
+						dash: SERIES.charged.dash,
 						value: edges.chargedMargin?.last,
 					},
 				];
@@ -637,8 +889,29 @@ export default function CostPriceTrendChart({
 	// themselves at the right edge, but receipt dots have no line end to label.
 	const hasReceipts = (data?.receipts?.length ?? 0) > 0;
 	const legendEntries: LegendEntry[] =
-		effectiveMode === "amounts" && hasReceipts
-			? [{ label: "Receipt", color: SERIES.wac.color, marker: "circle" }]
+		effectiveMode === "amounts"
+			? [
+					...(hasReceipts
+						? [
+								{
+									label: "Receipt",
+									color: SERIES.wac.color,
+									marker: "circle" as const,
+								},
+							]
+						: []),
+					// The band has no line end to label itself at, and an unnamed
+					// shaded region invites being read as a forecast or a target.
+					...(hasBand
+						? [
+								{
+									label: "Charged range (low–high)",
+									color: SERIES.charged.color,
+									marker: "band" as const,
+								},
+							]
+						: []),
+				]
 			: [];
 
 	return (
@@ -648,6 +921,11 @@ export default function CostPriceTrendChart({
 				<div className="flex items-center gap-2">
 					{effectiveMode === "amounts" && !hasPaidCost && (
 						<ChartChip>Configured cost only</ChartChip>
+					)}
+					{/* Only worth the space once buying is actually split across
+					    vendors — one supplier is the unremarkable case. */}
+					{effectiveMode === "amounts" && supplierCount > 1 && (
+						<ChartChip>Suppliers · {supplierCount}</ChartChip>
 					)}
 					{modeToggle}
 					{notesTrigger}
@@ -665,6 +943,7 @@ export default function CostPriceTrendChart({
 						delta={s.edge ? s.edge.last - s.edge.first : null}
 						deltaLabel={s.edge ? s.deltaFormat(s.edge.last - s.edge.first) : null}
 						invertTone={s.invertTone}
+						sub={s.sub}
 					/>
 				))}
 			</div>
@@ -672,11 +951,16 @@ export default function CostPriceTrendChart({
 			<div className="flex-1 min-h-[260px]">
 				<ResponsiveContainer width="100%" height="100%" minHeight={260}>
 					{/* Right margin holds the stacked label column: 8px gap + 12px
-					    swatch + 5px + the longest label ("Paid cost (avg)"). */}
-					<ComposedChart data={rows} margin={{ top: 10, right: 112, left: 4, bottom: 0 }}>
+					    swatch + 5px + the longest label ("Paid cost (running avg)" —
+					    widened from 112 to fit it when "avg" became "running avg").
+					    bottom: 6, not 0 — the y-axis's $0 tick sits vertically
+					    centered ON the bottom axis line, and with zero bottom
+					    margin the leftmost x-axis date label (closest to the
+					    y-axis) rendered flush against it. */}
+					<ComposedChart data={rows} margin={{ top: 10, right: 172, left: 4, bottom: 6 }}>
 						<CartesianGrid {...CHART_GRID} />
 						<XAxis
-							{...timeXAxis(xDomain)}
+							{...timeXAxis(timeDomain)}
 							tickFormatter={(v: number) => formatDate(new Date(v))}
 						/>
 						<YAxis
@@ -695,6 +979,22 @@ export default function CostPriceTrendChart({
 
 						{effectiveMode === "amounts" ? (
 							<>
+								{/* Rendered FIRST so it sits behind every line. Very low
+								    opacity and no stroke: it's context for the charged
+								    line, not a fifth series competing with it. No
+								    connectNulls — a period with no sales must break the
+								    band exactly as it breaks the line. */}
+								<Area
+									type="linear"
+									dataKey="chargedBand"
+									name="Charged range"
+									stroke="none"
+									fill={SERIES.charged.color}
+									fillOpacity={0.14}
+									isAnimationActive={false}
+									activeDot={false}
+									legendType="none"
+								/>
 								<Line
 									type="stepAfter"
 									dataKey="setCost"
@@ -712,7 +1012,7 @@ export default function CostPriceTrendChart({
 										name={SERIES.wac.label}
 										stroke={SERIES.wac.color}
 										strokeWidth={2}
-										strokeDasharray="2 3"
+										strokeDasharray={SERIES.wac.dash}
 										dot={false}
 										isAnimationActive={false}
 										connectNulls
@@ -738,7 +1038,7 @@ export default function CostPriceTrendChart({
 									name={SERIES.charged.label}
 									stroke={SERIES.charged.color}
 									strokeWidth={1.5}
-									strokeDasharray="5 4"
+									strokeDasharray={SERIES.charged.dash}
 									dot={{ r: 3, fill: SERIES.charged.color, strokeWidth: 0 }}
 									isAnimationActive={false}
 								/>
@@ -748,7 +1048,7 @@ export default function CostPriceTrendChart({
 								<Scatter
 									dataKey="receiptCost"
 									name="Receipt"
-									shape={<ReceiptDot />}
+									shape={<ReceiptDot focusKey={focusKey} />}
 									fill={SERIES.wac.color}
 									isAnimationActive={false}
 								/>
@@ -789,7 +1089,7 @@ export default function CostPriceTrendChart({
 									name="Realized margin %"
 									stroke={SERIES.charged.color}
 									strokeWidth={1.5}
-									strokeDasharray="5 4"
+									strokeDasharray={SERIES.charged.dash}
 									dot={{ r: 3, fill: SERIES.charged.color, strokeWidth: 0 }}
 									isAnimationActive={false}
 								/>
@@ -804,7 +1104,46 @@ export default function CostPriceTrendChart({
 
 			{legendEntries.length > 0 && <ChartLegend entries={legendEntries} />}
 
+			{/* Right under the plot, not at the very bottom of the card: every
+			    line here (set cost vs. paid cost, the charged band, the margin
+			    formula) describes the SERIES above, not the supplier breakdown
+			    below. The old placement put a two-table section between the Info
+			    toggle in the header and the text it reveals — correct content,
+			    wrong neighborhood. */}
 			{notes}
+
+			{/* Amounts only: the strip explains COST origin, and margin mode plots
+			    no cost line for it to explain. One shell, not two floating
+			    tables — the rollup and the ledger are master and detail, not
+			    independent sections, and the border now says so: it wraps both,
+			    with the ledger rendering as a recessed sub-panel of the rollup
+			    rather than a second equal-weight table below it. */}
+			{effectiveMode === "amounts" && hasSupplierBreakdown && (
+				<div className="mt-3 pt-3 border-t border-border-subtle">
+					<div className="rounded-lg border border-border-subtle bg-base overflow-hidden">
+						<SupplierOriginStrip
+							rows={data?.bySupplier ?? []}
+							unit={data?.unitBasis?.unit ?? null}
+							focusKey={focusKey}
+							onFocus={setFocusKey}
+							filterKey={filterKey}
+							onFilterToggle={toggleFilter}
+						/>
+						{/* Answers "what did we pay, exactly, each time" where the
+						    rollup above answers "who do we mostly buy from" —
+						    sharing `focusKey` so hovering a vendor row up there
+						    highlights that vendor's purchases down here too, and
+						    `filterKey` so CLICKING a vendor row narrows this ledger
+						    to just them. Filtering is set AND cleared entirely up
+						    in the strip — this panel only reads the result. */}
+						<PurchaseHistoryTable
+							receipts={receiptsSorted}
+							focusKey={focusKey}
+							filterKey={filterKey}
+						/>
+					</div>
+				</div>
+			)}
 		</Card>
 	);
 }

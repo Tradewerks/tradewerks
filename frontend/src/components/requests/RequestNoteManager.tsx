@@ -1,6 +1,8 @@
 ﻿import { useState, useEffect, useRef } from "react";
 import { Plus, Edit2, Trash2, X } from "lucide-react";
 import Card from "../ui/Card";
+import { HEADER_BTN_PRIMARY } from "../ui/headerActions";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import type { RequestNote } from "../../types/requests";
 import {
 	useRequestNotesQuery,
@@ -18,7 +20,8 @@ export default function NoteManager({ requestId }: NoteManagerProps) {
 	const formRef = useRef<HTMLDivElement>(null);
 	const [isAdding, setIsAdding] = useState(false);
 	const [editingId, setEditingId] = useState<string | null>(null);
-	const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+	const [noteToDelete, setNoteToDelete] = useState<string | null>(null);
+	const [deleteError, setDeleteError] = useState<string | null>(null);
 	const [content, setContent] = useState("");
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -89,18 +92,20 @@ export default function NoteManager({ requestId }: NoteManagerProps) {
 		setIsAdding(true);
 	};
 
-	const handleDelete = async (noteId: string) => {
+	const handleDelete = (noteId: string) => {
 		if (!EDIT_NOTES) return;
-		if (deleteConfirmId !== noteId) {
-			setDeleteConfirmId(noteId);
-			return;
-		}
+		setDeleteError(null);
+		setNoteToDelete(noteId);
+	};
 
+	const confirmDelete = async () => {
+		if (!noteToDelete) return;
 		try {
-			await deleteNote.mutateAsync({ requestId, noteId });
-			setDeleteConfirmId(null);
+			await deleteNote.mutateAsync({ requestId, noteId: noteToDelete });
+			setNoteToDelete(null);
 		} catch (error) {
 			console.error("Failed to delete note:", error);
+			setDeleteError(error instanceof Error ? error.message : "Failed to delete note");
 		}
 	};
 
@@ -123,7 +128,7 @@ export default function NoteManager({ requestId }: NoteManagerProps) {
 						if (!EDIT_NOTES) return;
 						setIsAdding(true)
 					}}
-					className="flex items-center gap-2 px-3 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+					className={HEADER_BTN_PRIMARY}
 				>
 					<Plus size={14} />
 					Add Note
@@ -217,33 +222,12 @@ export default function NoteManager({ requestId }: NoteManagerProps) {
 													)
 												}
 												disabled={!EDIT_NOTES}
-												onMouseLeave={() =>
-													setDeleteConfirmId(
-														null
-													)
-												}
-												className={`transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-													deleteConfirmId ===
-													note.id
-														? "text-error hover:text-error-strong"
-														: "text-text-tertiary hover:text-error-text"
-												}`}
-												title={
-													deleteConfirmId ===
-													note.id
-														? "Click again to confirm"
-														: "Delete note"
-												}
+												className="text-text-tertiary hover:text-error-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+												title="Delete note"
 											>
 												<Trash2
 													size={
 														14
-													}
-													className={
-														deleteConfirmId ===
-														note.id
-															? "fill-error"
-															: ""
 													}
 												/>
 											</button>
@@ -348,6 +332,21 @@ export default function NoteManager({ requestId }: NoteManagerProps) {
 					)}
 				</div>
 			</div>
+
+			<ConfirmDialog
+				open={noteToDelete !== null}
+				title="Delete Note"
+				body="Are you sure you want to delete this note? This cannot be undone."
+				confirmLabel="Delete"
+				tone="destructive"
+				pending={deleteNote.isPending}
+				error={deleteError}
+				onConfirm={confirmDelete}
+				onCancel={() => {
+					setNoteToDelete(null);
+					setDeleteError(null);
+				}}
+			/>
 		</Card>
 	);
 }

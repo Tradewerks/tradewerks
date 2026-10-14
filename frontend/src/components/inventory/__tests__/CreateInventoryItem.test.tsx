@@ -113,13 +113,23 @@ vi.mock("../tracking/SerialCaptureList", () => ({
 	),
 }));
 
+// Stubbed for the same reason as the capture components: it fetches the vendor
+// list, and the wizard's create/receive payloads are what these tests assert.
+vi.mock("../SupplierPicker", () => ({
+	default: ({ onChange }: { onChange: (v: { supplier_name?: string }) => void }) => (
+		<button type="button" onClick={() => onChange({ supplier_name: "Ferguson" })}>
+			Pick Supplier
+		</button>
+	),
+}));
+
 vi.mock("../tracking/BatchCaptureFields", () => ({
 	default: ({ itemId, onChange }: BatchCaptureFieldsProps) => (
 		<div data-testid="batch-capture" data-item-id={itemId}>
 			<button
 				type="button"
 				onClick={() =>
-					onChange({ mode: "new", batch_number: "LOT-1", expires_at: null, supplier: "" })
+					onChange({ mode: "new", batch_number: "LOT-1", expires_at: null })
 				}
 			>
 				Fill Batch
@@ -174,18 +184,18 @@ describe("step gating", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Next" }));
 
 		expect(screen.getByText("Name is required.")).toBeInTheDocument();
-		expect(screen.getByText("Location is required.")).toBeInTheDocument();
+		// Location is optional — an item can exist before it has a shelf.
+		expect(screen.queryByText("Location is required.")).not.toBeInTheDocument();
 		// Still on Basics — step 2's Quantity never mounted.
 		expect(screen.queryByLabelText("Quantity")).not.toBeInTheDocument();
 		expect(screen.getByPlaceholderText("Item Name")).toHaveAttribute("aria-invalid", "true");
 	});
 
-	it("advances once the step 1 errors are fixed", async () => {
+	it("advances once the step 1 errors are fixed, with no location", async () => {
 		render(<CreateInventoryItem isOpen onClose={vi.fn()} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "Next" }));
 		await userEvent.type(screen.getByPlaceholderText("Item Name"), "Widget");
-		await userEvent.type(screen.getByPlaceholderText("e.g. A42 - 325"), "A1-100");
 		await userEvent.click(screen.getByRole("button", { name: "Next" }));
 
 		expect(await screen.findByLabelText("Quantity")).toBeInTheDocument();

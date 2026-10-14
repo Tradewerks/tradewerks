@@ -1,21 +1,29 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
 
-// Credential / token columns that must never leave the server by default.
-// Applied globally (including nested relation reads such as
+// Columns that must never leave the server by default: credentials, tokens, and
+// technician pay. Applied globally (including nested relation reads such as
 // `visit_techs: { include: { tech: true } }`); the few code paths that
-// genuinely need a value opt back in per query with `omit: { <field>: false }`.
+// genuinely need a value opt back in per query, either with an explicit
+// `select` naming the field (pay-rate reads) or `omit: { <field>: false }`
+// (credential checks).
 export const SECRET_FIELD_OMIT = {
 	dispatcher: {
 		password: true,
 		password_reset_token: true,
 		password_reset_token_expires_at: true,
 		email_verification_token: true,
+		invite_token_hash: true,
 	},
 	technician: {
 		password: true,
 		password_reset_token: true,
 		password_reset_token_expires_at: true,
+		hourly_rate: true,
+	},
+	platform_staff: {
+		password: true,
+		invite_token_hash: true,
 	},
 } as const;
 
@@ -37,7 +45,7 @@ if (process.env.NODE_ENV !== "production") {
 
 // Narrow Tx types — loose enough to accept both Prisma.TransactionClient and
 // the extended client returned by getScopedDb's $transaction callback.
-// Advisory lock constants: 1=quote, 2=job, 3=invoice, 4=project (two-int overload,
+// Advisory lock constants: 1=quote, 2=job, 3=invoice, 4=project, 5=purchase, 6=dispatcher seats, 7=technician seats (two-int overload,
 // separate PG lock space from any single-bigint locks; no cross-entity collision possible).
 
 type QuoteNumberTx = {
@@ -108,6 +116,25 @@ type ProjectNumberTx = {
 			};
 		}) => Promise<{ project_number: string } | null>;
 	};
+}
+
+type PurchaseNumberTx = {
+	$executeRaw: (
+		template: TemplateStringsArray,
+		...values: unknown[]
+	) => Promise<number>;
+	purchase: {
+		findFirst: (args: {
+			where: {
+				organization_id: string;
+				purchase_number: { startsWith: string };
+			};
+			orderBy: {
+				purchase_number?: "asc" | "desc";
+				created_at?: "asc" | "desc";
+			};
+		}) => Promise<{ purchase_number: string } | null>; 
+	}
 }
 
 export async function generateQuoteNumber(
@@ -199,6 +226,31 @@ export async function generateProjectNumber(
 	let nextNumber = 1;
 	if (lastProject) {
 		const match = lastProject.project_number.match(/P-(\d+)/);
+		if (match) {
+			nextNumber = parseInt(match[1]) + 1;
+		}
+	}
+
+	return `P-${nextNumber.toString().padStart(4, "0")}`;
+}
+
+export async function generatePurchaseNumber(
+	tx: PurchaseNumberTx,
+	organizationId: string,
+): Promise<string> {
+	await tx.$executeRaw`SELECT pg_advisory_xact_lock(5, hashtext(${organizationId}))`;
+
+	const lastPurchase = await tx.purchase.findFirst({
+		where: {
+			organization_id: organizationId,
+			purchase_number: { startsWith: "P-" },
+		},
+		orderBy: { created_at: "desc" },
+	});
+
+	let nextNumber = 1;
+	if (lastPurchase) {
+		const match = lastPurchase.purchase_number.match(/P-(\d+)/);
 		if (match) {
 			nextNumber = parseInt(match[1]) + 1;
 		}

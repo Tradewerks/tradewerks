@@ -4,9 +4,22 @@ import { getScopedDb } from "../lib/context.js";
 import { log } from "../services/appLogger.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { createErrorResponse, createSuccessResponse, ErrorCodes } from "../types/responses.js";
+import { FEED_EVENT_TYPES } from "../lib/activityFeedEvents.js";
+import { weekRangeIn, weekStartOf } from "../lib/dayRange.js";
 
 export type actor = "technician" | "dispatcher";
-export type entity = "job" | "quote" | "request" | "invoice" | "client" | "project";
+export type entity =
+    | "job"
+    | "quote"
+    | "request"
+    | "invoice"
+    | "client"
+    | "project"
+    | "recurring_plan"
+    | "vehicle"
+    | "technician"
+    | "dispatcher"
+    | "timesheet";
 
 export const DEFAULT_HISTORY_LIMIT = 20;
 export const MAX_HISTORY_LIMIT = 200;
@@ -65,9 +78,13 @@ export const redactSensitiveChanges = <T extends { changes: unknown }>(row: T): 
     };
 };
 
+// "agent" rows carry the HUMAN in actor_id, so pairing the type with an actor_id
+// filter (as getActorHistory does) keeps them scoped to that one person — there
+// is no cross-contamination from listing it under both buckets. A dispatcher
+// reviewing someone's activity should see what that person's agent did for them.
 const ACTOR_TYPES: Record<actor, string[]> = {
-    technician: ["technician"],
-    dispatcher: ["dispatcher", "admin"],
+    technician: ["technician", "agent"],
+    dispatcher: ["dispatcher", "admin", "agent"],
 }
 
 type ScopedDb = ReturnType<typeof getScopedDb>;
@@ -97,6 +114,22 @@ const pluck = (rows: { id: string }[]) => rows.map((r) => r.id);
  */
 export const PARENT_ID_PATH = ["_parent_id", "new"] as const;
 
+export const timesheetWeekId = (technicianId: string, weekStart: Date) =>
+    `${technicianId}:${weekStart.toISOString().slice(0, 10)}`;
+
+const weekShiftIds = async (sdb: ScopedDb, id: string) => {
+    const [techId, date] = id.split(":");
+    const tech = await sdb.technician.findFirst({
+        where: { id: techId },
+        select: { organization: { select: { timezone: true } } },
+    });
+    if (!tech) return [];
+    const { start, end } = weekRangeIn(weekStartOf(date), tech.organization?.timezone ?? "UTC");
+    return sdb.technician_shift
+        .findMany({ where: { tech_id: techId, started_at: { gte: start, lt: end } }, select: { id: true } })
+        .then(pluck);
+};
+
 export const parentBreadcrumb = (type: entity, id: string) => ({
     _parent_type: { old: null, new: type },
     _parent_id: { old: null, new: id },
@@ -125,6 +158,20 @@ const ENTITY_GROUPS: Record<entity, GroupMember[]> = {
                 sdb.job_note
                     .findMany({ where: { job_id: jobId }, select: { id: true } })
                     .then(pluck),
+        },
+        {
+            entity_type: "quote",
+            resolve: (sdb, jobId) =>
+                sdb.job
+                    .findUnique({ where: { id: jobId }, select: { quote_id: true } })
+                    .then((j) => (j?.quote_id ? [j.quote_id] : [])),
+        },
+        {
+            entity_type: "request",
+            resolve: (sdb, jobId) =>
+                sdb.job
+                    .findUnique({ where: { id: jobId }, select: { request_id: true } })
+                    .then((j) => (j?.request_id ? [j.request_id] : [])),
         },
     ],
     quote: [
@@ -197,6 +244,105 @@ const ENTITY_GROUPS: Record<entity, GroupMember[]> = {
                     .findMany({ where: { project_id: projectId }, select: { id: true } })
                     .then(pluck),
         },
+        {
+            entity_type: "project_note",
+            resolve: (sdb, projectId) =>
+                sdb.project_note
+                    .findMany({ where: { project_id: projectId }, select: { id: true } })
+                    .then(pluck),
+        },
+    ],
+    recurring_plan: [
+        { entity_type: "recurring_plan" },
+        {
+            entity_type: "recurring_plan_note",
+            resolve: (sdb, planId) =>
+                sdb.recurring_plan_note
+                    .findMany({ where: { recurring_plan_id: planId }, select: { id: true } })
+                    .then(pluck),
+        },
+        {
+            entity_type: "recurring_occurrence",
+            resolve: (sdb, planId) =>
+                sdb.recurring_occurrence
+                    .findMany({ where: { recurring_plan_id: planId }, select: { id: true } })
+                    .then(pluck),
+        },
+    ],
+    vehicle: [
+        { entity_type: "vehicle" },
+        {
+            entity_type: "vehicle_stock_item",
+            resolve: (sdb, vehicleId) =>
+                sdb.vehicle_stock_item
+                    .findMany({ where: { vehicle_id: vehicleId }, select: { id: true }})
+                    .then(pluck),
+        },
+        {
+            entity_type: "vehicle_stock_adjustment",
+            resolve: (sdb, vehicleId) =>
+                sdb.vehicle_stock_adjustment
+                    .findMany({ where: { vehicle_id: vehicleId }, select: { id: true }})
+                    .then(pluck),
+        },
+        {
+            entity_type: "vehicle_restock_request",
+            resolve: (sdb, vehicleId) =>
+                sdb.vehicle_restock_request
+                    .findMany({ where: { stock_item: { vehicle_id: vehicleId } }, select: { id: true }})
+                    .then(pluck),
+        },
+        {
+            entity_type: "vehicle_restock_record",
+            resolve: (sdb, vehicleId) =>
+                sdb.vehicle_restock_record
+                    .findMany({ where: { vehicle_id: vehicleId }, select: { id: true }})
+                    .then(pluck),
+        },
+        {
+            entity_type: "vehicle_maintenance_record",
+            resolve: (sdb, vehicleId) =>
+                sdb.vehicle_maintenance_record
+                    .findMany({ where: { vehicle_id: vehicleId }, select: { id: true }})
+                    .then(pluck),
+        },
+        {
+            entity_type: "vehicle_maintenance_reminder",
+            resolve: (sdb, vehicleId) =>
+                sdb.vehicle_maintenance_reminder
+                    .findMany({ where: { vehicle_id: vehicleId }, select: { id: true }})
+                    .then(pluck),
+        },
+    ],
+    // Matches on entity_id = the target user's own id, so any update logged
+    // against their record (name/status edits, role assignment, etc.) surfaces
+    // here regardless of who the actor was.
+    technician: [{ entity_type: "technician" }, { entity_type: "organization_role_assignment" }],
+    dispatcher: [{ entity_type: "dispatcher" }, { entity_type: "organization_role_assignment" }],
+    // Id is timesheetWeekId(); the timesheet_week row is deleted on unapprove, so its rows carry the breadcrumb.
+    timesheet: [
+        {
+            entity_type: "timesheet",
+            resolve: async (sdb, id) => {
+                const [techId, date] = id.split(":");
+                const week = await sdb.timesheet_week.findFirst({
+                    where: { technician_id: techId, week_start: weekStartOf(date) },
+                    select: { id: true },
+                });
+                return week ? [week.id] : [];
+            },
+        },
+        {
+            entity_type: "technician_shift",
+            resolve: (sdb, id) => weekShiftIds(sdb, id),
+        },
+        {
+            entity_type: "shift_correction",
+            resolve: async (sdb, id) =>
+                sdb.shift_correction
+                    .findMany({ where: { shift_id: { in: await weekShiftIds(sdb, id) } }, select: { id: true } })
+                    .then(pluck),
+        },
     ],
 };
 
@@ -233,33 +379,60 @@ export const getActorHistory = async (orgId: string, type: actor, id: string, li
     }
 };
 
+// Builds the OR-clause matching every log row for an entity group (the entity's
+// own rows plus its children, including children resolved via parent breadcrumb
+// for rows whose child no longer exists). Shared by getEntityHistory and
+// getUserHistory so the latter can fold entity rows into a single query
+// alongside the actor filter rather than merging two separate paginated sets.
+const buildEntityOr = async (
+    sdb: ScopedDb,
+    type: entity,
+    id: string,
+): Promise<Prisma.logWhereInput[] | null> => {
+    const group = ENTITY_GROUPS[type];
+    if (!group) return null;
+
+    const groups = await Promise.all(
+        group.map(async (member) => ({
+            entity_type: member.entity_type,
+            ids: member.resolve ? await member.resolve(sdb, id) : [id],
+        })),
+    );
+
+    const scopedOr: Prisma.logWhereInput[] = groups
+        .filter((g) => g.ids.length > 0)
+        .map((g) => ({ entity_type: g.entity_type, entity_id: { in: g.ids } }));
+
+    // Children that no longer exist (deleted rows) can't be resolved from
+    // the child tables — match them through the parent breadcrumb instead.
+    const breadcrumbOr: Prisma.logWhereInput[] = group
+        .filter((member) => member.resolve)
+        .map((member) => ({
+            entity_type: member.entity_type,
+            changes: { path: [...PARENT_ID_PATH], equals: id },
+        }));
+    scopedOr.push(...breadcrumbOr);
+
+    // Only the delete row carries the breadcrumb; pull in the deleted child's earlier rows by id.
+    if (breadcrumbOr.length > 0) {
+        const deletedChildren = await sdb.log.findMany({
+            where: { OR: breadcrumbOr },
+            select: { entity_type: true, entity_id: true },
+            distinct: ["entity_type", "entity_id"],
+        });
+        for (const child of deletedChildren) {
+            scopedOr.push({ entity_type: child.entity_type, entity_id: child.entity_id });
+        }
+    }
+
+    return scopedOr;
+};
+
 export const getEntityHistory = async (orgId: string, type: entity, id: string, limit = DEFAULT_HISTORY_LIMIT) => {
     try {
-        const group = ENTITY_GROUPS[type];
-        if (!group) return { err: `Unknown entity type: ${type}`, rows: [] as log_row[], hasMore: false, total: 0 };
-
         const sdb = getScopedDb(orgId);
-
-        const groups = await Promise.all(
-            group.map(async (member) => ({
-                entity_type: member.entity_type,
-                ids: member.resolve ? await member.resolve(sdb, id) : [id],
-            })),
-        );
-
-        const scopedOr: Prisma.logWhereInput[] = groups
-            .filter((g) => g.ids.length > 0)
-            .map((g) => ({ entity_type: g.entity_type, entity_id: { in: g.ids } }));
-
-        // Children that no longer exist (deleted rows) can't be resolved from
-        // the child tables — match them through the parent breadcrumb instead.
-        for (const member of group) {
-            if (!member.resolve) continue;
-            scopedOr.push({
-                entity_type: member.entity_type,
-                changes: { path: [...PARENT_ID_PATH], equals: id },
-            });
-        }
+        const scopedOr = await buildEntityOr(sdb, type, id);
+        if (!scopedOr) return { err: `Unknown entity type: ${type}`, rows: [] as log_row[], hasMore: false, total: 0 };
 
         const scopedWhere = { AND: [{ OR: scopedOr }, RENDERABLE, NOT_SENSITIVE_EVENT] };
 
@@ -285,26 +458,54 @@ export const getEntityHistory = async (orgId: string, type: entity, id: string, 
     }
 };
 
+/**
+ * Change history for a technician/dispatcher: everything they DID (actor rows)
+ * unioned with everything that happened TO their own user record (entity rows —
+ * profile edits, role assignment, etc.), so an edit made by someone else still
+ * shows up here. A single query rather than merging two separately-paginated
+ * result sets, so hasMore/total stay exact.
+ */
+export const getUserHistory = async (orgId: string, type: actor, id: string, limit = DEFAULT_HISTORY_LIMIT) => {
+    try {
+        const actorTypes = ACTOR_TYPES[type];
+        if (!actorTypes) return { err: `Unknown actor type: ${type}`, rows: [] as log_row[], hasMore: false, total: 0 };
+
+        const sdb = getScopedDb(orgId);
+        const entityOr = (await buildEntityOr(sdb, type, id)) ?? [];
+
+        const scopedWhere = {
+            AND: [
+                { OR: [{ actor_type: { in: actorTypes }, actor_id: id }, ...entityOr] },
+                RENDERABLE,
+                NOT_SENSITIVE_EVENT,
+            ],
+        };
+
+        const [rows, total] = await Promise.all([
+            sdb.log.findMany({
+                where: scopedWhere,
+                orderBy: [{ timestamp: "desc" }, { id: "desc"}],
+                take: limit + 1,
+            }),
+            sdb.log.count({ where: scopedWhere }),
+        ]);
+
+        const hasMore = rows.length > limit;
+        const page = (hasMore ? rows.slice(0, limit) : rows).map(redactSensitiveChanges);
+
+        return { err: "", rows: page, hasMore, total };
+    } catch (err) {
+        if (err instanceof Error) {
+            return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
+        }
+        log.error({ err }, "Get user history error");
+        return { err: "Internal server error", rows: [] as log_row[], hasMore: false, total: 0 };
+    }
+};
+
 // ============================================================
 // ACTIVITY FEED (GET /logs/recent)
 // ============================================================
-
-const FEED_EVENTS = [
-    "job.created",
-    "job_visit.created",
-    "job_visit.updated",
-    "job_visit.technicians_assigned",
-    "request.created",
-    "request.updated",
-    "quote.created",
-    "quote.updated",
-    "invoice.created",
-    "invoice.updated",
-    "invoice_payment.created",
-    "recurring_plan.created",
-    "recurring_occurrence.generated",
-    "technician.updated",
-];
 
 // technician.updated carries contact details and GPS coords — keep the event in
 // the feed (status changes are useful) but never ship the PII diffs.
@@ -312,13 +513,32 @@ const FEED_PII_KEYS: Record<string, ReadonlySet<string>> = {
     "technician.updated": new Set(["email", "phone", "coords", "hire_date", "last_login"]),
 };
 
-export const redactFeedRow = <T extends { event_type: string; changes: unknown }>(row: T): T => {
-    const denied = FEED_PII_KEYS[row.event_type];
-    const changes = row.changes;
-    if (!denied || !changes || typeof changes !== "object" || Array.isArray(changes)) return row;
+// Dispute reasons and resolution notes are free text written from a client's
+// complaint, and the org socket room also reaches technician sockets
+// (OPEN-QUESTIONS B1). The detail page still shows them behind view_*.
+const FEED_REASON_REDACTED: ReadonlySet<string> = new Set([
+    "quote.dispute_opened",
+    "quote.dispute_resolved",
+    "invoice.dispute_opened",
+    "invoice.dispute_resolved",
+    // A failed send carries the email provider's own rejection text, which names
+    // the sending domain, the recipient's domain and the account's approval
+    // state. Same rule as a dispute reason: useful on the detail page behind
+    // view_*, not something to broadcast to every socket in the org.
+    "quote.send_failed",
+    "invoice.send_failed",
+]);
+
+export const redactFeedRow = <T extends { event_type: string; changes: unknown; reason?: string | null }>(
+    row: T,
+): T => {
+    const base = FEED_REASON_REDACTED.has(row.event_type) && row.reason != null ? { ...row, reason: null } : row;
+    const denied = FEED_PII_KEYS[base.event_type];
+    const changes = base.changes;
+    if (!denied || !changes || typeof changes !== "object" || Array.isArray(changes)) return base;
     const entries = Object.entries(changes as Record<string, unknown>);
-    if (!entries.some(([key]) => denied.has(key))) return row;
-    return { ...row, changes: Object.fromEntries(entries.filter(([key]) => !denied.has(key))) };
+    if (!entries.some(([key]) => denied.has(key))) return base;
+    return { ...base, changes: Object.fromEntries(entries.filter(([key]) => !denied.has(key))) };
 };
 
 const FEED_DEFAULT_LIMIT = 25;
@@ -356,7 +576,7 @@ export const getRecentActivity = async (req: Request, res: Response, next: NextF
         const sdb = getScopedDb(orgId);
         const logs = await sdb.log.findMany({
             where: {
-                event_type: { in: FEED_EVENTS },
+                event_type: { in: [...FEED_EVENT_TYPES] },
                 ...(cursor ? { timestamp: { lt: new Date(cursor) } } : {}),
                 ...(userId ? { OR: [{ actor_id: userId }, { entity_id: userId }] } : {}),
             },

@@ -43,6 +43,11 @@ const ORG_SCOPED_MODELS = new Set([
 	"form_draft",
 	"inventory_item",
 	"inventory_tag",
+	"inventory_import",
+	"inventory_import_source",
+	"inventory_import_candidate",
+	"inventory_import_change",
+	"inventory_variant_group",
 	"technician",
 	"dispatcher",
 	"invoice",
@@ -66,6 +71,17 @@ const ORG_SCOPED_MODELS = new Set([
 	"followup_send",
 	"email_template",
 	"project",
+	"field_purchase",
+	"field_purchase_grant",
+	"field_purchase_event",
+	"assistant_conversation",
+	"document_dispute",
+	"vehicle_maintenance_record",
+	"vehicle_maintenance_reminder",
+	"purchase",
+	"timesheet_week",
+	"shift_correction",
+	"visit_tech_arrival",
 ]);
 
 /**
@@ -75,9 +91,13 @@ const ORG_SCOPED_MODELS = new Set([
  * guarantees as an org-scoped model — reads are filtered, writes are guarded.
  *
  * Models still relying on caller-provided parent scoping (not auto-enforced):
- * job_visit_line_item, job_visit_technician, visit_tech_time_entry,
- * quote_line_item, recurring_occurrence, invoice_line_item, invoice_payment,
- * client_contact. Add them here as needed.
+ * job_visit_line_item, job_visit_technician, quote_line_item,
+ * recurring_occurrence, invoice_line_item, invoice_payment, client_contact.
+ * Add them here as needed.
+ *
+ * Keys are matched by exact string against the Prisma model name, which is
+ * lowercase (`schema.prisma`) — a capitalised key silently matches nothing and
+ * injects no filter, which reads as registered but is a no-op.
  */
 const RELATION_SCOPED_MODELS: Record<string, (organizationId: string) => Record<string, unknown>> = {
 	vehicle_stock_item: (o) => ({ vehicle: { organization_id: o } }),
@@ -89,6 +109,17 @@ const RELATION_SCOPED_MODELS: Record<string, (organizationId: string) => Record<
 	vehicle_stock_batch: (o) => ({ vehicle: { organization_id: o } }),
 	stock_movement_serial: (o) => ({ movement: { organization_id: o } }),
 	stock_movement_batch: (o) => ({ movement: { organization_id: o } }),
+	visit_tech_time_entry: (o) => ({ visit: { job: { organization_id: o } } }),
+	visit_tech_drive: (o) => ({ tech: { organization_id: o } }),
+	field_purchase_line: (o) => ({ field_purchase: { organization_id: o } }),
+	purchase_line: (o) => ({ purchase: { organization_id: o } }),
+	field_purchase_job_allocation: (o) => ({ field_purchase: { organization_id: o } }),
+	assistant_message: (o) => ({ conversation: { organization_id: o } }),
+	assistant_tool_call: (o) => ({ message: { conversation: { organization_id: o } } }),
+	technician_notification: (o) => ({ technician: { organization_id: o } }),
+	dispatcher_notification: (o) => ({ dispatcher: { organization_id: o } }),
+	technician_shift: (o) => ({ tech: {organization_id: o }}),
+	technician_shift_break: (o) => ({ shift: { tech: { organization_id: o }}}),
 };
 
 // Returns the where-fragment that pins a row to the caller's org, or null if the
@@ -138,7 +169,7 @@ function forceOrg<T>(data: T, organizationId: string): T {
  * Returns a Prisma client scoped to an organization. Every tenant-scoped model
  * (org-scoped or relation-scoped) is enforced automatically:
  *
- * - reads (findMany/findFirst/count/aggregate) inject the org filter;
+ * - reads (findMany/findFirst/count/aggregate/groupBy) inject the org filter;
  * - update/delete merge the org filter into the where clause as a sibling of
  *   the caller's unique identifier (Prisma's "filter on non-unique fields"
  *   support) rather than a separate ownership pre-check query — it's the same
@@ -171,6 +202,9 @@ export function getScopedDb(organizationId: string) {
 					return query(scopedArgs(model, args, organizationId));
 				},
 				async aggregate({ model, args, query }) {
+					return query(scopedArgs(model, args, organizationId));
+				},
+				async groupBy({ model, args, query }) {
 					return query(scopedArgs(model, args, organizationId));
 				},
 				async updateMany({ model, args, query }) {
@@ -217,4 +251,3 @@ export function getScopedDb(organizationId: string) {
 		},
 	});
 }
-

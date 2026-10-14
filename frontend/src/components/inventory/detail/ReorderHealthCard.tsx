@@ -17,7 +17,6 @@ import { formatDate } from "../../../util/util";
 import { unitLabel } from "../../../lib/units";
 import Card from "../../ui/Card";
 import EmptyState from "../../ui/EmptyState";
-import { ChartChip } from "./chartShared";
 import { useChartNotes, unitBreakNote, unitBreakShort, UNIT_BREAK_DETAIL } from "./chartNotes";
 import LoadSvg from "../../../assets/icons/loading.svg?react";
 
@@ -233,7 +232,6 @@ export default function ReorderHealthCard({ itemId }: { itemId: string }) {
 			title="Reorder Health"
 			headerAction={
 				<div className="flex items-center gap-2">
-					<ChartChip>Estimate · {FORECAST_WINDOW_LABEL}</ChartChip>
 					{orgForecastLink}
 					{notesTrigger}
 				</div>

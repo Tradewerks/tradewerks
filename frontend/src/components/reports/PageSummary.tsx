@@ -12,6 +12,8 @@ import {
 	Pie,
 } from "recharts";
 import type { PageSummaryResponse } from "../../types/reports";
+import { InvoiceStatusLabels, type InvoiceStatus } from "../../types/invoices";
+import { QuoteStatusLabels, type QuoteStatus } from "../../types/quotes";
 
 interface PageSummaryProps {
 	data: PageSummaryResponse;
@@ -60,10 +62,10 @@ const STAT_DESCRIPTIONS: Record<string, Record<string, string>> = {
 		"Est. Value": "Combined estimated value of requests in the range.",
 	},
 	invoices: {
-		Total: "Invoices issued in the selected range.",
-		Issued: "Total amount billed on invoices issued in the range.",
+		Total: "Invoices created in the selected range.",
+		Created: "Total amount billed on invoices created in the range.",
 		Collected: "Payments received in the selected range.",
-		"Avg. Days to Pay": "Average number of days from invoice issue to payment.",
+		"Avg. Days to Pay": "Average number of days from invoice creation to payment.",
 	},
 	clients: {
 		Total: "All clients in your organization (all time).",
@@ -173,6 +175,26 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 	const useDonut =
 		data.breakdown.length > 0 && data.breakdown.length <= DONUT_MAX_SLICES;
 
+	// A breakdown label doubles as the drill-through filter value, so the stored
+	// status stays on `label` and only the printed name is swapped. Invoices and
+	// quotes are the pages whose badge text differs from the value: Issued shows
+	// as "Created", and an invoice's Paid as "Fully Paid".
+	const statusLabel = (label: string): string => {
+		if (data.breakdownLabel !== "By Status") return label;
+		if (data.page === "invoices")
+			return InvoiceStatusLabels[label as InvoiceStatus] ?? label;
+		if (data.page === "quotes")
+			return QuoteStatusLabels[label as QuoteStatus] ?? label;
+		return label;
+	};
+	const breakdown = data.breakdown.map((entry) => ({
+		...entry,
+		display: statusLabel(entry.label),
+	}));
+	// The bar chart reports the clicked slice by its printed name; the filter
+	// needs the stored one back.
+	const rawLabelFor = new Map(breakdown.map((e) => [e.display, e.label]));
+
 	return (
 		<div className={`flex flex-col gap-4${fill ? " min-h-0 flex-1" : ""}`}>
 			<div className="grid grid-cols-[repeat(auto-fit,minmax(6rem,1fr))] gap-3">
@@ -207,9 +229,9 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 						{useDonut ? (
 							<PieChart>
 								<Pie
-									data={data.breakdown}
+									data={breakdown}
 									dataKey="value"
-									nameKey="label"
+									nameKey="display"
 									cx="50%"
 									cy="50%"
 									outerRadius="90%"
@@ -226,7 +248,7 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 									}}
 									className={onBarClick ? "cursor-pointer" : undefined}
 								>
-									{data.breakdown.map((entry, i) => (
+									{breakdown.map((entry, i) => (
 										<Cell
 											key={entry.label}
 											fill={sliceColor(data.page, entry.label, i)}
@@ -241,11 +263,11 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 						)
 						: (
 							<BarChart
-								data={data.breakdown}
+								data={breakdown}
 								onClick={(s) => {
 									const l = s?.activeLabel;
 									if (l != null && onBarClick) {
-										onBarClick(String(l));
+										onBarClick(rawLabelFor.get(String(l)) ?? String(l));
 									}
 								}}
 							>
@@ -254,7 +276,7 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 									stroke="var(--color-border)"
 								/>
 								<XAxis
-									dataKey="label"
+									dataKey="display"
 									tick={{ fontSize: 11, fill: "var(--color-text-faint)" }}
 								/>
 								<YAxis
@@ -282,7 +304,7 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 					</div>
 					{useDonut && (
 						<div className="flex flex-wrap items-center justify-center gap-4 pt-2">
-							{data.breakdown.map((entry, i) => (
+							{breakdown.map((entry, i) => (
 								<div key={entry.label} className="flex items-center gap-2">
 									<span
 										className="inline-block h-3 w-3 rounded-full"
@@ -295,7 +317,7 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 										}}
 									/>
 									<span className="text-sm text-text-tertiary">
-										{entry.label}
+										{entry.display}
 									</span>
 									<span className="text-sm font-medium text-primary">
 										{entry.value.toLocaleString()}

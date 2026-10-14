@@ -99,8 +99,8 @@ describe("AdjustStockModal — fractional on-hand", () => {
 	});
 });
 
-// Review I6: Number("") is 0, so a cleared field used to preview "-10 ft" and
-// Save would zero the warehouse count.
+// Number("") is 0, so a cleared quantity field is not zero and must not
+// preview a movement or be treated as a valid save.
 describe("AdjustStockModal — blank and unchanged input", () => {
 	it("treats a cleared field as invalid: Save is disabled, nothing is previewed or sent", async () => {
 		render(<AdjustStockModal item={makeItem({ quantity: 10 })} isOpen onClose={vi.fn()} />);

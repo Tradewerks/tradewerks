@@ -3,12 +3,14 @@ import type { ZodError } from "zod";
 import { useUpdateRequestMutation } from "../../hooks/useRequests";
 import { UpdateRequestSchema, type Request, type UpdateRequestInput } from "../../types/requests";
 import { type Priority, PriorityValues } from "../../types/common";
-import type { GeocodeResult } from "../../types/location";
+import { normalizeCoords, type Coordinates, type GeocodeResult } from "../../types/location";
 import AddressForm from "../ui/AddressForm";
 import Dropdown from "../ui/Dropdown";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { UndoButton, UndoButtonTop } from "../ui/forms/UndoButton";
 import { useDirtyTracking } from "../../hooks/forms/useDirtyTracking";
+import { errorMessage } from "../../util/util";
 import { ChevronDown, ChevronUp, RotateCcw } from "lucide-react";
 
 interface EditRequestProps {
@@ -30,10 +32,13 @@ const PRIORITY_ENTRIES = (
 export default function EditRequest({ isModalOpen, setIsModalOpen, request }: EditRequestProps) {
 	const updateRequest = useUpdateRequestMutation();
 
-	const [geoData, setGeoData] = useState<GeocodeResult>();
+	const [geoData, setGeoData] = useState<{ address: string; coords?: Coordinates }>();
 	const [isLoading, setIsLoading] = useState(false);
 	const [errors, setErrors] = useState<ZodError | null>(null);
+	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [showAdditional, setShowAdditional] = useState(false);
+
+	const requestCoords = useMemo(() => normalizeCoords(request.coords), [request.coords]);
 
 	type FormFields = {
 		title: string;
@@ -75,16 +80,17 @@ export default function EditRequest({ isModalOpen, setIsModalOpen, request }: Ed
 			setOriginals(initialOriginals);
 
 			setGeoData(
-				request.address || request.coords
-					? { address: request.address || "", coords: request.coords }
+				request.address || requestCoords
+					? { address: request.address || "", coords: requestCoords }
 					: undefined
 			);
 
 			setShowAdditional(false);
 
 			setErrors(null);
+			setSubmitError(null);
 		}
-	}, [isModalOpen, request, setOriginals]);
+	}, [isModalOpen, request, requestCoords, setOriginals]);
 
 	useEffect(() => {
 		if (!getValue("source").trim()) {
@@ -97,8 +103,8 @@ export default function EditRequest({ isModalOpen, setIsModalOpen, request }: Ed
 	};
 
 	const handleClearAddress = () => {
-		if (request.address || request.coords) {
-			setGeoData({ address: request.address || "", coords: request.coords });
+		if (request.address || requestCoords) {
+			setGeoData({ address: request.address || "", coords: requestCoords });
 		} else {
 			setGeoData(undefined);
 		}
@@ -129,14 +135,18 @@ export default function EditRequest({ isModalOpen, setIsModalOpen, request }: Ed
 		}
 
 		setErrors(null);
+		setSubmitError(null);
 		setIsLoading(true);
 
 		try {
-			await updateRequest.mutateAsync({ id: request.id, data: updates });
+			await updateRequest.mutateAsync({ id: request.id, data: parseResult.data });
 			setIsLoading(false);
 			setIsModalOpen(false);
 		} catch (error) {
 			console.error("Failed to update request:", error);
+			setSubmitError(
+				errorMessage(error, "Failed to update request. Please try again.")
+			);
 			setIsLoading(false);
 		}
 	};
@@ -290,7 +300,7 @@ export default function EditRequest({ isModalOpen, setIsModalOpen, request }: Ed
 						<AddressForm
 							mode={request.address ? "edit" : "create"}
 							originalValue={request.address || ""}
-							originalCoords={request.coords}
+							originalCoords={requestCoords}
 							dropdownPosition="above"
 							handleChange={handleChangeAddress}
 							handleClear={handleClearAddress}
@@ -554,6 +564,7 @@ export default function EditRequest({ isModalOpen, setIsModalOpen, request }: Ed
 			isLoading,
 			errors,
 			request,
+			requestCoords,
 			geoData,
 			showAdditional,
 			additionalPreviewTags,
@@ -575,7 +586,10 @@ export default function EditRequest({ isModalOpen, setIsModalOpen, request }: Ed
 			submitLabel="Save Changes"
 			isEditMode={true}
 		>
-			{formContent}
+			<>
+				<FormErrorBanner message={submitError} className="mb-2" />
+				{formContent}
+			</>
 		</FormWizardContainer>
 	);
 }

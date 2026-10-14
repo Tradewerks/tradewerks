@@ -196,11 +196,22 @@ describe("provisionalItems", () => {
 				stock_movement: {
 					updateMany: vi.fn(),
 				},
-				job_visit_line_item: {
-					updateMany: vi.fn(),
-				},
+				// All five tables that can hold a link to an inventory item.
+				job_visit_line_item: { updateMany: vi.fn() },
+				quote_line_item: { updateMany: vi.fn() },
+				job_line_item: { updateMany: vi.fn() },
+				recurring_plan_line_item: { updateMany: vi.fn() },
+				invoice_line_item: { updateMany: vi.fn() },
 			};
 		}
+
+		const LINKED_TABLES = [
+			"job_visit_line_item",
+			"quote_line_item",
+			"job_line_item",
+			"recurring_plan_line_item",
+			"invoice_line_item",
+		] as const;
 
 		const PROV_ID = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 		const TARGET_ID = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
@@ -225,7 +236,7 @@ describe("provisionalItems", () => {
 			tx.vehicle_stock_item.findFirst.mockResolvedValue(null);
 			tx.vehicle_stock_item.update.mockResolvedValue({});
 			tx.stock_movement.updateMany.mockResolvedValue({ count: 0 });
-			tx.job_visit_line_item.updateMany.mockResolvedValue({ count: 0 });
+			for (const table of LINKED_TABLES) tx[table].updateMany.mockResolvedValue({ count: 0 });
 			tx.inventory_item.delete.mockResolvedValue({});
 
 			const result = await mergeProvisionalItem(PROV_ID, VALID_BODY, ORG_ID);
@@ -249,6 +260,47 @@ describe("provisionalItems", () => {
 			expect(tx.inventory_item.delete).toHaveBeenCalledWith({ where: { id: PROV_ID } });
 		});
 
+		// A forgotten table does not throw: the FK is ON DELETE SET NULL, so those
+		// lines quietly lose their link and reappear in the unmapped backlog.
+		it("repoints ALL five line-item tables before deleting the provisional item", async () => {
+			const tx = makeTx();
+			mockDb.$transaction.mockImplementation((cb: (tx: unknown) => Promise<unknown>) => cb(tx));
+
+			tx.inventory_item.findFirst
+				.mockResolvedValueOnce({ id: PROV_ID, provisional: true })
+				.mockResolvedValueOnce({ id: TARGET_ID, provisional: false });
+			tx.vehicle_stock_item.findMany.mockResolvedValue([]);
+			tx.stock_movement.updateMany.mockResolvedValue({ count: 0 });
+
+			const deleteOrder: string[] = [];
+			for (const table of LINKED_TABLES) {
+				tx[table].updateMany.mockImplementation(async () => {
+					deleteOrder.push(table);
+					return { count: 1 };
+				});
+			}
+			tx.inventory_item.delete.mockImplementation(async () => {
+				deleteOrder.push("delete");
+				return {};
+			});
+
+			const result = await mergeProvisionalItem(PROV_ID, VALID_BODY, ORG_ID);
+			expect(result.err).toBeUndefined();
+
+			for (const table of LINKED_TABLES) {
+				expect(tx[table].updateMany).toHaveBeenCalledWith(
+					expect.objectContaining({
+						where: { inventory_item_id: PROV_ID },
+						data: { inventory_item_id: TARGET_ID },
+					}),
+				);
+			}
+
+			// The delete has to come last, or the SET NULL beats the repoint.
+			expect(deleteOrder[deleteOrder.length - 1]).toBe("delete");
+			expect(deleteOrder.filter((t) => t !== "delete")).toHaveLength(LINKED_TABLES.length);
+		});
+
 		it("happy path — collision: merges qty and re-points usage/restock rows", async () => {
 			const tx = makeTx();
 			mockDb.$transaction.mockImplementation((cb: (tx: unknown) => Promise<unknown>) => cb(tx));
@@ -268,7 +320,7 @@ describe("provisionalItems", () => {
 			tx.vehicle_stock_usage.updateMany.mockResolvedValue({ count: 1 });
 			tx.vehicle_restock_request.updateMany.mockResolvedValue({ count: 0 });
 			tx.stock_movement.updateMany.mockResolvedValue({ count: 0 });
-			tx.job_visit_line_item.updateMany.mockResolvedValue({ count: 0 });
+			for (const table of LINKED_TABLES) tx[table].updateMany.mockResolvedValue({ count: 0 });
 			tx.inventory_item.delete.mockResolvedValue({});
 
 			const result = await mergeProvisionalItem(PROV_ID, VALID_BODY, ORG_ID);

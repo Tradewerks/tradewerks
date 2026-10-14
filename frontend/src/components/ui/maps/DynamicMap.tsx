@@ -2,7 +2,7 @@
 import { createPortal } from "react-dom";
 import mapboxgl from "mapbox-gl";
 import type { GeoJSONSource } from "mapbox-gl";
-import type { StaticMarker, TechRouteData } from "../../../types/location";
+import type { MapViewRequest, StaticMarker, TechRouteData } from "../../../types/location";
 import "mapbox-gl/dist/mapbox-gl.css";
 import CreateMarker from "./MarkerFactory";
 import { Copy, Check, RefreshCw } from "lucide-react";
@@ -124,16 +124,19 @@ const INITIAL_FIT_OPTIONS: mapboxgl.FitBoundsOptions = {
 	duration: 0,
 };
 
+const VIEW_MOVE_MS = 200;
+
 const FALLBACK_CENTER: [number, number] = [-91.22, 43.85];
 const FALLBACK_ZOOM = 10;
 
 // Compute an initial viewport that frames the bulk of the markers. Trims the
 // outermost 10% on each axis (once there are enough markers) so a single
 // far-away tech or client doesn't dominate the framing.
-function computeInitialBounds(
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper, exported for tests
+export function computeInitialBounds(
 	markers: StaticMarker[],
 ): [[number, number], [number, number]] | null {
-	const valid = markers.filter(hasValidCoords);
+	const valid = markers.filter((m) => !m.fitIgnore && hasValidCoords(m));
 	if (valid.length === 0) return null;
 
 	const lats = valid.map((m) => m.coords.lat).sort((a, b) => a - b);
@@ -147,22 +150,52 @@ function computeInitialBounds(
 	];
 }
 
+// Ids, not coords: location pings move markers without changing the key, so they never refit.
+function fitKey(markers: StaticMarker[]): string {
+	return markers
+		.filter((m) => !m.fitIgnore && hasValidCoords(m))
+		.map((m) => m.id)
+		.sort()
+		.join("|");
+}
+
+const USER_MOVE_EVENTS = ["dragstart", "zoomstart", "rotatestart", "pitchstart"] as const;
+
 interface DynamicMapProps {
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	staticMarkers?: StaticMarker[];
 	techRoutes?: TechRouteData[];
 	showRoutes?: boolean;
+	viewRequest?: MapViewRequest | null;
+	/**
+	 * "once": frame the first markers, then leave the view alone.
+	 * "untilInteraction": reframe whenever the set of framed markers changes, until the user
+	 * moves the map or asks for a view.
+	 */
+	autoFit?: "once" | "untilInteraction";
+	/** False renders a fixed view: no pan, zoom or rotate (the landing page's preview). */
+	interactive?: boolean;
 }
 
 const MIN_ANIM_MS = 1500;
 const MAX_ANIM_MS = 5000;
 const DEFAULT_ANIM_MS = 2500;
 
+// Mapbox paint props can't read CSS vars; resolve "var(--x)" to its computed value
+function resolveCssColor(color: string): string {
+	const name = color.match(/^var\((--[^)]+)\)$/)?.[1];
+	if (!name) return color;
+	return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || color;
+}
+
 const DynamicMap = ({
 	containerRef,
 	staticMarkers = [],
 	techRoutes = [],
 	showRoutes = false,
+	viewRequest = null,
+	autoFit = "once",
+	interactive = true,
 }: DynamicMapProps) => {
 	const mapRef = useRef<mapboxgl.Map | null>(null);
 	const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -174,9 +207,11 @@ const DynamicMap = ({
 	const rafRef = useRef<number | null>(null);
 	const hadContextLoss = useRef(false);
 	const hasDoneInitialFitRef = useRef(false);
+	const fitKeyRef = useRef<string | null>(null);
+	const userMovedRef = useRef(false);
 
 	function markerFingerprint(m: StaticMarker): string {
-		return `${m.type}|${m.label ?? ""}|${m.color ?? ""}|${m.statusDotColor ?? ""}|${m.variant ?? ""}`;
+		return `${m.type}|${m.label ?? ""}|${m.color ?? ""}|${m.statusDotColor ?? ""}|${m.variant ?? ""}|${m.alert ?? ""}`;
 	}
 
 	const [webglError, setWebglError] = useState(false);
@@ -203,6 +238,8 @@ const DynamicMap = ({
 
 		const initialBounds = computeInitialBounds(staticMarkers);
 		hasDoneInitialFitRef.current = initialBounds !== null;
+		fitKeyRef.current = initialBounds ? fitKey(staticMarkers) : null;
+		userMovedRef.current = false;
 
 		try {
 			mapRef.current = new mapboxgl.Map({
@@ -211,13 +248,17 @@ const DynamicMap = ({
 					? { bounds: initialBounds, fitBoundsOptions: INITIAL_FIT_OPTIONS }
 					: { center: FALLBACK_CENTER, zoom: FALLBACK_ZOOM }),
 				style: "mapbox://styles/mapbox/standard",
+				pitch: 15,
 				minZoom: 5,
 				maxZoom: 22,
 				failIfMajorPerformanceCaveat: false,
+				interactive,
 				config: {
 					basemap: {
-						lightPreset: "dusk",
+						lightPreset: "day",
 						showPointOfInterestLabels: false,
+						show3dObjects: true,
+						show3dBuildings: true,
 					},
 				},
 			});
@@ -225,6 +266,13 @@ const DynamicMap = ({
 			hadContextLoss.current = false;
 
 			mapRef.current.on("style.load", () => setStyleReady(true));
+			if (autoFit === "untilInteraction") {
+				USER_MOVE_EVENTS.forEach((type) =>
+					mapRef.current?.on(type, (e) => {
+						if ("originalEvent" in e && e.originalEvent) userMovedRef.current = true;
+					}),
+				);
+			}
 
 			const canvas = mapRef.current.getCanvas();
 			canvas.addEventListener("webglcontextlost", (e) => {
@@ -265,14 +313,14 @@ const DynamicMap = ({
 	// If markers weren't ready at mount, fit to them on first arrival. Runs once
 	// per map lifetime so later marker updates don't yank the user's view.
 	useEffect(() => {
-		if (hasDoneInitialFitRef.current) return;
+		if (autoFit !== "once" || hasDoneInitialFitRef.current) return;
 		const map = mapRef.current;
 		if (!map || contextLost) return;
 		const bounds = computeInitialBounds(staticMarkers);
 		if (!bounds) return;
 		map.fitBounds(bounds, INITIAL_FIT_OPTIONS);
 		hasDoneInitialFitRef.current = true;
-	}, [staticMarkers, contextLost]);
+	}, [staticMarkers, contextLost, autoFit]);
 
 	// Resize map once after the container stops changing.
 	useEffect(() => {
@@ -405,11 +453,22 @@ const DynamicMap = ({
 				lastUpdateAtRef.current.delete(id);
 			}
 		});
+		if (autoFit === "untilInteraction") {
+			const key = fitKey(staticMarkers);
+			if (key === fitKeyRef.current) return;
+			fitKeyRef.current = key;
+			if (userMovedRef.current) return;
+			const bounds = computeInitialBounds(staticMarkers);
+			if (bounds) map.fitBounds(bounds, { ...INITIAL_FIT_OPTIONS, duration: VIEW_MOVE_MS });
+			return;
+		}
+
 		// Autofit based on the markers instead of fixed, if there are markers
-		if (staticMarkers.length > 0 && !hasFitRef.current) {
+		const fitTargets = staticMarkers.filter((m) => !m.fitIgnore && hasValidCoords(m));
+		if (fitTargets.length > 0 && !hasFitRef.current) {
 			hasFitRef.current = true;
 			const bounds = new mapboxgl.LngLatBounds();
-			staticMarkers.forEach((m) => bounds.extend(m.coords));
+			fitTargets.forEach((m) => bounds.extend(m.coords));
 
 			const fitBounds = () => map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
 
@@ -419,7 +478,7 @@ const DynamicMap = ({
 				map.once("style.load", fitBounds);
 			}
 		}
-	}, [staticMarkers, contextLost]);
+	}, [staticMarkers, contextLost, autoFit]);
 
 	// Route sync: add/update/remove a line layer per active tech route.
 	useEffect(() => {
@@ -438,7 +497,7 @@ const DynamicMap = ({
 				if (existingSource) {
 					existingSource.setData(route.routeGeoJSON);
 					if (map.getLayer(layerId)) {
-						map.setPaintProperty(layerId, "line-color", route.color);
+						map.setPaintProperty(layerId, "line-color", resolveCssColor(route.color));
 					}
 				} else {
 					map.addSource(layerId, {
@@ -451,9 +510,10 @@ const DynamicMap = ({
 						source: layerId,
 						layout: { "line-cap": "round", "line-join": "round" },
 						paint: {
-							"line-color": route.color,
+							"line-color": resolveCssColor(route.color),
 							"line-width": 5,
 							"line-opacity": 0.8,
+							"line-emissive-strength": 1, // ignore the dusk light preset's dimming
 						},
 					});
 					routeLayerIdsRef.current.add(layerId);
@@ -468,6 +528,28 @@ const DynamicMap = ({
 			routeLayerIdsRef.current.delete(layerId);
 		});
 	}, [techRoutes, showRoutes, styleReady, contextLost]);
+
+	// Keyed on the request id alone: marker churn must not replay the last move.
+	useEffect(() => {
+		const map = mapRef.current;
+		if (!viewRequest || !map || contextLost) return;
+		// A fit re-arms following (and syncs the key so the next marker change refits once);
+		// locate requests disarm it.
+		userMovedRef.current = viewRequest.target !== "fit";
+		if (viewRequest.target === "fit") {
+			fitKeyRef.current = fitKey(staticMarkers);
+			const bounds = computeInitialBounds(staticMarkers);
+			if (bounds) map.fitBounds(bounds, { ...INITIAL_FIT_OPTIONS, duration: VIEW_MOVE_MS });
+			return;
+		}
+		const { lat, lon } = viewRequest.target;
+		map.flyTo({
+			center: [lon, lat],
+			zoom: Math.max(map.getZoom(), 14),
+			duration: VIEW_MOVE_MS,
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [viewRequest?.id]);
 
 	if (webglError) {
 		return <WebGLErrorFallback afterContextLoss={hadContextLoss.current} />;

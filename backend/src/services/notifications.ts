@@ -17,7 +17,7 @@ export function startVisitReminderInterval(): void {
 				},
 				include: {
 					visit_techs: { select: { tech_id: true } },
-					job: { select: { client: { select: { name: true } } } },
+					job: { select: { organization_id: true, client: { select: { name: true } } } },
 				},
 			});
 
@@ -34,6 +34,8 @@ export function startVisitReminderInterval(): void {
 			);
 
 			for (const visit of upcoming) {
+				const orgId = visit.job.organization_id;
+				if (!orgId) continue;
 				const clientName = visit.job.client.name;
 				const actionUrl  = `/technician/visits/${visit.id}`;
 
@@ -46,7 +48,7 @@ export function startVisitReminderInterval(): void {
 						title: `Visit in 30 minutes: ${clientName}`,
 						body: `Your visit at ${clientName} starts in about 30 minutes.`,
 						actionUrl,
-					});
+					}, orgId);
 				}
 			}
 		} catch (e) {

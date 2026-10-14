@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from 'express';
 import { ZodError } from 'zod';
 import {
@@ -6,18 +7,26 @@ import {
     createErrorResponse,
 } from "../types/responses.js";
 import { getUserContext, getScopedDb } from '../lib/context.js';
-import { requirePermission } from '../lib/requirePermissions.js';
+import { requirePermission, requirePermissionForBody } from '../lib/requirePermissions.js';
 import { logActivity } from '../services/logger.js';
 import * as invoicesController from '../controllers/invoicesController.js';
 import { createInvoiceRecord } from '../services/invoiceService.js';
 import { generateInvoicePdf } from '../lib/pdf/pdfService.js';
 import { sendInvoiceEmail } from '../services/emailService.js';
+import { isSendFailure } from '../services/emailErrors.js';
 import { onInvoiceSent } from '../services/followupTriggers.js';
 import { buildVisitInvoicePayload, buildRecurringPlanInvoicePayload } from '../services/invoiceGenerator.js';
-import { overlapCheckSchema, generateInvoiceSchema } from '../lib/validate/invoices.js';
+import { overlapCheckSchema, generateInvoiceSchema, createRefundSchema } from '../lib/validate/invoices.js';
 import { advanceNextInvoiceAt, calculateNextInvoiceAt, type ScheduleFrequency } from '../lib/invoiceSchedule.js';
 import { Prisma } from '../../generated/prisma/client.js';
+import { assertValidInvoiceTransition, InvalidTransitionError } from '../lib/statusTransitions.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
+import {
+    disputeErrorResponse,
+    listDisputes,
+    postDispute,
+    postResolution,
+} from '../controllers/disputesController.js';
 
 const router = Router();
 
@@ -35,7 +44,7 @@ router.get("/:id", requirePermission("view_invoices"), async (req, res, next) =>
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
-        const invoice = await invoicesController.getInvoiceById(id, orgId);
+        const invoice = await invoicesController.getInvoiceDetail(id, orgId);
         if (!invoice)
             return res
                 .status(404)
@@ -74,7 +83,7 @@ router.get("/:id/pdf", requirePermission("view_invoices"), async (req, res, next
 
 
 
-router.post("/:id/send", requirePermission("edit_invoices"), async (req, res, next) => {
+router.post("/:id/send", requirePermission("send_invoices"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const recipientEmail: string | undefined = req.body?.recipient_email;
@@ -85,8 +94,71 @@ router.post("/:id/send", requirePermission("edit_invoices"), async (req, res, ne
         }
 
         const orgId = req.user!.organization_id as string;
-        await sendInvoiceEmail(id, recipientEmail, orgId);
+
+        // Guard BEFORE the email, exactly as POST /quotes/:id/send does. The
+        // status update below would reject an illegal move — INVOICE_TRANSITIONS
+        // has no edge to Sent from Viewed, PartiallyPaid, Paid or Void — but by
+        // then the client already has it in their inbox and the invoice is left
+        // sitting in its old status.
+        const existing = await invoicesController.getInvoiceById(id, orgId);
+        if (!existing) {
+            return res
+                .status(404)
+                .json(createErrorResponse(ErrorCodes.NOT_FOUND, "Invoice not found"));
+        }
+        try {
+            assertValidInvoiceTransition(existing.status, "Sent");
+        } catch (e) {
+            if (e instanceof InvalidTransitionError) {
+                return res
+                    .status(422)
+                    .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, e.message));
+            }
+            throw e;
+        }
+
         const context = getUserContext(req);
+        try {
+            await sendInvoiceEmail(id, recipientEmail, orgId);
+        } catch (e: unknown) {
+            // A missing document is not a delivery failure. Let the outer
+            // handler answer it as a 404 rather than restating it as an email
+            // problem.
+            if (!isSendFailure(e) && (e as { status?: number })?.status === 404) throw e;
+            // Only a translated failure carries a message written for the
+            // caller. A PDF render throw or a Prisma error reaches here with
+            // text that was never meant to leave the server, so it is recorded
+            // and answered generically.
+            const failure = isSendFailure(e) ? e : null;
+            // logActivity swallows its own errors, so this await cannot
+            // displace the response below.
+            // An invoice the client never received must not age on the
+            // receivables board as Sent, and onInvoiceSent below must not start
+            // dunning against a delivery that did not happen.
+            await logActivity({
+                event_type: "invoice.send_failed",
+                action: "sent",
+                entity_type: "invoice",
+                entity_id: id,
+                organization_id: orgId,
+                actor_type: "dispatcher",
+                actor_id: context.dispatcherId ?? null,
+                reason:
+                    failure?.providerMessage ??
+                    (e instanceof Error ? e.message : undefined),
+                changes: { recipient_email: { old: null, new: recipientEmail } },
+                ip_address: context.ipAddress,
+                user_agent: context.userAgent,
+            });
+            return res
+                .status(failure?.status ?? 502)
+                .json(
+                    createErrorResponse(
+                        failure?.code ?? ErrorCodes.EMAIL_SEND_FAILED,
+                        failure?.message ?? "Email could not be sent.",
+                    ),
+                );
+        }
         const result = await invoicesController.updateInvoice(
             { params: { id }, body: { status: "Sent" } } as any,
             orgId,
@@ -130,7 +202,7 @@ router.post("/overlap-check", requirePermission("create_invoices"), async (req, 
 
 // ── Pipeline: generate invoice from recurring plan ────────────────────────────
 
-router.post("/generate", requirePermission("create_invoices"), async (req, res, next) => {
+router.post("/generate", requireModule("recurring_plans"), requirePermission("create_invoices"), async (req, res, next) => {
     try {
         const parsed = generateInvoiceSchema.parse(req.body);
         const orgId = req.user!.organization_id as string;
@@ -253,7 +325,14 @@ router.post("/", requirePermission("create_invoices"), async (req, res, next) =>
     }
 });
 
-router.patch("/:id", requirePermission("edit_invoices"), async (req, res, next) => {
+// Voiding is cash out, and it arrives on the same PATCH that renames a memo —
+// so the gate reads what the body is asking for rather than the path.
+const requireVoidPermission = requirePermissionForBody(
+    "refund_invoices",
+    (body) => (body as { status?: string } | undefined)?.status === "Void",
+);
+
+router.patch("/:id", requirePermission("edit_invoices"), requireVoidPermission, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
@@ -336,9 +415,11 @@ router.post("/:invoiceId/payments", requirePermission("edit_invoices"), async (r
     }
 });
 
+// Deleting a payment row reverses recorded cash and re-syncs the invoice
+// totals — a payment void by another name, so it sits with the refunds.
 router.delete(
     "/:invoiceId/payments/:paymentId",
-    requirePermission("edit_invoices"),
+    requirePermission("refund_invoices"),
     async (req, res, next) => {
         try {
             const orgId = req.user!.organization_id as string;
@@ -361,6 +442,94 @@ router.delete(
                     );
             }
             res.status(200).json(createSuccessResponse(result.item));
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+router.post("/:invoiceId/refunds", requirePermission("refund_invoices"), async (req, res, next) => {
+    try {
+        const orgId = req.user!.organization_id as string;
+        const context = getUserContext(req);
+        const parsed = createRefundSchema.parse(req.body);
+        const result = await invoicesController.recordRefund(
+            req.params.invoiceId as string,
+            parsed,
+            orgId,
+            context,
+        );
+        if (result.err) {
+            const status = result.err.includes("not found") ? 404 : 422;
+            return res
+                .status(status)
+                .json(
+                    createErrorResponse(
+                        ErrorCodes.VALIDATION_ERROR,
+                        result.err,
+                    ),
+                );
+        }
+        res.status(201).json(createSuccessResponse(result.item));
+    } catch (err) {
+        if (err instanceof ZodError) {
+            return res
+                .status(422)
+                .json(
+                    createErrorResponse(
+                        ErrorCodes.VALIDATION_ERROR,
+                        err.issues[0]?.message ?? "Invalid request",
+                    ),
+                );
+        }
+        next(err);
+    }
+});
+
+// ── Disputes ─────────────────────────────────────────────────────────────────
+
+router.get("/:invoiceId/disputes", requireModule("disputes"), requirePermission("view_invoices"), async (req, res, next) => {
+    try {
+        const invoiceId = req.params.invoiceId as string;
+        const list = await listDisputes("invoice", invoiceId, req);
+        res.json(createSuccessResponse(list, { count: list.disputes.length }));
+    } catch (err) {
+        next(err);
+    }
+});
+
+// view_invoices ahead of the dispute grant: both doors' refusals can echo the
+// document's status and amount_paid (DW-65), and open_disputes/resolve_disputes
+// alone say nothing about whether this caller may see that.
+router.post("/:invoiceId/disputes", requireModule("disputes"), requirePermission("view_invoices"), requirePermission("open_disputes"), async (req, res, next) => {
+    try {
+        const invoiceId = req.params.invoiceId as string;
+        const result = await postDispute("invoice", invoiceId, req);
+        if (result && "err" in result) {
+            const refusal = disputeErrorResponse(result);
+            return res.status(refusal.status).json(refusal.body);
+        }
+        res.status(201).json(createSuccessResponse(result));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post(
+    "/:invoiceId/disputes/:disputeId/resolve",
+    requireModule("disputes"),
+    requirePermission("view_invoices"),
+    requirePermission("resolve_disputes"),
+    async (req, res, next) => {
+        try {
+            const invoiceId = req.params.invoiceId as string;
+            const disputeId = req.params.disputeId as string;
+            const result = await postResolution("invoice", invoiceId, disputeId, req);
+            if (result && "err" in result) {
+                const refusal = disputeErrorResponse(result);
+                return res.status(refusal.status).json(refusal.body);
+            }
+            res.json(createSuccessResponse(result));
         } catch (err) {
             next(err);
         }

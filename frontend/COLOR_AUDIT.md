@@ -191,12 +191,6 @@ Intentional shade collapses: cases where two similar values were unified under o
 | `scheduleTokens.ts`, visit popup | `#93c5fd` (blue-300) | `--color-sched-status-badge-text` | Visit status badge text |
 | `scheduleTokens.ts` | `rgba(255,255,255,0.38)` | `--color-sched-open-ended-dash` | Dashed bottom border on open-ended cards |
 
-### Calendar (schedule-x)
-
-| File(s) | Original Value | Semantic Token | Context |
-|---|---|---|---|
-| `DashboardCalendar.css`, schedule-x overrides | `#d4d4d8` (zinc-300) | `--color-cal-month-day` | Month view day number text |
-
 ### Charts
 
 | File(s) | Original Value | Semantic Token | Context |

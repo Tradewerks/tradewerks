@@ -23,7 +23,8 @@ vi.mock("../../services/emailService.js", () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { assignOrgRole } from "../organizationsController.js";
+import { assignOrgRole, createOrgRole, updateOrgRole } from "../organizationsController.js";
+import { createOrgRoleSchema } from "../../lib/validate/organizationRoles.js";
 import { getScopedDb } from "../../lib/context.js";
 
 const mockGetScopedDb = vi.mocked(getScopedDb);
@@ -106,6 +107,56 @@ describe("assignOrgRole — base_tier must match the user type", () => {
 		const result = await assignOrgRole(USER_ID, "dispatcher", ROLE_ID, ORG_ID);
 
 		expect(result.err).toBe("Role not found");
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * A role carrying another tier's permission is not inert: a technician role
+ * holding dispute grants reaches the dispute routes as a caller separation of
+ * duties cannot identify (DW-25).
+ */
+describe("role payloads are held to their tier's catalog", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("refuses to create a technician role carrying dispute permissions", async () => {
+		const sdb = makeSdb(null);
+		const result = await createOrgRole(
+			{ name: "Field Lead", base_tier: "technician", permissions: ["view_visits", "resolve_disputes"] },
+			ORG_ID,
+		);
+
+		expect(result.err).toBe("Validation failed: Not technician permissions: resolve_disputes");
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("refuses a permission string no catalog defines", async () => {
+		makeSdb(null);
+		const result = await createOrgRole(
+			{ name: "Clerk", base_tier: "dispatcher", permissions: ["approve_everything"] },
+			ORG_ID,
+		);
+
+		expect(result.err).toMatch(/approve_everything/);
+	});
+
+	it("accepts a role whose permissions all belong to its tier", () => {
+		expect(
+			createOrgRoleSchema.safeParse({
+				name: "Billing",
+				base_tier: "dispatcher",
+				permissions: ["view_invoices", "edit_invoices", "refund_invoices"],
+			}).success,
+		).toBe(true);
+	});
+
+	it("checks an update against the stored tier when the payload names none", async () => {
+		const sdb = makeSdb({ base_tier: "technician", name: "Field Tech" });
+		const result = await updateOrgRole(ROLE_ID, { permissions: ["concede_disputes"] }, ORG_ID);
+
+		expect(result.err).toBe("Validation failed: Not technician permissions: concede_disputes");
 		expect(sdb.$transaction).not.toHaveBeenCalled();
 	});
 });

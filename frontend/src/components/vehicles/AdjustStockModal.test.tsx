@@ -1,6 +1,7 @@
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, test, vi, beforeEach } from "vitest";
 import AdjustStockModal from "./AdjustStockModal";
 import { ADJUSTMENT_TYPE_LABELS } from "../../types/vehicles";
@@ -29,6 +30,13 @@ vi.mock("../../hooks/useTracking", () => ({
 	useResolveCodeMutation: () => ({ mutateAsync: mockResolveMutateAsync, isPending: false }),
 }));
 
+// The doorway out to field purchases is permission-gated; these tests are about
+// the wizard, so the caller is assumed to hold it.
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => true,
+	useAnyPermission: () => true,
+}));
+
 // Camera scanning depends on getUserMedia/BarcodeDetector, unavailable in jsdom.
 vi.mock("../inventory/BarcodeScanner", () => ({
 	BarcodeScanner: () => null,
@@ -38,22 +46,16 @@ function renderModal(props: Partial<React.ComponentProps<typeof AdjustStockModal
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={qc}>
-			<AdjustStockModal
-				vehicleId="v1"
-				stockItems={[]}
-				onClose={() => {}}
-				{...props}
-			/>
+			<MemoryRouter>
+				<AdjustStockModal
+					vehicleId="v1"
+					stockItems={[]}
+					onClose={() => {}}
+					{...props}
+				/>
+			</MemoryRouter>
 		</QueryClientProvider>
 	);
-}
-
-// SerialCaptureList's per-row "already exists" check debounces 400ms on a real
-// timer — settle it so the state update lands inside act() instead of leaking.
-async function settleDebounce() {
-	await act(async () => {
-		await new Promise((resolve) => setTimeout(resolve, 450));
-	});
 }
 
 beforeEach(() => {
@@ -69,12 +71,24 @@ beforeEach(() => {
 });
 
 describe("AdjustStockModal type picker", () => {
-	test("shows exactly the four adjustment types", () => {
+	test("shows the adjustment types", () => {
 		renderModal();
 		expect(screen.getByText("Field Loss")).toBeInTheDocument();
 		expect(screen.getByText("Transfer In")).toBeInTheDocument();
 		expect(screen.getByText("Audit Correction")).toBeInTheDocument();
-		expect(screen.getByText("Supplier Purchase")).toBeInTheDocument();
+	});
+
+	// Spending money is not an adjustment: it needs a grant, a limit, a receipt
+	// and a dispatcher's yes. The tile is a way through to that flow, not a step.
+	test("offers supplier buying as a doorway out, not as a type", () => {
+		renderModal();
+		expect(screen.queryByText("Supplier Purchase")).not.toBeInTheDocument();
+		// The truck rides along: a part bought to restock it defaults back onto
+		// it rather than into the warehouse.
+		expect(screen.getByText("Record a field purchase").closest("a")).toHaveAttribute(
+			"href",
+			"/technician/purchases?vehicleId=v1",
+		);
 	});
 
 	test("no longer offers warehouse exchange or add-from-warehouse", () => {
@@ -87,148 +101,6 @@ describe("AdjustStockModal type picker", () => {
 describe("historical record support", () => {
 	test("warehouse_exchange label is retained for past records", () => {
 		expect(ADJUSTMENT_TYPE_LABELS.warehouse_exchange).toBe("Warehouse Exchange");
-	});
-});
-
-describe("tracking step — supplier_purchase serialized item", () => {
-	test("requires new_serials matching qty and submits the right shape", async () => {
-		mockCatalogQuery.mockReturnValue({
-			data: [
-				{
-					id: "inv-serial",
-					name: "Compressor",
-					category: null,
-					is_serialized: true,
-					is_batch_tracked: false,
-				},
-			],
-			isLoading: false,
-		});
-
-		renderModal({ initialType: "supplier_purchase" });
-
-		await userEvent.click(screen.getByText("+ Add"));
-		await userEvent.click(screen.getByText("Review →"));
-
-		// Tracking step should appear — SerialCaptureList's count indicator.
-		expect(await screen.findByText("0 / 1 serials")).toBeInTheDocument();
-		// Blocked until a serial is captured.
-		expect(screen.getByText("Review →").closest("button")).toBeDisabled();
-
-		const input = screen.getByLabelText("Add serial number");
-		await userEvent.type(input, "SN-100{Enter}");
-		await settleDebounce();
-
-		expect(screen.getByText("1 / 1 serials")).toBeInTheDocument();
-		expect(screen.getByText("Review →").closest("button")).not.toBeDisabled();
-
-		await userEvent.click(screen.getByText("Review →"));
-		await userEvent.click(screen.getByText("Apply Adjustment"));
-
-		await waitFor(() => expect(mockAdjustMutateAsync).toHaveBeenCalled());
-		const submitted = mockAdjustMutateAsync.mock.calls[0][0] as AdjustStockInput;
-		expect(submitted.type).toBe("supplier_purchase");
-		expect(submitted.lines).toEqual([
-			expect.objectContaining({
-				inventory_item_id: "inv-serial",
-				qty_after: 1,
-				new_serials: ["SN-100"],
-			}),
-		]);
-	});
-});
-
-describe("tracking step — supplier_purchase batch-tracked item", () => {
-	test("requires new_batch and submits correctly", async () => {
-		mockCatalogQuery.mockReturnValue({
-			data: [
-				{
-					id: "inv-batch",
-					name: "Refrigerant Jug",
-					category: null,
-					is_serialized: false,
-					is_batch_tracked: true,
-				},
-			],
-			isLoading: false,
-		});
-
-		renderModal({ initialType: "supplier_purchase" });
-
-		await userEvent.click(screen.getByText("+ Add"));
-		await userEvent.click(screen.getByText("Review →"));
-
-		const batchInput = await screen.findByLabelText("Batch or lot number");
-		expect(screen.getByText("Review →").closest("button")).toBeDisabled();
-
-		await userEvent.type(batchInput, "LOT-2026-01");
-
-		expect(screen.getByText("Review →").closest("button")).not.toBeDisabled();
-
-		await userEvent.click(screen.getByText("Review →"));
-		await userEvent.click(screen.getByText("Apply Adjustment"));
-
-		await waitFor(() => expect(mockAdjustMutateAsync).toHaveBeenCalled());
-		const submitted = mockAdjustMutateAsync.mock.calls[0][0] as AdjustStockInput;
-		expect(submitted.lines).toEqual([
-			expect.objectContaining({
-				inventory_item_id: "inv-batch",
-				qty_after: 1,
-				new_batch: expect.objectContaining({ batch_number: "LOT-2026-01" }),
-			}),
-		]);
-	});
-});
-
-describe("tracking step — supplier_purchase dual-tracked (serialized + batch) item", () => {
-	test("requires both serials and batch, and submits both on one line", async () => {
-		mockCatalogQuery.mockReturnValue({
-			data: [
-				{
-					id: "inv-dual",
-					name: "Compressor",
-					category: null,
-					is_serialized: true,
-					is_batch_tracked: true,
-				},
-			],
-			isLoading: false,
-		});
-
-		renderModal({ initialType: "supplier_purchase" });
-
-		await userEvent.click(screen.getByText("+ Add"));
-		await userEvent.click(screen.getByText("Review →"));
-
-		// Both capture UIs render for a dual-tracked line.
-		expect(await screen.findByText("0 / 1 serials")).toBeInTheDocument();
-		expect(screen.getByLabelText("Batch or lot number")).toBeInTheDocument();
-		expect(screen.getByText("Review →").closest("button")).toBeDisabled();
-
-		const serialInput = screen.getByLabelText("Add serial number");
-		await userEvent.type(serialInput, "SN-200{Enter}");
-		await settleDebounce();
-
-		// Serials alone aren't enough — batch is still required.
-		expect(screen.getByText("Review →").closest("button")).toBeDisabled();
-
-		await userEvent.type(screen.getByLabelText("Batch or lot number"), "LOT-2026-02");
-
-		expect(screen.getByText("Review →").closest("button")).not.toBeDisabled();
-
-		await userEvent.click(screen.getByText("Review →"));
-		await userEvent.click(screen.getByText("Apply Adjustment"));
-
-		await waitFor(() => expect(mockAdjustMutateAsync).toHaveBeenCalled());
-		const submitted = mockAdjustMutateAsync.mock.calls[0][0] as AdjustStockInput;
-		expect(submitted.lines).toEqual([
-			expect.objectContaining({
-				inventory_item_id: "inv-dual",
-				qty_after: 1,
-				new_serials: ["SN-200"],
-				new_batch: expect.objectContaining({ batch_number: "LOT-2026-02" }),
-			}),
-		]);
 	});
 });
 

@@ -67,7 +67,7 @@ describe("resetPassword — role is derived from the token's owner row (review B
 		expect(result).toEqual({ err: "", userId: "disp-1", role: "dispatcher" });
 		expect(fake.dispatcher.update).toHaveBeenCalledWith({
 			where: { password_reset_token: "tok" },
-			data: { password: "hashed(new-password-123)", password_reset_token: null, password_reset_token_expires_at: null },
+			data: { password: "hashed(new-password-123)", password_reset_token: null, password_reset_token_expires_at: null, invite_token_hash: null, invite_expires_at: null },
 		});
 		expect(fake.technician.update).not.toHaveBeenCalled();
 		// lookup asks only for what it needs — never the hash or the token itself
@@ -178,6 +178,19 @@ describe("requestPasswordReset — no live token survives a failed email (review
 	});
 });
 
+describe("requestPasswordReset — email is lowercased before lookup", () => {
+	it("finds a lowercase-stored user when called with a differently-cased email", async () => {
+		fake.dispatcher.findUnique.mockResolvedValue({ id: "disp-1", organization_id: "org-1", email: "d@x.com" });
+		vi.mocked(sendPasswordResetEmail).mockResolvedValue({ success: true } as never);
+
+		const result = await requestPasswordReset("D@X.com", "dispatcher");
+
+		expect(result).toEqual({ err: "" });
+		expect(fake.dispatcher.findUnique).toHaveBeenCalledWith({ where: { email: "d@x.com" } });
+		expect(fake.dispatcher.update.mock.calls[0][0].where).toEqual({ email: "d@x.com" });
+	});
+});
+
 describe("login — opts back into the password hash only for the credential check (review B2)", () => {
 	it("passes omit:{password:false} on the lookup and never returns the hash", async () => {
 		fake.technician.findUnique.mockResolvedValue(null);
@@ -273,5 +286,57 @@ describe("refreshAccessToken — role/permissions are re-read from the DB (revie
 		const result = await refreshAccessToken(token);
 		expect(result).toMatchObject({ success: false, error: { code: "INVALID_TOKEN" } });
 		expect(fake.dispatcher.findUnique).not.toHaveBeenCalled();
+	});
+});
+
+describe("deactivated users (build plan 2)", () => {
+	it("login refuses a deactivated dispatcher with the generic message", async () => {
+		fake.technician.findUnique.mockResolvedValue(null);
+		fake.dispatcher.findUnique.mockResolvedValue({
+			id: "disp-1",
+			email: "d@x.com",
+			organization_id: "org-1",
+			role: "dispatcher",
+			password: "hashed(pw)",
+			last_login: new Date(),
+			deactivated_at: new Date(),
+		});
+		const result = await login({ cookie: vi.fn() } as never, "d@x.com", "pw");
+		expect(result).toMatchObject({
+			success: false,
+			error: { code: "INVALID_CREDENTIALS", message: "Invalid credentials" },
+		});
+		expect(fake.jwt_refresh_token.create).not.toHaveBeenCalled();
+	});
+
+	it("password reset request is a silent no-op for a deactivated user", async () => {
+		fake.dispatcher.findUnique.mockResolvedValue({
+			id: "disp-1",
+			organization_id: "org-1",
+			email: "d@x.com",
+			deactivated_at: new Date(),
+		});
+		const result = await requestPasswordReset("d@x.com", "dispatcher");
+		expect(result).toEqual({ err: "" });
+		expect(fake.dispatcher.update).not.toHaveBeenCalled();
+		expect(sendPasswordResetEmail).not.toHaveBeenCalled();
+	});
+});
+
+describe("isUserActive (build plan 2)", () => {
+	it("is false for a deactivated or missing user and caches the answer", async () => {
+		const { isUserActive } = await import("../../services/userActiveCache.js");
+		fake.technician.findUnique.mockResolvedValueOnce({ deactivated_at: new Date() });
+		expect(await isUserActive("tech-x", "technician")).toBe(false);
+		expect(await isUserActive("tech-x", "technician")).toBe(false);
+		expect(fake.technician.findUnique).toHaveBeenCalledTimes(1);
+		fake.dispatcher.findUnique.mockResolvedValueOnce(null);
+		expect(await isUserActive("gone", "dispatcher")).toBe(false);
+	});
+
+	it("falls back to active when the lookup fails and nothing is cached", async () => {
+		const { isUserActive } = await import("../../services/userActiveCache.js");
+		fake.dispatcher.findUnique.mockRejectedValueOnce(new Error("db down"));
+		expect(await isUserActive("never-seen", "dispatcher")).toBe(true);
 	});
 });

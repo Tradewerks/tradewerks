@@ -2,6 +2,8 @@
 import type { ZodError } from "zod";
 import { CreateVehicleSchema, type CreateVehicleInput } from "../../types/vehicles";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
+import AddressForm from "../ui/AddressForm";
+import type { GeocodeResult } from "../../types/location";
 
 interface CreateVehicleProps {
 	isModalOpen: boolean;
@@ -28,7 +30,9 @@ export default function CreateVehicle({
 	const [color, setColor] = useState("");
 	const [status, setStatus] = useState<"active" | "inactive">("active");
 	const [notes, setNotes] = useState("");
+	const [odometer, setOdometer] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
+	const [geoData, setGeoData] = useState<GeocodeResult>();
 	const [errors, setErrors] = useState<ZodError | null>(null);
 
 	const resetForm = useCallback(() => {
@@ -41,7 +45,9 @@ export default function CreateVehicle({
 		setColor("");
 		setStatus("active");
 		setNotes("");
+		setOdometer("");
 		setErrors(null);
+		setGeoData(undefined);
 	}, []);
 
 	useEffect(() => {
@@ -66,6 +72,11 @@ export default function CreateVehicle({
 		);
 	};
 
+	const handleChangeAddress = (result: GeocodeResult) => {
+		setGeoData({ address: result.address, coords: result.coords });
+	};
+	const handleClearAddress = () => setGeoData(undefined);
+
 	const invokeCreate = async () => {
 		if (isLoading) return;
 		const input: CreateVehicleInput = {
@@ -78,6 +89,9 @@ export default function CreateVehicle({
 			color: color.trim() || null,
 			status,
 			notes: notes.trim() || null,
+			current_odometer_mi: odometer ? parseInt(odometer, 10) : null,
+			stored_at: geoData?.address,
+			stored_at_coords: geoData?.coords,
 		};
 		const result = CreateVehicleSchema.safeParse(input);
 		if (!result.success) {
@@ -161,7 +175,7 @@ export default function CreateVehicle({
 				</div>
 
 				{/* Year + Make + Model */}
-				<div className="grid grid-cols-3 gap-2">
+				<div className="grid grid-cols-4 gap-2">
 					<div>
 						<label className={LABEL}>Year</label>
 						<input
@@ -191,6 +205,17 @@ export default function CreateVehicle({
 							placeholder="Transit"
 							value={model}
 							onChange={(e) => setModel(e.target.value)}
+							className={INPUT}
+							disabled={isLoading}
+						/>
+					</div>
+					<div>
+						<label className={LABEL}>Miles</label>
+						<input
+							type="number"
+							placeholder="50000"
+							value={odometer}
+							onChange={(e) => setOdometer(e.target.value)}
 							className={INPUT}
 							disabled={isLoading}
 						/>
@@ -230,6 +255,23 @@ export default function CreateVehicle({
 					</div>
 				</div>
 
+				<div
+					className="relative min-w-0"
+					style={{ zIndex: 50 }}
+				>
+					<label className={LABEL}>Stored at</label>
+					<AddressForm
+						mode={geoData ? "edit" : "create"}
+						originalValue={
+							geoData?.address || ""
+						}
+						originalCoords={geoData?.coords}
+						dropdownPosition="above"
+						handleChange={handleChangeAddress}
+						handleClear={handleClearAddress}
+					/>
+				</div>
+
 				{/* Notes */}
 				<div>
 					<label className={LABEL}>Notes</label>
@@ -253,8 +295,10 @@ export default function CreateVehicle({
 			color,
 			status,
 			notes,
+			odometer,
 			isLoading,
 			errors,
+			geoData,
 		]
 	);
 

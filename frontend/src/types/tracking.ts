@@ -144,9 +144,17 @@ export interface ReceiveInventoryInput {
 	 * weighted-average paid cost, never treated as 0.
 	 */
 	unit_cost?: number;
+	/** Adopts an existing vendor. */
+	supplier_id?: string;
+	/** Creates the vendor on write, when `supplier_id` wasn't given. */
+	supplier_name?: string;
 	batch?: {
 		batch_number: string;
 		expires_at?: string | null;
+		/**
+		 * @deprecated Legacy free text. Send supplier_id/supplier_name instead —
+		 * the server writes the resolved vendor onto the lot itself.
+		 */
 		supplier?: string;
 		/** Lot-level cost; falls back to the receive-level unit_cost. */
 		unit_cost?: number;
@@ -221,8 +229,8 @@ export interface VehicleStockResponse {
 // lock its toggles and explain WHY before the user saves. Mirrors
 // getTrackingEligibility's return shape.
 //
-// `qty_on_vehicles` is the field the form previously had no access to: it read
-// InventoryItem.quantity alone, which is blind to stock sitting on a van.
+// `qty_on_vehicles` gives the form visibility InventoryItem.quantity alone
+// does not have: quantity alone is blind to stock sitting on a van.
 // `history_*` are lifetime row counts — nonzero on an item whose tracking was
 // turned off, which is what drives the archived view on the Tracking tab.
 // ============================================================================

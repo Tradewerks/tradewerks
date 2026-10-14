@@ -3,7 +3,7 @@ import { ResponsiveGridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout, ResponsiveLayouts } from "react-grid-layout";
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
-import './DashboardPage.css';
+import '../../components/ui/GridLayout.css';
 import { useNavigate } from "react-router-dom";
 import {
 	AlertCircle,
@@ -14,6 +14,7 @@ import {
 	RotateCcw,
 	StretchHorizontal,
 	Shuffle,
+	Trash,
 	Unlock,
 } from "lucide-react";
 import Card from "../../components/ui/Card";
@@ -21,32 +22,66 @@ import WeekStrip from "../../components/ui/schedule/WeekStrip";
 import { useAuthStore } from "../../auth/authStore";
 import { FALLBACK_TIMEZONE } from "../../util/util";
 import { useAllJobsQuery } from "../../hooks/useJobs";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useAllRequestsQuery } from "../../hooks/useRequests";
 import { useAllQuotesQuery } from "../../hooks/useQuotes";
 import { useAllRecurringPlansQuery } from "../../hooks/useRecurringPlans";
 import type { JobVisit } from "../../types/jobs";
+import type { TechnicianStatus } from "../../types/technicians";
 import CreateRecurringPlan from "../../components/recurringPlans/CreateRecurringPlan";
 import LowStockWidget from "../../components/widgets/LowStockWidget";
+import OpenDisputesWidget from "../../components/widgets/OpenDisputesWidget";
+import MaintenanceRemindersWidget from "../../components/widgets/MaintenanceRemindersWidget";
+import { canSeeWidget } from "../../lib/permissionGates";
 import ActivityFeed from "../../components/dashboard/ActivityFeed";
 import { useDispatcherByIdQuery, useUpdateDispatcherMutation } from "../../hooks/useDispatchers";
-import { DEFAULT_RESPONSIVE_LAYOUTS, BREAKPOINTS, WIDGET_CATALOG, resolveConstraints, getActiveCols, fitDashboard, randomizeLayout } from "../../lib/DashboardConfig";
+import { DEFAULT_RESPONSIVE_LAYOUTS, WIDGET_CATALOG } from "../../lib/DashboardConfig";
+import { BREAKPOINTS, resolveConstraints, getActiveCols, fitLayout, randomizeLayout, removeWidget } from "../../lib/gridLayoutEngine";
 import { QUICKBOOKS_ENABLED } from "../../config/features";
 import AddWidgetModal from "../../components/widgets/AddWidgetModal";
-import OverviewWidget from "../../components/widgets/OverviewWidget";
-import RevenueYTDWidget from "../../components/widgets/RevenueYTDWidget";
-import UnscheduledRevenueWidget from "../../components/widgets/UnscheduledRevenueWidget";
-import RevenueByJobTypeWidget from "../../components/widgets/RevenueByJobTypeWidget";
-import LeadsBySourceWidget from "../../components/widgets/LeadsBySourceWidget";
-import QuotePipelineWidget from "../../components/widgets/QuotePipelineWidget";
-import ArrivalPerformanceWidget from "../../components/widgets/ArrivalPerformanceWidget";
-import MileageSummaryWidget from "../../components/widgets/MileageSummaryWidget";
-import AgedReceivablesColumnWidget from "../../components/widgets/AgedReceivablesColumnWidget";
-import JobBacklogWidget from "../../components/widgets/JobBacklogWidget";
 import MapWidget from "../../components/widgets/MapWidget";
+import LiveArrivalsWidget from "../../components/widgets/LiveArrivalsWidget";
 import QBWidget from "../../components/widgets/QBWidget";
-import PageReportWidget from "../../components/widgets/PageReportWidget";
+import {
+	OverviewWidget,
+	RevenueYTDWidget,
+	UnscheduledRevenueWidget,
+	RevenueByJobTypeWidget,
+	LeadsBySourceWidget,
+	QuotePipelineWidget,
+	ArrivalPerformanceWidget,
+	MileageSummaryWidget,
+	AgedReceivablesColumnWidget,
+	JobBacklogWidget,
+	PageReportWidget,
+} from "../../components/widgets/reports";
 
+
+/* Status underline on the technician badge. Eight statuses collapse to three
+   signals because the panel is scanned, not read — and the corner pip already
+   carries the per-tech "on a live visit" bit, so per-state granularity here
+   would be a second encoding of the same thing.
+
+   Typed against TechnicianStatus so adding an enum member fails the build. The
+   previous map keyed off `string` and listed "Busy", which has never been a
+   status — it silently never matched, and the five real working statuses
+   (Working/OnSite/EnRoute/WrappingUp/Paused) all fell through to a neutral
+   fallback that resolved to the same grey as the badge fill. */
+const TECH_STATUS_BORDER: Record<TechnicianStatus, string> = {
+	Available:  "border-success",
+	Working:    "border-warning",
+	OnSite:     "border-warning",
+	EnRoute:    "border-warning",
+	WrappingUp: "border-warning",
+	HeadingBack: "border-warning",
+	Paused:     "border-reviewing",
+	Break:      "border-reviewing",
+	// Filtered out of this widget, but a square with no signal stays a square.
+	Offline:    "border-transparent",
+};
+
+const getStatusBorderClass = (status: TechnicianStatus) =>
+	TECH_STATUS_BORDER[status] ?? "border-transparent";
 
 export default function DashboardPage() {
 	const navigate = useNavigate();
@@ -80,7 +115,7 @@ export default function DashboardPage() {
 	const { data: requests = [] } = useAllRequestsQuery();
 	const { data: quotes = [] } = useAllQuotesQuery();
 	const { data: recurringPlans = [] } = useAllRecurringPlansQuery();
-	const { data: allTechnicians = [], error: techsError } = useAllTechniciansQuery();
+	const { data: allTechnicians = [], error: techsError } = useActiveTechniciansQuery();
 
 	const saveDashboardLayout = async (id: string, newLayout: Layout) => {
 		try {
@@ -159,18 +194,12 @@ export default function DashboardPage() {
 					nextVisit: upcomingVisits[0] || null,
 				};
 			})
-			.sort((a) => (a.currentVisit ? -1 : 1));
+			// Techs on a live visit first. Takes both operands — the previous
+			// comparator ignored `b`, which is not a valid comparator and left
+			// the order up to the engine's sort implementation.
+			.sort((a, b) => Number(!!b.currentVisit) - Number(!!a.currentVisit));
 	}, [allTechnicians, jobs]);
 
-	const getStatusBorderClass = (status: string) => {
-		const classes: Record<string, string> = {
-			Available: "border-success",
-			Busy: "border-warning",
-			Break: "border-primary",
-			Offline: "border-border-strong",
-		};
-		return classes[status] || "border-border-strong";
-	};
 
 	const formatNextVisit = (visit: JobVisit): string => {
 		const d = new Date(visit.scheduled_start_at);
@@ -259,21 +288,26 @@ export default function DashboardPage() {
 		prevColsRef.current = activeCols.lg;
 		setDisplayLayouts(prev => ({
 			...prev,
-			lg: activeCols.lg === 12 ? (layouts.lg ?? []) : fitDashboard(layouts.lg ?? [], activeCols.lg),
+			lg: activeCols.lg === 12 ? (layouts.lg ?? []) : fitLayout(WIDGET_CATALOG, layouts.lg ?? [], activeCols.lg),
 		}));
 	}, [activeCols.lg, layouts.lg]);
 
 	const constrainedLayouts = useMemo(() => {
 		const w = settledWidth || displayWidth;
 		const cols = activeCols.lg;
-		const display = (displayLayouts.lg ?? []).map(item => {
-			const c = resolveConstraints(item.i, w);
+		// The grid must never be handed a layout entry it has no child for.
+		const display = (displayLayouts.lg ?? []).filter(item => canSeeWidget(user, WIDGET_CATALOG[item.i])).map(item => {
+			const c = resolveConstraints(WIDGET_CATALOG, item.i, w);
 			
 			const minW = Math.min(c.minW ?? 1, cols);
 			const maxW = Math.min(c.maxW ?? cols, cols);
 			
 			const baseH = Math.min(Math.max(item.h, c.minH ?? 1), c.maxH ?? 20);
-			const h = baseH + (autoExtra[item.i] ?? 0);
+			// autoGrowMaxH is opt-in: widgets that don't declare it keep the
+			// existing unbounded fit-to-content behaviour.
+			const growCeiling = WIDGET_CATALOG[item.i]?.autoGrowMaxH;
+			const grown = baseH + (autoExtra[item.i] ?? 0);
+			const h = growCeiling ? Math.min(grown, growCeiling) : grown;
 			return {
 				...item,
 				...c,
@@ -285,14 +319,23 @@ export default function DashboardPage() {
 			};
 		});
 		return { lg: display, md: display, sm: display };
-	}, [displayLayouts.lg, settledWidth, displayWidth, activeCols.lg, autoExtra]);
+	}, [displayLayouts.lg, settledWidth, displayWidth, activeCols.lg, autoExtra, user]);
 
 	useEffect(() => { setAutoExtra({}); }, [layouts.lg, settledWidth, isEditMode]);
 
+	/* DORMANT — measured 2026-09-17, not yet fixed.
+	   `widgetRefs` is never populated, so this pass has nothing to measure and
+	   no widget has ever auto-grown. react-grid-layout 2.2.3 renders children
+	   via `cloneElement(child, { ref: elementRef, ... })`, and that ref replaces
+	   the callback ref set on the mapped wrapper below — so the map stays empty.
+	   Reviving it means merging rgl's ref with ours, which would switch
+	   fit-to-content on for every widget at once and resize dashboards people
+	   have already arranged. Deliberately left off pending that decision;
+	   widgets must size themselves without relying on this. */
 	useEffect(() => {
 		if (isEditMode || displayWidth <= 0) return;
-		const ROW_PX = 45 + 16; 
-		const SAFETY_MAX_EXTRA = 40; 
+		const ROW_PX = 45 + 16;
+		const SAFETY_MAX_EXTRA = 40;
 
 		const measure = () => {
 			setAutoExtra(prev => {
@@ -303,7 +346,20 @@ export default function DashboardPage() {
 					if (!body) return;
 					const overflow = body.scrollHeight - body.clientHeight;
 					const prevExtra = prev[id] ?? 0;
-					const wantExtra = Math.min(prevExtra + Math.ceil(overflow / ROW_PX), SAFETY_MAX_EXTRA);
+					// A widget that has hit its autoGrowMaxH will keep overflowing
+					// for good — it scrolls from here. Cap the extra it can ask for
+					// so it stops requesting rows the render pass will discard,
+					// instead of climbing to SAFETY_MAX_EXTRA one render at a time.
+					const growCeiling = WIDGET_CATALOG[id]?.autoGrowMaxH;
+					const placed = (displayLayouts.lg ?? []).find(l => l.i === id);
+					const ceilingExtra = growCeiling && placed
+						? Math.max(0, growCeiling - placed.h)
+						: SAFETY_MAX_EXTRA;
+					const wantExtra = Math.min(
+						prevExtra + Math.ceil(overflow / ROW_PX),
+						ceilingExtra,
+						SAFETY_MAX_EXTRA
+					);
 					if (overflow > 2 && wantExtra !== prevExtra) {
 						next[id] = wantExtra;
 						changed = true;
@@ -393,6 +449,8 @@ export default function DashboardPage() {
 			case "activity-feed": return <ActivityFeed />;
 			case "technicians": return <Card
 							className="h-full"
+							scrollable
+							quietScroll
 							title="Technicians"
 							headerAction={
 								<div className="flex items-center gap-2">
@@ -414,52 +472,70 @@ export default function DashboardPage() {
 									<p className="text-xs text-error-text">Failed to load technicians</p>
 								</div>
 							) : activeTechnicians.length === 0 ? (
-								<div className="py-8 text-center">
-									<div className="inline-flex items-center justify-center w-12 h-12 bg-surface rounded-full mb-3">
-										<Clock size={20} className="text-text-muted" />
-									</div>
+								/* Laid out on one row. Stacked, this state was ~144px tall against the
+								   ~78px a minH:3 card leaves for content, so "nobody is online" — the
+								   emptiest the panel ever gets — was the case that scrolled hardest. */
+								<div className="flex items-center gap-2 py-2">
+									<span className="inline-flex items-center justify-center w-9 h-9 shrink-0 rounded-lg bg-surface">
+										<Clock size={16} className="text-text-muted" />
+									</span>
 									<p className="text-sm text-text-tertiary">No technicians online</p>
 								</div>
 							) : (
-								<div className="flex-1 overflow-y-auto min-h-0 ">
-									<div
-										className="grid gap-1.5"
-										style={{ gridTemplateColumns: "repeat(auto-fill, minmax(4.5rem, 1fr))" }}
-									>
-										{activeTechnicians.map((tech) => (
-											<div
-												key={tech.id}
-												onClick={() => navigate(`/dispatch/technicians/${tech.id}`)}
-												className="flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-surface/40 cursor-pointer transition-colors group w-full max-w-[5rem] mx-auto"
-											>
-												<div className={`relative w-9 h-9 rounded-lg bg-gradient-to-br from-border to-border-strong flex items-center justify-center text-white font-semibold text-sm border-b-[3px] ${getStatusBorderClass(tech.status)}`}>
-													{tech.name.charAt(0).toUpperCase()}
-													{tech.currentVisit && (
-														<span className="absolute -top-1 -right-1 w-2 h-2 bg-warning rounded-full border border-base" />
+								/* Tile height budget, measured: a minH:3 card leaves 108px of body,
+								   and a tile is 74px (p-1.5 12 + avatar 36 + gap-0.5 2 + name ~12.5
+								   + sub ~11.25). One row fits with 34px to spare, which is the case
+								   that was scrolling for no reason.
+
+								   Past one row this scrolls, and should: the dashboard's
+								   fit-to-content pass is dormant (see the note on that effect), so a
+								   widget cannot grow itself. The Card body is the scroller rather
+								   than a nested div so the scrollbar is the card's own, and
+								   quietScroll keeps the thumb hidden until hover. */
+								<div
+									className="grid gap-1.5 content-start"
+									style={{ gridTemplateColumns: "repeat(auto-fill, minmax(4.5rem, 1fr))" }}
+								>
+									{activeTechnicians.map((tech) => (
+										<div
+											key={tech.id}
+											onClick={() => navigate(`/dispatch/technicians/${tech.id}`)}
+											className="flex flex-col items-center gap-0.5 p-1.5 rounded-lg hover:bg-surface/40 cursor-pointer transition-colors group w-full max-w-[5rem] mx-auto"
+										>
+											{/* pt-[3px] offsets the 3px bottom border, which eats its width
+											    from the content box and otherwise sits the initial 1.5px
+											    above true centre — a top-heaviness that read as the square
+											    being slightly rectangular even once the border was visible. */}
+											<div className={`relative w-9 h-9 rounded-lg bg-avatar-bg flex items-center justify-center pt-[3px] text-avatar-fg font-semibold text-sm border-b-[3px] ${getStatusBorderClass(tech.status)}`}>
+												{tech.name.charAt(0).toUpperCase()}
+												{tech.currentVisit && (
+													<span className="absolute -top-1 -right-1 w-2 h-2 bg-warning rounded-full border border-base" />
+												)}
+											</div>
+											<div className="w-full text-center">
+												<div className="text-[10px] font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors leading-tight">
+													{tech.name.split(" ")[0]}
+												</div>
+												<div className="text-[9px] leading-tight truncate">
+													{tech.currentVisit ? (
+														<span className="text-warning-text">On Job</span>
+													) : tech.nextVisit ? (
+														<span className="text-text-muted">{formatNextVisit(tech.nextVisit)}</span>
+													) : (
+														<span className="invisible">·</span>
 													)}
 												</div>
-												<div className="w-full text-center">
-													<div className="text-[10px] font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors leading-tight">
-														{tech.name.split(" ")[0]}
-													</div>
-													<div className="text-[9px] leading-tight mt-0.5 truncate">
-														{tech.currentVisit ? (
-															<span className="text-warning-text">On Job</span>
-														) : tech.nextVisit ? (
-															<span className="text-text-muted">{formatNextVisit(tech.nextVisit)}</span>
-														) : (
-															<span className="invisible">·</span>
-														)}
-													</div>
-												</div>
 											</div>
-										))}
-									</div>
+										</div>
+									))}
 								</div>
 							)}
 						</Card>;
 			case "low-stock": 			   return <LowStockWidget className="h-full" />;
+			case "open-disputes":          return <OpenDisputesWidget />;
+			case "maintenance-reminders":  return <MaintenanceRemindersWidget />;
 			case "map":  				   return <MapWidget />;
+			case "arrivals":               return <LiveArrivalsWidget />;
 			case "quickbooks": 			   return QUICKBOOKS_ENABLED ? <QBWidget /> : null;
 			case "report-overview":        return <OverviewWidget />;
 			case "report-revenue-ytd":     return <RevenueYTDWidget />;
@@ -571,7 +647,7 @@ export default function DashboardPage() {
 							</button>
 							<button
 								onClick={() => {
-									const fitted = fitDashboard(layouts.lg ?? [], activeCols.lg);
+									const fitted = fitLayout(WIDGET_CATALOG, layouts.lg ?? [], activeCols.lg);
 									if (activeCols.lg === 12) handleLayoutSave(fitted);
 									else setDisplayLayouts(prev => ({ ...prev, lg: fitted }));
 								}}
@@ -582,7 +658,7 @@ export default function DashboardPage() {
 								Fit
 							</button>
 							<button
-								onClick={() => setLayouts(prev => ({ ...prev, lg: randomizeLayout(prev.lg ?? []) }))}
+								onClick={() => setLayouts(prev => ({ ...prev, lg: randomizeLayout(WIDGET_CATALOG, prev.lg ?? []) }))}
 								title="Scramble widgets into a messy layout (for testing Fit)"
 								className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface hover:bg-surface-raised border border-border text-xs font-medium text-text-secondary hover:text-text-primary transition-colors"
 							>
@@ -594,7 +670,7 @@ export default function DashboardPage() {
 				</div>
 
 				{/* Dashboard grid */}
-				<div className={`dashboard-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} px-2 py-2`} style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}>
+				<div className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} px-2 py-2`} style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}>
 					{displayWidth > 0 && dispatcher && <ResponsiveGridLayout
 						key={`grid-${dispatcher.id}-${dispatcher.dashboard_layout ? 'saved' : 'default'}`}
 						width={displayWidth}
@@ -630,15 +706,15 @@ export default function DashboardPage() {
 						}}
 
 					>
-						{Object.keys(WIDGET_CATALOG).filter(id => layouts.lg?.some(l => l.i === id)).map((id) => (
+						{Object.keys(WIDGET_CATALOG).filter(id => layouts.lg?.some(l => l.i === id) && canSeeWidget(user, WIDGET_CATALOG[id])).map((id) => (
 							<div key={id}
 								ref={(el) => {
 									if (el) widgetRefs.current.set(id, el);
 									else widgetRefs.current.delete(id);
 								}}
 								className={isEditMode ?
-									"cursor-grab active:cursor-grabbing h-full hover:border hover:border-border-strong hover:border-primary hover:rounded-xl hover:shadow hover:shadow-primary" 
-									: "h-full"}
+									"group relative cursor-grab active:cursor-grabbing h-full hover:border hover:border-border-strong hover:border-primary hover:rounded-xl hover:shadow hover:shadow-primary"
+									: "relative h-full"}
 								onClickCapture={(e) => {
 									if (justDraggedRef.current) {
 										e.preventDefault();
@@ -647,6 +723,16 @@ export default function DashboardPage() {
 									}
 								}}
 							>
+								{isEditMode && (
+									<button
+										title="Remove widget"
+										className="absolute top-2 right-2 z-10 w-7 h-7 rounded-md bg-error text-on-primary flex items-center justify-center shadow-md ring-2 ring-base opacity-0 group-hover:opacity-100 hover:bg-error-strong hover:cursor-pointer transition-opacity"
+										onClick={() => handleLayoutSave(removeWidget(id, layouts.lg ?? []))}
+									>
+										<Trash size={12}/>
+									</button>
+								)}
+
 								{renderWidget(id)}
 							</div>
 						))}
@@ -662,6 +748,7 @@ export default function DashboardPage() {
 				isOpen={isAddWidgetModalOpen}
 				onClose={() => setIsAddWidgetModalOpen(false)}
 				currentLayout={layouts.lg ?? []}
+				catalog={WIDGET_CATALOG}
 				onLayoutChange={(newLayout) => {
 					setLayouts(prev => ({ ...prev, lg: newLayout }));
 					if (dispatcher?.id) saveDashboardLayout(dispatcher.id, newLayout);

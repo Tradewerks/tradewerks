@@ -15,6 +15,7 @@ export interface RegisterOrganizationInput {
     admin_name: string;
     admin_email: string;
     admin_password: string;
+    business_type: string;
     admin_phone?: string;
     org_phone?: string;
     org_address?: string;

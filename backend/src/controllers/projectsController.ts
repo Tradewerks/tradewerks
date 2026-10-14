@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { fillCoords } from "../lib/geocode.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import {
     createProjectSchema,
@@ -8,6 +9,7 @@ import {
 } from "../lib/validate/projects.js";
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
+import { parentBreadcrumb } from "./logsController.js";
 import { log } from "../services/appLogger.js";
 import { generateProjectNumber } from "../db.js";
 
@@ -119,6 +121,7 @@ export const getProjectsByClientId = async (orgId: string, clientId: string) => 
 export const insertProject = async (req: Request, context?: UserContext) => {
     try {
         const parsed = createProjectSchema.parse(req.body);
+        await fillCoords(parsed, false);
         const orgId = req.user!.organization_id as string;
         const sdb = getScopedDb(orgId);
 
@@ -207,6 +210,7 @@ export const updateProject = async (req: Request, context?: UserContext) => {
     try {
         const id = req.params.id as string;
         const parsed = updateProjectSchema.parse(req.body);
+        await fillCoords(parsed, false);
         const orgId = req.user!.organization_id as string;
         const sdb = getScopedDb(orgId);
 
@@ -379,8 +383,8 @@ export const attachJob = async (req: Request, context?: UserContext) => {
             await logActivity({
                 event_type: "project.job_attached",
                 action: "attached",
-                entity_type: "project",
-                entity_id: projectId,
+                entity_type: "job",
+                entity_id: jobId,
                 organization_id: orgId,
                 actor_type: context?.techId
                     ? "technician"
@@ -391,6 +395,7 @@ export const attachJob = async (req: Request, context?: UserContext) => {
                 changes: {
                     project_id: { old: job.project_id, new: projectId },
                     _job_number: { old: null, new: job.job_number },
+                    ...parentBreadcrumb("project", projectId),
                 },
                 ip_address: context?.ipAddress,
                 user_agent: context?.userAgent,
@@ -429,8 +434,8 @@ export const detachJob = async (req: Request, context?: UserContext) => {
             await logActivity({
                 event_type: "project.job_detached",
                 action: "detached",
-                entity_type: "project",
-                entity_id: projectId,
+                entity_type: "job",
+                entity_id: jobId,
                 organization_id: orgId,
                 actor_type: context?.techId
                     ? "technician"
@@ -441,6 +446,7 @@ export const detachJob = async (req: Request, context?: UserContext) => {
                 changes: {
                     project_id: { old: job.project_id, new: null },
                     _job_number: { old: null, new: job.job_number },
+                    ...parentBreadcrumb("project", projectId),
                 },
                 ip_address: context?.ipAddress,
                 user_agent: context?.userAgent,

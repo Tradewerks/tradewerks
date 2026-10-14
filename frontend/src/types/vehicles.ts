@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { InventoryItem } from "./inventory";
+import type { Coordinates } from "./location";
 
 export const CreateVehicleSchema = z.object({
 	name: z.string().min(1, "Name is required"),
@@ -11,6 +12,15 @@ export const CreateVehicleSchema = z.object({
 	color: z.string().max(50).nullable().optional(),
 	status: z.enum(["active", "inactive"]).optional(),
 	notes: z.string().max(1000).nullable().optional(),
+	current_odometer_mi: z.number().int().min(0).nullable().optional(),
+	stored_at: z.string().nullable().optional(),
+	stored_at_coords: z
+		.object({
+			lat: z.number(),
+			lon: z.number(),
+		})
+		.nullable()
+		.optional(),
 });
 
 export interface Vehicle {
@@ -25,10 +35,14 @@ export interface Vehicle {
 	status: "active" | "inactive";
 	color: string | null;
 	notes: string | null;
+	current_odometer_mi: number | null;
+	odometer_updated_at: string | null;
 	created_at: string;
 	updated_at: string;
 	stock_items?: VehicleStockItem[];
 	current_technicians?: { id: string; name: string }[];
+	stored_at: string;
+	stored_at_coords: Coordinates;
 }
 
 export interface VehicleStockItem {
@@ -63,6 +77,9 @@ export interface CreateVehicleInput {
 	color?: string | null;
 	status?: "active" | "inactive";
 	notes?: string | null;
+	current_odometer_mi?: number | null;
+	stored_at?: string | null;
+	stored_at_coords?: Coordinates | null;
 }
 
 export type UpdateVehicleInput = Partial<CreateVehicleInput>;
@@ -102,6 +119,19 @@ export interface VehicleStockConflict {
 	conflicts: VehicleStockConflictItem[];
 }
 
+export interface VehicleMaintenanceAlert {
+	reminderId: string;
+	vehicleId: string;
+	vehicleName: string;
+	category: MaintenanceCategory;
+	title: string;
+	status: "overdue" | "duesoon";
+	dueAt: string | null;
+	dueOdometerMi: number | null;
+	currentOdometerMi: number | null;
+	acknowledged: boolean;
+}
+
 export interface VehicleUsageTodayItem {
 	itemName: string;
 	qtyUsed: number;
@@ -122,13 +152,6 @@ export interface AddPartsUsedInput {
 	technician_id: string;
 	serial_unit_ids?: string[];
 	batch_id?: string;
-}
-
-export interface SupplierPartUsedInput {
-	technician_id: string;
-	qty_used: number;
-	inventory_item_id?: string;
-	new_item?: { name: string; cost: number };
 }
 
 export interface RestockRequestInput {
@@ -235,14 +258,16 @@ export interface TomorrowRequirementVisit {
 	items: TomorrowRequirementItem[];
 }
 
-export type VehicleAdjustmentType = "warehouse_exchange" | "field_loss" | "transfer" | "audit" | "supplier_purchase";
+// `supplier_purchase` is gone: buying externally is a field purchase now, which
+// carries a grant, a limit, a receipt and a review. Historical adjustments of
+// that type still exist and are labelled by StockHistorySection's own map.
+export type VehicleAdjustmentType = "warehouse_exchange" | "field_loss" | "transfer" | "audit";
 
 export const ADJUSTMENT_TYPE_LABELS: Record<VehicleAdjustmentType, string> = {
 	warehouse_exchange: "Warehouse Exchange",
 	field_loss:         "Field Loss",
 	transfer:           "Transfer In",
 	audit:              "Audit Correction",
-	supplier_purchase:  "Supplier Purchase",
 };
 
 export interface AdjustStockInput {
@@ -251,15 +276,14 @@ export interface AdjustStockInput {
 	lines: Array<{
 		stock_item_id?: string;
 		inventory_item_id?: string;
-		new_item?: { name: string; cost: number };
 		qty_after: number;
 		// Serial/batch tracking (F-T4) — which of these apply depends on the
-		// resolved item's is_serialized/is_batch_tracked flags and the adjustment
-		// type; see AdjustStockModal's tracking step for how they're populated.
+		// resolved item's is_serialized/is_batch_tracked flags; see
+		// AdjustStockModal's tracking step for how they're populated. Every
+		// remaining type moves stock the org already owns, so these only ever
+		// pick existing units and lots.
 		serial_unit_ids?: string[];
-		new_serials?: string[];
 		batch_picks?: Array<{ batch_id: string; qty: number }>;
-		new_batch?: { batch_number: string; expires_at?: string | null; supplier?: string };
 	}>;
 }
 
@@ -347,5 +371,115 @@ export interface FillResultLine {
 export interface BulkRestockResult {
 	created: RestockRequest[];
 	skipped: { stock_item_id: string; reason: string }[];
+}
+
+export type MaintenanceCategory =
+	| "oil_change"
+	| "fluids"
+	| "tire"
+	| "brake"
+	| "inspection"
+	| "registration"
+	| "repair"
+	| "other";
+
+export const MAINTENANCE_CATEGORY_LABELS: Record<MaintenanceCategory, string> = {
+	oil_change:   "Oil change",
+	fluids:       "Fluids",
+	tire:         "Tire",
+	brake:        "Brake",
+	inspection:   "Inspection",
+	registration: "Registration",
+	repair:       "Repair",
+	other:        "Other",
+};
+
+export interface VehicleMaintenanceRecord {
+	id: string;
+	vehicle_id: string;
+	organization_id: string;
+	category: MaintenanceCategory;
+	performed_at: string;
+	odometer_mi: number | null;
+	interval_miles: number | null;
+	interval_months: number | null;
+	cost: number | null;
+	vendor_name: string | null;
+	notes: string | null;
+	performed_by: DualActor["dispatcher"];
+	performed_by_tech: DualActor["technician"];
+	source_purchase_line_id: string | null;
+	source_field_purchase_line_id: string | null;
+	source_purchase_id: string | null;
+	source_field_purchase_id: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export const CreateMaintenanceRecordSchema = z.object({
+	category: z.enum(["oil_change", "fluids", "tire", "brake", "inspection", "registration", "repair", "other"]),
+	performed_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "performed_at must be YYYY-MM-DD"),
+	odometer_mi: z.number().int().min(0).optional().nullable(),
+	interval_miles: z.number().int().min(0).optional().nullable(),
+	interval_months: z.number().int().min(0).optional().nullable(),
+	cost: z.number().min(0).optional().nullable(),
+	vendor_name: z.string().optional().nullable(),
+	notes: z.string().optional().nullable(),
+	source_purchase_line_id: z.string().optional().nullable(),
+	source_field_purchase_line_id: z.string().optional().nullable(),
+	reminder_ids: z.array(z.string()).optional(),
+});
+export const UpdateMaintenanceRecordSchema = CreateMaintenanceRecordSchema.omit({ reminder_ids: true }).partial();
+
+export type CreateMaintenanceRecordInput = z.infer<typeof CreateMaintenanceRecordSchema>;
+export type UpdateMaintenanceRecordInput = Partial<CreateMaintenanceRecordInput>;
+
+export interface VehicleMaintenanceReminder {
+	id: string;
+	vehicle_id: string;
+	organization_id: string;
+	category: MaintenanceCategory;
+	title: string;
+	description: string | null;
+	interval_miles: number | null;
+	interval_unit: IntervalUnit | null;
+	interval_count: number | null;
+	repeats: boolean;
+	due_at: string | null;
+	due_odometer_mi: number | null;
+	completed_at: string | null;
+	acknowledged_at: string | null;
+	baseline_at: string | null;
+	baseline_odometer_mi: number | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export type IntervalUnit = "days" | "weeks" | "months" | "years";
+
+export const CreateMaintenanceReminderSchema = z.object({
+	category: z.enum(["oil_change", "fluids", "tire", "brake", "inspection", "registration", "repair", "other"]),
+	title: z.string().min(1),
+	description: z.string().optional().nullable(),
+	interval_miles: z.number().int().min(0).optional().nullable(),
+	interval_unit: z.enum(["days", "weeks", "months", "years"]).optional().nullable(),
+	interval_count: z.number().int().min(1).optional().nullable(),
+	repeats: z.boolean().optional().default(true),
+	due_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "due_at must be YYYY-MM-DD").optional().nullable(),
+	due_odometer_mi: z.number().int().min(0).optional().nullable(),
+});
+export const UpdateMaintenanceReminderSchema = CreateMaintenanceReminderSchema.partial();
+
+export type CreateMaintenanceReminderInput = z.infer<typeof CreateMaintenanceReminderSchema>;
+export type UpdateMaintenanceReminderInput = Partial<CreateMaintenanceReminderInput>;
+
+export interface MaintenanceSourceLine {
+	id: string;
+	source: "purchase" | "field_purchase";
+	description: string;
+	vendor_name: string | null;
+	cost: number;
+	date: string | null;
+	reference: string | null;
 }
 

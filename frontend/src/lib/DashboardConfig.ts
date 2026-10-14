@@ -1,41 +1,42 @@
-import type { Layout, LayoutItem, ResponsiveLayouts } from "react-grid-layout";
+import type { Layout, ResponsiveLayouts } from "react-grid-layout";
 import { QUICKBOOKS_ENABLED } from "../config/features";
-
-export const BREAKPOINTS = { lg: 0, md: 0, sm: 0 };
-export const COLS       = { lg: 12,   md: 12,   sm: 12 };
-
-// Fewer columns at smaller widths so each column is physically wider
-export function getActiveCols(containerWidth: number): number {
-    if (containerWidth < 500) return 4;
-    if (containerWidth < 800) return 8;
-    return 12;
-}
+import type { ResponsiveConstraints, WidgetCatalog } from "./gridLayoutEngine";
+import { DISPUTE_VIEW_PERMISSIONS } from "./permissionGates";
 
 export const DEFAULT_LAYOUT: Layout = [
-    { i: "week-strip",    x: 0, y: 0,  w: 12, h: 5  },
+    { i: "week-strip",    x: 0, y: 0,  w: 8,  h: 5  },
+    { i: "arrivals",      x: 8, y: 0,  w: 4,  h: 7  },
+    { i: "technicians",   x: 8, y: 7,  w: 4,  h: 3  },
+    { i: "open-disputes", x: 8, y: 10, w: 4,  h: 4  },
     { i: "pipeline",      x: 0, y: 5,  w: 3,  h: 6  },
+    { i: "activity-feed", x: 3, y: 5,  w: 5,  h: 8  },
+    { i: "maintenance-reminders", x: 8, y: 14, w: 4, h: 6 },
     { i: "low-stock",     x: 0, y: 11, w: 3,  h: 2  },
-    { i: "activity-feed", x: 3, y: 5,  w: 5,  h: 12 },
-    { i: "technicians",   x: 8, y: 5,  w: 4,  h: 3  },
 ];
 
 
 // 8-col two-column layout
 const DEFAULT_MD_LAYOUT: Layout = [
     { i: "week-strip",    x: 0, y: 0,  w: 8, h: 5  },
-    { i: "pipeline",      x: 0, y: 5,  w: 4, h: 6  },
-    { i: "technicians",   x: 4, y: 5,  w: 4, h: 3  },
-    { i: "low-stock",     x: 4, y: 8,  w: 4, h: 2  },
-    { i: "activity-feed", x: 0, y: 11, w: 8, h: 12 },
+    { i: "arrivals",      x: 0, y: 5,  w: 8, h: 7  },
+    { i: "pipeline",      x: 0, y: 12, w: 4, h: 6  },
+    { i: "technicians",   x: 4, y: 12, w: 4, h: 3  },
+    { i: "open-disputes", x: 4, y: 15, w: 4, h: 6  },
+    { i: "maintenance-reminders", x: 0, y: 18, w: 4, h: 6 },
+    { i: "low-stock",     x: 4, y: 21, w: 4, h: 2  },
+    { i: "activity-feed", x: 0, y: 24, w: 8, h: 12 },
 ];
 
 // 4-col single-column stacked layout
 const DEFAULT_SM_LAYOUT: Layout = [
     { i: "week-strip",    x: 0, y: 0,  w: 4, h: 4  },
-    { i: "pipeline",      x: 0, y: 4,  w: 4, h: 6  },
-    { i: "activity-feed", x: 0, y: 10, w: 4, h: 12 },
-    { i: "technicians",   x: 0, y: 22, w: 4, h: 3  },
-    { i: "low-stock",     x: 0, y: 25, w: 4, h: 2  },
+    { i: "arrivals",      x: 0, y: 4,  w: 4, h: 7  },
+    { i: "pipeline",      x: 0, y: 11, w: 4, h: 6  },
+    { i: "open-disputes", x: 0, y: 17, w: 4, h: 6  },
+    { i: "maintenance-reminders", x: 0, y: 23, w: 4, h: 6 },
+    { i: "activity-feed", x: 0, y: 29, w: 4, h: 12 },
+    { i: "technicians",   x: 0, y: 41, w: 4, h: 3  },
+    { i: "low-stock",     x: 0, y: 44, w: 4, h: 2  },
 ];
 
 export const DEFAULT_RESPONSIVE_LAYOUTS: ResponsiveLayouts = {
@@ -45,38 +46,7 @@ export const DEFAULT_RESPONSIVE_LAYOUTS: ResponsiveLayouts = {
 };
 
 // All widgets that exist, with their default size and label
-export interface WidgetConstraints {
-    minW?: number;
-    minH?: number;
-    maxW?: number;
-    maxH?: number;
-}
-
-// Resolved at render time based on containerWidth. Entries sorted largest breakpoint first.
-// The first entry whose `atWidth` is <= containerWidth wins. Omit to use flat min/max values.
-export type ResponsiveConstraints = Array<{ atWidth: number } & WidgetConstraints>;
-
-export function resolveConstraints(
-    id: string,
-    containerWidth: number
-): WidgetConstraints {
-    const w = WIDGET_CATALOG[id];
-    if (!w) return {};
-    const responsive = w.responsiveConstraints;
-    if (responsive) {
-        const match = [...responsive]
-            .sort((a, b) => b.atWidth - a.atWidth)
-            .find(r => containerWidth <= r.atWidth);
-        if (match) {
-            const { atWidth: _, ...constraints } = match;
-            // merge: flat values are the base, responsive overrides on top
-            return { minW: w.minW, minH: w.minH, maxW: w.maxW, maxH: w.maxH, ...constraints };
-        }
-    }
-    return { minW: w.minW, minH: w.minH, maxW: w.maxW, maxH: w.maxH };
-}
-
-export const WIDGET_CATALOG: Record<string, {
+export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
     label: string;
     defaultW: number;
     defaultH: number;
@@ -84,11 +54,17 @@ export const WIDGET_CATALOG: Record<string, {
     minH?: number;
     maxW?: number;
     maxH?: number;
+    /* Row ceiling for the auto-grow pass, which ignores `maxH` — that bounds
+       dragging only. Needed on widgets whose content scales with the org, or a
+       big roster grows the card until it pushes the widgets below it off-screen.
+       Omit for no ceiling. Inert today: auto-grow is dormant, see DashboardPage. */
+    autoGrowMaxH?: number;
     responsiveConstraints?: ResponsiveConstraints;
     requiredPermission?: string;
+    requiredAnyPermission?: readonly string[];
 }> = {
     "week-strip":           {   label: "Week Schedule",
-                                defaultW: 12, defaultH: 5,  minW: 6, minH: 4, maxH: 5, maxW: 12,
+                                defaultW: 12, defaultH: 5,  minW: 6, minH: 4, maxH: 8, maxW: 12,
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
                                 ]
@@ -106,7 +82,11 @@ export const WIDGET_CATALOG: Record<string, {
                                 ]
                             },
     "technicians":          {   label: "Technicians",
-                                defaultW: 4,  defaultH: 4,  minW: 3, minH: 3, maxH: 6, maxW: 6,
+                                /* defaultH was 4 while every preset layout ships h:3, so adding
+                                   this widget from the picker gave a taller card than a fresh
+                                   dashboard did. */
+                                defaultW: 4,  defaultH: 3,  minW: 3, minH: 3, maxH: 6, maxW: 6,
+                                autoGrowMaxH: 6,
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
                                 ]
@@ -117,9 +97,30 @@ export const WIDGET_CATALOG: Record<string, {
                                     { atWidth: 800, minW: 2, maxW: 12, maxH: 6 },
                                 ]
                             },
+    "open-disputes":        {   label: "Open Disputes",
+                                defaultW: 4,  defaultH: 6,  minW: 3, minH: 4, maxH: 10, maxW: 6,
+                                requiredAnyPermission: DISPUTE_VIEW_PERMISSIONS,
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
+                            },
+    "maintenance-reminders":{   label: "Maintenance Reminders",
+                                defaultW: 4,  defaultH: 6,  minW: 3, minH: 4, maxH: 10, maxW: 6,
+                                requiredAnyPermission: ["view_vehicles", "manage_vehicles"],
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
+                            },
     "quickbooks":           {   label: "QuickBooks",
                                 defaultW: 3,  defaultH: 1,  minW: 3, minH: 1, maxW: 6,  maxH: 2,
                                 requiredPermission: "manage_organization",
+                            },
+    "arrivals":             {   label: "Arrivals",
+                                defaultW: 4,  defaultH: 7,  minW: 3, minH: 4, maxH: 14, maxW: 8,
+                                requiredPermission: "view_jobs",
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
                             },
     "map":                  {   label: "Live Map",
                                 defaultW: 6,  defaultH: 8,  minW: 4, minH: 5, maxW: 12, maxH: 20,
@@ -211,304 +212,4 @@ export const WIDGET_CATALOG: Record<string, {
 // be added and any previously-placed instance stops rendering (see config/features).
 if (!QUICKBOOKS_ENABLED) {
     delete WIDGET_CATALOG.quickbooks;
-}
-
-export function addWidget(id: string, currentLayout: Layout, cols = 12): Layout {
-    if (currentLayout.find(l => l.i === id)) return currentLayout;
-    const def = WIDGET_CATALOG[id];
-    const w = Math.min(def.defaultW, cols);
-    const h = def.defaultH;
-    const maxY = Math.max(0, ...currentLayout.map(l => l.y + l.h));
-
-    // Build a set of all occupied cells so we can check free rectangles cheaply
-    const occupied = new Set<string>();
-    for (const item of currentLayout) {
-        for (let iy = item.y; iy < item.y + item.h; iy++)
-            for (let ix = item.x; ix < item.x + item.w; ix++)
-                occupied.add(`${ix},${iy}`);
-    }
-
-    const isFree = (cx: number, cy: number): boolean => {
-        for (let iy = cy; iy < cy + h; iy++)
-            for (let ix = cx; ix < cx + w; ix++)
-                if (occupied.has(`${ix},${iy}`)) return false;
-        return true;
-    };
-
-    // Score = rows of the candidate rect that overlap the existing grid area.
-    // A widget fully inside the current bounds scores h (best). Placing below scores 0 (fallback).
-    // Scan top-to-bottom, left-to-right so the first max-score hit wins on ties.
-    let bestX = 0, bestY = maxY, bestScore = -1;
-    for (let cy = 0; cy <= maxY; cy++) {
-        for (let cx = 0; cx <= cols - w; cx++) {
-            if (!isFree(cx, cy)) continue;
-            const score = Math.min(cy + h, maxY) - cy;
-            if (score > bestScore) {
-                bestScore = score;
-                bestX = cx;
-                bestY = cy;
-            }
-        }
-    }
-
-    return [...currentLayout, {
-        i: id,
-        x: bestX,
-        y: bestY,
-        w,
-        h,
-        minW: def.minW,
-        minH: def.minH,
-    }];
-}
-
-export function removeWidget(id: string, currentLayout: Layout): Layout {
-    return currentLayout.filter(l => l.i !== id);
-}
-
-// for testing fit 
-export function randomizeLayout(currentLayout: Layout, cols = COLS.lg): Layout {
-    const rnd = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
-    const items = [...currentLayout];
-    for (let i = items.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [items[i], items[j]] = [items[j], items[i]];
-    }
-    let y = 0;
-    return items.map(item => {
-        const cat = WIDGET_CATALOG[item.i];
-        const maxW = Math.min(cat?.maxW ?? cols, cols);
-        const minW = Math.min(cat?.minW ?? 2, maxW);
-        const maxH = cat?.maxH ?? 8;
-        const minH = Math.min(cat?.minH ?? 2, maxH);
-        const w = rnd(minW, maxW);
-        const h = rnd(minH, maxH);
-        const placed = { ...item, x: rnd(0, cols - w), y, w, h };
-        y += h + rnd(0, 2);
-        return placed;
-    });
-}
-
-interface Move{
-    widget: LayoutItem,
-    x: number,
-    y: number,
-    direction: "right" | "left" | "up" | "down" | "reposition" | "expand-left" | "expand-up",
-    newW: number,
-    newH: number
-}
-
-function canResize(layout: Layout, widget: LayoutItem, x: number, y: number, w: number, h: number, cols: number): boolean {
-    if (x < 0 || y < 0 || x + w > cols) return false;
-    for (const other of layout) {
-        if (other.i === widget.i) continue;
-        if (other.x < x + w && other.x + other.w > x && other.y < y + h && other.y + other.h > y) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-function growRightMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const maxW = Math.min(WIDGET_CATALOG[widget.i]?.maxW ?? widget.w, cols);
-
-    for(let newW = widget.w + 1; newW <= maxW; newW++) {
-        if (canResize(layout, widget, widget.x, widget.y, newW, widget.h, cols)) {
-            moves.push({ widget, x: widget.x, y: widget.y, direction: "right", newW, newH: widget.h });
-        }
-    }
-
-    return moves;
-}
-function growLeftMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const minW = WIDGET_CATALOG[widget.i]?.minW ?? widget.w;
-
-    for(let newW = widget.w - 1; newW >= minW; newW--) {
-        if (canResize(layout, widget, widget.x, widget.y, newW, widget.h, cols)) {
-            moves.push({ widget, x: widget.x, y: widget.y, direction: "left", newW, newH: widget.h });
-        }
-    }
-
-    return moves;
-}
-function growUpMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const minH = WIDGET_CATALOG[widget.i]?.minH ?? widget.h;
-
-    for(let newH = widget.h - 1; newH >= minH; newH--) {
-        if (canResize(layout, widget, widget.x, widget.y, widget.w, newH, cols)) {
-            moves.push({ widget, x: widget.x, y: widget.y, direction: "up", newW: widget.w, newH });
-        }
-    }
-
-    return moves;
-}
-function growDownMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const maxH = WIDGET_CATALOG[widget.i]?.maxH ?? widget.h;
-
-    for(let newH = widget.h + 1; newH <= maxH; newH++) {
-        if (canResize(layout, widget, widget.x, widget.y, widget.w, newH, cols)) {
-            moves.push({ widget, x: widget.x, y: widget.y, direction: "down", newW: widget.w, newH });
-        }
-    }
-
-    return moves;
-}
-
-function expandLeftMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const maxW = Math.min(WIDGET_CATALOG[widget.i]?.maxW ?? widget.w, cols);
-    for (let k = 1; widget.x - k >= 0 && widget.w + k <= maxW; k++) {
-        const x = widget.x - k, newW = widget.w + k;
-        if (canResize(layout, widget, x, widget.y, newW, widget.h, cols)) {
-            moves.push({ widget, x, y: widget.y, direction: "expand-left", newW, newH: widget.h });
-        }
-    }
-    return moves;
-}
-function expandUpMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const maxH = WIDGET_CATALOG[widget.i]?.maxH ?? widget.h;
-    for (let k = 1; widget.y - k >= 0 && widget.h + k <= maxH; k++) {
-        const y = widget.y - k, newH = widget.h + k;
-        if (canResize(layout, widget, widget.x, y, widget.w, newH, cols)) {
-            moves.push({ widget, x: widget.x, y, direction: "expand-up", newW: widget.w, newH });
-        }
-    }
-    return moves;
-}
-
-function repositionMoves(layout: Layout, widget: LayoutItem, cols: number): Move[] {
-    const moves = [] as Move[];
-    const boundingHeight = Math.max(0, ...layout.map(w => w.y + w.h));
-    for (let y = 0; y <= boundingHeight - widget.h; y++) {
-        for (let x = 0; x <= cols - widget.w; x++) {
-            if (x === widget.x && y === widget.y) continue;
-            if (canResize(layout, widget, x, y, widget.w, widget.h, cols)) {
-                moves.push({ widget, x, y, direction: "reposition", newW: widget.w, newH: widget.h });
-            }
-        }
-    }
-    return moves;
-}
-
-function gernerateMoves(layout: Layout, cols: number) : Move[] {
-    const moves = [] as Move[];
-
-    for (const widget of layout) {
-        moves.push(...growRightMoves(layout, widget, cols));
-        moves.push(...growLeftMoves(layout, widget, cols));
-        moves.push(...growDownMoves(layout, widget, cols));
-        moves.push(...growUpMoves(layout, widget, cols));
-        moves.push(...expandLeftMoves(layout, widget, cols));
-        moves.push(...expandUpMoves(layout, widget, cols));
-        moves.push(...repositionMoves(layout, widget, cols));
-    }
-
-    return moves;
-}
-
-function canMoveUp(layout: Layout, widget: LayoutItem): boolean {
-    if (widget.y <= 0) return false;
-    const targetY = widget.y - 1;
-    return !layout.some(other => other.i !== widget.i && other.x < widget.x + widget.w && other.x + other.w > widget.x && other.y < targetY + widget.h && other.y + other.h > targetY);
-}
-
-
-function compactLayout(layout: Layout): Layout {
-    layout = layout.map(widget => ({ ...widget }));
-    let moved = true;
-    while (moved) {
-        moved = false;
-        layout = [...layout].sort((a, b) => a.y - b.y || a.x - b.x);
-        for (const widget of layout) {
-            while (widget.y > 0 && canMoveUp(layout, widget)) { widget.y--; moved = true; }
-        }
-    }
-    return layout;
-}
-
-function evaluate(layout: Layout, cols: number): number {
-    let occupiedArea = 0;
-    layout.forEach(widget => occupiedArea += widget.w * widget.h);
-    const boundingHeight = Math.max(...layout.map(widget => widget.y + widget.h));
-    const emptyArea = cols * boundingHeight - occupiedArea;
-
-    // Primary goal: fewest holes 
-    // Tiebreaker: prefer the shortest 
-    return -(emptyArea * 100000 + boundingHeight);
-}
-
-function applyMove(layout: Layout, move: Move): Layout {
-    return layout.map(widget => widget.i === move.widget.i ? { ...widget, x: move.x, y: move.y, w: move.newW, h: move.newH } : widget);
-}
-
-function layoutSignature(layout: Layout): string {
-    return [...layout]
-        .sort((a, b) => (a.i < b.i ? -1 : 1))
-        .map(w => `${w.i}:${w.x},${w.y},${w.w},${w.h}`)
-        .join("|");
-}
-
-function placeWithoutOverlap(layout: Layout, cols: number): Layout {
-    const placed: LayoutItem[] = [];
-    const fits = (x: number, y: number, w: number, h: number) =>
-        x + w <= cols &&
-        !placed.some(o => o.x < x + w && o.x + o.w > x && o.y < y + h && o.y + o.h > y);
-    const ordered = [...layout].sort((a, b) => a.y - b.y || a.x - b.x);
-    for (const widget of ordered) {
-        const w = Math.min(widget.w, cols);
-        const h = widget.h;
-        let done = false;
-        for (let y = 0; !done; y++) {
-            for (let x = 0; x <= cols - w; x++) {
-                if (fits(x, y, w, h)) { placed.push({ ...widget, x, y, w }); done = true; break; }
-            }
-        }
-    }
-    return placed;
-}
-
-export function fitDashboard(layout: Layout, cols = COLS.lg, beamWidth = 6, patience = 2, maxRounds = 60): Layout {
-    const TOP_TIER_CAP = 24; 
-    const start = compactLayout(placeWithoutOverlap(layout, cols));
-    let beam: Layout[] = [start];
-    let best = start;
-    let bestScore = evaluate(start, cols);
-    let sinceImprovement = 0;
-
-    for (let round = 0; round < maxRounds && sinceImprovement <= patience; round++) {
-        const seen = new Set<string>([layoutSignature(start)]);
-        const scored: { layout: Layout; score: number }[] = [];
-        for (const state of beam) {
-            for (const move of gernerateMoves(state, cols)) {
-                const next = compactLayout(applyMove(state, move));
-                const sig = layoutSignature(next);
-                if (seen.has(sig)) continue;
-                seen.add(sig);
-                scored.push({ layout: next, score: evaluate(next, cols) });
-            }
-        }
-        if (scored.length === 0) break;
-        scored.sort((a, b) => b.score - a.score);
-
-        const topScore = scored[0].score;
-        let tierSize = 0;
-        while (tierSize < scored.length && scored[tierSize].score === topScore) tierSize++;
-        const keep = Math.max(beamWidth, Math.min(tierSize, TOP_TIER_CAP));
-        beam = scored.slice(0, keep).map(s => s.layout);
-
-        if (topScore > bestScore) {
-            best = scored[0].layout;
-            bestScore = topScore;
-            sinceImprovement = 0;
-        } else {
-            sinceImprovement++;
-        }
-    }
-    return best;
 }

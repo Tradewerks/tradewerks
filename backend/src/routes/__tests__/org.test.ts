@@ -6,6 +6,9 @@ import type { Request, Response, NextFunction, Router } from "express";
 vi.mock("../../db.js", () => ({
 	db: {
 		organization: { findUnique: vi.fn(), update: vi.fn() },
+		plan: { findUnique: vi.fn(async () => ({ label: "Pro" })) },
+		org_entitlement: { findUnique: vi.fn(async () => null), updateMany: vi.fn() },
+		$executeRaw: vi.fn(),
 	},
 }));
 
@@ -21,10 +24,36 @@ vi.mock("../../lib/upload.js", () => ({
 	},
 }));
 
+vi.mock("../../services/entitlementService.js", () => ({
+	getEntitlements: vi.fn(async () => ({
+		planKey: "pro",
+		planVersion: 1,
+		trialActive: false,
+		modules: {},
+		limits: { ai_calls_month: 500 },
+	})),
+	previewDisable: vi.fn(),
+	setModuleChoices: vi.fn(),
+	isModuleOn: vi.fn(async () => true),
+	tierLabel: vi.fn(async () => "Pro"),
+}));
+const summary = vi.hoisted(() => ({ period_start: "2026-10-01", meters: {} }));
+vi.mock("../../lib/entitlements/quota.js", () => ({ getUsageSummary: vi.fn(async () => summary) }));
+
+vi.mock("../../services/logger.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../services/logger.js")>();
+	return { ...actual, logActivity: vi.fn() };
+});
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import orgRouter from "../org.js";
+import orgEntitlementsRouter from "../orgEntitlements.js";
+import { callRoute } from "./harness.js";
+import { getUsageSummary } from "../../lib/entitlements/quota.js";
 import { db } from "../../db.js";
+import { logActivity } from "../../services/logger.js";
+import { Prisma } from "../../../generated/prisma/client.js";
 
 const mockDb = vi.mocked(db, true);
 
@@ -51,6 +80,7 @@ function getHandlers(method: "get" | "patch", path: string): Array<
 function makeReq(overrides: Partial<Request> = {}): Request {
 	return {
 		user: { organization_id: "org-1", role: "admin", permissions: [] },
+		headers: {},
 		body: {},
 		...overrides,
 	} as unknown as Request;
@@ -117,6 +147,7 @@ const baseOrg = {
 describe("org routes — measurement_system", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
 	});
 
 	it("GET / returns measurement_system on the response", async () => {
@@ -172,5 +203,299 @@ describe("org routes — measurement_system", () => {
 				error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
 			}),
 		);
+	});
+});
+
+describe("org routes — field purchase second sign-off threshold", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
+	});
+
+	it("PATCH / stores a threshold and returns it as a Decimal string", async () => {
+		mockDb.organization.update.mockResolvedValue({
+			...baseOrg,
+			field_purchase_second_signoff_threshold: "500",
+		} as never);
+		const handlers = getHandlers("patch", "/");
+		const req = makeReq({ body: { field_purchase_second_signoff_threshold: 500 } });
+		const res = makeRes();
+		await runChain(handlers, req, res);
+
+		expect(mockDb.organization.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({
+					field_purchase_second_signoff_threshold: 500,
+				}),
+			}),
+		);
+		expect(res.json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				success: true,
+				data: expect.objectContaining({
+					field_purchase_second_signoff_threshold: "500",
+				}),
+			}),
+		);
+	});
+
+	// null is the off switch, so it has to survive the schema rather than be
+	// dropped the way an absent optional is.
+	it("PATCH / clears the threshold with an explicit null", async () => {
+		mockDb.organization.update.mockResolvedValue({
+			...baseOrg,
+			field_purchase_second_signoff_threshold: null,
+		} as never);
+		const handlers = getHandlers("patch", "/");
+		const req = makeReq({
+			body: { field_purchase_second_signoff_threshold: null },
+		});
+		const res = makeRes();
+		await runChain(handlers, req, res);
+
+		expect(mockDb.organization.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({
+					field_purchase_second_signoff_threshold: null,
+				}),
+			}),
+		);
+	});
+
+	it("PATCH / rejects a negative threshold", async () => {
+		const handlers = getHandlers("patch", "/");
+		const req = makeReq({
+			body: { field_purchase_second_signoff_threshold: -1 },
+		});
+		const res = makeRes();
+		await runChain(handlers, req, res);
+
+		expect(mockDb.organization.update).not.toHaveBeenCalled();
+		expect(res.status).toHaveBeenCalledWith(400);
+	});
+
+	it("PATCH / leaves the threshold untouched when the field is absent", async () => {
+		mockDb.organization.update.mockResolvedValue(baseOrg as never);
+		const handlers = getHandlers("patch", "/");
+		const req = makeReq({ body: { name: "Acme HVAC" } });
+		const res = makeRes();
+		await runChain(handlers, req, res);
+
+		const data = mockDb.organization.update.mock.calls[0][0].data as Record<
+			string,
+			unknown
+		>;
+		expect(data).not.toHaveProperty("field_purchase_second_signoff_threshold");
+	});
+});
+
+describe("org routes — settings audit log", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
+	});
+
+	it("logs one organization.settings_updated row with only the changed fields", async () => {
+		mockDb.organization.update.mockResolvedValue({
+			...baseOrg,
+			restock_mode: "dispatch_prepared",
+		} as never);
+		const req = makeReq({
+			user: { uid: "disp-1", organization_id: "org-1", role: "admin", permissions: [] },
+			body: { name: "Acme HVAC", restock_mode: "dispatch_prepared", measurement_system: "imperial" },
+		} as Partial<Request>);
+		await runChain(getHandlers("patch", "/"), req, makeRes());
+
+		expect(logActivity).toHaveBeenCalledTimes(1);
+		expect(logActivity).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event_type: "organization.settings_updated",
+				action: "updated",
+				entity_type: "organization",
+				entity_id: "org-1",
+				organization_id: "org-1",
+				actor_type: "dispatcher",
+				actor_id: "disp-1",
+				changes: { restock_mode: { old: "tech_self_serve", new: "dispatch_prepared" } },
+			}),
+		);
+	});
+
+	it("writes no log when the save changes nothing", async () => {
+		mockDb.organization.update.mockResolvedValue(baseOrg as never);
+		const req = makeReq({
+			body: { name: "Acme HVAC", restock_mode: "tech_self_serve", measurement_system: "imperial" },
+		});
+		await runChain(getHandlers("patch", "/"), req, makeRes());
+
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	// The stored Decimal and the body's number must compare equal, or every
+	// no-change save would log a phantom threshold change.
+	it("writes no log when the threshold is resent unchanged", async () => {
+		const stored = {
+			...baseOrg,
+			field_purchase_second_signoff_threshold: new Prisma.Decimal("500"),
+		};
+		mockDb.organization.findUnique.mockResolvedValue(stored as never);
+		mockDb.organization.update.mockResolvedValue(stored as never);
+		const req = makeReq({
+			body: {
+				name: "Acme HVAC",
+				restock_mode: "tech_self_serve",
+				measurement_system: "imperial",
+				field_purchase_second_signoff_threshold: 500,
+			},
+		});
+		await runChain(getHandlers("patch", "/"), req, makeRes());
+
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	it("answers 404 without updating when the org row is gone", async () => {
+		mockDb.organization.findUnique.mockResolvedValue(null as never);
+		const res = makeRes();
+		await runChain(getHandlers("patch", "/"), makeReq({ body: { name: "X" } }), res);
+
+		expect(res.status).toHaveBeenCalledWith(404);
+		expect(mockDb.organization.update).not.toHaveBeenCalled();
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+});
+
+describe("GET /org/entitlements usage (build plan 2)", () => {
+	it("includes usage for admins", async () => {
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
+		});
+		expect(r.body.data.usage).toEqual(summary);
+	});
+
+	it("is null for a user without manage_organization", async () => {
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "d", role: "dispatcher", organization_id: "org-1", permissions: ["view_jobs"] },
+		});
+		expect(r.body.data.usage).toBeNull();
+	});
+
+	it("still answers with module states when the usage summary fails", async () => {
+		vi.mocked(getUsageSummary).mockRejectedValueOnce(new Error("db down"));
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
+		});
+		expect(r.status).toBe(200);
+		expect(r.body.data.usage).toBeNull();
+		expect(r.body.data.limits).toEqual({ ai_calls_month: 500 });
+	});
+
+	it("GET / includes the tier label", async () => {
+		const r = await callRoute(orgEntitlementsRouter, "get", "/", {
+			user: { uid: "a", role: "admin", organization_id: "org-1", permissions: null },
+		});
+		expect(r.body.data.plan).toMatchObject({ key: "pro", label: "Pro" });
+	});
+});
+
+describe("org setup state (build plan 4)", () => {
+	const admin = { uid: "d-1", organization_id: "org-1", role: "admin", permissions: [] };
+	const plain = { uid: "d-2", organization_id: "org-1", role: "dispatcher", permissions: [] };
+	const get = (user: Record<string, unknown>) =>
+		callRoute(orgEntitlementsRouter, "get", "/", { user });
+	const post = (path: string, user: Record<string, unknown>) =>
+		callRoute(orgEntitlementsRouter, "post", path, { user });
+
+	it("GET includes template, review state and the active trial", async () => {
+		mockDb.org_entitlement.findUnique.mockResolvedValueOnce({
+			template_key: "plumbing",
+			modules_reviewed_at: null,
+			trial_ends_at: new Date(Date.now() + 86_400_000),
+			trial_plan_version: { plan: { label: "Enterprise" } },
+		} as never);
+		const r = await get(admin);
+		expect(r.body.data.setup).toEqual({
+			templateKey: "plumbing",
+			modulesReviewed: false,
+			trial: { tierLabel: "Enterprise", endsAt: expect.any(String) },
+		});
+	});
+
+	it("a setup read failure yields setup: null, not a failed payload", async () => {
+		mockDb.org_entitlement.findUnique.mockRejectedValueOnce(new Error("db down"));
+		const r = await get(admin);
+		expect(r.status).toBe(200);
+		expect(r.body.data.setup).toBeNull();
+	});
+
+	it("POST /modules-reviewed marks once with raw SQL", async () => {
+		mockDb.$executeRaw.mockResolvedValueOnce(1 as never);
+		const r = await post("/modules-reviewed", admin);
+		expect(r.status).toBe(200);
+		expect(mockDb.$executeRaw).toHaveBeenCalledTimes(1);
+		expect(mockDb.org_entitlement.updateMany).not.toHaveBeenCalled();
+	});
+
+	it("POST /modules-reviewed is refused without manage_organization", async () => {
+		const r = await post("/modules-reviewed", plain);
+		expect(r.status).toBe(403);
+	});
+});
+
+describe("org routes — restock_mode", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(baseOrg as never);
+	});
+
+	it("GET / returns restock_mode", async () => {
+		const res = makeRes();
+		await runChain(getHandlers("get", "/"), makeReq(), res);
+		expect(res.json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ restock_mode: "tech_self_serve" }),
+			}),
+		);
+	});
+
+	it("PATCH / accepts dispatch_prepared", async () => {
+		mockDb.organization.update.mockResolvedValue({
+			...baseOrg,
+			restock_mode: "dispatch_prepared",
+		} as never);
+		const res = makeRes();
+		await runChain(
+			getHandlers("patch", "/"),
+			makeReq({ body: { restock_mode: "dispatch_prepared" } }),
+			res,
+		);
+		expect(mockDb.organization.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ restock_mode: "dispatch_prepared" }),
+			}),
+		);
+	});
+
+	it("PATCH / rejects an unknown restock_mode", async () => {
+		const res = makeRes();
+		await runChain(
+			getHandlers("patch", "/"),
+			makeReq({ body: { restock_mode: "warehouse_only" } }),
+			res,
+		);
+		expect(mockDb.organization.update).not.toHaveBeenCalled();
+		expect(res.status).toHaveBeenCalledWith(400);
+	});
+
+	it("PATCH / requires manage_organization", () => {
+		const guard = getHandlers("patch", "/")[0];
+		const res = makeRes();
+		const next = vi.fn();
+		guard(
+			makeReq({ user: { organization_id: "org-1", role: "dispatcher", permissions: [] } } as never),
+			res,
+			next as never,
+		);
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(next).not.toHaveBeenCalled();
 	});
 });

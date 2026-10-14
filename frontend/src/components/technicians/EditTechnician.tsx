@@ -21,6 +21,7 @@ const STATUS_ENTRIES = (
 		<option value="OnSite">On Site</option>
 		<option value="Paused">Paused</option>
 		<option value="WrappingUp">Wrapping Up</option>
+		<option value="HeadingBack">Heading Back</option>
 		<option value="Break">Break</option>
 	</>
 );

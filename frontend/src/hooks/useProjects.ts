@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { getClientProjects } from "../api/clients";
-import type { CreateProjectInput, UpdateProjectInput } from "../types/project";
+import type { CreateProjectInput, UpdateProjectInput, ProjectNote, CreateProjectNoteInput, UpdateProjectNoteInput } from "../types/project";
 import {
     getProjects,
     getProjectById,
@@ -8,8 +9,15 @@ import {
     updateProject,
     attachJobToProject,
     detachJobFromProject,
-    deleteProject
+    deleteProject,
+    getProjectNotes,
+    createProjectNote,
+    updateProjectNote,
+    deleteProjectNote,
+    uploadProjectNotePhoto,
 } from "../api/project";
+
+const useQuery = moduleQuery("projects");
 
 // Queries
 
@@ -92,3 +100,66 @@ export function useDeleteProjectMutation(projectId: string) {
         }
     });
 }
+
+// ============================================
+// PROJECT NOTE QUERIES
+// ============================================
+
+export const useProjectNotesQuery = (projectId: string): UseQueryResult<ProjectNote[], Error> => {
+    return useQuery({
+        queryKey: ["project", projectId, "notes"],
+        queryFn: () => getProjectNotes(projectId),
+        enabled: !!projectId,
+    });
+};
+
+// ============================================
+// PROJECT NOTE MUTATIONS
+// ============================================
+
+export const useCreateProjectNoteMutation = (): UseMutationResult<
+    ProjectNote, Error, { projectId: string; data: CreateProjectNoteInput }
+> => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ projectId, data }) => createProjectNote(projectId, data),
+        onSuccess: async (_, variables) => {
+            await queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+            await queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, "notes"] });
+            await queryClient.invalidateQueries({ queryKey: ["changes"] });
+        },
+    });
+};
+
+export const useUpdateProjectNoteMutation = (): UseMutationResult<
+    ProjectNote, Error, { projectId: string; noteId: string; data: UpdateProjectNoteInput }
+> => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ projectId, noteId, data }) => updateProjectNote(projectId, noteId, data),
+        onSuccess: async (_, variables) => {
+            await queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+            await queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, "notes"] });
+            await queryClient.invalidateQueries({ queryKey: ["changes"] });
+        },
+    });
+};
+
+export const useDeleteProjectNoteMutation = (): UseMutationResult<
+    { message: string }, Error, { projectId: string; noteId: string }
+> => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ projectId, noteId }) => deleteProjectNote(projectId, noteId),
+        onSuccess: async (_, variables) => {
+            await queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+            await queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, "notes"] });
+            await queryClient.invalidateQueries({ queryKey: ["changes"] });
+        },
+    });
+};
+
+export const useUploadProjectNotePhotoMutation = (): UseMutationResult<
+    { url: string; raw_url: string }, Error, { projectId: string; file: File }
+> =>
+    useMutation({ mutationFn: ({ projectId, file }) => uploadProjectNotePhoto(projectId, file) });

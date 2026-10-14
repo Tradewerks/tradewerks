@@ -163,6 +163,7 @@ export interface QuotePipelineResponse {
 	draft: QuotePipelineBucket;
 	sent: QuotePipelineBucket;
 	viewed: QuotePipelineBucket;
+	disputed: QuotePipelineBucket;
 }
 
 // ============================================================================
@@ -216,6 +217,9 @@ export interface TimesheetReportEntry {
 	grossHours: number;
 	breakHours: number;
 	payableHours: number;
+	visitHours: number;
+	driveHours: number;
+	visitCount: number;
 }
 
 // ============================================================================
@@ -229,7 +233,7 @@ export interface TimesheetReportEntry {
 export type ReorderSeverity = 'critical' | 'warning' | 'healthy' | 'unknown';
 
 // Calculated over the last REORDER_FORECAST_WINDOW_DAYS days.
-export interface ReorderForecastRow {
+export interface ReorderForecastRow extends VendorSuggestion {
 	itemId: string;
 	itemName: string;
 	sku: string | null;
@@ -264,6 +268,29 @@ export interface ReorderForecastRow {
 	severity: ReorderSeverity;
 }
 
+/**
+ * Who to buy an item from, attached to any forecast row. Declared once and
+ * extended by both forecast shapes so the org-wide report and the item detail
+ * page can't drift apart on what "preferred vendor" means.
+ *
+ * Every field is null when the item has no vendor on file — the forecast still
+ * says what to buy, it just can't say where.
+ */
+export interface VendorSuggestion {
+	preferredSupplierId: string | null;
+	preferredSupplierName: string | null;
+	/** The vendor's own part number — what you actually order by. */
+	vendorSku: string | null;
+	preferredUnitPrice: number | null;
+	/** A negotiated rate and a one-off counter price deserve different confidence. */
+	priceSource: "contract" | "observed" | "none";
+	/** Whether someone CHOSE this vendor, or we fell back to whoever sold it last. */
+	vendorSource: "preferred" | "recent" | "none";
+	/** Units to get back to the reorder point. Null when no threshold is set. */
+	shortfallQty: number | null;
+	estimatedShortfallCost: number | null;
+}
+
 // The forecast window is FIXED server-side (reportRegistry.ts's "reorder-forecast"
 // entry defaults lookbackDays to 90 and this report sends no override). Stated in
 // one place so the report labels the same window ReorderHealthCard does.
@@ -291,7 +318,7 @@ export interface InventoryReportRow {
 	qtyUsed: number | null;
 	qtyUsedBasis: UnitBasis;
 	stockStatus: StockStatus;
-	location: string;
+	location: string | null;
 	tags: { label: string }[];
 	altIds: string[];
 	updatedAt: string;
@@ -310,6 +337,11 @@ export interface AgedReceivablesBucket {
 export interface AgedReceivablesResponse {
 	data: AgedReceivablesBucket[];
 	totalOutstanding: number;
+	// Disputed invoices are still owed, so they stay in totalOutstanding, but
+	// are excluded from the ageing buckets above and reported here instead.
+	disputedTotal: number;
+	// Their invoice count, likewise excluded from every bucket's `count`.
+	disputedCount: number;
 }
 
 export interface AgedReceivablesClientRow {
@@ -319,6 +351,9 @@ export interface AgedReceivablesClientRow {
 	bucket31_60: number;
 	bucket61_90: number;
 	bucket90plus: number;
+	// Disputed balance for this client — already included in `total`, but
+	// broken out on its own since it's excluded from the ageing buckets.
+	disputed: number;
 	total: number;
 	count: number;
 }
@@ -491,6 +526,15 @@ export interface FieldAddedRevenueSummary {
 	truncated?: boolean;
 	// per-(tech, month) field-added revenue for the trend chart's local tech filter
 	trend: FieldAddedRevenueTrend;
+}
+
+// ============================================================================
+// COGS trend 
+// ============================================================================
+
+export interface CogsTrendPoint {
+	month: string;
+	totalCogs: number;
 }
 
 // ============================================================================

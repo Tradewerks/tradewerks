@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { ClipboardList } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "../../components/ui/PageHeader";
+import PageControls from "../../components/ui/PageControls";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import AdaptableTable from "../../components/AdaptableTable";
 import JobBacklogChart from "../../components/reports/JobBacklogChart";
 import {
@@ -75,6 +77,8 @@ export default function JobBacklogPage() {
 					<JobBacklogChart data={data} />
 				</div>
 			)}
+
+			<PageControls className="mb-4" right={<RefreshReportsButton />} />
 
 			<div className="shadow-sm border border-border-subtle p-3 bg-base rounded-lg overflow-x-auto text-left">
 				{showEmpty ? (

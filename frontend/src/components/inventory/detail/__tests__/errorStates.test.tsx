@@ -12,10 +12,11 @@ import ReorderHealthMini from "../ReorderHealthMini";
 import StockPlacementCard from "../StockPlacementCard";
 import type { InventoryItem } from "../../../../types/inventory";
 
-// Every detail card used to ignore `isError` and fall through to its empty
-// state, so a failed read rendered as "No history yet" / a row of zeros — a
-// false claim about data that is still there (08-frontend-inventory F9). Each
-// card now says the read failed and offers a retry wired to the query's refetch.
+// Every detail card must route a query error into a failed-read state instead
+// of falling through to its empty state, because "No history yet" / a row of
+// zeros is a false claim about data that is still there — not proof there's
+// nothing to show. Each card says the read failed and offers a retry wired to
+// the query's refetch.
 
 vi.mock("recharts", async () => {
 	const actual = await vi.importActual<typeof import("recharts")>("recharts");

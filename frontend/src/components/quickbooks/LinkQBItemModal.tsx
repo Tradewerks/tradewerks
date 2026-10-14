@@ -6,6 +6,7 @@ import {
 	useQBMappedItemsQuery,
 } from "../../hooks/useQuickbooks";
 import FullPopup from "../ui/FullPopup";
+import { TemplateSearch, type TemplateSearchResult } from "../ui/forms/TemplateSearch";
 
 interface LinkQBItemModalProps {
 	item: InventoryItem;
@@ -14,10 +15,11 @@ interface LinkQBItemModalProps {
 }
 
 export default function LinkQBItemModal({ item, onClose, isOpen }: LinkQBItemModalProps) {
-	const { data: qbItems } = useQBItemsQuery(isOpen);
+	const { data: qbItems, isLoading: itemsLoading } = useQBItemsQuery(isOpen);
 	const { data: mappedItems } = useQBMappedItemsQuery(isOpen);
 	const linkMutation = useLinkQBItemMutation();
-	const [selectedQbId, setSelectedQbId] = useState("");
+	const [selectedQbIds, setSelectedQbIds] = useState<string[]>([]);
+	const selectedQbId = selectedQbIds[0];
 
 	// Only offer QB items that aren't already linked to some inventory item
 	const availableQbItems = useMemo(() => {
@@ -29,12 +31,27 @@ export default function LinkQBItemModal({ item, onClose, isOpen }: LinkQBItemMod
 		if (!selectedQbId) return;
 		try {
 			await linkMutation.mutateAsync({ inventory_item_id: item.id, qb_item_id: selectedQbId });
-			setSelectedQbId("");
+			setSelectedQbIds([]);
 			onClose();
 		} catch (error) {
 			console.error("Error linking QuickBooks item:", error);
 		}
 	};
+
+	const templateResults = useMemo((): TemplateSearchResult[] => {
+		return availableQbItems.map((i) => ({
+			id: i.Id,
+			title: i.Name,
+			subtitle: i.Sku,
+			detail: i.Description
+				? i.Description.slice(0, 80) + (i.Description.length > 80 ? "…" : "")
+				: undefined,
+		}));
+	}, [availableQbItems]);
+
+	const handleToggleSelect = (id: string) => {
+		setSelectedQbIds([id]);
+	}
 
 	const content = (
 		<div className="flex flex-col px-5 py-5">
@@ -44,23 +61,19 @@ export default function LinkQBItemModal({ item, onClose, isOpen }: LinkQBItemMod
 				QuickBooks item so synced invoice lines use the right product.
 			</p>
 
-			<label className="mb-1 block text-xs font-medium uppercase tracking-wider text-text-tertiary">
-				QuickBooks Item
-			</label>
-			<select
-				value={selectedQbId}
-				onChange={(e) => setSelectedQbId(e.target.value)}
-				className="w-full rounded-md border border-border bg-surface-raised px-2.5 py-2 text-sm text-text-primary transition-colors focus:border-primary focus:outline-none"
-			>
-				<option value="">Select a QuickBooks item…</option>
-				{availableQbItems.map((q) => (
-					<option key={q.Id} value={q.Id}>
-						{q.Name}
-						{q.Sku ? ` (${q.Sku})` : ""}
-						{q.UnitPrice != null ? ` — $${q.UnitPrice}` : ""}
-					</option>
-				))}
-			</select>
+			<TemplateSearch
+				heading="Link QB Item"
+				headingHint={`Select an item to link to`}
+				placeholder="Search for items by number, name, or client..."
+				results={templateResults}
+				clients={[]}
+				isLoading={itemsLoading}
+				selectedIds={selectedQbIds}
+				onToggleSelect={handleToggleSelect}
+				onSelect={() => {}}
+				onClose={onClose}
+				emptyHint={"No items available to link to"}
+			/>
 
 			{linkMutation.isError && (
 				<p className="mt-2 text-xs text-error-text">

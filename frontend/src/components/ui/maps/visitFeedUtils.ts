@@ -18,6 +18,7 @@ const TECH_CHANGE_COLORS: Record<TechStatusChangeType, string> = {
 	break_start:         "var(--color-visit-paused)",
 	break_end:           "var(--color-visit-completed)",
 	wrapping_up_cleared: "var(--color-visit-completed)",
+	heading_back:        "var(--color-visit-driving)",
 };
 
 const TECH_CHANGE_TEXT: Record<TechStatusChangeType, (name: string) => { primary: string; sub: string }> = {
@@ -26,6 +27,7 @@ const TECH_CHANGE_TEXT: Record<TechStatusChangeType, (name: string) => { primary
 	break_start:         (n) => ({ primary: `${n} on break`,            sub: "" }),
 	break_end:           (n) => ({ primary: `${n} returned from break`, sub: "" }),
 	wrapping_up_cleared: (n) => ({ primary: `${n} is available`,        sub: "" }),
+	heading_back:        (n) => ({ primary: `${n} is heading back`,     sub: "" }),
 };
 
 export function timeAgo(isoString: string): string {

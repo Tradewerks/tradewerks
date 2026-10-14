@@ -1,8 +1,10 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { ZodError } from "zod";
 import { Prisma } from "../../generated/prisma/client.js";
 import type { tech_visit_status, technician_status, pause_reason_type } from "../../generated/prisma/client.js";
 import { db } from "../db.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { recordDrive } from "../lib/visitDrive.js";
 import {
 	createJobVisitSchema,
 	updateJobVisitSchema,
@@ -14,11 +16,19 @@ import { log } from "../services/appLogger.js";
 import { deductInventoryForVisit } from "./inventoryController.js";
 import { onVisitScheduled, onVisitRescheduled, onVisitCancelled } from "../services/followupTriggers.js";
 import { fireLowStockAlerts } from "../services/lowStockAlerts.js";
-import { createNotification } from "./notificationsController.js";
-import { getSocket } from "../services/socketService.js";
+import { createNotification, notifyDispatchers } from "./notificationsController.js";
+import { emitToOrg } from "../services/socketService.js";
 import { buildRecurringPlanInvoicePayload } from "../services/invoiceGenerator.js";
 import { createInvoiceRecord } from "../services/invoiceService.js";
 import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
+import {
+	findForeignInventoryItemIds,
+	dispositionFields,
+	plannedLineItemFields,
+	foreignDispositionVehicleIds,
+	unknownInventoryItemsMessage,
+} from "../lib/inventory.js";
+import { applyOdometerIncrement, fetchRouteDistanceMiles } from "../lib/vehicleMileage.js";
 
 const VALID_PAUSE_REASONS = new Set<string>(["AwaitingMaterials", "EquipmentIssue", "Break", "Other"]);
 function toPauseReason(v: string | undefined): pause_reason_type | undefined {
@@ -60,37 +70,7 @@ export const buildSecondaryEventPayload = (
 };
 
 const ACTIVE_VISIT_STATUSES = ["Driving", "OnSite", "InProgress", "Paused", "Delayed"] as const;
-
-interface MapboxDirectionsResponse {
-	routes: Array<{ distance: number }>;
-	code: string;
-	message?: string;
-}
-
-async function fetchRouteDistanceMiles(
-	techCoords: { lat: number; lon: number } | null | undefined,
-	jobCoords: { lat: number; lon: number } | null | undefined,
-): Promise<number | null> {
-	const token = process.env.MAPBOX_TOKEN;
-	if (!token || !techCoords?.lat || !techCoords?.lon || !jobCoords?.lat || !jobCoords?.lon) {
-		if (!token) console.error("Missing MAPBOX_TOKEN; cannot fetch route distance.");
-		return null;
-	}
-	const coords = `${techCoords.lon},${techCoords.lat};${jobCoords.lon},${jobCoords.lat}`;
-	const url =
-		`https://api.mapbox.com/directions/v5/mapbox/driving/${coords}` +
-		`?overview=false&access_token=${token}`;
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), 8_000);
-	try {
-		const resp = await fetch(url, { signal: controller.signal });
-		if (!resp.ok) return null;
-		const data = (await resp.json()) as MapboxDirectionsResponse;
-		if (data.code !== "Ok" || !data.routes.length) return null;
-		return data.routes[0].distance / 1609.34;
-	} catch { return null; }
-	finally { clearTimeout(timeoutId); }
-}
+const NEEDS_TECH = ["Driving", "OnSite", "InProgress", "Paused", "Completed"];
 
 export const buildVisitStatusPayload = (
 	visit: {
@@ -126,6 +106,45 @@ export const buildVisitStatusPayload = (
 		},
 		changedAt: new Date().toISOString(),
 	};
+};
+
+/**
+ * The technician's own current work, as thin as a picker needs. Deliberately not
+ * `getAllJobVisits`, which returns every visit in the org with client, project,
+ * techs, line items, time entries and notes attached: megabytes over a truck's
+ * connection, and it handed a technician every client in the company. Cancelled
+ * visits are dropped - nobody buys parts for work that was called off.
+ */
+export const getMyJobsForPurchase = async (organization_id: string, technicianId: string) => {
+	const sdb = getScopedDb(organization_id);
+	const visits = await sdb.job_visit.findMany({
+		where: {
+			status: { not: "Cancelled" },
+			visit_techs: { some: { tech_id: technicianId } },
+		},
+		select: {
+			id: true,
+			name: true,
+			job_id: true,
+			scheduled_start_at: true,
+			job: { select: { id: true, name: true, job_number: true } },
+		},
+		orderBy: { scheduled_start_at: "desc" },
+	});
+
+	// One row per job, keeping its most recent visit: a purchase attaches to the
+	// job, and the visit is only there to say which one carries the charge.
+	const byJob = new Map<string, (typeof visits)[number]>();
+	for (const v of visits) if (!byJob.has(v.job_id)) byJob.set(v.job_id, v);
+
+	return [...byJob.values()].map((v) => ({
+		job_id: v.job_id,
+		job_name: v.job?.name ?? null,
+		job_number: v.job?.job_number ?? null,
+		visit_id: v.id,
+		visit_name: v.name,
+		scheduled_start_at: v.scheduled_start_at,
+	}));
 };
 
 export const getAllJobVisits = async (organization_id: string, filters?: { clientId?: string; limit?: number; sort?: "asc" | "desc" }) => {
@@ -390,7 +409,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 
 		if (parsed.tech_ids && parsed.tech_ids.length > 0) {
 			const existingTechs = await sdb.technician.findMany({
-				where: { id: { in: parsed.tech_ids } },
+				where: { id: { in: parsed.tech_ids }, deactivated_at: null },
 				select: { id: true },
 			});
 			const existingIds = new Set(existingTechs.map((t) => t.id));
@@ -399,8 +418,27 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 			);
 			if (missing.length > 0) {
 				return {
-					err: `Technicians not found: ${missing.join(", ")}`,
+					err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 				};
+			}
+		}
+
+		if (parsed.line_items && parsed.line_items.length > 0) {
+			const foreignItems = await findForeignInventoryItemIds(
+				sdb,
+				organization_id,
+				parsed.line_items.map((li) => li.inventory_item_id),
+			);
+			if (foreignItems.length > 0) {
+				return { err: unknownInventoryItemsMessage(foreignItems) };
+			}
+			const foreignVehicles = await foreignDispositionVehicleIds(
+				sdb,
+				organization_id,
+				parsed.line_items.map((li) => li.disposition_vehicle_id),
+			);
+			if (foreignVehicles.length > 0) {
+				return { err: `Validation failed: unknown vehicle ${foreignVehicles.join(", ")}` };
 			}
 		}
 
@@ -447,6 +485,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 						source: "manual" as const,
 						tax_group_id: li.tax_group_id ?? null,
 						taxable: li.taxable ?? true,
+						...plannedLineItemFields(li.inventory_item_id, li.quantity, li),
 					})),
 				});
 				await recomputeVisitTotals(visit.id, organization_id, tx as unknown as Prisma.TransactionClient);
@@ -491,7 +530,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 						new: visit.scheduled_end_at,
 					},
 					status: { old: null, new: visit.status },
-					job_id: { old: null, new: parsed.job_id },
+					...parentBreadcrumb("job", parsed.job_id),
 					_job_number: { old: null, new: job.job_number },
 				},
 				ip_address: context?.ipAddress,
@@ -534,7 +573,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 		});
 
 		if (created) {
-			getSocket().emit("job_visit:created", { visitId: created.id, organizationId: organization_id });
+			emitToOrg(organization_id, "job_visit:created", { visitId: created.id, organizationId: organization_id });
 			// Best-effort: schedule client reminders from any active visit_scheduled sequences.
 			onVisitScheduled(created.id, organization_id);
 		}
@@ -561,7 +600,14 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			where: { id, job: { organization_id: organizationId } },
 			include: {
 				job: true,
-				line_items: { select: { id: true } },
+				line_items: {
+					select: {
+						id: true,
+						fulfillment_status: true,
+						inventory_item_id: true,
+					},
+				},
+				visit_techs: true,
 			},
 		});
 
@@ -585,6 +631,24 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 					return { err: `Tax group not found: ${foreign}` };
 				}
 			}
+
+			// Returned, not thrown: the catch below collapses every non-Zod Error.
+			const foreignItems = await findForeignInventoryItemIds(
+				sdb,
+				organizationId,
+				parsed.line_items.map((li) => li.inventory_item_id),
+			);
+			if (foreignItems.length > 0) {
+				return { err: unknownInventoryItemsMessage(foreignItems) };
+			}
+			const foreignVehicles = await foreignDispositionVehicleIds(
+				sdb,
+				organizationId,
+				parsed.line_items.map((li) => li.disposition_vehicle_id),
+			);
+			if (foreignVehicles.length > 0) {
+				return { err: `Validation failed: unknown vehicle ${foreignVehicles.join(", ")}` };
+			}
 		}
 
 		const changes = buildChanges(existingVisit, parsed, [
@@ -602,6 +666,18 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			"actual_end_at",
 			"status",
 		] as const);
+
+		if (
+			parsed.status &&
+			changes.status &&
+			NEEDS_TECH.includes(parsed.status) &&
+			existingVisit.visit_techs.length === 0
+		) {
+			return {
+				err: "Assign a technician to this visit first.",
+			};
+		}
+
 		let deductLowStockIds: string[] = [];
 		const updated = await sdb.$transaction(async (tx) => {
 			// ── Scalar field update ───────────────────────────────────────
@@ -660,16 +736,21 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			// Existing items absent from the incoming array → delete.
 			// If line_items is undefined (not sent), skip entirely — no change.
 			if (parsed.line_items !== undefined) {
-				const existingIds = new Set(
-					existingVisit.line_items.map((i) => i.id),
+				const existingById = new Map(
+					existingVisit.line_items.map((i) => [i.id, i]),
 				);
+				// Lines a technician already consumed: a stock_movement points at the row,
+				// and the dispatch form doesn't render them, so without this guard the
+				// delete pass below would wipe every one.
+				const isConsumed = (lineId: string) =>
+					existingById.get(lineId)?.fulfillment_status === "used";
 				const incomingIds = new Set(
 					parsed.line_items.filter((i) => i.id).map((i) => i.id!),
 				);
 
 				// Delete removed items
 				for (const item of existingVisit.line_items) {
-					if (!incomingIds.has(item.id)) {
+					if (!incomingIds.has(item.id) && !isConsumed(item.id)) {
 						await tx.job_visit_line_item.delete({
 							where: { id: item.id },
 						});
@@ -678,10 +759,12 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 
 				// Create or update
 				for (const item of parsed.line_items) {
-					if (item.id && existingIds.has(item.id)) {
+					if (item.id && isConsumed(item.id)) continue;
+					const existingLine = item.id ? existingById.get(item.id) : undefined;
+					if (existingLine) {
 						// Update existing
 						await tx.job_visit_line_item.update({
-							where: { id: item.id },
+							where: { id: existingLine.id },
 							data: {
 								name: item.name,
 								description: item.description ?? null,
@@ -695,6 +778,28 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 								sort_order: item.sort_order ?? 0,
 								tax_group_id: item.tax_group_id ?? null,
 								taxable: item.taxable ?? true,
+								// Only when the catalog link actually moved, so a retitle or requantify
+								// can't flip a tech's `voided` back to `planned`.
+								...(item.inventory_item_id !== undefined &&
+								item.inventory_item_id !==
+									existingLine.inventory_item_id
+									? plannedLineItemFields(
+											item.inventory_item_id,
+											item.quantity,
+											item,
+										)
+									: // Link unchanged: qty_planned still follows the
+										// quantity. Only while `planned` — `voided` keeps
+										// its planned figure as the variance.
+										existingLine.fulfillment_status ===
+											"planned"
+										? { qty_planned: item.quantity }
+										: {}),
+								// Applied on its own so switching a part to vendor-direct can't resurrect
+								// a tech's `voided` as `planned`.
+								...(item.disposition !== undefined
+									? dispositionFields(item)
+									: {}),
 							},
 						});
 					} else {
@@ -715,6 +820,11 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 								sort_order: item.sort_order ?? 0,
 								tax_group_id: item.tax_group_id ?? null,
 								taxable: item.taxable ?? true,
+								...plannedLineItemFields(
+									item.inventory_item_id,
+									item.quantity,
+									item,
+								),
 							},
 						});
 					}
@@ -795,7 +905,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 					actor_id: context?.techId || context?.dispatcherId,
 					changes: {
 						...changes,
-						_job_id: { old: null, new: existingVisit.job_id },
+						...parentBreadcrumb("job", existingVisit.job_id),
 						_job_number: { old: null, new: existingVisit.job.job_number },
 					},
 					ip_address: context?.ipAddress,
@@ -839,7 +949,8 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		if (
 			parsed.status === "Completed" &&
 			existingVisit.status !== "Completed" &&
-			existingVisit.job.recurring_plan_id
+			existingVisit.job.recurring_plan_id &&
+			(await isModuleOn(organizationId, "recurring_plans"))
 		) {
 			const planId = existingVisit.job.recurring_plan_id;
 			const schedule = await sdb.invoice_schedule.findFirst({
@@ -943,7 +1054,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 							}),
 						),
 					);
-					getSocket().emit("job_visit:updated", { visitId: null, organizationId });
+					emitToOrg(organizationId, "job_visit:updated", { visitId: null, organizationId });
 				}
 			}
 		}
@@ -976,14 +1087,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			parsed.status !== undefined &&
 			existingVisit.status !== updated.status
 		) {
-			const io = getSocket();
-			io.emit(
+			emitToOrg(organizationId,
 				"job_visit:status_changed",
 				buildVisitStatusPayload(updated as any, existingVisit.status, true, context),
 			);
 		}
 		if (updated && Object.keys(changes).length > 0) {
-			getSocket().emit("job_visit:updated", { visitId: updated.id, organizationId });
+			emitToOrg(organizationId, "job_visit:updated", { visitId: updated.id, organizationId });
 		}
 		// Best-effort: keep visit reminders in sync with reschedules / cancellations.
 		if (parsed.status === "Cancelled" && existingVisit.status !== "Cancelled") {
@@ -1030,17 +1140,28 @@ export const assignTechniciansToVisit = async (
 			return { err: "Job visit not found" };
 		}
 
-		const existingTechs = await sdb.technician.findMany({
-			where: { id: { in: techIds } },
-			select: { id: true, name: true },
+		if (techIds.length === 0 && NEEDS_TECH.includes(visit.status)) {
+			return { err: `Can't remove every technician while the visit is ${visit.status}. Assign someone else first.` };
+		}
+
+		const currentlyAssigned = await sdb.job_visit_technician.findMany({
+			where: { visit_id: visitId },
+			select: { tech_id: true },
 		});
+		const keep = new Set(currentlyAssigned.map((r) => r.tech_id));
+		const existingTechs = (
+			await sdb.technician.findMany({
+				where: { id: { in: techIds } },
+				select: { id: true, name: true, deactivated_at: true },
+			})
+		).filter((t) => t.deactivated_at === null || keep.has(t.id));
 
 		const existingIds = new Set(existingTechs.map((t) => t.id));
 		const missing = techIds.filter((id) => !existingIds.has(id));
 
 		if (missing.length > 0) {
 			return {
-				err: `Technicians not found: ${missing.join(", ")}`,
+				err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 			};
 		}
 
@@ -1076,7 +1197,7 @@ export const assignTechniciansToVisit = async (
 						old: oldTechNames,
 						new: newTechNames,
 					},
-					_job_id: { old: null, new: visit.job_id },
+					...parentBreadcrumb("job", visit.job_id),
 					_job_number: { old: null, new: visit.job.job_number },
 				},
 				ip_address: context?.ipAddress,
@@ -1118,7 +1239,7 @@ export const assignTechniciansToVisit = async (
 					actionUrl:    `/technician/visits/${visitId}`,
 				}, organizationId);
 			}
-			getSocket().emit("job_visit:updated", { visitId: updated.id, organizationId });
+			emitToOrg(organizationId, "job_visit:updated", { visitId: updated.id, organizationId });
 		}
 
 		return { err: "", item: updated };
@@ -1190,6 +1311,7 @@ export const acceptJobVisit = async (
 						old: [],
 						new: [techId],
 					},
+					...parentBreadcrumb("job", visit.job_id),
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
@@ -1255,10 +1377,18 @@ export const applyVisitTransition = async (
 		const sdb = getScopedDb(organizationId);
 		const existingVisit = await sdb.job_visit.findFirst({
 			where: { id, job: { organization_id: organizationId } },
-			include: { job: true, line_items: { select: { id: true } } },
+			include: { job: true, line_items: { select: { id: true } }, visit_techs: true },
 		});
 
 		if (!existingVisit) return { err: "Job visit not found" };
+		if (context?.techId && !existingVisit.visit_techs.some((v) => v.tech_id === context.techId)) {
+			return { err: "You aren't assigned to this visit." };
+		}
+
+		// Guard: only delay action can be done with no technicians assigned
+		if (action !== "delay" && existingVisit.visit_techs.length === 0) {
+			return { err: "Assign a technician to this visit before updating its status." };
+		}
 
 		// Guard: delay is dispatcher-only
 		if (action === "delay" && context?.techId) {
@@ -1307,10 +1437,11 @@ export const applyVisitTransition = async (
 									data: { status: techGlobalStatus },
 								}),
 							]);
-							getSocket().emit(
+							emitToOrg(organizationId,
 								"job_visit:status_changed",
 								buildSecondaryEventPayload(currentVisit, techVisitStatus, context),
 							);
+							await recordDrive(sdb, context.techId, new Date(), action === "drive" ? id : undefined);
 						}
 						return { err: "", item: currentVisit ?? undefined };
 					}
@@ -1325,8 +1456,7 @@ export const applyVisitTransition = async (
 					},
 				});
 				if (action === "drive" && existingVisit.status === "Driving" && currentVisit) {
-					const io = getSocket();
-					io.emit(
+					emitToOrg(organizationId,
 						"job_visit:status_changed",
 						buildVisitStatusPayload(currentVisit as any, existingVisit.status, false, context),
 					);
@@ -1348,7 +1478,21 @@ export const applyVisitTransition = async (
 			if (!existingVisit.actual_start_at) timestampData.actual_start_at = now;
 		}
 
+		const actingTechIds = context?.techId
+			? [context.techId]
+			: (
+				await sdb.technician.findMany({
+					where: {
+						id: { in: existingVisit.visit_techs.map((vt) => vt.tech_id) },
+						status: { not: "Break" },
+						time_entries: { none: { clocked_out_at: null } },
+					},
+					select: { id: true },
+				})
+			).map((t) => t.id);
+
 		let deductLowStockIds: string[] = [];
+		let jobJustCompleted = false;
 		await sdb.$transaction(async (tx) => {
 			await tx.job_visit.update({
 				where: { id },
@@ -1358,13 +1502,13 @@ export const applyVisitTransition = async (
 				},
 			});
 
-			// Destination switch: revert any other Driving visit assigned to this tech
-			if (action === "drive" && context?.techId) {
+			// Destination switch: revert any other Driving visit assigned to these techs
+			if (action === "drive") {
 				const otherDrivingVisits = await tx.job_visit.findMany({
 					where: {
 						status: "Driving",
 						id: { not: id },
-						visit_techs: { some: { tech_id: context.techId } },
+						visit_techs: { some: { tech_id: { in: actingTechIds } } },
 					},
 					include: { job: true },
 				});
@@ -1376,7 +1520,7 @@ export const applyVisitTransition = async (
 					await tx.job_visit_technician.updateMany({
 						where: {
 							visit_id: other.id,
-							tech_id: context.techId,
+							tech_id: { in: actingTechIds },
 							tech_status: "EnRoute",
 						},
 						data: { tech_status: "Assigned" },
@@ -1400,6 +1544,13 @@ export const applyVisitTransition = async (
 						});
 					}
 				}
+				for (const techId of actingTechIds) await recordDrive(tx, techId, now, id);
+			}
+			if (action === "arrive") {
+				for (const techId of actingTechIds) await recordDrive(tx, techId, now);
+			}
+			if (action === "delay") {
+				await tx.visit_tech_drive.updateMany({ where: { visit_id: id, ended_at: null }, data: { ended_at: now } });
 			}
 
 			// ── Job status sync ────────────────────────────────────────────────
@@ -1417,6 +1568,7 @@ export const applyVisitTransition = async (
 					where: { id: existingVisit.job_id },
 					data: { status: newJobStatus, status_changed_at: new Date() },
 				});
+				jobJustCompleted = newJobStatus === "Completed";
 			}
 
 			// ── Inventory consumption (once, on this visit's Completed transition) ──
@@ -1433,7 +1585,11 @@ export const applyVisitTransition = async (
 			// ── Auto-close open time entries on pause or complete ─────────────
 			if (action === "pause" || action === "complete") {
 				const openEntries = await tx.visit_tech_time_entry.findMany({
-					where: { visit_id: id, clocked_out_at: null },
+					where: { 
+						visit_id: id, 
+						clocked_out_at: null,
+						visit: { job: { organization_id: organizationId } },
+					},
 					include: { tech: { select: { id: true, name: true, hourly_rate: true } } },
 				});
 
@@ -1460,7 +1616,10 @@ export const applyVisitTransition = async (
 					});
 
 					await tx.visit_tech_time_entry.update({
-						where: { id: entry.id },
+						where: { 
+							id: entry.id,
+							visit: { job: { organization_id: organizationId } },
+						},
 						data: {
 							clocked_out_at: closeTime,
 							hours_worked: hoursWorked,
@@ -1567,24 +1726,24 @@ export const applyVisitTransition = async (
 						data: { status: newTechGlobalStatus! },
 					});
 				}
-			} else if (context?.techId && (newTechVisitStatus || newTechGlobalStatus)) {
-				// Only the calling tech
+			} else if (newTechVisitStatus || newTechGlobalStatus) {
+				// The calling tech, or every assigned tech when a dispatcher acts
 				if (newTechVisitStatus) {
-					await tx.job_visit_technician.update({
-						where: { visit_id_tech_id: { visit_id: id, tech_id: context.techId } },
+					await tx.job_visit_technician.updateMany({
+						where: { visit_id: id, tech_id: { in: actingTechIds } },
 						data: { tech_status: newTechVisitStatus },
 					});
 				}
 				if (newTechGlobalStatus) {
-					await tx.technician.update({
-						where: { id: context.techId },
+					await tx.technician.updateMany({
+						where: { id: { in: actingTechIds } },
 						data: { status: newTechGlobalStatus },
 					});
 				}
 				// Cancel any pending WrappingUp timer when tech transitions to an active state
 				if (["drive", "arrive", "start", "resume"].includes(action)) {
 					import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
-						cancelWrappingUpTimer(context.techId!);
+						for (const techId of actingTechIds) cancelWrappingUpTimer(techId);
 					}).catch(() => {});
 				}
 			}
@@ -1603,7 +1762,7 @@ export const applyVisitTransition = async (
 					...Object.fromEntries(
 						Object.entries(timestampData).map(([k, v]) => [k, { old: null, new: v }]),
 					),
-					_job_id: { old: null, new: existingVisit.job_id },
+					...parentBreadcrumb("job", existingVisit.job_id),
 					_job_number: { old: null, new: existingVisit.job.job_number },
 				},
 				ip_address: context?.ipAddress,
@@ -1625,10 +1784,28 @@ export const applyVisitTransition = async (
 		});
 
 		if (updated) {
-			getSocket().emit(
+			emitToOrg(organizationId,
 				"job_visit:status_changed",
 				buildVisitStatusPayload(updated, existingVisit.status, true, context),
 			);
+		}
+
+		if (jobJustCompleted && updated) {
+			notifyDispatchers({
+				type: "job_finished",
+				title: `Job ${existingVisit.job.job_number} finished`,
+				body: `${updated.job.client.name}: all visits are complete.`,
+				actionUrl: `/dispatch/jobs/${existingVisit.job_id}`,
+			}, organizationId, context?.dispatcherId).catch(() => {});
+		}
+
+		if (action === "delay" && updated) {
+			notifyDispatchers({
+				type: "visit_delayed",
+				title: `Visit delayed — Job ${existingVisit.job.job_number}`,
+				body: `${updated.job.client.name}'s visit was marked delayed.`,
+				actionUrl: `/dispatch/jobs/${existingVisit.job_id}/visits/${id}`,
+			}, organizationId, context?.dispatcherId).catch(() => {});
 		}
 
 		if (action === "drive" && updated) {
@@ -1641,6 +1818,9 @@ export const applyVisitTransition = async (
 			if (miles !== null) {
 				await sdb.job_visit.update({ where: { id }, data: { estimated_drive_miles: miles } });
 				updated.estimated_drive_miles = miles;
+				
+				if (context?.techId !== undefined) 
+					await applyOdometerIncrement(sdb, context.techId, miles);
 			}
 		}
 		return { err: "", item: updated ?? undefined };
@@ -1792,7 +1972,7 @@ export const cancelJobVisit = async (
 				changes: {
 					status: { old: existingVisit.status, new: "Cancelled" },
 					cancellation_reason: { old: null, new: cancellationReason },
-					_job_id: { old: null, new: existingVisit.job_id },
+					...parentBreadcrumb("job", existingVisit.job_id),
 					_job_number: { old: null, new: existingVisit.job.job_number },
 				},
 				ip_address: context?.ipAddress,
@@ -1827,8 +2007,7 @@ export const cancelJobVisit = async (
 		}
 
 		if (updated) {
-			const io = getSocket();
-			io.emit(
+			emitToOrg(organizationId,
 				"job_visit:status_changed",
 				buildVisitStatusPayload(updated as any, existingVisit.status, true, context),
 			);
@@ -1904,7 +2083,7 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 			}
 		});
 
-		getSocket().emit("job_visit:deleted", { visitId: id, organizationId });
+		emitToOrg(organizationId, "job_visit:deleted", { visitId: id, organizationId });
 		return { err: "", message: "Job visit deleted successfully" };
 	} catch (e) {
 		log.error({ err: e }, "Failed to delete job visit");

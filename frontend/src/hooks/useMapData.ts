@@ -2,11 +2,14 @@ import { useMemo, useState } from "react";
 import { useAllClientsQuery } from "./useClients";
 import { useLiveTechnicians } from "./useTechnicianMarkers";
 import { useTechRoutes } from "./useTechRoutes";
-import type { StaticMarker, TechRouteData, Coordinates } from "../types/location";
+import type { StaticMarker, TechRouteData } from "../types/location";
 import type { Technician } from "../types/technicians";
-import { TechnicianStatusDotColors } from "../types/technicians";
 import type { Client } from "../types/clients";
 import type { MapFilters } from "../components/ui/maps/MapPanel";
+import { buildTechMarker, hasValidCoords } from "../lib/mapMarkers";
+import { useArrivalBoardQuery } from "./useArrivals";
+import { usePermission } from "./usePermission";
+import type { Arrival } from "../types/arrivals";
 
 interface UseMapDataResult {
 	markers: StaticMarker[];
@@ -20,30 +23,23 @@ interface UseMapDataResult {
 	setFilters: (next: MapFilters) => void;
 }
 
-function formatEtaShort(seconds: number | null): string {
-	if (seconds === null) return "";
-	const mins = Math.max(1, Math.round(seconds / 60));
-	if (mins < 60) return `~${mins}m`;
-	const hours = Math.floor(mins / 60);
-	const rem = mins % 60;
-	return rem === 0 ? `~${hours}h` : `~${hours}h${rem}m`;
-}
-
-function hasValidCoords(c: Coordinates | null | undefined): boolean {
-	return (
-		!!c &&
-		typeof c.lat === "number" &&
-		typeof c.lon === "number" &&
-		Number.isFinite(c.lat) &&
-		Number.isFinite(c.lon) &&
-		!(c.lat === 0 && c.lon === 0)
-	);
-}
-
 export function useMapData(): UseMapDataResult {
 	const { technicians, isLoading: techLoading } = useLiveTechnicians();
 	const { data: clients, isLoading: clientsLoading } = useAllClientsQuery();
 	const allDrivingRoutes = useTechRoutes(technicians);
+	const canSeeArrivals = usePermission("view_jobs");
+	const { data: arrivalBoard } = useArrivalBoardQuery(canSeeArrivals);
+
+	// Each tech's next stop, as the arrival tracker forecasts it
+	const nextArrivalByTech = useMemo(() => {
+		const out = new Map<string, Arrival>();
+		for (const a of arrivalBoard?.arrivals ?? []) {
+			if (a.status === "arrived" || a.stop_index !== 0) continue;
+			const prev = out.get(a.tech_id);
+			if (!prev || new Date(a.due_at) < new Date(prev.due_at)) out.set(a.tech_id, a);
+		}
+		return out;
+	}, [arrivalBoard]);
 
 	const [filters, setFilters] = useState<MapFilters>({
 		showClients: true,
@@ -100,24 +96,13 @@ export function useMapData(): UseMapDataResult {
 				if (filters.hiddenTechIds.has(tech.id)) continue;
 				if (!hasValidCoords(tech.coords)) continue;
 
-				const route = drivingRouteById.get(tech.id);
-				const isDriving = !!route;
-				const showEta =
-					isDriving &&
-					filters.showETAs &&
-					!filters.hiddenETAIds.has(tech.id) &&
-					route!.etaSeconds !== null;
-				const etaSuffix = showEta ? ` · ${formatEtaShort(route!.etaSeconds)}` : "";
-
-				out.push({
-					id: `tech-${tech.id}`,
-					coords: isDriving ? route!.current : tech.coords,
-					type: "TECHNICIAN",
-					label: `${tech.name}${etaSuffix}`,
-					color: isDriving ? route!.color : undefined,
-					statusDotColor: TechnicianStatusDotColors[tech.status],
-					variant: isDriving ? "default" : "dimmed",
-				});
+				out.push(
+					buildTechMarker(tech, {
+						route: drivingRouteById.get(tech.id) ?? null,
+						showEta: filters.showETAs && !filters.hiddenETAIds.has(tech.id),
+						arrival: nextArrivalByTech.get(tech.id) ?? null,
+					}),
+				);
 			}
 		}
 
@@ -126,6 +111,7 @@ export function useMapData(): UseMapDataResult {
 		clients,
 		technicians,
 		drivingRouteById,
+		nextArrivalByTech,
 		filters.showClients,
 		filters.hiddenClientIds,
 		filters.showTechs,

@@ -23,11 +23,13 @@ import PageHeader from "../../components/ui/PageHeader";
 import { usePermission } from "../../hooks/usePermission";
 import PageReportSection from "../../components/reports/PageReportSection";
 import type { SortDir } from "../../util/sortUtil";
-import { 
+import {
 	withDir,
 	compareByOrder,
 	compareDateNullsLast,
-	comparePriority
+	comparePriority,
+	compareString,
+	compareNumber
 } from "../../util/sortUtil";
 import { PriorityLabels, PriorityValues, PriorityColors, type Priority } from "../../types/common";
 
@@ -50,6 +52,26 @@ const sortLabels: Record<string, string> = {
 	priority: "Priority",
 	status: "Status",
 	date: "Date",
+	client: "Client",
+	jobNumber: "Job #",
+	total: "Total",
+};
+
+// Plain-text columns sorted with a generic localeCompare — no domain-specific
+// order needed (unlike priority/status). Allowlisted so a stray `sort` value
+// from the URL can't index an arbitrary JobRow field.
+const SORTABLE_STRING_FIELDS = ["client", "jobNumber"] as const;
+type SortableStringField = (typeof SORTABLE_STRING_FIELDS)[number];
+function isSortableStringField(value: string | null): value is SortableStringField {
+	return (SORTABLE_STRING_FIELDS as readonly string[]).includes(value ?? "");
+}
+
+// Column ids whose displayed value isn't the sortable one — the real value
+// lives on a `_raw*`/underlying field (formatted currency string vs the raw
+// number, a schedule-status blurb vs the raw date). Clicking these headers
+// sorts by, and highlights in sync with, the aliased key instead.
+const COLUMN_SORT_KEY: Record<string, string> = {
+	schedule: "date",
 };
 
 type JobRow = {
@@ -398,6 +420,10 @@ export default function JobsPage() {
 					? withDir((a, b) => compareByOrder(a._rawStatus, b._rawStatus, JobStatusValues), dir)
 					: sortParam === "date"
 					? (a, b) => compareDateNullsLast(dir)(a._scheduleDate, b._scheduleDate)
+					: sortParam === "total"
+					? withDir((a, b) => compareNumber(a._rawTotal, b._rawTotal), dir)
+					: isSortableStringField(sortParam)
+					? withDir((a, b) => compareString(a[sortParam], b[sortParam]), dir)
 					: (a, b) => {
 							// default: status, then schedule date (nulls last)
 							const statusDiff =
@@ -476,6 +502,18 @@ export default function JobsPage() {
 		next.delete("sort");
 		next.delete("dir");
 		navigate(`/dispatch/jobs${next.toString() ? `?${next.toString()}` : ""}`);
+	};
+
+	const handleSortChange = (col: string) => {
+		const key = COLUMN_SORT_KEY[col] ?? col;
+		const next = new URLSearchParams(location.search);
+		if (next.get("sort") === key) {
+				next.set("dir", next.get("dir") === "asc" ? "desc" : "asc");
+		} else {
+				next.set("sort", key);
+				next.set("dir", "asc");
+		}
+		navigate(`/dispatch/jobs?${next.toString()}`);
 	};
 
 	return (
@@ -578,8 +616,11 @@ export default function JobsPage() {
 									{ value: "priority", label: "Priority" },
 									{ value: "status", label: "Status" },
 									{ value: "date", label: "Date" },
+									{ value: "jobNumber", label: "Job #"},
+									{ value: "client", label: "Client"},
+									{ value: "total", label: "Total"}
 								]}
-								defaultDirByField={{ priority: "desc", status: "asc", date: "desc" }}
+								defaultDirByField={{ priority: "desc", status: "asc", date: "desc", total: "desc" }}
 							/>
 						)}
 					</div>
@@ -672,6 +713,19 @@ export default function JobsPage() {
 							return <div className={`w-fit px-2 py-1 rounded-md border text-sm font-medium ${PriorityColors[r._rawPriority]}`}>{r.priority}</div>;
 						},
 					}}
+					sortableColumns={
+						{
+							status: true,
+							priority: true,
+							client: true,
+							jobNumber: true,
+							total: true,
+							schedule: true,
+						}
+					}
+					sortKey={sortParam === "date" ? "schedule" : (sortParam ?? "")}
+					sortDir={dirParam === "asc" ? "asc" : "desc"}
+					onSortChange={handleSortChange}
 				/>
 			</div>
 

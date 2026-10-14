@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, MapPin, Gauge } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useJobVisitsByTechIdQuery } from "../../hooks/useJobs";
 import { FALLBACK_TIMEZONE, startOfWeek, addDays, formatWeekDay, formatWeekRange, isSameDay } from "../../util/util";
+import TechPage from "../../components/technician/TechPage";
 
 
 export default function TechnicianMileagePage() {
@@ -38,7 +39,7 @@ export default function TechnicianMileagePage() {
 	const isCurrentWeek = weekOffset === 0;
 
 	return (
-		<div className="max-w-lg mx-auto space-y-5">
+		<TechPage className="space-y-5">
 			{/* Header */}
 			<div>
 				<div className="flex items-center gap-2 mb-0.5">
@@ -143,6 +144,6 @@ export default function TechnicianMileagePage() {
 					))}
 				</div>
 			)}
-		</div>
+		</TechPage>
 	);
 }

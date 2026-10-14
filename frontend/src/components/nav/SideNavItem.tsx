@@ -28,10 +28,10 @@ export default function SideNavItem({
 				{icon}
 			</div>
 
-			{/* Label - constrained width to reduce right-side empty space */}
+			{/* Label - min-w-0 is what lets truncate work inside the flex row */}
 			<div
 				className={`
-					absolute left-12 w-24 flex items-center h-full overflow-hidden
+					flex-1 min-w-0 flex items-center overflow-hidden
 					transition-[opacity,transform] duration-200 ease-in-out
 					${expanded ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2 pointer-events-none"}
 				`}

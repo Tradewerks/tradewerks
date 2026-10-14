@@ -100,7 +100,7 @@ function CustomTooltip({
 export default function AgedReceivablesColumnChart({
 	data,
 }: AgedReceivablesColumnChartProps) {
-	const { data: buckets, totalOutstanding } = data;
+	const { data: buckets, totalOutstanding, disputedTotal, disputedCount } = data;
 	const [activeBucket, setActiveBucket] = useState<Bucket | null>(null);
 
 	const isEmpty = totalOutstanding === 0;
@@ -110,7 +110,9 @@ export default function AgedReceivablesColumnChart({
 	const countFor = (bucket: Bucket) =>
 		buckets.find((b) => b.bucket === bucket)?.count ?? 0;
 
-	const totalCount = buckets.reduce((sum, b) => sum + b.count, 0);
+	// totalOutstanding includes the disputed balance, so the count beside it
+	// has to include the disputed invoices the buckets deliberately exclude.
+	const totalCount = buckets.reduce((sum, b) => sum + b.count, 0) + disputedCount;
 
 	const chartData: ColumnDatum[] = BUCKET_META.map((m) => ({
 		bucket: m.bucket,
@@ -202,6 +204,12 @@ export default function AgedReceivablesColumnChart({
 							· {totalCount}{" "}
 							{totalCount === 1 ? "invoice" : "invoices"}
 						</span>
+						{disputedTotal > 0 && (
+							<span className="text-warning-text">
+								{" "}
+								· {formatCurrency(disputedTotal)} in dispute
+							</span>
+						)}
 					</p>
 				</div>
 			)}

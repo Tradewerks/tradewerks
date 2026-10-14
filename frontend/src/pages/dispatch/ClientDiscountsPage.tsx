@@ -5,6 +5,7 @@ import SearchBar from "../../components/ui/SearchBar";
 import FilterChips from "../../components/ui/FilterChips";
 import PageControls from "../../components/ui/PageControls";
 import PageHeader from "../../components/ui/PageHeader";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import ColumnsButton from "../../components/ui/ColumnsButton";
 import StatCard from "../../components/ui/StatCard";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
@@ -166,6 +167,7 @@ export default function ClientDiscountsPage() {
 							disabled={total === 0}
 						/>
 						<ColumnsButton columns={COLS} hidden={hidden} onToggle={toggle} onReset={reset} />
+						<RefreshReportsButton />
 					</>
 				}
 			/>
@@ -189,7 +191,7 @@ export default function ClientDiscountsPage() {
 						<p className="text-text-muted text-sm">
 							{hasActiveFilters
 								? "Try adjusting your filters"
-								: "Discounts applied to issued invoices appear here"}
+								: "Discounts applied to created invoices appear here"}
 						</p>
 					</div>
 				) : (

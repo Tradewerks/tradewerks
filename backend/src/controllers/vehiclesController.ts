@@ -4,6 +4,8 @@ import { log } from "../services/appLogger.js";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { db } from "../db.js";
 import { getScopedDb, UserContext } from "../lib/context.js";
+import { resolveSupplier, SupplierValidationError } from "../services/suppliers.js";
+import { supplierCaptureFields } from "../lib/validate/suppliers.js";
 import { utcDayRange, localDateString } from "../lib/dayRange.js";
 import {
 	recordMovements,
@@ -21,8 +23,9 @@ import {
 } from "../services/stockMovements.js";
 import { fireLowStockAlerts } from "../services/lowStockAlerts.js";
 import { expiresAtField } from "../lib/validate/inventoryTracking.js";
+import { READINESS_LINE_ITEM_WHERE } from "../lib/inventory.js";
 import { isStorableStockQty, STOCK_QTY_MESSAGE } from "../lib/validate/shared.js";
-import { emitToOrg, emitInventoryUpdated } from "../services/socketService.js";
+import { emitInventoryUpdated } from "../services/socketService.js";
 import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import {
 	mapVehicleStockItemWithInventory,
@@ -30,7 +33,14 @@ import {
 	mapStockAdjustmentRecord,
 	mapRestockRequest,
 	mapStockMovement,
+	mapMaintenanceRecord,
+	mapMaintenanceReminder,
 } from "../types/dto/vehicles.js";
+import { createMaintenanceRecordSchema, createMaintenanceReminderSchema, updateMaintenanceRecordSchema, updateMaintenanceReminderSchema } from "../lib/validate/vehicles.js";
+import { classifyReminder, resolveDueTargets } from "../lib/validate/vehicleMaintenanceStatus.js";
+import { applyRecordOdometer } from "../lib/vehicleMileage.js";
+import { parentBreadcrumb } from "./logsController.js";
+import { notifyDispatchers } from "./notificationsController.js";
 
 // Stock-item quantities nested under a restock request only carry a partial
 // inventory_item select (id/name/unit/quantity, no Decimal fields) — convert
@@ -93,14 +103,14 @@ function formatZodError(e: ZodError): string {
 /**
  * Shared catch-block handling for the tracking errors (InsufficientBatchStockError,
  * TrackingValidationError) that applyFill / completeRestock / adjustStock / addPartsUsed /
- * addSupplierPartUsed all surface the same way. Returns null when `e` isn't one of these,
+ * all surface the same way. Returns null when `e` isn't one of these,
  * so callers fall through to their own remaining checks.
  */
 function trackingErrorResponse(e: unknown): { err: string; available?: Record<string, number> } | null {
 	if (e instanceof InsufficientBatchStockError) {
 		return { err: "insufficient_batch_stock", available: e.available };
 	}
-	if (e instanceof TrackingValidationError) {
+	if (e instanceof TrackingValidationError || e instanceof SupplierValidationError) {
 		return { err: e.message };
 	}
 	return null;
@@ -359,6 +369,17 @@ const createVehicleSchema = z.object({
 	color:         z.string().max(50).nullable().optional(),
 	status:        z.enum(["active", "inactive"]).default("active"),
 	notes:         z.string().max(1000).nullable().optional(),
+	current_odometer_mi: z.number().int().min(0).nullable().optional(),
+	stored_at: z.string().nullable().optional(),
+	stored_at_coords: z
+		.object({
+			lat: z.number(),
+			lon: z.number(),
+		})
+		.nullable()
+		.optional()
+		// Prisma Json columns reject plain null
+		.transform((v) => (v === null ? Prisma.DbNull : v)),
 });
 
 const updateVehicleSchema = createVehicleSchema.partial();
@@ -405,7 +426,10 @@ const completeRestockSchema = z.object({
 });
 
 // Single source of truth — prevents silent divergence from the Prisma enum
-export const ADJUSTMENT_TYPES = ["warehouse_exchange", "field_loss", "transfer", "audit", "supplier_purchase"] as const;
+// `supplier_purchase` is deliberately absent: buying externally is a field
+// purchase now, which carries a grant, a limit, a receipt and a review. It stays
+// in the Prisma enum so historical adjustments still read.
+export const ADJUSTMENT_TYPES = ["warehouse_exchange", "field_loss", "transfer", "audit"] as const;
 export type VehicleAdjustmentType = typeof ADJUSTMENT_TYPES[number];
 
 const adjustStockSchema = z
@@ -421,47 +445,24 @@ const adjustStockSchema = z
 					.object({
 						stock_item_id:     z.string().uuid().optional(),
 						inventory_item_id: z.string().uuid().optional(),
-						new_item:          z.object({ name: z.string().min(1).max(200), cost: z.number().min(0) }).optional(),
 						qty_after:         stockQtyField(z.number().min(0)),
 						// Serial/batch tracking (B-T3) — which fields apply depends on the
 						// resolved item's is_serialized/is_batch_tracked flags, which Zod
 						// can't see; the controller validates that once the item is loaded.
 						serial_unit_ids: z.array(z.string().uuid()).optional(),
-						new_serials:     z.array(z.string().trim().min(1).max(100)).optional(),
 						batch_picks:     z
 							.array(z.object({ batch_id: z.string().uuid(), qty: stockQtyField(z.number().positive()) }))
 							.optional(),
-						// Per-unit cost paid — only meaningful on a supplier_purchase
-						// line (a tech buying a part in the field). Recorded on the
-						// movement so it joins warehouse receives in the item's paid-cost
-						// history; ignored by every other adjustment type, which move
-						// stock the org already owns and therefore has no purchase price.
-						unit_cost:       z.number().nonnegative().optional(),
-						new_batch: z
-							.object({
-								batch_number: z.string().trim().min(1).max(100),
-								expires_at:   expiresAtField,
-								supplier:     z.string().trim().max(200).optional(),
-								unit_cost:    z.number().nonnegative().optional(),
-							})
-							.optional(),
 					})
 					.refine(
-						(l) => {
-							const identifiers = (l.stock_item_id ? 1 : 0) + (l.inventory_item_id ? 1 : 0) + (l.new_item ? 1 : 0);
-							return identifiers === 1;
-						},
-						{ message: "Each line needs exactly one of stock_item_id, inventory_item_id, or new_item" },
-					)
-					.refine(
-						(l) => !(l.serial_unit_ids?.length && l.new_serials?.length),
-						{ message: "Provide either serial_unit_ids or new_serials, not both" },
+						(l) => (l.stock_item_id ? 1 : 0) + (l.inventory_item_id ? 1 : 0) === 1,
+						{ message: "Each line needs exactly one of stock_item_id or inventory_item_id" },
 					),
 			)
 			.min(1, "At least one line required")
 			.refine(
 				(lines) => {
-					const ids = lines.map((l) => l.stock_item_id ?? l.inventory_item_id ?? l.new_item?.name);
+					const ids = lines.map((l) => l.stock_item_id ?? l.inventory_item_id);
 					return new Set(ids).size === ids.length;
 				},
 				{ message: "Duplicate line entries are not allowed" },
@@ -471,63 +472,16 @@ const adjustStockSchema = z
 		// No whole-number rule for warehouse_exchange: inventory_item.quantity is
 		// numeric(10,2) like every other qty column, so a fractional target is a
 		// perfectly storable warehouse movement (qty_after above bounds it to 2 dp).
-		if (data.type === "supplier_purchase") {
-			// supplier_purchase lines must carry inventory_item_id OR new_item
-			// (not stock_item_id), and must have an integer qty > 0
-			data.lines.forEach((line, i) => {
-				if (line.stock_item_id) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["lines", i, "stock_item_id"],
-						message: "Validation failed: supplier_purchase lines must use inventory_item_id or new_item, not stock_item_id",
-					});
-				}
-				if (line.new_item && !Number.isInteger(line.qty_after)) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["lines", i, "qty_after"],
-						message: "Supplier purchase requires whole-number quantities",
-					});
-				}
-			});
-		} else if (data.type !== "warehouse_exchange") {
-			// Adding a new item from the catalog is only meaningful when stock
-			// moves to/from the warehouse — reject it for every other type
+		//
+		// Naming a catalog item rather than an existing stock row only means
+		// something when stock moves to or from the warehouse.
+		if (data.type !== "warehouse_exchange") {
 			data.lines.forEach((line, i) => {
 				if (line.inventory_item_id) {
 					ctx.addIssue({
 						code: z.ZodIssueCode.custom,
 						path: ["lines", i, "inventory_item_id"],
-						message: "Adding a new item is only allowed for warehouse exchange or supplier_purchase",
-					});
-				}
-				if (line.new_item) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["lines", i, "new_item"],
-						message: "new_item is only allowed for supplier_purchase",
-					});
-				}
-			});
-		}
-
-		// new_serials / new_batch (creating brand-new tracked units/lots) are only
-		// meaningful for supplier_purchase — the one type whose movement direction
-		// is external→vehicle (units/lots entering circulation for the first time).
-		if (data.type !== "supplier_purchase") {
-			data.lines.forEach((line, i) => {
-				if (line.new_serials) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["lines", i, "new_serials"],
-						message: "new_serials is only allowed for supplier_purchase",
-					});
-				}
-				if (line.new_batch) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["lines", i, "new_batch"],
-						message: "new_batch is only allowed for supplier_purchase",
+						message: "Adding a new item is only allowed for warehouse exchange",
 					});
 				}
 			});
@@ -581,6 +535,7 @@ export const createVehicle = async (data: unknown, organizationId: string, conte
 			data: {
 				...parsed,
 				organization_id: organizationId,
+				...(parsed.current_odometer_mi != null ? { odometer_updated_at: new Date() } : {}),
 			},
 		});
 		await logActivity({
@@ -595,6 +550,7 @@ export const createVehicle = async (data: unknown, organizationId: string, conte
 				type:          { old: null, new: vehicle.type },
 				license_plate: { old: null, new: vehicle.license_plate },
 				status:        { old: null, new: vehicle.status },
+				stored_at: 	   { old: null, new: vehicle.stored_at },
 			},
 		});
 		return { err: "", item: vehicle };
@@ -609,9 +565,14 @@ export const updateVehicle = async (id: string, data: unknown, organizationId: s
 	try {
 		const parsed = updateVehicleSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
+		const existing = await sdb.vehicle.findFirst({ where: { id } });
+		if (!existing) return { err: "Vehicle not found" };
 		const vehicle = await sdb.vehicle.update({
 			where: { id },
-			data: parsed,
+			data: {
+				...parsed,
+				...(parsed.current_odometer_mi != null ? { odometer_updated_at: new Date() } : {})
+			}
 		});
 		await logActivity({
 			event_type: "vehicle.updated",
@@ -620,6 +581,10 @@ export const updateVehicle = async (id: string, data: unknown, organizationId: s
 			entity_id: vehicle.id,
 			organization_id: organizationId,
 			...getActorInfo(context),
+			changes: buildChanges(existing, parsed, [
+				"name", "type", "license_plate", "year", "make",
+				"model", "color", "status", "notes", "current_odometer_mi", "stored_at"
+			] as const),
 		});
 		return { err: "", item: vehicle };
 	} catch (e: unknown) {
@@ -817,6 +782,7 @@ export const deleteVehicleStockItem = async (vehicleId: string, itemId: string, 
 			entity_id: itemId,
 			organization_id: organizationId,
 			...getActorInfo(context),
+			changes: { ...parentBreadcrumb("vehicle", vehicleId) },
 		});
 		return { err: "" };
 	} catch (e: unknown) {
@@ -827,6 +793,17 @@ export const deleteVehicleStockItem = async (vehicleId: string, itemId: string, 
 		return { err: "Failed to delete stock item" };
 	}
 };
+
+// Shared by the single and bulk restock request paths
+async function notifyRestockRequested(vehicleId: string, orgId: string, count: number) {
+	const vehicle = await db.vehicle.findFirst({ where: { id: vehicleId, organization_id: orgId }, select: { name: true } });
+	await notifyDispatchers({
+		type: "vehicle_restock_requested",
+		title: `Restock requested — ${vehicle?.name ?? "a vehicle"}`,
+		body: `${count} item${count === 1 ? "" : "s"} requested.`,
+		actionUrl: `/dispatch/vehicles/${vehicleId}/stock`,
+	}, orgId);
+}
 
 export const createRestockRequest = async (
 	vehicleId: string,
@@ -878,6 +855,7 @@ export const createRestockRequest = async (
 				status:        { old: null, new: request.status },
 			},
 		});
+		notifyRestockRequested(vehicleId, organizationId, 1).catch(() => {});
 		return { err: "", item: request };
 	} catch (e: unknown) {
 		if (e instanceof ZodError) return { err: `Validation failed: ${formatZodError(e)}` };
@@ -983,6 +961,7 @@ export async function createRestockRequestsBulk(
 				actor_id: technicianId,
 				changes: { batch_count: { old: null, new: result.created.length } },
 			});
+			notifyRestockRequested(vehicleId, orgId, result.created.length).catch(() => {});
 		}
 		return { err: "", created: result.created, skipped: result.skipped };
 	} catch (e: unknown) {
@@ -1450,7 +1429,17 @@ export const updatePartsUsedQty = async (
 				include: { inventory_item: true },
 			});
 			if (!lineItem) throw new PartsUsedEditError("Line item not found");
-			if (!lineItem.inventory_item_id || !lineItem.inventory_item || lineItem.fulfillment_status !== "used") {
+			// "used" alone no longer proves the stock came off a van: since
+			// 2026-08-20 completion also stamps `receive` and `non_stock` lines
+			// used, and reversing vehicle stock for a part that was received
+			// into the warehouse (or never ours at all) would invent movements.
+			const fromVehicleStock = (lineItem.disposition ?? "consume") === "consume";
+			if (
+				!lineItem.inventory_item_id ||
+				!lineItem.inventory_item ||
+				lineItem.fulfillment_status !== "used" ||
+				!fromVehicleStock
+			) {
 				throw new PartsUsedEditError(
 					"This line isn't linked to vehicle stock — edit it as a regular line item",
 				);
@@ -1946,7 +1935,11 @@ export async function completeRestock(
 					vehicle_id:           vehicleId,
 					organization_id:      orgId,
 					completed_at:         new Date(),
-					day:                  utcDayRange(new Date(), 1, orgTz).start,
+					// `day` is a DateTime @db.Date column — it keeps only the UTC date
+					// component, so it needs the org-local calendar date as a string, not
+					// the local-midnight instant (which a zone east of UTC would truncate
+					// to the wrong date).
+					day:                  new Date(localDateString(new Date(), orgTz) + "T00:00:00.000Z"),
 					mode:                 parsed.mode ?? "restock",
 					completed_by_id:      context?.dispatcherId ?? null,
 					completed_by_tech_id: context?.dispatcherId ? null : (context?.techId ?? null),
@@ -2125,20 +2118,15 @@ export async function completeRestock(
 				select: { id: true, inventory_item: { select: { name: true } } },
 			});
 			const nameByStockItemId = new Map(shortfallStockItems.map((s) => [s.id, s.inventory_item.name]));
-			try {
-				emitToOrg(orgId, "vehicle:restock_shortfall", {
-					organizationId: orgId,
-					vehicleId,
-					vehicle_name: vehicle.name,
-					date: localDateString(new Date(), orgTz),
-					shortfalls: shortfallLines.map((l) => ({
-						name: nameByStockItemId.get(l.stock_item_id) ?? "Unknown item",
-						qty_shortfall: Number(l.qty_shortfall),
-					})),
-				});
-			} catch {
-				// no-op — same "socket not initialized" tolerance as emitInventoryUpdated
-			}
+			const items = shortfallLines.map(
+				(l) => `${nameByStockItemId.get(l.stock_item_id) ?? "Unknown item"} (-${Number(l.qty_shortfall)})`,
+			);
+			notifyDispatchers({
+				type: "restock_shortfall",
+				title: `Restock shortfall — ${vehicle.name}`,
+				body: `Couldn't fully restock: ${items.slice(0, 3).join(", ")}${items.length > 3 ? ` and ${items.length - 3} more` : ""}.`,
+				actionUrl: `/dispatch/vehicles/${vehicleId}/stock`,
+			}, orgId).catch(() => {});
 		}
 
 		// G10: zero-shortfall EOD auto-confirms readiness for tomorrow
@@ -2234,37 +2222,6 @@ class RequestNotPendingError extends Error {}
 class QuantityRequiredError extends Error {}
 class ValidationError extends Error {}
 
-async function resolveOrCreateSupplierItem(
-	tx: Prisma.TransactionClient,
-	orgId: string,
-	line: { inventory_item_id?: string; new_item?: { name: string; cost: number } },
-	context?: UserContext,
-): Promise<string> {
-	if (line.inventory_item_id) {
-		const inv = await tx.inventory_item.findFirst({
-			where: { id: line.inventory_item_id, organization_id: orgId },
-			select: { id: true },
-		});
-		if (!inv) throw new StockItemNotFoundError("Inventory item not found");
-		return inv.id;
-	}
-	const created = await tx.inventory_item.create({
-		data: {
-			organization_id:    orgId,
-			name:               line.new_item!.name,
-			description:        "",
-			location:           "",
-			quantity:           0,
-			cost:               line.new_item!.cost,
-			unit_price:         line.new_item!.cost,
-			provisional:        true,
-			created_by_tech_id: context?.techId ?? null,
-		},
-		select: { id: true },
-	});
-	return created.id;
-}
-
 export async function adjustStock(
 	vehicleId: string,
 	data: unknown,
@@ -2342,35 +2299,6 @@ export async function adjustStock(
 						qty_before:        Number(item.qty_on_hand),
 						qty_after:         line.qty_after,
 					});
-				} else if (parsed.type === "supplier_purchase") {
-					// supplier_purchase: resolve existing catalog item or create a
-					// provisional one, then upsert a zero-qty vehicle stock row
-					const invId = await resolveOrCreateSupplierItem(tx as unknown as Prisma.TransactionClient, orgId, line, context);
-					const row = await tx.vehicle_stock_item.upsert({
-						where: {
-							vehicle_id_inventory_item_id: {
-								vehicle_id:        vehicleId,
-								inventory_item_id: invId,
-							},
-						},
-						create: {
-							vehicle_id:        vehicleId,
-							inventory_item_id: invId,
-							qty_on_hand:       0,
-							qty_min:           0,
-						},
-						update: {},
-					});
-					const delta = line.qty_after - Number(row.qty_on_hand);
-					if (delta <= 0) {
-						throw new Error("Supplier purchase must increase quantity");
-					}
-					resolved.push({
-						stock_item_id:     row.id,
-						inventory_item_id: invId,
-						qty_before:        Number(row.qty_on_hand),
-						qty_after:         line.qty_after,
-					});
 				} else {
 					const inv = await tx.inventory_item.findFirst({
 						where: { id: line.inventory_item_id!, organization_id: orgId, provisional: false },
@@ -2443,24 +2371,6 @@ export async function adjustStock(
 				const line = computedLines[i];
 				if (line.delta === 0) continue;
 				const raw = parsed.lines[i];
-				const itemFlags = flags.get(line.inventory_item_id);
-
-				let batchId: string | undefined;
-				if (itemFlags?.is_batch_tracked && raw.new_batch) {
-					const batch = await getOrCreateBatch(tx as unknown as Prisma.TransactionClient, orgId, {
-						inventory_item_id: line.inventory_item_id,
-						batch_number: raw.new_batch.batch_number,
-						expires_at: raw.new_batch.expires_at ? new Date(raw.new_batch.expires_at) : null,
-						supplier: raw.new_batch.supplier ?? null,
-						// Lot cost only for a genuine purchase — a transfer or
-						// audit correction of an existing lot paid nothing.
-						unit_cost:
-							parsed.type === "supplier_purchase"
-								? (raw.new_batch.unit_cost ?? raw.unit_cost ?? null)
-								: null,
-					});
-					batchId = batch.id;
-				}
 
 				nonZeroIdx.push(i);
 				nonZeroLines.push({
@@ -2468,8 +2378,6 @@ export async function adjustStock(
 					qty: Math.abs(line.delta),
 					raw: {
 						serial_unit_ids: raw.serial_unit_ids,
-						new_serials: raw.new_serials,
-						batch_id: batchId,
 						batch_picks: raw.batch_picks,
 					},
 				});
@@ -2480,7 +2388,9 @@ export async function adjustStock(
 				orgId,
 				flags,
 				nonZeroLines,
-				{ allowNewSerials: true },
+				// Nothing left here brings a unit into circulation for the first
+				// time — that was supplier_purchase, and it is a field purchase now.
+				{ allowNewSerials: false },
 			);
 
 			const trackingByLine: LineTracking[] = computedLines.map(() => ({}));
@@ -2542,22 +2452,6 @@ export async function adjustStock(
 						adjustment_id:      created.id,
 						...tracking,
 					});
-				} else if (parsed.type === "supplier_purchase") {
-					movements.push({
-						inventory_item_id:  line.inventory_item_id,
-						qty,
-						from_location_type: "external",
-						to_location_type:   "vehicle",
-						to_vehicle_id:      vehicleId,
-						reason:             "supplier_purchase",
-						adjustment_id:      created.id,
-						// Only branch carrying a purchase price: stock enters from
-						// outside the org here, so this is literally what was paid.
-						// new_item.cost is NOT a fallback — that's the standard cost
-						// being configured on a freshly created item, not a receipt.
-						unit_cost:          parsed.lines[i]?.unit_cost,
-						...tracking,
-					});
 				} else {
 					const reason =
 						parsed.type === "field_loss"
@@ -2595,7 +2489,7 @@ export async function adjustStock(
 		});
 
 		fireLowStockAlerts(lowStockItemIds, orgId).catch(() => {});
-		if (parsed.type === "warehouse_exchange" || parsed.lines.some((l) => l.new_item)) emitInventoryUpdated(orgId, { vehicleId });
+		if (parsed.type === "warehouse_exchange") emitInventoryUpdated(orgId, { vehicleId });
 
 		await logActivity({
 			event_type: "vehicle_stock.adjusted",
@@ -2835,12 +2729,12 @@ export async function getTomorrowRequirements(
 				scheduled_start_at: { gte: tomorrowStart, lt: tomorrowEnd },
 				status: { notIn: ["Completed", "Cancelled"] },
 				visit_techs: { some: { tech_id: { in: techIds } } },
-				line_items: { some: { inventory_item_id: { not: null } } },
+				line_items: { some: READINESS_LINE_ITEM_WHERE },
 			},
 			include: {
 				job: { include: { client: { select: { name: true } } } },
 				line_items: {
-					where: { inventory_item_id: { not: null } },
+					where: READINESS_LINE_ITEM_WHERE,
 					select: { inventory_item_id: true, quantity: true, name: true },
 				},
 			},
@@ -2964,7 +2858,7 @@ async function computeReadinessForVehicles(
 					},
 					include: {
 						line_items: {
-							where: { inventory_item_id: { not: null } },
+							where: READINESS_LINE_ITEM_WHERE,
 							include: { inventory_item: { select: { id: true, name: true } } },
 						},
 						visit_techs: { select: { tech_id: true } },
@@ -3281,239 +3175,6 @@ export async function getStockConflicts(orgId: string, scopeVehicleId?: string):
 	return scopeVehicleId ? conflicts.filter((c) => c.vehicleId === scopeVehicleId) : conflicts;
 }
 
-// ── Supplier Part Used (shortcut: external → vehicle → consumed) ──────────────
-
-const supplierPartUsedSchema = z
-	.object({
-		technician_id:     z.string().uuid(),
-		qty_used:          stockQtyField(z.number().positive()),
-		inventory_item_id: z.string().uuid().optional(),
-		new_item:          z.object({ name: z.string().min(1).max(200), cost: z.number().min(0) }).optional(),
-		// What the tech paid the supplier per unit for this part. Recorded on the
-		// external → vehicle leg (the purchase); the vehicle → consumed leg is the
-		// same stock being used, not a second purchase, so it carries no cost.
-		unit_cost:         z.number().nonnegative().optional(),
-		new_serials:       z.array(z.string().trim().min(1).max(100)).optional(),
-		batch: z
-			.object({
-				batch_number: z.string().trim().min(1).max(100),
-				expires_at:   expiresAtField,
-				supplier:     z.string().trim().max(200).optional(),
-				unit_cost:    z.number().nonnegative().optional(),
-			})
-			.optional(),
-		batch_id: z.string().uuid().optional(),
-	})
-	.refine(
-		(d) => (d.inventory_item_id ? 1 : 0) + (d.new_item ? 1 : 0) === 1,
-		{ message: "Provide exactly one of inventory_item_id or new_item" },
-	)
-	.refine((d) => !(d.batch && d.batch_id), {
-		message: "provide either batch or batch_id, not both",
-	});
-
-export async function addSupplierPartUsed(
-	vehicleId: string,
-	visitId: string,
-	data: unknown,
-	orgId: string,
-	context?: UserContext,
-) {
-	try {
-		const parsed = supplierPartUsedSchema.parse(data);
-
-		const ownershipErr = await requireTechOnVehicle(vehicleId, orgId, context);
-		if (ownershipErr) return { err: ownershipErr };
-
-		const sdb = getScopedDb(orgId);
-
-		const visit = await sdb.job_visit.findFirst({ where: { id: visitId } });
-		if (!visit) return { err: "Visit not found" };
-
-		const result = await sdb.$transaction(async (tx) => {
-			// Resolve or provision the inventory item
-			const txc = tx as unknown as Prisma.TransactionClient;
-			const inventoryItemId = parsed.inventory_item_id
-				? await resolveOrCreateSupplierItem(txc, orgId, { inventory_item_id: parsed.inventory_item_id }, context)
-				: await resolveOrCreateSupplierItem(txc, orgId, { new_item: parsed.new_item }, context);
-
-			const inv = await tx.inventory_item.findFirstOrThrow({
-				where: { id: inventoryItemId },
-				select: { name: true, unit_price: true, is_serialized: true, is_batch_tracked: true },
-			});
-
-			// Serial/batch tracking (B-T3) — leg 1 (external → vehicle) creates the
-			// new units/lot, leg 2 (vehicle → consumed) resolves-once and reuses
-			// the same units/lot. Only the existing-item branch above can ever be
-			// tracked (provisional items are always untracked), so this simply
-			// no-ops for the new_item path.
-			let leg1Serial: MovementInput["serial"];
-			let leg2Serial: MovementInput["serial"];
-			let batchAllocations: MovementInput["batch_allocations"];
-
-			if (inv.is_serialized) {
-				if (!Number.isInteger(parsed.qty_used)) {
-					throw new TrackingValidationError("qty_used must be an integer for a serialized item");
-				}
-				if (!parsed.new_serials || parsed.new_serials.length !== parsed.qty_used) {
-					throw new TrackingValidationError(
-						"new_serials is required and its length must equal qty_used for a serialized item",
-					);
-				}
-				leg1Serial = { create: parsed.new_serials.map((sn) => ({ serial_number: sn })) };
-			} else if (inv.is_batch_tracked) {
-				if (!parsed.batch && !parsed.batch_id) {
-					throw new TrackingValidationError("Provide batch or batch_id for a batch-tracked item");
-				}
-				let resolvedBatch: { id: string };
-				if (parsed.batch) {
-					resolvedBatch = await getOrCreateBatch(txc, orgId, {
-						inventory_item_id: inventoryItemId,
-						batch_number:      parsed.batch.batch_number,
-						expires_at:        parsed.batch.expires_at ? new Date(parsed.batch.expires_at) : null,
-						supplier:          parsed.batch.supplier ?? null,
-						unit_cost:         parsed.batch.unit_cost ?? parsed.unit_cost ?? null,
-					});
-				} else {
-					const batchRow = await tx.stock_batch.findFirst({
-						where: { id: parsed.batch_id!, organization_id: orgId, inventory_item_id: inventoryItemId },
-						select: { id: true },
-					});
-					if (!batchRow) throw new Error("Batch not found");
-					resolvedBatch = batchRow;
-				}
-				batchAllocations = [{ batch_id: resolvedBatch.id, qty: parsed.qty_used }];
-			}
-
-			// 1) Part enters the truck from the supplier
-			await recordMovements(txc, orgId, toActor(context), [
-				{
-					inventory_item_id:  inventoryItemId,
-					qty:                parsed.qty_used,
-					from_location_type: "external",
-					to_location_type:   "vehicle",
-					to_vehicle_id:      vehicleId,
-					reason:             "supplier_purchase",
-					unit_cost:          parsed.unit_cost,
-					...(leg1Serial ? { serial: leg1Serial } : {}),
-					...(batchAllocations ? { batch_allocations: batchAllocations } : {}),
-				},
-			]);
-
-			if (inv.is_serialized && parsed.new_serials) {
-				const createdUnits = await tx.serial_unit.findMany({
-					where: {
-						organization_id:   orgId,
-						inventory_item_id: inventoryItemId,
-						serial_number:     { in: parsed.new_serials },
-					},
-					select: { id: true },
-				});
-				leg2Serial = { unit_ids: createdUnits.map((u) => u.id) };
-			}
-
-			// 2) Line item + consumption from the truck
-			const unitPrice = Number(inv.unit_price ?? 0);
-			const lineItem = await tx.job_visit_line_item.create({
-				data: {
-					visit_id:           visitId,
-					name:               inv.name,
-					quantity:           parsed.qty_used,
-					unit_price:         unitPrice,
-					total:              unitPrice * parsed.qty_used,
-					source:             "field_addition",
-					item_type:          "material",
-					sort_order:         0,
-					inventory_item_id:  inventoryItemId,
-					fulfillment_status: "used",
-				},
-			});
-
-			await recordMovements(
-				txc,
-				orgId,
-				{ actor_type: "technician", actor_id: parsed.technician_id },
-				[
-					{
-						inventory_item_id:  inventoryItemId,
-						qty:                parsed.qty_used,
-						from_location_type: "vehicle",
-						from_vehicle_id:    vehicleId,
-						to_location_type:   "consumed",
-						reason:             "parts_used",
-						visit_id:           visitId,
-						visit_line_item_id: lineItem.id,
-						...(leg2Serial ? { serial: leg2Serial } : {}),
-						...(batchAllocations ? { batch_allocations: batchAllocations } : {}),
-					},
-				],
-				{ allowNegative: true },
-			);
-
-			// Ensure a stock row exists for the usage record (upsert zero-qty row if absent)
-			await tx.vehicle_stock_item.upsert({
-				where: {
-					vehicle_id_inventory_item_id: {
-						vehicle_id:        vehicleId,
-						inventory_item_id: inventoryItemId,
-					},
-				},
-				create: {
-					vehicle_id:        vehicleId,
-					inventory_item_id: inventoryItemId,
-					qty_on_hand:       0,
-					qty_min:           0,
-				},
-				update: {},
-			});
-
-			const stockRow = await tx.vehicle_stock_item.findFirstOrThrow({
-				where: { vehicle_id: vehicleId, inventory_item_id: inventoryItemId },
-				select: { id: true },
-			});
-
-			await tx.vehicle_stock_usage.create({
-				data: {
-					stock_item_id:      stockRow.id,
-					visit_id:           visitId,
-					technician_id:      parsed.technician_id,
-					qty_used:           parsed.qty_used,
-					visit_line_item_id: lineItem.id,
-				},
-			});
-
-			await recomputeVisitTotals(visitId, orgId, tx as unknown as Prisma.TransactionClient);
-
-			return { lineItem };
-		});
-
-		if (parsed.new_item) emitInventoryUpdated(orgId, { vehicleId });
-
-		await logActivity({
-			event_type:      "vehicle_stock.supplier_part_used",
-			action:          "updated",
-			entity_type:     "job_visit",
-			entity_id:       visitId,
-			organization_id: orgId,
-			actor_type:      "technician",
-			actor_id:        parsed.technician_id,
-			changes:         { qty_used: { old: null, new: parsed.qty_used } },
-		});
-
-		return { err: "", item: result };
-	} catch (e: unknown) {
-		if (e instanceof ZodError) return { err: `Validation failed: ${formatZodError(e)}` };
-		if (e instanceof StockItemNotFoundError) return { err: e.message };
-		const t = trackingErrorResponse(e);
-		if (t) return t;
-		if (e instanceof Error && e.message === "Batch not found") return { err: e.message };
-		log.error({ err: e }, "Failed to add supplier part");
-		return { err: "Failed to add supplier part" };
-	}
-}
-
-// ── Movement history ──────────────────────────────────────────────────────────
-
 export const getVehicleMovements = async (
 	vehicleId: string,
 	organizationId: string,
@@ -3547,3 +3208,524 @@ export const getVehicleMovements = async (
 
 	return { err: "", movements: page.map(mapStockMovement), nextCursor };
 };
+
+// Vehicle maintenance
+
+export const createMaintenanceRecord = async (orgId: string, vehicleId: string, data: unknown, context?: UserContext) => {
+	const sdb = getScopedDb(orgId);
+
+	const vehicle = await sdb.vehicle.findFirst({where: { id: vehicleId }});
+	if (!vehicle) return { err: "Vehicle not found"};
+
+	let parsed: z.infer<typeof createMaintenanceRecordSchema>;
+	try {
+		parsed = createMaintenanceRecordSchema.parse(data);
+	} catch (e) {
+		if (e instanceof ZodError) return { err: formatZodError(e) };
+		return { err: "Invalid input" };
+	}
+
+	if (parsed.source_field_purchase_line_id) {
+		const line = await sdb.field_purchase_line.findFirst({ 
+			where: {id: parsed.source_field_purchase_line_id}, 
+		});
+		if (line?.disposition_vehicle_id !== vehicleId)
+			return { err: "Source purchase line belongs to another vehicle"}
+	}
+	if (parsed.source_purchase_line_id) {
+		const line = await sdb.purchase_line.findFirst({ 
+			where: {id: parsed.source_purchase_line_id}, 
+		});
+		if (line?.disposition_vehicle_id !== vehicleId)
+			return { err: "Source purchase line belongs to another vehicle"}
+	}
+
+	const { reminder_ids, ...recordData } = parsed;
+	const record = await sdb.vehicle_maintenance_record.create({
+		data: {
+			...recordData,
+			performed_at: new Date(parsed.performed_at),
+			performed_by_id: context?.dispatcherId ?? null,
+			performed_by_tech_id: context?.dispatcherId ? null : (context?.techId ?? null),
+			organization_id: orgId,
+			vehicle_id: vehicleId
+		}
+	});
+
+	await applyRecordOdometer(sdb, vehicleId, record);
+
+	if (reminder_ids?.length) {
+		const covered = await sdb.vehicle_maintenance_reminder.findMany({
+			where: { id: { in: reminder_ids }, vehicle_id: vehicleId },
+		});
+		for (const reminder of covered) {
+			if (!reminder.repeats) {
+				if (reminder.completed_at == null) await completeMaintenanceReminder(orgId, vehicleId, reminder.id, context);
+				continue;
+			}
+			// backdated record older than the current anchor — don't move the due date backwards
+			const anchor = reminder.baseline_at;
+			if (anchor && record.performed_at.getTime() < Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), anchor.getUTCDate())) continue;
+
+			const baseline_odometer_mi = record.odometer_mi ?? vehicle.current_odometer_mi;
+			await sdb.vehicle_maintenance_reminder.update({
+				where: { id: reminder.id },
+				data: { baseline_at: record.performed_at, baseline_odometer_mi, acknowledged_at: null },
+			});
+			await logActivity({
+				event_type: "vehicle_maintenance_reminder.serviced",
+				action: "updated",
+				entity_type: "vehicle_maintenance_reminder",
+				entity_id: reminder.id,
+				organization_id: orgId,
+				...getActorInfo(context),
+				changes: {
+					baseline_at:          { old: reminder.baseline_at, new: record.performed_at },
+					baseline_odometer_mi: { old: reminder.baseline_odometer_mi, new: baseline_odometer_mi },
+				},
+			});
+		}
+	}
+
+	await logActivity({
+		event_type: "vehicle_maintenance.created",
+		action: "created",
+		entity_type: "vehicle_maintenance_record",
+		entity_id: record.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: {
+			category:     { old: null, new: record.category },
+			performed_at: { old: null, new: record.performed_at },
+		},
+	});
+
+	return { record };
+}
+
+export const getMaintenanceRecords = async (orgId: string, vehicleId: string) => {
+	const sdb = getScopedDb(orgId);
+
+	const exists = await sdb.vehicle.findFirst({ where: { id: vehicleId }});
+	if (!exists) return { err: "Vehicle not found"};
+
+	const records = await sdb.vehicle_maintenance_record.findMany({
+		where: {vehicle_id: vehicleId},
+		orderBy: { performed_at: "desc" }, 
+		include: {
+			performed_by: { select: { id: true, name: true } },
+			performed_by_tech: { select: { id: true, name: true } },
+			source_purchase_line: { select: { purchase_id: true } },
+			source_field_purchase_line: { select: { field_purchase_id: true } },
+		}
+	});
+
+	return { records: records.map(mapMaintenanceRecord) };
+}
+
+export const updateMaintenanceRecord = async(orgId: string, vehicleId: string, recordId: string, data: unknown, context?: UserContext) =>  {
+	let parsed: z.infer<typeof updateMaintenanceRecordSchema>;
+	try {
+		parsed = updateMaintenanceRecordSchema.parse(data);
+	} catch (e) {
+		if (e instanceof ZodError) return { err: formatZodError(e) };
+		return { err: "Invalid input" };
+	}
+
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_record.findFirst({
+		where: { id: recordId, vehicle_id: vehicleId }
+	});
+	if (!existing) return { err: "Maintenance record not found"};
+
+	if (parsed.source_field_purchase_line_id) {
+		const line = await sdb.field_purchase_line.findFirst({ where: { id: parsed.source_field_purchase_line_id } });
+		if (line?.disposition_vehicle_id !== vehicleId)
+			return { err: "Source purchase line belongs to another vehicle" };
+	}
+	if (parsed.source_purchase_line_id) {
+		const line = await sdb.purchase_line.findFirst({ where: { id: parsed.source_purchase_line_id } });
+		if (line?.disposition_vehicle_id !== vehicleId)
+			return { err: "Source purchase line belongs to another vehicle" };
+	}
+
+	const record = await sdb.vehicle_maintenance_record.update({
+		where: { id: recordId },
+		data: {
+			...parsed,
+			...(parsed.performed_at ? { performed_at: new Date(parsed.performed_at) } : {}),
+		},
+	});
+
+	await applyRecordOdometer(sdb, vehicleId, record);
+
+	const changes = buildChanges(existing, parsed, [
+		"category", "performed_at", "odometer_mi", "interval_miles",
+		"interval_months", "cost", "vendor_name", "notes",
+	] as const);
+
+	await logActivity({
+		event_type: "vehicle_maintenance.updated",
+		action: "updated",
+		entity_type: "vehicle_maintenance_record",
+		entity_id: record.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes,
+	});
+
+	return { record };
+}
+
+export const deleteMaintenanceRecord = async (orgId: string, recordId: string, vehicleId: string, context?: UserContext) => {
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_record.findFirst({ where: { id: recordId, vehicle_id: vehicleId }});
+	if (!existing) return { err: "Maintenance record not found" };
+
+	await sdb.vehicle_maintenance_record.delete({ where: { id: recordId } });
+
+	await logActivity({
+		event_type: "vehicle_maintenance.deleted",
+		action: "deleted",
+		entity_type: "vehicle_maintenance_record",
+		entity_id: recordId,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: {
+			category:     { old: existing.category, new: null },
+			performed_at: { old: existing.performed_at, new: null },
+			...parentBreadcrumb("vehicle", vehicleId),
+		},
+	});
+
+	return { err: "" };
+}
+
+export interface MaintenanceSourceLine {
+	id: string;
+	source: "purchase" | "field_purchase";
+	description: string;
+	vendor_name: string | null;
+	cost: number;
+	date: string | null;
+	reference: string | null;
+}
+
+export const searchMaintenanceSourceLines = async (orgId: string, vehicleId: string, q: string | undefined) => {
+	const sdb = getScopedDb(orgId);
+
+	const vehicle = await sdb.vehicle.findFirst({where: { id: vehicleId }});
+	if (!vehicle) return { err: "Vehicle not found"};
+
+	const term = q?.trim();
+
+	const [purcahseLines, fieldLines] = await Promise.all([
+		sdb.purchase_line.findMany({
+			where: {
+				disposition_vehicle_id: vehicleId,
+				...(term 
+					? { OR: [
+							{ description: { contains: term, mode: "insensitive" as const } },
+							{ purchase: { purchase_number: { contains: term, mode: "insensitive" as const } } },
+							{ purchase: { vendor_name: { contains: term, mode: "insensitive" as const } } },
+						]
+					}
+					: {}
+				)
+			},
+			include: { purchase: { select: { purchase_number: true, vendor_name: true, purchased_at: true } } },
+			orderBy: { created_at: "desc" },
+			take: 20,
+		}),
+		sdb.field_purchase_line.findMany({
+			where: {
+				disposition_vehicle_id: vehicleId,
+				...(term 
+					? { OR: [
+							{ description: { contains: term, mode: "insensitive" as const } },
+							{ field_purchase: { receipt_number: { contains: term, mode: "insensitive" as const } } },
+							{ field_purchase: { vendor_name: { contains: term, mode: "insensitive" as const } } },
+						]
+					}
+					: {}
+				)
+			},
+			include: { field_purchase: { select: { receipt_number: true, vendor_name: true, purchased_at: true, submitted_at: true } } },
+			orderBy: { created_at: "desc" },
+			take: 20,
+		})
+	]);
+	
+	const lines: MaintenanceSourceLine[] = [
+		...purcahseLines.map((l): MaintenanceSourceLine => ({
+		id: l.id,
+		source: "purchase",
+		description: l.description,
+		vendor_name: l.purchase.vendor_name,
+		cost: Number(l.line_total),
+		date: (l.received_at ?? l.purchase.purchased_at)?.toISOString() ?? null,
+		reference: l.purchase.purchase_number,
+		})),
+		...fieldLines.map((l): MaintenanceSourceLine => ({
+		id: l.id,
+		source: "field_purchase",
+		description: l.description,
+		vendor_name: l.field_purchase.vendor_name,
+		cost: Number(l.line_total),
+		date: l.field_purchase.submitted_at?.toISOString() ?? null,
+		reference: l.field_purchase.receipt_number,
+		})),
+	].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? "")).slice(0, 20);
+
+	return { lines };
+}
+
+export const getMaintenanceReminders = async (orgId: string, vehicleId: string) => {
+	const sdb = getScopedDb(orgId);
+
+	const vehicle = await sdb.vehicle.findFirst({where: {id: vehicleId}});
+	if (!vehicle) return { err: "Vehicle not found"};
+
+	const reminders = await sdb.vehicle_maintenance_reminder.findMany({
+		where: {vehicle_id: vehicleId},
+		orderBy: { created_at: "desc"}
+	});
+
+	return { reminders: reminders.map(mapMaintenanceReminder) };
+}
+
+export const createMaintenanceReminder = async (orgId: string, vehicleId: string, data: unknown, context?: UserContext) => {
+	let parsed: z.infer<typeof createMaintenanceReminderSchema>;
+	try {
+		parsed = createMaintenanceReminderSchema.parse(data);
+	} catch (e) {
+		if (e instanceof ZodError) return { err: formatZodError(e) };
+		return { err: "Invalid input" };
+	}
+
+	const sdb = getScopedDb(orgId);
+
+	const vehicle = await sdb.vehicle.findFirst({where: {id: vehicleId}});
+	if (!vehicle) return { err: "Vehicle not found"};
+
+	// repeating only: anchors the due calc until a record covers this reminder
+	const baseline = parsed.repeats
+		? {
+				baseline_at: new Date(),
+				baseline_odometer_mi: vehicle.current_odometer_mi,
+			}
+		: {};
+
+	const reminder = await sdb.vehicle_maintenance_reminder.create({
+		data: {
+			...parsed,
+			...(parsed.due_at ? { due_at: new Date(parsed.due_at) } : {}),
+			...baseline,
+			organization_id: orgId,
+			vehicle_id: vehicleId
+		}
+	});
+
+	await logActivity({
+		event_type: "vehicle_maintenance_reminder.created",
+		action: "created",
+		entity_type: "vehicle_maintenance_reminder",
+		entity_id: reminder.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: {
+			category: { old: null, new: reminder.category },
+			title:    { old: null, new: reminder.title },
+			repeats:  { old: null, new: reminder.repeats },
+		},
+	});
+
+	return { reminder };
+}
+
+export const updateMaintenanceReminder = async (orgId: string, vehicleId: string, reminderId: string, data: unknown, context?: UserContext) =>{
+	let parsed: z.infer<typeof updateMaintenanceReminderSchema>;
+	try {
+		parsed = updateMaintenanceReminderSchema.parse(data);
+	} catch (e) {
+		if (e instanceof ZodError) return { err: formatZodError(e) };
+		return { err: "Invalid input" };
+	}
+
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_reminder.findFirst({where: {id: reminderId, vehicle_id: vehicleId}});
+	if (!existing) return { err: "Maintenance reminder not found"};
+
+	const updated = await sdb.vehicle_maintenance_reminder.update({
+		where: {id: reminderId},
+		data: {
+			...parsed,
+			...(parsed.due_at ? { due_at: new Date(parsed.due_at) } : {}),
+		}
+	});
+
+	await logActivity({
+		event_type: "vehicle_maintenance_reminder.updated",
+		action: "updated",
+		entity_type: "vehicle_maintenance_reminder",
+		entity_id: updated.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: buildChanges(existing, parsed, [
+			"category", "title", "description", "interval_miles",
+			"interval_unit", "interval_count", "repeats", "due_at", "due_odometer_mi",
+		] as const),
+	});
+
+	return { reminder: updated };
+}
+
+export const deleteMaintenanceReminder = async (orgId: string, vehicleId: string, reminderId: string, context?: UserContext) => {
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_reminder.findFirst({where: {id: reminderId, vehicle_id: vehicleId}});
+	if (!existing) return { err: "Maintenance reminder not found"};
+
+	await sdb.vehicle_maintenance_reminder.delete({ where: { id: reminderId } });
+
+	await logActivity({
+		event_type: "vehicle_maintenance_reminder.deleted",
+		action: "deleted",
+		entity_type: "vehicle_maintenance_reminder",
+		entity_id: reminderId,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: {
+			category: { new: null, old: existing.category },
+			title:    { new: null, old: existing.title },
+			repeats:  { new: null, old: existing.repeats },
+			...parentBreadcrumb("vehicle", vehicleId),
+		},
+	});
+
+	return { err: "" };
+}
+
+export const acknowledgeMaintenanceReminder = async (orgId: string, vehicleId: string, reminderId: string, context?: UserContext) => {
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_reminder.findFirst({where: {id: reminderId, vehicle_id: vehicleId}});
+	if (!existing) return { err: "Maintenance reminder not found"};
+
+	const reminder = await sdb.vehicle_maintenance_reminder.update({
+		where: {id: reminderId},
+		data: { acknowledged_at: new Date() },
+	});
+
+	await logActivity({
+		event_type: "vehicle_maintenance_reminder.acknowledged",
+		action: "updated",
+		entity_type: "vehicle_maintenance_reminder",
+		entity_id: reminder.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: { acknowledged_at: { old: null, new: reminder.acknowledged_at } },
+	});
+
+	return { reminder };
+}
+
+export const completeMaintenanceReminder = async (orgId: string, vehicleId: string, reminderId: string, context?: UserContext) => {
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_reminder.findFirst({where: {id: reminderId, vehicle_id: vehicleId}});
+	if (!existing) return { err: "Maintenance reminder not found"};
+
+	const reminder = await sdb.vehicle_maintenance_reminder.update({
+		where: {id: reminderId},
+		data: { completed_at: new Date() },
+	});
+
+	await logActivity({
+		event_type: "vehicle_maintenance_reminder.completed",
+		action: "updated",
+		entity_type: "vehicle_maintenance_reminder",
+		entity_id: reminder.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: { completed_at: { old: null, new: reminder.completed_at } },
+	});
+
+	return { reminder };
+}
+
+export const unacknowledgeMaintenanceReminder = async (orgId: string, vehicleId: string, reminderId: string, context?: UserContext) => {
+	const sdb = getScopedDb(orgId);
+
+	const existing = await sdb.vehicle_maintenance_reminder.findFirst({where: {id: reminderId, vehicle_id: vehicleId}});
+	if (!existing) return { err: "Maintenance reminder not found"};
+
+	const reminder = await sdb.vehicle_maintenance_reminder.update({
+		where: {id: reminderId},
+		data: { acknowledged_at: null },
+	});
+
+	await logActivity({
+		event_type: "vehicle_maintenance_reminder.unacknowledged",
+		action: "updated",
+		entity_type: "vehicle_maintenance_reminder",
+		entity_id: reminder.id,
+		organization_id: orgId,
+		...getActorInfo(context),
+		changes: { acknowledged_at: { old: existing.acknowledged_at, new: null } },
+	});
+
+	return { reminder };
+}
+
+interface MaintenanceAlert {
+	reminderId: string;
+	vehicleId: string;
+	vehicleName: string;
+	category: string;
+	title: string;
+	status: "overdue" | "duesoon";
+	dueAt: string | null;
+	dueOdometerMi: number | null;
+	currentOdometerMi: number | null;
+	acknowledged: boolean;
+}
+
+export const getMaintenanceAlerts = async (orgId: string, scopeVehicleId?: string): Promise<MaintenanceAlert[]> => {
+	const sdb = getScopedDb(orgId);
+
+	const reminders = await sdb.vehicle_maintenance_reminder.findMany({
+		where: {
+			completed_at: null,
+			...(scopeVehicleId ? { vehicle_id: scopeVehicleId } : {}),
+		},
+		include: { vehicle: { select: { id: true, name: true, current_odometer_mi: true } } },
+	});
+
+	const alerts: MaintenanceAlert[] = [];
+	for (const reminder of reminders) {
+		const odometer = reminder.vehicle.current_odometer_mi;
+		const status = classifyReminder(reminder, odometer);
+		if (status !== "overdue" && status !== "duesoon") continue;
+
+		const { dueAt, dueMiles } = resolveDueTargets(reminder);
+		alerts.push({
+			reminderId: reminder.id,
+			vehicleId: reminder.vehicle_id,
+			vehicleName: reminder.vehicle.name,
+			category: reminder.category,
+			title: reminder.title,
+			status,
+			dueAt: dueAt ? dueAt.toISOString() : null,
+			dueOdometerMi: dueMiles,
+			currentOdometerMi: odometer,
+			acknowledged: reminder.acknowledged_at != null,
+		});
+	}
+
+	const rank = { overdue: 0, duesoon: 1 } as const;
+	return alerts.sort((a, b) => Number(a.acknowledged) - Number(b.acknowledged) || rank[a.status] - rank[b.status]);
+}

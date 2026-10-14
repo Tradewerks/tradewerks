@@ -11,7 +11,11 @@ import * as notificationsController from "./controllers/notificationsController.
 import { startVisitReminderInterval } from "./services/notifications.js";
 import { startInvoiceSchedulerInterval } from "./services/invoiceScheduler.js";
 import { startFollowupSchedulerInterval } from "./services/followupScheduler.js";
+import { startMaintenanceReminderInterval } from "./services/vehicleMaintenanceScheduler.js";
+import { startArrivalTrackingInterval } from "./services/arrivalTracker.js";
+import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
+import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
 import multer from "multer";
 import {
 	login,
@@ -19,6 +23,7 @@ import {
 	checkToken,
 	issueAuthTokens,
 	resetPassword,
+	checkResetToken,
 } from "./controllers/authenticationController.js";
 import { verifyOTP } from "./services/otpServce.js";
 import { log } from "./services/appLogger.js";
@@ -38,9 +43,11 @@ import { refreshAccessToken, verifyToken as verifyAccessToken } from "./services
 // ============================================
 import clientsContactsRouter from "./routes/clientsContacts.js";
 import dispatchersRouter from "./routes/dispatchers.js";
+import disputesRouter from "./routes/disputes.js";
 import draftsRouter from "./routes/drafts.js";
 import emailRouter from "./routes/email.js";
 import inventoryRouter from "./routes/inventory.js";
+import inventoryImportsRouter from "./routes/inventoryImports.js";
 import invoicesRouter from "./routes/invoices.js";
 import jobsRouter from "./routes/jobs.js";
 import jobVisitsRouter from "./routes/jobVisits.js";
@@ -51,17 +58,27 @@ import quotesRouter from "./routes/quotes.js";
 import recurringPlansRouter from "./routes/recurringPlans.js";
 import reportsRouter from "./routes/reports.js";
 import requestsRouter from "./routes/requests.js";
+import suppliersRouter from "./routes/suppliers.js";
+import supplierItemsRouter from "./routes/supplierItems.js";
+import fieldPurchasesRouter from "./routes/fieldPurchases.js";
+import purchasesRouter from "./routes/purchases.js";
 import techniciansRouter from "./routes/technicians.js";
 import vehiclesRouter from "./routes/vehicles.js";
-import notificationsRouter from "./routes/notifications.js";
+import notificationsRouter, { dispatcherNotificationsRouter } from "./routes/notifications.js";
 import taxRouter from "./routes/tax.js";
 import organizationRolesRouter from "./routes/organizationRoles.js";
 import quickbooksRouter from "./routes/quickbooks.js";
 import oauthRouter from "./routes/oauth.js";
 import mfaRouter from "./routes/mfa.js";
+import platformRouter from "./routes/platform/index.js";
+import { platformProxyWarning, trustProxySetting } from "./platform/staffToken.js";
 import ssoRouter from "./routes/sso.js"
 import followupsRouter from "./routes/followups.js";
 import projectsRouter from "./routes/projects.js";
+import searchRouter from "./routes/search.js";
+import assistantRouter from "./routes/assistant.js";
+import timesheetsRouter from "./routes/timesheets.js";
+import arrivalsRouter from "./routes/arrivals.js";
 
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 
@@ -71,6 +88,13 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 import { handleCallback, QB_ENABLED } from "./services/quickbooksService.js";
 import { handleQBWebhook } from "./services/qb/qbWebhook.js"
 import { handlePostmarkWebhook } from "./services/postmarkWebhook.js";
+import { isUserActive } from "./services/userActiveCache.js";
+import { assertRegistry } from "./lib/entitlements/registry.js";
+import { assertBusinessTypes } from "./lib/entitlements/businessTypes.js";
+import { requireModule } from "./lib/entitlements/requireModule.js";
+import { registerEntitlementBlockers } from "./lib/entitlements/blockers.js";
+import orgEntitlementsRouter from "./routes/orgEntitlements.js";
+import moduleNoticesRouter from "./routes/moduleNotices.js";
 
 const errorHandler = (
 	err: any,
@@ -94,20 +118,59 @@ const errorHandler = (
 		"Unhandled request error",
 	);
 
-	const statusCode = err.statusCode || 500;
+	// httpError carries statusCode; InvalidTransitionError and
+	// DocumentRuleError carry status. Reading only one turned a deliberate
+	// refusal that reached this handler into a 500.
+	const statusCode = err.statusCode || err.status || 500;
 
 	res.status(statusCode).json(
 		createErrorResponse(
-			err.code || ErrorCodes.SERVER_ERROR,
+			err.code ||
+				(statusCode < 500 ? ErrorCodes.VALIDATION_ERROR : ErrorCodes.SERVER_ERROR),
 			err.message || "An unexpected error occurred",
 			process.env.NODE_ENV === "development" ? err.stack : undefined,
 		),
 	);
 };
 
+const ANSI = {
+	reset: "\x1b[0m",
+	dim: "\x1b[2m",
+	green: "\x1b[32m",
+	cyan: "\x1b[36m",
+	red: "\x1b[31m",
+	brightRed: "\x1b[91m",
+} as const;
+
+// Docker allocates no TTY for these containers, so process.stdout.isTTY is
+// false even though `docker logs` passes ANSI through fine. Gate on an env
+// var instead: set LOG_COLOR=0 when capturing logs to a file.
+const COLOR_LOGS = process.env["LOG_COLOR"] !== "0";
+
+const statusColor = (status: number) => {
+	if (!COLOR_LOGS) return "";
+	if (status >= 500) return ANSI.brightRed;
+	if (status >= 400) return ANSI.red;
+	if (status >= 300) return ANSI.cyan;
+	return ANSI.green;
+};
+
 const requestLogger = (req: Request, res: Response, next: NextFunction) => {
-	const timestamp = new Date().toISOString();
-	console.log(`[${timestamp}] ${req.method} ${req.path}`);
+	const startedAt = process.hrtime.bigint();
+
+	// Log on finish, not on entry (the status code does not exist yet here)
+	res.on("finish", () => {
+		const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+		const timestamp = new Date().toISOString();
+		const color = statusColor(res.statusCode);
+		const off = color ? ANSI.reset : "";
+		const dim = COLOR_LOGS ? ANSI.dim : "";
+		// req.path, not originalUrl (the query string carries OAuth codes)
+		console.log(
+			`${dim}[${timestamp}]${off} ${color}${res.statusCode}${off} ${req.method} ${req.path} ${dim}${ms.toFixed(1)}ms${off}`,
+		);
+	});
+
 	next();
 };
 
@@ -120,7 +183,7 @@ const notFoundHandler = (req: Request, res: Response) => {
 	);
 };
 
-const verifyToken = (req: Request, res: Response, next: NextFunction) => {
+const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
 	if (req.method === "OPTIONS") return next();
 
 	const token = req.headers.authorization?.split(" ")[1];
@@ -145,6 +208,11 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 						"Invalid or expired token",
 					),
 				);
+		}
+		if (!(await isUserActive(decoded.uid, decoded.role))) {
+			return res
+				.status(401)
+				.json(createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid or expired token"));
 		}
 		req.user = { ...decoded, permissions: decoded.permissions ?? null };
 		next();
@@ -194,6 +262,14 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 // ============================================
 
 const app = express();
+const trustProxy = trustProxySetting(process.env.TRUST_PROXY);
+if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
+const proxyWarning = platformProxyWarning(process.env);
+if (proxyWarning) log.warn(proxyWarning);
+
+assertRegistry();
+assertBusinessTypes();
+registerEntitlementBlockers();
 
 app.use(
 	express.json({
@@ -204,7 +280,8 @@ app.use(
 		},
 	}),
 );
-app.use(pinoHttp({ logger: log }));
+// Bearer tokens (staff tokens act on every org) must not reach stdout or Loki.
+app.use(pinoHttp({ logger: log, redact: ["req.headers.authorization", "req.headers.cookie"] }));
 app.use(httpMetricsMiddleware);
 
 // Expose Prometheus metrics at /metrics
@@ -238,29 +315,41 @@ notificationsController.setSocketIo(io);
 startVisitReminderInterval();
 startInvoiceSchedulerInterval();
 startFollowupSchedulerInterval();
+startMaintenanceReminderInterval();
+startArrivalTrackingInterval();
+startTrialSchedulerInterval();
+startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>
 	log.error(e, "Failed to rearm WrappingUp timers"),
 );
 
 // Reject sockets without a valid JWT; room membership must come from verified
 // claims, never from client-supplied handshake query params.
-io.use((socket, next) => {
+io.use(async (socket, next) => {
 	const token = socket.handshake.auth?.["token"] as string | undefined;
 	if (!token) return next(new Error("Unauthorized"));
 	try {
 		const claims = verifyAccessToken(token);
+		if (!(await isUserActive(claims.uid, claims.role))) return next(new Error("Unauthorized"));
 		socket.data.orgId = claims.organization_id ?? undefined;
 		socket.data.techId = claims.role === "technician" ? claims.uid : undefined;
+		socket.data.dispatcherId =
+			claims.role === "dispatcher" || claims.role === "admin" ? claims.uid : undefined;
 		next();
 	} catch {
 		next(new Error("Unauthorized"));
 	}
 });
 
-// Each technician joins their personal room; all clients join their org room
+// Each technician/dispatcher joins their personal room; all clients join their org room
 io.on("connection", (socket) => {
-	const { orgId, techId } = socket.data as { orgId?: string; techId?: string };
+	const { orgId, techId, dispatcherId } = socket.data as {
+		orgId?: string;
+		techId?: string;
+		dispatcherId?: string;
+	};
 	if (techId) socket.join(`tech:${techId}`);
+	if (dispatcherId) socket.join(`dispatcher:${dispatcherId}`);
 	if (orgId) socket.join(`org:${orgId}`);
 });
 
@@ -376,6 +465,15 @@ app.post("/otp-verify", async (req, res, next) => {
 	}
 });
 
+app.post("/reset-password/check", async (req, res, next) => {
+	try {
+		const status = await checkResetToken(req.body?.token, req.body?.role);
+		res.json(createSuccessResponse({ status }));
+	} catch (err) {
+		next(err);
+	}
+});
+
 app.post("/reset-password", async (req, res, next) => {
 	try {
 		const { token, newPassword, role } = req.body;
@@ -430,15 +528,15 @@ app.post("/refresh-token", async (req, res, next) => {
 app.get("/integrations/quickbooks/callback", async (req, res, next) => {
 	// QuickBooks temporarily disabled (see quickbooksService.QB_ENABLED).
 	if (!QB_ENABLED)
-		return res.redirect(`${process.env.FRONTEND_URL}/quickbooks/callback?qb=error`);
+		return res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=error`);
 	try {
 		const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
 		const realmId = req.query.realmId as string;
 		const state = req.query.state as string;
 		await handleCallback(fullUrl, state, realmId);
-		res.redirect(`${process.env.FRONTEND_URL}/quickbooks/callback?qb=connected`);
+		res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=connected`);
 	} catch (err) {
-		res.redirect(`${process.env.FRONTEND_URL}/quickbooks/callback?qb=error`);
+		res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=error`);
 	}
 });
 app.post("/integrations/quickbooks/webhook", (req, res) => {
@@ -457,6 +555,7 @@ app.use("/oauth", oauthRouter);
 // MFA (public mount — the router applies its own per-route auth guards)
 // ================================================================================
 app.use("/mfa", mfaRouter);
+app.use("/platform", platformRouter);
 
 // ================================================================================
 // SSO 
@@ -486,7 +585,7 @@ app.use("/requests", verifyToken, requestsRouter);
 // ============================================
 // QUOTE ROUTES
 // ============================================
-app.use("/quotes", verifyToken, quotesRouter);
+app.use("/quotes", verifyToken, requireModule("quotes"), quotesRouter);
 
 // ============================================
 // JOBS
@@ -501,28 +600,32 @@ app.use("/job-visits", verifyToken, jobVisitsRouter);
 // ============================================
 // RECURRING PLANS
 // ============================================
-app.use("/recurring-plans", verifyToken, recurringPlansRouter);
+app.use("/recurring-plans", verifyToken, requireModule("recurring_plans"), recurringPlansRouter);
 
 // ============================================
 // OCCURRENCE ROUTES
 // ============================================
-app.use("/occurrences", verifyToken, occurrencesRouter);
+app.use("/occurrences", verifyToken, requireModule("recurring_plans"), occurrencesRouter);
 
 // ============================================
 // INVOICE ROUTES
 // ============================================
 app.use("/invoices", verifyToken, invoicesRouter);
+app.use("/disputes", verifyToken, requireModule("disputes"), disputesRouter);
 
 // ============================================
 // TECHNICIANS
 // ============================================
 app.use("/technicians", verifyToken, techniciansRouter);
 app.use("/technicians", verifyToken, notificationsRouter);
+app.use("/timesheets", verifyToken, timesheetsRouter);
+app.use("/arrivals", verifyToken, arrivalsRouter);
 
 // ============================================
 // DISPATCHERS
 // ============================================
 app.use("/dispatchers", verifyToken, dispatchersRouter);
+app.use("/dispatchers", verifyToken, dispatcherNotificationsRouter);
 
 // ============================================
 // Email
@@ -532,9 +635,32 @@ app.use("/email", verifyToken, emailRouter);
 // ============================================
 // INVENTORY
 // ============================================
-app.use("/inventory", verifyToken, inventoryRouter);
+// Deliberately mounted before the main inventory router and its /:id routes.
+app.use("/inventory/imports", verifyToken, requireModule("inventory"), inventoryImportsRouter);
+app.use("/inventory", verifyToken, requireModule("inventory"), inventoryRouter);
+
+// ============================================
+// SUPPLIERS (vendor origin for purchased stock)
+// ============================================
+app.use("/suppliers", verifyToken, requireModule("inventory"), suppliersRouter);
+app.use("/supplier-items", verifyToken, requireModule("inventory"), supplierItemsRouter);
+app.use(
+	"/field-purchases",
+	verifyToken,
+	requireModule("field_purchases", undefined, { readOnlyPaths: [/^\/limit-check$/] }),
+	fieldPurchasesRouter,
+);
+app.use("/purchases", verifyToken, requireModule("purchasing"), purchasesRouter);
 
 // ── Org settings ─────────────────────────────────────────────────────────────
+// Above /org on purpose: that router would otherwise take the path.
+app.use(
+	"/org/entitlements/notices",
+	verifyToken,
+	requireModule("inventory", "read"),
+	moduleNoticesRouter,
+);
+app.use("/org/entitlements", verifyToken, orgEntitlementsRouter);
 app.use("/org", verifyToken, orgRouter);
 
 // ============================================
@@ -545,7 +671,14 @@ app.use("/reports", verifyToken, reportsRouter);
 // ============================================
 // VEHICLES
 // ============================================
-app.use("/vehicles", verifyToken, vehiclesRouter);
+app.use(
+	"/vehicles",
+	verifyToken,
+	requireModule("fleet", undefined, {
+		readOnlyPaths: [/^\/[^/]+\/maintenance\/purchase-lines$/],
+	}),
+	vehiclesRouter,
+);
 
 // ============================================
 // TAX RATES & GROUPS
@@ -555,17 +688,29 @@ app.use("/tax", verifyToken, taxRouter);
 // ============================================
 // QUICKBOOKS
 // ============================================
-app.use("/integrations/quickbooks", verifyToken, quickbooksRouter);
+app.use("/integrations/quickbooks", verifyToken, requireModule("quickbooks"), quickbooksRouter);
 
 // ============================================
 // AUTOMATED FOLLOWUPS
 // ============================================
-app.use("/followups", verifyToken, followupsRouter);
+app.use("/followups", verifyToken, requireModule("followups"), followupsRouter);
 
 // ============================================
 // PROJECTS
 // ============================================
-app.use("/projects", verifyToken, projectsRouter);
+app.use("/projects", verifyToken, requireModule("projects"), projectsRouter);
+
+// ============================================
+// AI ASSISTANT
+// ============================================
+app.use("/assistant", verifyToken, requireModule("ai_assistant"), assistantRouter);
+
+// ============================================
+// CROSS-ENTITY SEARCH
+// ============================================
+// Must stay above the clientsContacts mount below: that router is mounted at
+// "/" and would otherwise swallow this path.
+app.use("/search", verifyToken, searchRouter);
 
 // ============================================
 // CLIENTS + CONTACTS

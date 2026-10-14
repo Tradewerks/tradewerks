@@ -5,6 +5,7 @@ import SearchBar from "../../components/ui/SearchBar";
 import FilterChips from "../../components/ui/FilterChips";
 import PageControls from "../../components/ui/PageControls";
 import PageHeader from "../../components/ui/PageHeader";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import ColumnsButton from "../../components/ui/ColumnsButton";
 import ExportExcelButton from "../../components/reports/ExportExcelButton";
 import AdaptableTable from "../../components/AdaptableTable";
@@ -28,7 +29,7 @@ import type { RevenueLineItemRow, ReportFetchParams } from "../../types/reports"
 const COLS: ColumnOption[] = [
 	{ key: "invoiceNumber", label: "Invoice #" },
 	{ key: "clientName", label: "Client" },
-	{ key: "issueDate", label: "Issue Date" },
+	{ key: "issueDate", label: "Created Date" },
 	{ key: "name", label: "Item" },
 	{ key: "description", label: "Description" },
 	{ key: "quantity", label: "Qty" },
@@ -172,6 +173,7 @@ export default function RevenueByLineItemTypeDetailPage() {
 							disabled={total === 0}
 						/>
 						<ColumnsButton columns={COLS} hidden={hidden} onToggle={toggle} onReset={reset} />
+						<RefreshReportsButton />
 					</>
 				}
 			/>

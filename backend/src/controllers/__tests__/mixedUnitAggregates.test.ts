@@ -22,6 +22,9 @@ vi.mock("../../db.js", () => {
 		inventory_item: { findFirst: vi.fn(), findMany: vi.fn() },
 		log: { findMany: vi.fn() },
 		stock_movement: { findMany: vi.fn(), groupBy: vi.fn() },
+		// The forecast now attaches a preferred vendor per row; these fixtures
+		// have no vendors, so an empty list is the truthful stub.
+		supplier_item: { findMany: vi.fn().mockResolvedValue([]) },
 		$queryRaw: vi.fn(),
 		$extends,
 	};
@@ -370,23 +373,24 @@ describe("getItemPriceHistory — mixed units", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Reorder forecast — consumption rate, runway and severity
 // ─────────────────────────────────────────────────────────────────────────────
-describe("buildReorderForecast — mixed units", () => {
-	const forecastRow = (overrides: Record<string, unknown> = {}) => ({
-		itemId: ITEM,
-		itemName: "Line set",
-		sku: "LS-1",
-		category: null,
-		unit: ITEM_UNIT,
-		warehouseQty: 100,
-		vehicleQty: 0,
-		qtyConsumed: 90,
-		consumedUnits: ["each"],
-		lowStockThreshold: null,
-		createdAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
-		firstConsumedAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
-		...overrides,
-	});
+// Module-scoped so the vendor suite below can build the same raw row.
+const forecastRow = (overrides: Record<string, unknown> = {}) => ({
+	itemId: ITEM,
+	itemName: "Line set",
+	sku: "LS-1",
+	category: null,
+	unit: ITEM_UNIT,
+	warehouseQty: 100,
+	vehicleQty: 0,
+	qtyConsumed: 90,
+	consumedUnits: ["each"],
+	lowStockThreshold: null,
+	createdAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+	firstConsumedAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+	...overrides,
+});
 
+describe("buildReorderForecast — mixed units", () => {
 	it("computes a rate and a runway from single-unit consumption", async () => {
 		mockDb.$queryRaw.mockResolvedValue([forecastRow()]);
 
@@ -430,6 +434,85 @@ describe("buildReorderForecast — mixed units", () => {
 		expect(rows[0].belowReorderPoint).toBe(true);
 		expect(rows[0].severity).toBe("critical");
 		expect(rows[0].avgDailyUsage).toBeNull();
+	});
+});
+
+// The forecast could always say WHAT to buy and WHEN. These cover the half that
+// was missing: who from, at what price, and how confident either answer is.
+describe("reorder forecast — preferred vendor", () => {
+	const vendorRow = (over: Record<string, unknown> = {}) => ({
+		inventory_item_id: "item-1",
+		supplier_id: "sup-1",
+		vendor_sku: "FRG-88213",
+		contract_price: null,
+		last_price: 572.15,
+		last_purchased_at: new Date("2026-08-02T00:00:00.000Z"),
+		is_preferred: false,
+		supplier: { name: "Ferguson" },
+		...over,
+	});
+
+	beforeEach(() => {
+		mockDb.$queryRaw.mockResolvedValue([
+			forecastRow({ itemId: "item-1", warehouseQty: 2, lowStockThreshold: 10 }),
+		]);
+	});
+
+	it("names a chosen vendor and prices the gap to the reorder point", async () => {
+		mockDb.supplier_item.findMany.mockResolvedValue([
+			vendorRow({ is_preferred: true, contract_price: 560 }),
+		]);
+
+		const { rows } = await getInventoryReorderForecast(ORG, { lookbackDays: 90 });
+
+		expect(rows[0].preferredSupplierName).toBe("Ferguson");
+		expect(rows[0].vendorSku).toBe("FRG-88213");
+		expect(rows[0].vendorSource).toBe("preferred");
+		// A negotiated rate beats what we happened to pay last time.
+		expect(rows[0].preferredUnitPrice).toBe(560);
+		expect(rows[0].priceSource).toBe("contract");
+		// 10 threshold − 2 on hand = 8 to buy.
+		expect(rows[0].shortfallQty).toBe(8);
+		expect(rows[0].estimatedShortfallCost).toBe(4480);
+	});
+
+	it("falls back to the last vendor bought from, and says that's what it did", async () => {
+		mockDb.supplier_item.findMany.mockResolvedValue([vendorRow()]);
+
+		const { rows } = await getInventoryReorderForecast(ORG, { lookbackDays: 90 });
+
+		// Useful, but flagged — presenting a fallback as a decision would be a lie.
+		expect(rows[0].preferredSupplierName).toBe("Ferguson");
+		expect(rows[0].vendorSource).toBe("recent");
+		expect(rows[0].priceSource).toBe("observed");
+		expect(rows[0].preferredUnitPrice).toBe(572.15);
+	});
+
+	it("leaves every vendor field null when nobody sells it to us on record", async () => {
+		mockDb.supplier_item.findMany.mockResolvedValue([]);
+
+		const { rows } = await getInventoryReorderForecast(ORG, { lookbackDays: 90 });
+
+		expect(rows[0].preferredSupplierId).toBeNull();
+		expect(rows[0].preferredUnitPrice).toBeNull();
+		expect(rows[0].vendorSource).toBe("none");
+		expect(rows[0].priceSource).toBe("none");
+		// The quantity is still known — only the vendor half is missing.
+		expect(rows[0].shortfallQty).toBe(8);
+		expect(rows[0].estimatedShortfallCost).toBeNull();
+	});
+
+	it("ignores a deactivated vendor", async () => {
+		mockDb.supplier_item.findMany.mockResolvedValue([]);
+
+		await getInventoryReorderForecast(ORG, { lookbackDays: 90 });
+
+		// A retired vendor must not be the answer to "who do I buy this from".
+		expect(mockDb.supplier_item.findMany).toHaveBeenCalledWith(
+			expect.objectContaining({
+				where: expect.objectContaining({ supplier: { is_active: true } }),
+			}),
+		);
 	});
 });
 

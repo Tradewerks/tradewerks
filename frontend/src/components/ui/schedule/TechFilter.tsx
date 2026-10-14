@@ -1,6 +1,7 @@
 ﻿import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { ChevronDown, Check, Users } from "lucide-react";
 import type { Technician } from "../../../types/technicians";
+import { TOOLBAR_BTN_ACTIVE, TOOLBAR_BTN_BASE, TOOLBAR_BTN_IDLE } from "./toolbarButton";
 
 interface TechFilterProps {
 	technicians: Technician[];
@@ -99,10 +100,8 @@ export default function TechFilter({ technicians, selected, onChange, techColorM
 			<div className="flex items-center gap-1.5">
 				<button
 					onClick={selectAll}
-					className={`h-7 px-2.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
-						selected.size === 0
-							? "bg-primary/10 border-primary/25 text-primary-text"
-							: "border-transparent text-text-muted hover:text-text-secondary"
+					className={`${TOOLBAR_BTN_BASE} px-2.5 shrink-0 ${
+						selected.size === 0 ? TOOLBAR_BTN_ACTIVE : TOOLBAR_BTN_IDLE
 					}`}
 				>
 					All
@@ -114,11 +113,11 @@ export default function TechFilter({ technicians, selected, onChange, techColorM
 						<button
 							key={tech.id}
 							onClick={() => toggleTech(tech.id)}
-							className="h-7 px-2.5 rounded text-[11px] font-medium border transition-colors shrink-0 flex items-center gap-1.5"
+							className={`${TOOLBAR_BTN_BASE} px-2.5 shrink-0 flex items-center gap-1.5 ${isSel ? "" : TOOLBAR_BTN_IDLE}`}
 							style={
 								isSel
 									? { backgroundColor: color + "22", borderColor: color + "55", color }
-									: { borderColor: "transparent", color: "var(--color-text-muted)" }
+									: undefined
 							}
 						>
 							<span
@@ -142,10 +141,8 @@ export default function TechFilter({ technicians, selected, onChange, techColorM
 					ref={triggerRef}
 					onClick={() => setDropdownOpen((v) => !v)}
 					title="Technicians"
-					className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium border transition-colors min-w-0 w-full ${
-						isFiltered
-							? "bg-primary/10 border-primary/25 text-primary-text"
-							: "border-border text-text-tertiary hover:border-border-strong hover:text-text-secondary"
+					className={`${TOOLBAR_BTN_BASE} flex items-center gap-1.5 px-2.5 min-w-0 w-full ${
+						isFiltered ? TOOLBAR_BTN_ACTIVE : TOOLBAR_BTN_IDLE
 					}`}
 				>
 					<Users size={11} className="shrink-0" />

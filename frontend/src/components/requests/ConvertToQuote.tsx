@@ -4,9 +4,11 @@ import DatePicker from "../ui/DatePicker";
 import { type CreateQuoteInput } from "../../types/quotes";
 import { PriorityValues } from "../../types/common";
 import type { Request } from "../../types/requests";
-import type { GeocodeResult } from "../../types/location";
+import { normalizeCoords, type Coordinates, type GeocodeResult } from "../../types/location";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 import { X } from "lucide-react";
 
 interface ConvertToQuoteProps {
@@ -31,13 +33,15 @@ export default function ConvertToQuote({
 	const priorityRef = useRef<HTMLSelectElement>(null);
 	const [validUntil, setValidUntil] = useState<Date | null>(null);
 	const [expiresAt, setExpiresAt] = useState<Date | null>(null);
-	const [geoData, setGeoData] = useState<GeocodeResult | undefined>(
-		request.address || request.coords
-			? { address: request.address || "", coords: request.coords }
+	const requestCoords = normalizeCoords(request.coords);
+	const [geoData, setGeoData] = useState<{ address: string; coords?: Coordinates } | undefined>(
+		request.address || requestCoords
+			? { address: request.address || "", coords: requestCoords }
 			: undefined
 	);
 	const [isLoading, setIsLoading] = useState(false);
 	const [titleError, setTitleError] = useState<string | null>(null);
+	const [submitError, setSubmitError] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (isModalOpen && priorityRef.current) {
@@ -55,8 +59,8 @@ export default function ConvertToQuote({
 	};
 
 	const handleClearAddress = () => {
-		if (request.address || request.coords) {
-			setGeoData({ address: request.address || "", coords: request.coords });
+		if (request.address || requestCoords) {
+			setGeoData({ address: request.address || "", coords: requestCoords });
 		} else {
 			setGeoData(undefined);
 		}
@@ -81,6 +85,7 @@ export default function ConvertToQuote({
 		const priorityValue = priorityRef.current.value.trim() as "Low" | "Medium" | "High";
 
 		setTitleError(null);
+		setSubmitError(null);
 		if (!titleValue) {
 			setTitleError("Quote title is required");
 			return;
@@ -118,10 +123,8 @@ export default function ConvertToQuote({
 			setIsModalOpen(false);
 		} catch (error) {
 			console.error("Failed to convert request to quote:", error);
-			setTitleError(
-				error instanceof Error
-					? error.message
-					: "Failed to convert request to quote"
+			setSubmitError(
+				errorMessage(error, "Failed to convert request to quote.")
 			);
 		} finally {
 			setIsLoading(false);
@@ -183,7 +186,7 @@ export default function ConvertToQuote({
 					<AddressForm
 						mode={request.address ? "edit" : "create"}
 						originalValue={request.address || ""}
-						originalCoords={request.coords}
+						originalCoords={requestCoords}
 						dropdownPosition="below"
 						handleChange={handleChangeAddress}
 						handleClear={handleClearAddress}
@@ -233,21 +236,24 @@ export default function ConvertToQuote({
 			</div>
 
 			{/* Footer */}
-			<div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-border bg-base flex-shrink-0">
-				<button
-					onClick={() => setIsModalOpen(false)}
-					disabled={isLoading}
-					className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border bg-transparent text-sm font-medium text-text-tertiary hover:text-text-primary hover:bg-surface hover:border-border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
-				>
-					Cancel
-				</button>
-				<button
-					onClick={invokeConvert}
-					disabled={isLoading}
-					className="inline-flex items-center h-8 px-4 rounded-md bg-primary-hover hover:bg-primary disabled:bg-surface-raised disabled:text-text-muted text-sm font-semibold text-on-primary transition-colors disabled:cursor-not-allowed whitespace-nowrap"
-				>
-					{isLoading ? "Creating..." : "Create Quote"}
-				</button>
+			<div className="border-t border-border bg-base flex-shrink-0">
+				<FormErrorBanner message={submitError} className="mx-4 mt-2.5" />
+				<div className="flex items-center justify-end gap-2 px-4 py-2.5">
+					<button
+						onClick={() => setIsModalOpen(false)}
+						disabled={isLoading}
+						className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-border bg-transparent text-sm font-medium text-text-tertiary hover:text-text-primary hover:bg-surface hover:border-border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+					>
+						Cancel
+					</button>
+					<button
+						onClick={invokeConvert}
+						disabled={isLoading}
+						className="inline-flex items-center h-8 px-4 rounded-md bg-primary-hover hover:bg-primary disabled:bg-surface-raised disabled:text-text-muted text-sm font-semibold text-on-primary transition-colors disabled:cursor-not-allowed whitespace-nowrap"
+					>
+						{isLoading ? "Creating..." : "Create Quote"}
+					</button>
+				</div>
 			</div>
 		</div>
 	);

@@ -114,8 +114,23 @@ export interface AnchorLookupDb {
 }
 
 // Statuses that mean "the followup goal is resolved — stop chasing".
-const QUOTE_TERMINAL = new Set(["Approved", "Rejected", "Cancelled", "Expired"]);
-const INVOICE_TERMINAL = new Set(["Paid", "Void"]);
+// Not the same thing as terminal: a Disputed quote is very much alive, but
+// chasing the client about a document they are contesting is the wrong email,
+// and a Revised one has been superseded — the replacement enrolls on its own
+// send. Neither can ever return to Sent, so stopping here strands nothing.
+const QUOTE_STOP_CHASING = new Set([
+	"Approved",
+	"Rejected",
+	"Cancelled",
+	"Expired",
+	"Disputed",
+	"Revised",
+]);
+// Same reasoning as QUOTE_STOP_CHASING: dunning a client for a balance they
+// are actively contesting is the wrong email. Disputed is not terminal — the
+// invoice returns to status_at_open after an adjustment — but stopping the
+// enrollment here strands nothing, because an actual re-send re-enrolls it.
+const INVOICE_STOP_CHASING = new Set(["Paid", "Void", "Disputed"]);
 const VISIT_TERMINAL = new Set(["Cancelled", "Completed"]);
 // A request should still be chased only while it is New/Reviewing.
 const REQUEST_ACTIVE = new Set(["New", "Reviewing"]);
@@ -135,12 +150,12 @@ export async function evaluateAnchorStop(
 		case "quote": {
 			const q = await db.quote.findUnique({ where: { id: anchorId }, select: { status: true } });
 			if (!q) return "quote_missing";
-			return QUOTE_TERMINAL.has(q.status) ? `quote_${q.status.toLowerCase()}` : null;
+			return QUOTE_STOP_CHASING.has(q.status) ? `quote_${q.status.toLowerCase()}` : null;
 		}
 		case "invoice": {
 			const inv = await db.invoice.findUnique({ where: { id: anchorId }, select: { status: true } });
 			if (!inv) return "invoice_missing";
-			return INVOICE_TERMINAL.has(inv.status) ? `invoice_${inv.status.toLowerCase()}` : null;
+			return INVOICE_STOP_CHASING.has(inv.status) ? `invoice_${inv.status.toLowerCase()}` : null;
 		}
 		case "request": {
 			const r = await db.request.findUnique({ where: { id: anchorId }, select: { status: true } });

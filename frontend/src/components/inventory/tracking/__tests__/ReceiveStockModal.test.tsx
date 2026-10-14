@@ -1,19 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ReceiveStockModal from "../ReceiveStockModal";
 import type { BatchCaptureFieldsProps } from "../BatchCaptureFields";
 import type { SerialCaptureListProps } from "../SerialCaptureList";
 
-// Review I7: the quantity input was min=1 with no step and snapped anything
-// below 1 up to 1, so a batch-tracked measured item (ft, lb, gal …) could never
-// receive a fractional quantity even though the ledger stores 2 dp. Serialized
-// items stay whole — a serial is one indivisible unit.
+// The quantity input has no min/step clamp: the ledger stores 2 dp, so a
+// batch-tracked measured item (ft, lb, gal …) must be able to receive a
+// fractional quantity. Serialized items stay whole — a serial is one
+// indivisible unit.
 
 const mockReceive = vi.fn();
 vi.mock("../../../../hooks/useTracking", () => ({
 	useReceiveInventoryMutation: () => ({ mutateAsync: mockReceive, isPending: false }),
 }));
+
+// The modal now always renders SupplierPicker, which reads through react-query —
+// mocked (not just wrapped) so these quantity-precision tests don't also make a
+// real network call.
+vi.mock("../../../../api/suppliers", () => ({
+	getSuppliers: vi.fn().mockResolvedValue([]),
+}));
+
+function wrap(ui: React.ReactElement) {
+	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const providers = (el: React.ReactElement) => (
+		<QueryClientProvider client={qc}>{el}</QueryClientProvider>
+	);
+	const view = render(providers(ui));
+	return { ...view, rerender: (el: React.ReactElement) => view.rerender(providers(el)) };
+}
 
 const mockToast = { success: vi.fn(), error: vi.fn() };
 vi.mock("../../../ui/useToast", () => ({
@@ -32,7 +49,7 @@ vi.mock("../BatchCaptureFields", () => ({
 		<button
 			type="button"
 			onClick={() =>
-				onChange({ mode: "new", batch_number: "LOT-1", expires_at: null, supplier: "" })
+				onChange({ mode: "new", batch_number: "LOT-1", expires_at: null })
 			}
 		>
 			Fill Batch
@@ -68,7 +85,7 @@ async function setQty(value: string) {
 
 describe("ReceiveStockModal — fractional quantity", () => {
 	it("offers a 0.01 step for a batch-tracked item and a whole-unit step for a serialized one", () => {
-		const { rerender } = render(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
+		const { rerender } = wrap(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
 		expect(screen.getByLabelText("Quantity")).toHaveAttribute("step", "0.01");
 		expect(screen.getByLabelText("Quantity")).toHaveAttribute("min", "0.01");
 
@@ -79,7 +96,7 @@ describe("ReceiveStockModal — fractional quantity", () => {
 
 	it("accepts 12.5 for a batch-tracked item and sends it as a number", async () => {
 		const onClose = vi.fn();
-		render(<ReceiveStockModal isOpen onClose={onClose} item={batchItem} />);
+		wrap(<ReceiveStockModal isOpen onClose={onClose} item={batchItem} />);
 
 		await setQty("12.5");
 		await userEvent.click(screen.getByRole("button", { name: "Fill Batch" }));
@@ -94,7 +111,7 @@ describe("ReceiveStockModal — fractional quantity", () => {
 	});
 
 	it("accepts a quantity below 1 (0.5) instead of snapping it up to 1", async () => {
-		render(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
+		wrap(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
 
 		await setQty("0.5");
 		expect(screen.getByLabelText("Quantity")).toHaveValue(0.5);
@@ -106,7 +123,7 @@ describe("ReceiveStockModal — fractional quantity", () => {
 	});
 
 	it("rejects a blank or non-positive quantity with 'greater than 0'", async () => {
-		render(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
+		wrap(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
 
 		await setQty("");
 		await userEvent.click(screen.getByRole("button", { name: "Receive Stock" }));
@@ -119,7 +136,7 @@ describe("ReceiveStockModal — fractional quantity", () => {
 	});
 
 	it("rejects more than two decimal places (the numeric(10,2) bound)", async () => {
-		render(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
+		wrap(<ReceiveStockModal isOpen onClose={vi.fn()} item={batchItem} />);
 
 		await setQty("2.505");
 		await userEvent.click(screen.getByRole("button", { name: "Receive Stock" }));
@@ -128,7 +145,7 @@ describe("ReceiveStockModal — fractional quantity", () => {
 	});
 
 	it("rejects 2.5 for a serialized item — a serial is one whole unit", async () => {
-		render(<ReceiveStockModal isOpen onClose={vi.fn()} item={serialItem} />);
+		wrap(<ReceiveStockModal isOpen onClose={vi.fn()} item={serialItem} />);
 
 		await setQty("2.5");
 		await userEvent.click(screen.getByRole("button", { name: "Receive Stock" }));
@@ -139,7 +156,7 @@ describe("ReceiveStockModal — fractional quantity", () => {
 	});
 
 	it("still receives whole serialized units with their serial numbers", async () => {
-		render(<ReceiveStockModal isOpen onClose={vi.fn()} item={serialItem} />);
+		wrap(<ReceiveStockModal isOpen onClose={vi.fn()} item={serialItem} />);
 
 		await setQty("2");
 		expect(screen.getByTestId("serial-capture")).toHaveAttribute("data-target", "2");

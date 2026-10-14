@@ -3,8 +3,11 @@ import { AlertTriangle } from "lucide-react";
 import { useBatchesQuery } from "../../../hooks/useTracking";
 import type { BatchListRow } from "../../../types/tracking";
 
+// The vendor is captured once per receipt (SupplierPicker), not per lot: the
+// server writes the resolved supplier onto the new lot as well as the movement,
+// so a second input here would only be a way to disagree with it.
 export type BatchCaptureValue =
-	| { mode: "new"; batch_number: string; expires_at: string | null; supplier: string }
+	| { mode: "new"; batch_number: string; expires_at: string | null }
 	| { mode: "existing"; batch_id: string };
 
 export interface BatchCaptureFieldsProps {
@@ -49,7 +52,6 @@ export default function BatchCaptureFields({ itemId, value, onChange }: BatchCap
 			mode: "new",
 			batch_number: text,
 			expires_at: value.mode === "new" ? value.expires_at : null,
-			supplier: value.mode === "new" ? value.supplier : "",
 		});
 	};
 
@@ -62,11 +64,6 @@ export default function BatchCaptureFields({ itemId, value, onChange }: BatchCap
 	const handleExpiresChange = (text: string) => {
 		if (value.mode !== "new") return;
 		onChange({ ...value, expires_at: text || null });
-	};
-
-	const handleSupplierChange = (text: string) => {
-		if (value.mode !== "new") return;
-		onChange({ ...value, supplier: text });
 	};
 
 	const isNew = value.mode === "new";
@@ -124,7 +121,7 @@ export default function BatchCaptureFields({ itemId, value, onChange }: BatchCap
 				)}
 			</div>
 
-			<div className="grid grid-cols-2 gap-2 min-w-0">
+			<div className={`grid gap-2 min-w-0 ${isNew ? "grid-cols-1" : "grid-cols-2"}`}>
 				<div className="min-w-0">
 					<label className={LABEL}>Expires</label>
 					{isNew ? (
@@ -150,18 +147,12 @@ export default function BatchCaptureFields({ itemId, value, onChange }: BatchCap
 						/>
 					)}
 				</div>
-				<div className="min-w-0">
-					<label className={LABEL}>Supplier</label>
-					{isNew ? (
-						<input
-							type="text"
-							value={value.supplier}
-							onChange={(e) => handleSupplierChange(e.target.value)}
-							placeholder="Optional"
-							aria-label="Supplier"
-							className={INPUT}
-						/>
-					) : (
+				{/* Only for an existing lot: the vendor is already recorded on it and
+				    can't be changed by receiving more. A new lot takes its supplier
+				    from the receipt's own picker. */}
+				{!isNew && (
+					<div className="min-w-0">
+						<label className={LABEL}>Supplier</label>
 						<input
 							type="text"
 							readOnly
@@ -170,8 +161,8 @@ export default function BatchCaptureFields({ itemId, value, onChange }: BatchCap
 							value={selectedBatch?.supplier ?? "—"}
 							className={`${INPUT} text-text-muted cursor-not-allowed`}
 						/>
-					)}
-				</div>
+					</div>
+				)}
 			</div>
 
 			{!isNew && (

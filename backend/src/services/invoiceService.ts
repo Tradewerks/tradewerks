@@ -1,4 +1,5 @@
 import { getScopedDb } from "../lib/context.js";
+import { assertInventoryItemsInOrg } from "../lib/inventory.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { generateInvoiceNumber } from "../db.js";
 import {
@@ -12,6 +13,7 @@ import {
 import {
 	recomputeDocumentTotals,
 	lockDocumentTaxSnapshot,
+	type RecomputeResult,
 } from "../lib/recomputeDocumentTotals.js";
 
 // ============================================================================
@@ -56,6 +58,26 @@ export interface CreateInvoicePayload {
 // SHARED INCLUDE — exported so controller and other read paths can reuse
 // ============================================================================
 
+/**
+ * How far up the chain an invoice can be backtracked: the job's own quote and
+ * request. Spread into both join paths, which don't overlap — an invoice built
+ * from visits alone has no `invoice_job` row, so its only route to a quote is
+ * through each visit's parent job.
+ */
+const JOB_UPSTREAM_SELECT = {
+	quote: {
+		select: {
+			id: true,
+			quote_number: true,
+			title: true,
+			status: true,
+			total: true,
+			created_at: true,
+		},
+	},
+	request: { select: { id: true, title: true, status: true, created_at: true } },
+} as const;
+
 export const invoiceInclude = {
 	client: {
 		select: {
@@ -98,6 +120,7 @@ export const invoiceInclude = {
 					job_number: true,
 					name: true,
 					status: true,
+					...JOB_UPSTREAM_SELECT,
 				},
 			},
 		},
@@ -110,7 +133,17 @@ export const invoiceInclude = {
 					scheduled_start_at: true,
 					scheduled_end_at: true,
 					status: true,
-					job: { select: { id: true, job_number: true, name: true } },
+					job: {
+						select: {
+							id: true,
+							job_number: true,
+							name: true,
+							// status, because VisitReference types this
+							// job as a full JobReference.
+							status: true,
+							...JOB_UPSTREAM_SELECT,
+						},
+					},
 				},
 			},
 		},
@@ -142,6 +175,16 @@ export const invoiceInclude = {
 	recurring_plan: {
 		select: { id: true, name: true, status: true },
 	},
+	// Chain cross-references. The scalars alone cannot render "Adjusts
+	// INV-1039" / "Adjusted by INV-1040" — the detail page needs the other
+	// document's number, and "adjusted by" has no scalar at all.
+	previous_invoice: { select: { id: true, invoice_number: true } },
+	revised_invoice: { select: { id: true, invoice_number: true } },
+	adjusts_invoice: { select: { id: true, invoice_number: true } },
+	adjustments: {
+		orderBy: { invoice_number: "asc" as const },
+		select: { id: true, invoice_number: true },
+	},
 } satisfies Prisma.invoiceInclude;
 
 // ============================================================================
@@ -156,7 +199,7 @@ export async function syncInvoicePaymentTotals(
 	const [invoice, payments] = await Promise.all([
 		tx.invoice.findFirst({
 			where: { id: invoiceId },
-			select: { total: true, status: true },
+			select: { total: true, status: true, adjusts_invoice_id: true },
 		}),
 		tx.invoice_payment.findMany({
 			where: { invoice_id: invoiceId },
@@ -168,7 +211,13 @@ export async function syncInvoicePaymentTotals(
 
 	const total = Number(invoice.total);
 	const amountPaid = payments.reduce((sum, p) => sum + Number(p.amount), 0);
-	const balanceDue = Math.max(0, total - amountPaid);
+	// Same rule as recomputeDocumentTotals: a credit adjustment's balance is
+	// legitimately negative and must survive a payment resync, or the credit
+	// silently disappears from receivables the next time anything touches the
+	// document's payments. Ordinary invoices keep the floor.
+	const rawBalance = total - amountPaid;
+	const balanceDue =
+		invoice.adjusts_invoice_id != null ? rawBalance : Math.max(0, rawBalance);
 
 	// Only auto-transition to PartiallyPaid or Paid.
 	// Disputed and Void are set manually and must not be overwritten here.
@@ -198,16 +247,59 @@ export async function syncInvoicePaymentTotals(
 }
 
 /**
+ * How much has actually been paid on this invoice, summed from the payment
+ * rows — the authoritative figure. `invoice.amount_paid` is a denormalisation
+ * kept in step by syncInvoicePaymentTotals; a skipped or failed resync leaves
+ * it stale, so the guards that would strand money on a dead document read this
+ * instead of the column (matching the refund guard).
+ */
+export async function invoicePaidTotal(
+	invoiceId: string,
+	tx: Prisma.TransactionClient,
+): Promise<number> {
+	const agg = await tx.invoice_payment.aggregate({
+		where: { invoice_id: invoiceId },
+		_sum: { amount: true },
+	});
+	return Number(agg._sum.amount ?? 0);
+}
+
+/**
  * Recompute billed_amount for every invoice_job and invoice_visit row
  * linked to this invoice by summing the line items attributed to each
  * via source_job_id / source_visit_id.
+ *
+ * An adjustment carries part of the same job's billing, so profitability is
+ * the sum across the original and every live adjustment written against it.
+ * Callers may pass either end of the chain — the join rows always live on
+ * the root (original) invoice.
  */
 export async function syncBilledAmounts(
 	invoiceId: string,
 	tx: Prisma.TransactionClient,
 ): Promise<void> {
+	const self = await tx.invoice.findFirst({
+		where: { id: invoiceId },
+		select: { id: true, adjusts_invoice_id: true },
+	});
+	// Throw rather than return quietly: every caller passes an id it created or
+	// read inside the same transaction, so a miss means the chain root could
+	// not be resolved — and returning would leave every linked job's
+	// billed_amount stale with nothing to say the recompute never ran.
+	if (!self) throw new Error(`Invoice ${invoiceId} not found`);
+
+	const rootId = self.adjusts_invoice_id ?? self.id;
+	// A voided adjustment credits nothing: left in the chain, it keeps reducing
+	// the job's revenue after the credit itself is dead, and "void the
+	// adjustment first" would leave profitability short by exactly that credit.
+	const adjustments = await tx.invoice.findMany({
+		where: { adjusts_invoice_id: rootId, status: { not: "Void" } },
+		select: { id: true },
+	});
+	const chainIds = [rootId, ...adjustments.map((a) => a.id)];
+
 	const lineItems = await tx.invoice_line_item.findMany({
-		where: { invoice_id: invoiceId },
+		where: { invoice_id: { in: chainIds } },
 		select: {
 			total: true,
 			source_job_id: true,
@@ -216,7 +308,7 @@ export async function syncBilledAmounts(
 	});
 
 	const linkedVisits = await tx.invoice_visit.findMany({
-		where: { invoice_id: invoiceId },
+		where: { invoice_id: rootId },
 		select: { visit_id: true },
 	});
 
@@ -226,13 +318,13 @@ export async function syncBilledAmounts(
 			.reduce((sum, li) => sum + Number(li.total), 0);
 
 		await tx.invoice_visit.update({
-			where: { invoice_id_visit_id: { invoice_id: invoiceId, visit_id } },
+			where: { invoice_id_visit_id: { invoice_id: rootId, visit_id } },
 			data: { billed_amount: billedAmount },
 		});
 	}
 
 	const linkedJobs = await tx.invoice_job.findMany({
-		where: { invoice_id: invoiceId },
+		where: { invoice_id: rootId },
 		select: { job_id: true },
 	});
 
@@ -244,7 +336,7 @@ export async function syncBilledAmounts(
 			.reduce((sum, li) => sum + Number(li.total), 0);
 
 		await tx.invoice_job.update({
-			where: { invoice_id_job_id: { invoice_id: invoiceId, job_id } },
+			where: { invoice_id_job_id: { invoice_id: rootId, job_id } },
 			data: { billed_amount: billedAmount },
 		});
 	}
@@ -263,7 +355,7 @@ export async function recomputeInvoiceTotals(
 	organizationId: string,
 	tx: Prisma.TransactionClient,
 	lockedAt?: Date,
-): Promise<boolean> {
+): Promise<RecomputeResult> {
 	return recomputeDocumentTotals("invoice", invoiceId, organizationId, tx, lockedAt);
 }
 
@@ -419,6 +511,13 @@ export async function createInvoiceRecord(
 
 		// Create line items
 		if (payload.line_items && payload.line_items.length > 0) {
+			// Thrown, matching the "Client not found" style above: this function's
+			// callers surface Error.message.
+			await assertInventoryItemsInOrg(
+				tx,
+				organizationId,
+				payload.line_items.map((li) => li.inventory_item_id),
+			);
 			await tx.invoice_line_item.createMany({
 				data: payload.line_items.map((item, idx) => ({
 					invoice_id: invoice.id,

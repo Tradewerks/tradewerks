@@ -1,6 +1,8 @@
 import { useAllClientsQuery } from "../../hooks/useClients";
-import { useAllDispatchersQuery } from "../../hooks/useDispatchers";
+import { useActiveDispatchersQuery } from "../../hooks/useDispatchers";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 import {
     type Project,
     type UpdateProjectInput,
@@ -51,7 +53,7 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
     const { data: clients } = useAllClientsQuery();
     const clientList = useMemo(() => (clients ?? []), [clients]);
 
-    const { data: dispatchers } = useAllDispatchersQuery();
+    const { data: dispatchers } = useActiveDispatchersQuery();
     const dispatcherList = useMemo(() => (dispatchers ?? []), [dispatchers]);
 
     const isFormValid = useMemo(
@@ -112,7 +114,7 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
             }
             setIsModalOpen(false); // reopening re-seeds from the refreshed project
         } catch (e) {
-            setSubmitError(e instanceof Error ? e.message : "Failed to update project");
+            setSubmitError(errorMessage(e, "Failed to update project"));
         } finally {
             setIsLoading(false);
         }
@@ -139,11 +141,7 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
     const formContent = useMemo(
             () => (
                 <div className="space-y-2 lg:space-y-3 xl:space-y-4 min-w-0">
-                    {submitError && (
-                        <div className="rounded border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text">
-                            {submitError}
-                        </div>
-                    )}
+                    <FormErrorBanner message={submitError} />
                     {/* Name */}
                     <div className="min-w-0">
                         <label className={LABEL}>Project Name</label>

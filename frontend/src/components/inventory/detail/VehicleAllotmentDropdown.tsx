@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { AlertCircle, ChevronDown, Truck, type LucideIcon } from "lucide-react";
 import { useItemVehicleStockQuery } from "../../../hooks/useTracking";
 import { unitLabel } from "../../../lib/units";
@@ -35,6 +36,7 @@ export default function VehicleAllotmentDropdown({
 	/** Item's unit code, for the per-vehicle quantity suffix. */
 	unit: string;
 }) {
+	const navigate = useNavigate();
 	const [open, setOpen] = useState(false);
 	const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null);
 	const triggerRef = useRef<HTMLButtonElement>(null);
@@ -91,14 +93,21 @@ export default function VehicleAllotmentDropdown({
 	}, [open]);
 
 	// Close rather than reposition on scroll/resize — a drill-in this small
-	// doesn't need to track the trigger's rect continuously.
+	// doesn't need to track the trigger's rect continuously. Its own vehicle
+	// list scrolls though, and a capture listener sees that too: unguarded,
+	// scrolling down to the vehicle you wanted closed the panel.
 	useEffect(() => {
 		if (!open) return;
+		const onScroll = (e: Event) => {
+			const target = e.target;
+			if (target instanceof Node && panelRef.current?.contains(target)) return;
+			setOpen(false);
+		};
 		const close = () => setOpen(false);
-		window.addEventListener("scroll", close, true);
+		window.addEventListener("scroll", onScroll, true);
 		window.addEventListener("resize", close);
 		return () => {
-			window.removeEventListener("scroll", close, true);
+			window.removeEventListener("scroll", onScroll, true);
 			window.removeEventListener("resize", close);
 		};
 	}, [open]);
@@ -207,7 +216,18 @@ export default function VehicleAllotmentDropdown({
 										key={r.vehicle_id}
 										role="option"
 										aria-selected={false}
-										className="flex items-center justify-between gap-3 px-3 py-2"
+										tabIndex={0}
+										onClick={() => {
+											setOpen(false);
+											navigate(`/dispatch/vehicles/${r.vehicle_id}/stock`);
+										}}
+										onKeyDown={(e) => {
+											if (e.key !== "Enter" && e.key !== " ") return;
+											e.preventDefault();
+											setOpen(false);
+											navigate(`/dispatch/vehicles/${r.vehicle_id}/stock`);
+										}}
+										className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2 transition-colors hover:bg-surface-raised/60 focus-visible:outline-none focus-visible:bg-surface-raised/60"
 									>
 										<div className="min-w-0">
 											<div className="truncate text-sm font-medium text-text-primary">

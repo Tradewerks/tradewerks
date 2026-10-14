@@ -11,10 +11,10 @@ vi.mock("../../db.js", () => {
 	return { db: mockDb };
 });
 
-// Review R4 (decision 3): the frontend sends the user's local range as full ISO
-// instants. Flooring those to UTC day bounds widened every window — for a Denver
-// user "this month" (Aug 1 00:00 MDT .. Aug 31 23:59 MDT) became Jul 31 18:00 ..
-// Sep 1 17:59 local. Instants must be used exactly as sent; only a bare
+// The frontend sends the user's local range as full ISO instants. Flooring
+// those to UTC day bounds would widen every window — for a Denver user "this
+// month" (Aug 1 00:00 MDT .. Aug 31 23:59 MDT) becomes Jul 31 18:00 .. Sep 1
+// 17:59 local. Instants must be used exactly as sent; only a bare
 // YYYY-MM-DD still means "that whole UTC day".
 describe("buildDateFilter", () => {
 	it("uses full ISO instants exactly as sent (Denver 'this month')", () => {

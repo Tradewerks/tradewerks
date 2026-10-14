@@ -90,6 +90,36 @@ const REPORT_CATEGORIES: ReportCategory[] = [
 				description: "Billed revenue grouped by line items",
 				to: "/dispatch/reporting/revenue-by-line-item-type",
 			},
+			{
+				title: "Cost of Goods Sold",
+				description: "Inventory cost consumed, by job or by item",
+				to: "/dispatch/reporting/cogs",
+			},
+			{
+				title: "Balance Sheet",
+				description: "Balance Sheet from Quickbooks",
+				to: "/dispatch/reporting/qb/BalanceSheet",
+			},
+			{
+				title: "Cash Flow",
+				description: "Cash Flow from Quickbooks",
+				to: "/dispatch/reporting/qb/CashFlow",
+			},
+			{
+				title: "Trial Balance",
+				description: "Trial Balance from Quickbooks",
+				to: "/dispatch/reporting/qb/TrialBalance",
+			},
+			{
+				title: "General Ledger",
+				description: "General Ledger from Quickbooks",
+				to: "/dispatch/reporting/qb/GeneralLedger",
+			},
+			{
+				title: "Job Profitability",
+				description: "Revenue, cost, and profit by job",
+				to: "/dispatch/reporting/job-profitability",
+			}
 		],
 	},
 	{
@@ -166,6 +196,9 @@ const REPORT_CATEGORIES: ReportCategory[] = [
 	},
 ];
 
+const LEFT_COLUMN_CATEGORIES = REPORT_CATEGORIES.filter((c) => c.id === "financial" || c.id === "technician");
+const RIGHT_COLUMN_CATEGORIES = REPORT_CATEGORIES.filter((c) => c.id === "operational" || c.id === "client");
+
 const CATEGORY_IDS: ReportCategoryId[] = REPORT_CATEGORIES.map((c) => c.id);
 const BUILTIN_LINKS: ReportLink[] = REPORT_CATEGORIES.flatMap((c) => c.entries);
 const CARD_CAP = 5;
@@ -198,7 +231,7 @@ function StarButton({
 			onClick={onClick}
 			aria-label={active ? "Remove from favorites" : "Add to favorites"}
 			aria-pressed={active}
-			className={`shrink-0 p-1 rounded transition-colors ${
+			className={`shrink-0 p-1 rounded transition-colors hover:cursor-pointer ${
 				active
 					? "text-warning hover:text-warning"
 					: "text-text-faint hover:text-text-secondary"
@@ -261,9 +294,9 @@ function CategoryCard({
 				<Icon size={16} className="text-text-tertiary" />
 				<h3 className="font-semibold text-text-primary">{category.label}</h3>
 			</div>
-			<div className="p-2 flex flex-col gap-0.5">
+			<div className="p-3 flex flex-wrap gap-2">
 				{visible.length === 0 ? (
-					<p className="text-sm text-text-muted px-3 py-2.5">No reports yet</p>
+					<p className="text-sm text-text-muted px-1 py-2.5">No reports yet</p>
 				) : (
 					capped.map((entry) => {
 						const key = entryKey(entry);
@@ -281,64 +314,64 @@ function CategoryCard({
 									e.preventDefault();
 									onDropEntry(category.id, key);
 								}}
-								className={`flex items-center gap-2 rounded-lg px-3 py-2.5 border border-transparent transition-all ${
+								className={`relative w-[216px] shrink-0 rounded-lg border border-border-subtle p-2.5 transition-all ${
 									editing
 										? "bg-surface/40 cursor-grab active:cursor-grabbing"
-										: "hover:bg-surface hover:border-border-subtle hover:shadow-sm"
+										: "hover:border-border hover:shadow-sm hover:bg-surface"
 								} ${isHidden ? "opacity-50" : ""}`}
 							>
-								{editing && (
-									<GripVertical size={15} className="shrink-0 text-text-faint" />
-								)}
-								{editing ? (
-									<div className="flex-1 min-w-0">
-										<p className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
-											<span className="truncate">{entry.title}</span>
-											<TypeBadge type={entry.type} />
-										</p>
-										<p className="text-xs text-text-muted mt-0.5 truncate">
-											{entry.description}
-										</p>
-									</div>
-								) : (
-									<Link to={entry.to} className="block flex-1 min-w-0">
-										<p className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
-											<span className="truncate">{entry.title}</span>
-											<TypeBadge type={entry.type} />
-										</p>
-										<p className="text-xs text-text-muted mt-0.5 truncate">
-											{entry.description}
-										</p>
-									</Link>
-								)}
-								{editing ? (
-									<>
-										<button
-											onClick={() => onToggleHidden(category.id, key)}
-											aria-label={isHidden ? "Show report" : "Hide report"}
-											className="shrink-0 p-1 rounded text-text-faint hover:text-text-secondary transition-colors"
-										>
-											{isHidden ? <EyeOff size={15} /> : <Eye size={15} />}
-										</button>
-										{entry.type === "custom" && entry.kind === "saved" && (
+								<div className="flex items-start justify-between gap-1.5">
+									{editing ? (
+										<div className="flex-1 min-w-0">
+											<p className="flex items-center gap-1 text-[12.5px] font-semibold text-text-primary">
+												<GripVertical size={12} className="shrink-0 text-text-faint" />
+												<span className="truncate">{entry.title}</span>
+												<TypeBadge type={entry.type} />
+											</p>
+											<p className="text-[11px] text-text-muted mt-0.5 truncate">
+												{entry.description}
+											</p>
+										</div>
+									) : (
+										<Link to={entry.to} className="block flex-1 min-w-0" title={entry.description}>
+											<p className="flex items-center gap-1 text-[12.5px] font-semibold text-text-primary">
+												<span className="truncate">{entry.title}</span>
+												<TypeBadge type={entry.type} />
+											</p>
+											<p className="text-[11px] text-text-muted mt-0.5 truncate">
+												{entry.description}
+											</p>
+										</Link>
+									)}
+									{editing ? (
+										<div className="flex items-center gap-0.5 shrink-0 -mr-1 -mt-0.5">
 											<button
-												onClick={() => onDeleteReport(entry.ref)}
-												aria-label="Delete report"
-												className="shrink-0 p-1 rounded text-text-faint hover:text-error-text transition-colors"
+												onClick={() => onToggleHidden(category.id, key)}
+												aria-label={isHidden ? "Show report" : "Hide report"}
+												className="p-1 rounded text-text-faint hover:text-text-secondary transition-colors"
 											>
-												<Trash2 size={15} />
+												{isHidden ? <EyeOff size={13} /> : <Eye size={13} />}
 											</button>
-										)}
-									</>
-								) : (
-									<StarButton
-										active={isFavorited(entry.kind, entry.ref)}
-										onClick={(e) => {
-											e.preventDefault();
-											onToggleFavorite(entry.kind, entry.ref);
-										}}
-									/>
-								)}
+											{entry.type === "custom" && entry.kind === "saved" && (
+												<button
+													onClick={() => onDeleteReport(entry.ref)}
+													aria-label="Delete report"
+													className="p-1 rounded text-text-faint hover:text-error-text transition-colors"
+												>
+													<Trash2 size={13} />
+												</button>
+											)}
+										</div>
+									) : (
+										<StarButton
+											active={isFavorited(entry.kind, entry.ref)}
+											onClick={(e) => {
+												e.preventDefault();
+												onToggleFavorite(entry.kind, entry.ref);
+											}}
+										/>
+									)}
+								</div>
 							</div>
 						);
 					})
@@ -346,11 +379,56 @@ function CategoryCard({
 				{!editing && overflow > 0 && (
 					<button
 						onClick={onToggleExpand}
-						className="text-left text-xs font-semibold text-primary-text hover:underline px-3 py-2"
+						className="text-left text-xs font-semibold text-primary-text hover:underline px-3 py-2 hover:cursor-pointer"
 					>
 						{expanded ? "Show less" : `Show all ${visible.length} →`}
 					</button>
 				)}
+			</div>
+		</div>
+	);
+}
+
+function FavoritesCard({
+	favorites,
+	onRemove,
+}: {
+	favorites: FavoriteLink[];
+	onRemove: (kind: ReportFavoriteKind, ref: string) => void;
+}) {
+	if (favorites.length === 0) return null;
+
+	return (
+		<div className="bg-base border border-border-subtle rounded-xl overflow-hidden mb-4">
+			<div className="flex items-center gap-2 p-4 border-b border-border-subtle">
+				<Star size={16} className="text-warning" fill="currentColor" />
+				<h3 className="font-semibold text-text-primary">Favorites</h3>
+			</div>
+			<div className="p-3 flex flex-wrap gap-2">
+				{favorites.map((fav) => (
+					<div
+						key={`${fav.kind}:${fav.ref}`}
+						className="relative w-[216px] shrink-0 rounded-lg border border-border-subtle p-2.5 transition-all hover:border-border hover:shadow-sm hover:bg-surface"
+					>
+						<div className="flex items-start justify-between gap-1.5">
+							<Link to={fav.to} className="block flex-1 min-w-0">
+								<p className="text-[12.5px] font-semibold text-text-primary truncate">
+									{fav.title}
+								</p>
+								<p className="text-[11px] text-text-muted mt-0.5 truncate">
+									{fav.description}
+								</p>
+							</Link>
+							<StarButton
+								active
+								onClick={(e) => {
+									e.preventDefault();
+									onRemove(fav.kind, fav.ref);
+								}}
+							/>
+						</div>
+					</div>
+				))}
 			</div>
 		</div>
 	);
@@ -521,28 +599,32 @@ export default function ReportingPage() {
 					save automatically.
 				</p>
 			)}
-
-			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
-				{REPORT_CATEGORIES.map((category) => (
-					<CategoryCard
-						key={category.id}
-						category={category}
-						entries={entriesByCategory[category.id]}
-						hidden={hiddenByCategory[category.id]}
-						editing={editing}
-						expanded={!!expanded[category.id]}
-						onToggleExpand={() =>
-							setExpanded((prev) => ({ ...prev, [category.id]: !prev[category.id] }))
-						}
-						isFavorited={isFavorited}
-						onToggleFavorite={toggleFavorite}
-						onToggleHidden={toggleHidden}
-						onDeleteReport={handleDeleteReport}
-						onDragStartEntry={(catId, key) => {
-							dragKeyRef.current = { catId, key };
-						}}
-						onDropEntry={handleDrop}
-					/>
+			{!editing && <FavoritesCard favorites={favoriteLinks} onRemove={toggleFavorite} />}
+			<div className="flex flex-col xl:flex-row gap-4">
+				{[LEFT_COLUMN_CATEGORIES, RIGHT_COLUMN_CATEGORIES].map((column, i) => (
+					<div key={i} className="flex flex-col gap-4 xl:flex-1">
+						{column.map((category) => (
+							<CategoryCard
+								key={category.id}
+								category={category}
+								entries={entriesByCategory[category.id]}
+								hidden={hiddenByCategory[category.id]}
+								editing={editing}
+								expanded={!!expanded[category.id]}
+								onToggleExpand={() =>
+									setExpanded((prev) => ({ ...prev, [category.id]: !prev[category.id] }))
+								}
+								isFavorited={isFavorited}
+								onToggleFavorite={toggleFavorite}
+								onToggleHidden={toggleHidden}
+								onDeleteReport={handleDeleteReport}
+								onDragStartEntry={(catId, key) => {
+									dragKeyRef.current = { catId, key };
+								}}
+								onDropEntry={handleDrop}
+							/>
+						))}
+					</div>
 				))}
 			</div>
 			<NewReportModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />

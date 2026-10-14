@@ -38,14 +38,21 @@ export function useChartNotes({
 				className={`p-1 rounded-md border transition-colors ${
 					open
 						? "border-border-subtle text-text-primary bg-surface"
-						: "border-transparent text-text-muted hover:text-text-primary hover:bg-surface"
+						: // A visible-at-rest outline, not fully transparent — a control
+							// this consistently present shouldn't only become findable
+							// once the user is already hovering it.
+							"border-border-subtle text-text-tertiary hover:text-text-primary hover:bg-surface"
 				}`}
 			>
 				<Info size={14} />
 			</button>
 		);
 
-	const caveat = <p className="mt-3 text-[11px] text-text-faint">{primary}</p>;
+	// text-tertiary, not text-faint: this line is deliberately kept OUTSIDE the
+	// click-to-expand panel because it's important enough to always show —
+	// styling it at the lowest-contrast token in the app contradicted that
+	// decision.
+	const caveat = <p className="mt-3 text-[11px] text-text-tertiary">{primary}</p>;
 
 	const panel =
 		open && lines.length > 0 ? (

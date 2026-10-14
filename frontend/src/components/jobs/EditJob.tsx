@@ -14,6 +14,7 @@ import { useUpdateJobMutation } from "../../hooks/useJobs";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { UndoButton, UndoButtonTop } from "../ui/forms/UndoButton";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
@@ -76,6 +77,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 		dirtyLineItemFields,
 		undoLineItemField,
 		clearLineItemField,
+		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
 	} = useLineItems({
@@ -83,6 +85,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 		mode: "edit",
 	});
 
+	const { data: inventoryItems = [] } = useAllInventoryQuery();
 	const lineItemsForCalc = useMemo(
 		() =>
 			activeLineItems
@@ -209,6 +212,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 					total: Number(item.total),
 					taxable: item.taxable ?? true,
 					tax_group_id: item.tax_group_id ?? null,
+					inventory_item_id: item.inventory_item_id ?? null,
 					isNew: false,
 					isDeleted: false,
 				})) || [];
@@ -279,6 +283,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 				total: Number(item.total),
 				item_type: item.item_type || undefined,
 				tax_group_id: item.tax_group_id ?? undefined,
+				inventory_item_id: item.inventory_item_id ?? undefined,
 				taxable: item.taxable,
 			};
 		});
@@ -507,6 +512,8 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 					<div className="min-w-0 flex flex-col">
 						<ErrorDisplay path="line_items" />
 						<LineItemsSection
+							inventoryItems={inventoryItems}
+							onLinkInventory={setLineItemInventoryItem}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={addLineItemToState}

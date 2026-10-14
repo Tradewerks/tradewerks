@@ -1,0 +1,286 @@
+{
+  "_comment": "Shares fixture.ts's SAMPLE_RECEIPT numbers on purpose: two payloads with two answers mean a test passing against one proves nothing about the other.",
+  "inference": {
+    "id": "aaca1f05-9d11-4fc6-8ea4-ab575aa8b795",
+    "job": {
+      "id": "aaca1f05-9d11-4fc6-8ea4-ab575aa8b795"
+    },
+    "model": {
+      "id": "00000000-0000-4000-8000-000000000000"
+    },
+    "file": {
+      "name": "receipt.pdf",
+      "alias": null,
+      "page_count": 1,
+      "mime_type": "application/pdf"
+    },
+    "result": {
+      "fields": {
+        "supplier_name": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "Northgate Trade Supply"
+        },
+        "supplier_address": {
+          "locations": [],
+          "confidence": "High",
+          "value": "1200 Example Industrial Way, Springfield, ZZ 00000"
+        },
+        "supplier_phone_number": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "(555) 555-0188"
+        },
+        "supplier_company_registration": {
+          "items": [],
+          "confidence": "Certain"
+        },
+        "receipt_number": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "884213"
+        },
+        "date": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "2026-08-21"
+        },
+        "time": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "14:32"
+        },
+        "total_amount": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": 310.22
+        },
+        "total_net": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": 287.83
+        },
+        "total_tax": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": 22.39
+        },
+        "taxes": {
+          "items": [
+            {
+              "locations": [],
+              "confidence": "High",
+              "fields": {
+                "rate": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 0.0778
+                },
+                "base": {
+                  "locations": [],
+                  "confidence": "Certain",
+                  "value": 287.83
+                },
+                "amount": {
+                  "locations": [],
+                  "confidence": "Certain",
+                  "value": 22.39
+                }
+              }
+            }
+          ],
+          "confidence": "High"
+        },
+        "tips_gratuity": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": null
+        },
+        "line_items": {
+          "items": [
+            {
+              "locations": [],
+              "confidence": "Certain",
+              "fields": {
+                "description": {
+                  "locations": [],
+                  "confidence": "Certain",
+                  "value": "Capacitor 45/5 MFD 440V"
+                },
+                "quantity": {
+                  "locations": [],
+                  "confidence": "Certain",
+                  "value": 2
+                },
+                "unit_price": {
+                  "locations": [],
+                  "confidence": "Certain",
+                  "value": 24.99
+                },
+                "total_price": {
+                  "locations": [],
+                  "confidence": "Certain",
+                  "value": 49.98
+                }
+              }
+            },
+            {
+              "locations": [],
+              "confidence": "High",
+              "fields": {
+                "description": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": "Contactor 2P 30A 24V coil"
+                },
+                "quantity": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 1
+                },
+                "unit_price": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 18.45
+                },
+                "total_price": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 18.45
+                }
+              }
+            },
+            {
+              "locations": [],
+              "confidence": "High",
+              "fields": {
+                "description": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": "R-410A refrigerant 25 lb"
+                },
+                "quantity": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 1
+                },
+                "unit_price": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 189
+                },
+                "total_price": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 189
+                }
+              }
+            },
+            {
+              "locations": [],
+              "confidence": "Medium",
+              "fields": {
+                "description": {
+                  "locations": [],
+                  "confidence": "Medium",
+                  "value": "Line set 3/8 x 3/4 copper"
+                },
+                "quantity": {
+                  "locations": [],
+                  "confidence": "Medium",
+                  "value": 1
+                },
+                "unit_price": {
+                  "locations": [],
+                  "confidence": "Medium",
+                  "value": 62.4
+                },
+                "total_price": {
+                  "locations": [],
+                  "confidence": "Medium",
+                  "value": 62.4
+                }
+              }
+            },
+            {
+              "locations": [],
+              "confidence": "High",
+              "fields": {
+                "description": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": "Contractor discount"
+                },
+                "quantity": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": 1
+                },
+                "unit_price": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": -32.0
+                },
+                "total_price": {
+                  "locations": [],
+                  "confidence": "High",
+                  "value": -32.0
+                }
+              }
+            }
+          ],
+          "confidence": "Certain"
+        },
+        "document_type": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "expense_receipt"
+        },
+        "purchase_category": {
+          "locations": [],
+          "confidence": "High",
+          "value": "shopping"
+        },
+        "purchase_subcategory": {
+          "locations": [],
+          "confidence": "Certain",
+          "value": "other"
+        },
+        "locale": {
+          "locations": [],
+          "confidence": "Certain",
+          "fields": {
+            "language": {
+              "locations": [],
+              "confidence": "Certain",
+              "value": "en"
+            },
+            "country": {
+              "locations": [],
+              "confidence": "Certain",
+              "value": "US"
+            },
+            "currency": {
+              "locations": [],
+              "confidence": "Certain",
+              "value": "USD"
+            }
+          }
+        }
+      },
+      "raw_text": null,
+      "rag": null
+    },
+    "active_options": {
+      "raw_text": false,
+      "polygon": false,
+      "confidence": true,
+      "rag": false,
+      "multipage_context": false,
+      "text_context": false,
+      "data_schema": {
+        "replace": false
+      }
+    }
+  }
+}

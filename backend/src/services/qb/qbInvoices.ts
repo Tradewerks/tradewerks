@@ -1,10 +1,12 @@
+import { isModuleOn } from "../entitlementService.js";
 import { getScopedDb } from "../../lib/context.js";
 import { db } from "../../db.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { qbQueryAll } from "./qbQuery.js";
-import { qbFetch, getOrgRealmId } from "../quickbooksService.js";
+import { qbFetch, getOrgRealmId, isQBConnected } from "../quickbooksService.js";
+import { log } from "../appLogger.js";
 import { findOrCreateQBCustomer } from "./qbCustomers.js";
-import { httpError } from "../../types/responses.js";
+import { ErrorCodes, httpError } from "../../types/responses.js";
 
 interface QBImportInvoice {
 	Id: string;
@@ -332,16 +334,21 @@ export const importQBInvoices = async (orgId: string, qbInvoiceIds: string[]) =>
 };
 
 export async function pushInvoice(invoiceId: string, orgId: string): Promise<void> {
+	if (!(await isModuleOn(orgId, "quickbooks"))) return;
 	const prior = inFlightPushes.get(invoiceId) ?? Promise.resolve();
-	const run = prior.catch(() => {}).then(() => doPushInvoice(invoiceId, orgId));
-	inFlightPushes.set(
-		invoiceId,
-		run.finally(() => {
-			if (inFlightPushes.get(invoiceId) === run) {
+	const run = prior.then(() => doPushInvoice(invoiceId, orgId));
+	// The caller handles run's rejection; a promise derived from it and parked
+	// in the map would reject with nobody listening, and with no
+	// unhandledRejection handler that takes the process down on any failed
+	// push. So the map holds a tail that cannot reject, cleared by identity.
+	const tail: Promise<void> = run
+		.catch(() => {})
+		.finally(() => {
+			if (inFlightPushes.get(invoiceId) === tail) {
 				inFlightPushes.delete(invoiceId);
 			}
-		})
-	);
+		});
+	inFlightPushes.set(invoiceId, tail);
 	return run;
 };
 
@@ -385,6 +392,12 @@ async function doPushInvoice(invoiceId: string, orgId: string): Promise<void> {
 		},
 	});
 	if (!invoice) throw new Error("Invoice not found");
+	// Pushed as a document, a Void invoice would create or reopen a live,
+	// collectible one in QuickBooks. Voids reach QuickBooks only through
+	// mirrorInvoiceVoidToQuickBooks.
+	if (invoice.status === "Void") {
+		throw httpError(422, ErrorCodes.VALIDATION_ERROR, "A void invoice can't be pushed to QuickBooks.");
+	}
 
 	const primaryEmail = invoice.client.contacts?.[0]?.contact?.email ?? null;
 	const existingQBId = invoice.client.client_external_mapping?.[0]?.external_id ?? null;
@@ -493,6 +506,41 @@ export async function voidQBInvoice(orgId: string, qbInvoiceId: string): Promise
 	});
 }
 
+
+/**
+ * The QuickBooks side of voiding an invoice, shared by every void door: the
+ * kebab's Void, a dispute Repeal, and the original a Revise & Resend replaces
+ * (D3). Called after the local void commits, and never rejects. A failure is
+ * logged and marked rather than swallowed, because a silent one leaves
+ * QuickBooks holding a live, collectible invoice with nothing on our side
+ * saying so.
+ */
+export async function mirrorInvoiceVoidToQuickBooks(
+	orgId: string,
+	invoiceId: string,
+	qbInvoiceId: string | null | undefined,
+): Promise<void> {
+	// Never synced, so there is nothing in QuickBooks to void.
+	if (!qbInvoiceId) return;
+	if (!(await isModuleOn(orgId, "quickbooks"))) return;
+	try {
+		if (!(await isQBConnected(orgId))) return;
+		await voidQBInvoice(orgId, qbInvoiceId);
+	} catch (err) {
+		log.error({ err, invoiceId, orgId }, "QuickBooks void failed");
+		await getScopedDb(orgId)
+			.invoice.updateMany({
+				where: { id: invoiceId },
+				data: { qb_sync_status: "failed" },
+			})
+			.catch((markErr: unknown) =>
+				log.error(
+					{ err: markErr, invoiceId, orgId },
+					"Could not mark the invoice's QuickBooks sync as failed",
+				),
+			);
+	}
+}
 
 export async function sendInvoiceEmail(invoiceId: string, orgId: string, sendTo: string): Promise<void>{
 	const invoice = await db.invoice.findFirst({

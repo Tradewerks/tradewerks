@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router, type Response } from 'express';
 import {
     ErrorCodes,
@@ -41,6 +42,16 @@ import {
     updateSerial,
     deleteSerial,
     getTrackingReconciliation,
+    getLinkageAudit,
+    applyLinkageMatch,
+    getReconcileQueue,
+    getReconcileLines,
+    getReconcileTargets,
+    applyLinkageMatchBulk,
+    type ReconcileSort,
+    dismissUnmappedName,
+    restoreUnmappedName,
+    createProvisionalItemForLine,
     listProvisionalItems,
     approveProvisionalItem,
     mergeProvisionalItem,
@@ -368,7 +379,7 @@ router.get("/:itemId/tracking-summary", requireAnyPermission("view_inventory", "
 
 // Per-vehicle qty breakdown for the Overview tab's "on vehicles" drill-in —
 // same 2nd-segment reasoning and read permission as tracking-summary above.
-router.get("/:itemId/vehicle-stock", requireAnyPermission("view_inventory", "manage_inventory"), async (req, res, next) => {
+router.get("/:itemId/vehicle-stock", requireModule("vehicle_stock"), requireAnyPermission("view_inventory", "manage_inventory"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const itemId = req.params.itemId as string;
@@ -400,8 +411,175 @@ router.get("/:itemId/tracking-eligibility", requireAnyPermission("view_inventory
     }
 });
 
+// Literal first segment, so it must be registered before /:id.
+router.get("/linkage-audit", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const result = await getLinkageAudit(orgId);
+		if (result.err) return sendControllerErr(res, result);
+		res.json(
+			createSuccessResponse({
+				counts: result.counts,
+				candidates: result.candidates,
+				candidate_total: result.candidate_total,
+			}),
+		);
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Rewrites historical billing rows, so it stays at manage_inventory.
+router.post("/linkage-audit/apply", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const context = getUserContext(req);
+		const orgId = req.user!.organization_id as string;
+		const result = await applyLinkageMatch(req.body, orgId, context);
+		if (result.err) return sendControllerErr(res, result);
+		res.json(createSuccessResponse({ updated: result.updated }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Literal-first-segment rule again: must precede /:id.
+router.get("/reconcile", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const offset = Number(req.query.offset);
+		const limit = Number(req.query.limit);
+		const result = await getReconcileQueue(orgId, {
+			includeDismissed: req.query.include_dismissed === "true",
+			origin: typeof req.query.origin === "string" ? req.query.origin : undefined,
+			search: typeof req.query.search === "string" ? req.query.search : undefined,
+			sort: typeof req.query.sort === "string" ? (req.query.sort as ReconcileSort) : undefined,
+			...(Number.isFinite(offset) ? { offset } : {}),
+			...(Number.isFinite(limit) ? { limit } : {}),
+		});
+		if (result.err) return sendControllerErr(res, result);
+		res.json(createSuccessResponse(result.queue));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Read-only drill-in behind one queue row: which documents bill this name.
+router.get("/reconcile/lines", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const result = await getReconcileLines(orgId, {
+			name: typeof req.query.name === "string" ? req.query.name : undefined,
+			itemId: typeof req.query.item_id === "string" ? req.query.item_id : undefined,
+			foldedName:
+				typeof req.query.folded_name === "string" ? req.query.folded_name : undefined,
+		});
+		if (result.err) return sendControllerErr(res, result);
+		res.json(createSuccessResponse({ lines: result.lines, total: result.total }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// The same read, reachable from the field. A technician mapping a receipt line
+// needs to search the catalog and does not hold `manage_inventory`, so this is a
+// second door rather than a widened guard on the reconcile queue's own route.
+// Above "/:id", or Express reads "search" as an item id.
+router.get(
+	"/search",
+	requireAnyPermission("view_inventory", "use_inventory", "request_field_purchase"),
+	async (req, res, next) => {
+		try {
+			const orgId = req.user!.organization_id as string;
+			const limit = Number(req.query.limit);
+			const result = await getReconcileTargets(orgId, {
+				search: typeof req.query.q === "string" ? req.query.q : undefined,
+				...(Number.isFinite(limit) ? { limit } : {}),
+			});
+			if (result.err) return sendControllerErr(res, result);
+			res.json(createSuccessResponse(result.targets));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+// The map-target picker. Read-only, so it stays at the queue's own permission.
+router.get("/reconcile/targets", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const limit = Number(req.query.limit);
+		const result = await getReconcileTargets(orgId, {
+			search: typeof req.query.q === "string" ? req.query.q : undefined,
+			excludeId: typeof req.query.exclude_id === "string" ? req.query.exclude_id : undefined,
+			...(Number.isFinite(limit) ? { limit } : {}),
+		});
+		if (result.err) return sendControllerErr(res, result);
+		res.json(createSuccessResponse(result.targets));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Rewrites historical billing rows in bulk, so it stays at manage_inventory.
+// Partial success is a 200 carrying per-name errors — see applyLinkageMatchBulk.
+router.post(
+	"/reconcile/apply-bulk",
+	requirePermission("manage_inventory"),
+	async (req, res, next) => {
+		try {
+			const context = getUserContext(req);
+			const orgId = req.user!.organization_id as string;
+			const result = await applyLinkageMatchBulk(req.body, orgId, context);
+			if (result.err) return sendControllerErr(res, result);
+			res.json(createSuccessResponse({ results: result.results, linked: result.linked }));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+// Reversible on purpose — dismissal is the lazy way out of the queue.
+router.post("/reconcile/dismiss", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const context = getUserContext(req);
+		const orgId = req.user!.organization_id as string;
+		const result = await dismissUnmappedName(req.body, orgId, context);
+		if (result.err) return sendControllerErr(res, result);
+		res.status(201).json(createSuccessResponse(result.decision));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Reversible on purpose — dismissal is the lazy way out of the queue.
+router.post("/reconcile/restore", requirePermission("manage_inventory"), async (req, res, next) => {
+	try {
+		const context = getUserContext(req);
+		const orgId = req.user!.organization_id as string;
+		const result = await restoreUnmappedName(req.body, orgId, context);
+		if (result.err) return sendControllerErr(res, result);
+		res.json(createSuccessResponse(null));
+	} catch (err) {
+		next(err);
+	}
+});
+
 // ── Provisional item management ───────────────────────────────────────────────
 // NOTE: /provisional must be registered BEFORE any /:id routes to avoid param collision.
+
+// Deliberately a lower bar than POST /: a dispatcher mid-quote has a name
+// and a price, not a full catalog record.
+router.post("/provisional", requireAnyPermission("manage_inventory", "edit_quotes", "edit_jobs"), async (req, res, next) => {
+	try {
+		const context = getUserContext(req);
+		const orgId = req.user!.organization_id as string;
+		const result = await createProvisionalItemForLine(req.body, orgId, context);
+		if (result.err) return sendControllerErr(res, result);
+		res.status(201).json(createSuccessResponse(result.item));
+	} catch (err) {
+		next(err);
+	}
+});
 
 router.get("/provisional", requirePermission("manage_inventory"), async (req, res, next) => {
 	try {
@@ -422,9 +600,9 @@ router.post("/:id/approve", requirePermission("manage_inventory"), async (req, r
 		const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
 		const result = await approveProvisionalItem(id, orgId, req.body ?? {}, context);
-		if (result.err) {
-			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
-		}
+		// sendControllerErr rather than a flat 404: adopting without a cost
+		// basis is a bad request, and the client shows the message inline.
+		if (result.err) return sendControllerErr(res, result);
 		res.json(createSuccessResponse(result.item));
 	} catch (err) {
 		next(err);
@@ -576,6 +754,14 @@ router.post(
 router.post(
     "/import",
     requirePermission("manage_inventory"),
+	(req, res, next) => {
+		if (["1", "true", "yes", "on"].includes((process.env.INVENTORY_AI_IMPORT_ENABLED ?? "").toLowerCase())) {
+			return res
+				.status(410)
+				.json(createErrorResponse(ErrorCodes.BAD_REQUEST, "Direct inventory imports have been retired. Use /inventory/imports for review and approval."));
+		}
+		next();
+	},
     spreadsheetUpload.single("file"),
     async (req, res, next) => {
         try {

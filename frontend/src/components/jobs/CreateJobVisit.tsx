@@ -6,8 +6,12 @@ import {
 	type JobVisit,
 	VisitStatusColors,
 } from "../../types/jobs";
-import { type LineItemType, type BaseLineItem } from "../../types/common";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import {
+	type LineItemType,
+	type BaseLineItem,
+	type LineItemDisposition,
+} from "../../types/common";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useAllJobVisitsQuery } from "../../hooks/useJobs";
 import { useAllClientsQuery } from "../../hooks/useClients";
 import {
@@ -22,6 +26,8 @@ import DatePicker from "../ui/DatePicker";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useVehiclesQuery } from "../../hooks/useVehicles";
+import { useAllInventoryQuery } from "../../hooks/useInventory";
 import { useLineItems } from "../../hooks/forms/useLineItems";
 import TimeConstraints, { type TimeConstraintsState } from "../ui/forms/TimeConstraints";
 import { createStepRouter } from "../../hooks/forms/useZodStepRouting";
@@ -96,7 +102,7 @@ const CreateJobVisit = ({
 	const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
-	const { data: technicians } = useAllTechniciansQuery();
+	const { data: technicians } = useActiveTechniciansQuery();
 	const { data: allVisits = [] } = useAllJobVisitsQuery();
 	const { data: clients } = useAllClientsQuery();
 	const { data: drafts = [] } = useDraftsByTypeQuery("job_visit", jobId);
@@ -116,6 +122,10 @@ const CreateJobVisit = ({
 	);
 
 	const lineItems = useLineItems({ minItems: 1, mode: "create" });
+
+	const { data: inventoryItems = [] } = useAllInventoryQuery();
+	// Active only: a retired van is not somewhere stock can arrive.
+	const { data: vehicles = [] } = useVehiclesQuery("active");
 
 	const { data: taxGroups = [] } = useTaxGroups();
 
@@ -155,6 +165,14 @@ const CreateJobVisit = ({
 	const dirtyUpdateLineItem = useCallback(
 		(id: string, field: keyof BaseLineItem, value: string | number) => {
 			lineItems.updateLineItem(id, field, value);
+			markDirty();
+		},
+		[lineItems, markDirty]
+	);
+	// Draft-dirty wrapper, same as the other line-item mutators.
+	const dirtySetLineItemDisposition = useCallback(
+		(id: string, disposition: LineItemDisposition | null, vehicleId?: string | null) => {
+			lineItems.setLineItemDisposition(id, disposition, vehicleId);
 			markDirty();
 		},
 		[lineItems, markDirty]
@@ -314,6 +332,7 @@ const CreateJobVisit = ({
 							| "",
 						taxable: li.taxable ?? true,
 						tax_group_id: li.tax_group_id ?? null,
+						inventory_item_id: li.inventory_item_id ?? null,
 					}))
 				);
 			} else {
@@ -371,6 +390,7 @@ const CreateJobVisit = ({
 								| "",
 							taxable: li.taxable ?? true,
 							tax_group_id: li.tax_group_id ?? null,
+							inventory_item_id: li.inventory_item_id ?? null,
 						}))
 					);
 				}
@@ -428,6 +448,9 @@ const CreateJobVisit = ({
 				total: item.total,
 				taxable: item.taxable ?? true,
 				tax_group_id: item.tax_group_id ?? null,
+				inventory_item_id: item.inventory_item_id ?? null,
+				disposition: item.disposition ?? null,
+				disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 			})),
 			time_constraints: timeConstraintsState
 				? {
@@ -639,6 +662,9 @@ const CreateJobVisit = ({
 				sort_order: index,
 				taxable: item.taxable ?? true,
 				tax_group_id: item.tax_group_id ?? null,
+				inventory_item_id: item.inventory_item_id ?? null,
+				disposition: item.disposition ?? null,
+				disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 			}));
 
 		const newVisit: CreateJobVisitInput = {
@@ -859,6 +885,11 @@ const CreateJobVisit = ({
 					<div className="min-w-0 flex flex-col gap-3">
 						<ErrorDisplay path="line_items" />
 						<LineItemsSection
+							inventoryItems={inventoryItems}
+							onLinkInventory={lineItems.setLineItemInventoryItem}
+							showDisposition
+							vehicles={vehicles}
+							onDispositionChange={dirtySetLineItemDisposition}
 							lineItems={lineItems.activeLineItems}
 							isLoading={isLoading}
 							onAdd={dirtyAddLineItem}

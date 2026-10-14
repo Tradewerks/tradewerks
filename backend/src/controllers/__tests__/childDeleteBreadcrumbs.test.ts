@@ -9,7 +9,7 @@ vi.mock("../../services/logger.js", () => ({
 	logActivity: vi.fn(async () => undefined),
 	buildChanges: vi.fn(() => ({})),
 }));
-vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ emit: vi.fn() })) }));
+vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ emit: vi.fn() })), emitToOrg: vi.fn() }));
 vi.mock("../../services/quickbooksService.js", () => ({
 	isQBConnected: vi.fn(async () => false),
 	getOrgRealmId: vi.fn(async () => null),
@@ -42,6 +42,7 @@ import { logActivity } from "../../services/logger.js";
 import { deleteInvoicePayment, deleteInvoiceNote } from "../invoicesController.js";
 import { deleteJobLineItem, deleteJob } from "../jobsController.js";
 import { deleteQuoteItem } from "../quotesController.js";
+import { deleteRecurringPlanNote } from "../recurringPlanNotesController.js";
 import type { FakeDb } from "../../routes/__tests__/harness.js";
 
 const fake = db as unknown as FakeDb;
@@ -130,5 +131,24 @@ describe("child *.deleted log rows carry a parent breadcrumb (review P2-7 / L2)"
 		fake.job.findFirst.mockResolvedValue({ id: "job-2", job_number: "J-0002", name: "J", status: "Scheduled", project_id: null });
 		await deleteJob("job-2", "org-1", { dispatcherId: "disp-1" });
 		expect(lastLog()?.changes).not.toHaveProperty("_parent_id");
+	});
+
+	it("recurring_plan_note.deleted → recurring_plan", async () => {
+		fake.recurring_plan.findFirst.mockResolvedValue({ id: "plan-1", organization_id: "org-1" });
+		fake.recurring_plan_note.findFirst.mockResolvedValue({ id: "n-1", recurring_plan_id: "plan-1", content: "c" });
+		fake.recurring_plan_note.delete.mockResolvedValue({});
+
+		const result = await deleteRecurringPlanNote("job-1", "n-1", "org-1", { dispatcherId: "disp-1" });
+		expect(result.err).toBe("");
+		expect(lastLog()).toMatchObject({
+			event_type: "recurring_plan_note.deleted",
+			entity_id: "n-1",
+			organization_id: "org-1",
+			changes: {
+				content: { old: "c", new: null },
+				_parent_type: { old: null, new: "recurring_plan" },
+				_parent_id: { old: null, new: "plan-1" },
+			},
+		});
 	});
 });

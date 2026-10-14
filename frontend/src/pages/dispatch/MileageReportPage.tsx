@@ -10,6 +10,7 @@ import PageControls from "../../components/ui/PageControls";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
 import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRangeUtils";
 import PageHeader from "../../components/ui/PageHeader";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import ExportExcelButton from "../../components/reports/ExportExcelButton";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { exportReport } from "../../api/reports";
@@ -299,17 +300,20 @@ export default function MileageReportPage() {
 				}
 				middle={<DateRangeFilter paramKey="date" />}
 				right={
-					<ExportExcelButton
-						onExport={() =>
-							exportReport({
-								filename: datedFilename("mileage-report"),
-								sheetName: "Mileage",
-								columns: exportColumns,
-								rows: exportRows,
-							})
-						}
-						disabled={exportRows.length === 0}
-					/>
+					<>
+						<ExportExcelButton
+							onExport={() =>
+								exportReport({
+									filename: datedFilename("mileage-report"),
+									sheetName: "Mileage",
+									columns: exportColumns,
+									rows: exportRows,
+								})
+							}
+							disabled={exportRows.length === 0}
+						/>
+						<RefreshReportsButton />
+					</>
 				}
 			/>
 

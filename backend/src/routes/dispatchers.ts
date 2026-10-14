@@ -11,12 +11,14 @@ import {
     insertDispatcher,
     updateDispatcher,
     deleteDispatcher,
-    changeDispatcherPassword
+    changeDispatcherPassword,
+    deactivateDispatcher,
+    reactivateDispatcher
 } from "../controllers/dispatchersController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
 import { requirePermission, requirePermissionOrSelf } from '../lib/requirePermissions.js';
-import { getActorHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
+import { getUserHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 
 const router = Router();
 
@@ -202,6 +204,38 @@ router.delete("/:id", requirePermission("manage_dispatchers"), async (req, res, 
     }
 });
 
+router.post("/:id/deactivate", requirePermission("manage_dispatchers"), async (req, res, next) => {
+    try {
+        const result = await deactivateDispatcher(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.BAD_REQUEST, result.err));
+        }
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post("/:id/reactivate", requirePermission("manage_dispatchers"), async (req, res, next) => {
+    try {
+        const result = await reactivateDispatcher(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.BAD_REQUEST, result.err));
+        }
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
 router.post("/:id/mfa/reset", requirePermissionOrSelf("manage_dispatchers"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
@@ -232,7 +266,7 @@ router.get("/:id/changes", requirePermissionOrSelf("view_dispatchers"), async (r
                 .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, INVALID_HISTORY_LIMIT));
         }
 
-        const results = await getActorHistory(orgId, "dispatcher", id, limit);
+        const results = await getUserHistory(orgId, "dispatcher", id, limit);
 
         if (results.err) {
             return res

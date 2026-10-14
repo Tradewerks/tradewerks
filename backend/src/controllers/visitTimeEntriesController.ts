@@ -2,8 +2,9 @@ import { log } from "../services/appLogger.js";
 import { logActivity } from "../services/logger.js";
 import type { pause_reason_type, technician_status } from "../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import { buildVisitStatusPayload, buildSecondaryEventPayload } from "./jobVisitsController.js";
+import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
 
 const CLOCK_IN_ALLOWED = ["OnSite", "InProgress", "Paused"];
 const CLOCK_IN_AUTO_ADVANCE = ["OnSite", "Paused"];
@@ -45,6 +46,7 @@ export const clockInVisit = async (
 		if (existingOpen) {
 			return { err: `ALREADY_CLOCKED_IN:${existingOpen.visit.id}` };
 		}
+		if (await isWeekLocked(organizationId, techId)) return { err: TIMESHEET_LOCKED };
 
 		const now = new Date();
 		const isPrimaryAdvance = CLOCK_IN_AUTO_ADVANCE.includes(visit.status);
@@ -109,7 +111,7 @@ export const clockInVisit = async (
 
 		if (updatedVisit) {
 			if (isPrimaryAdvance) {
-				getSocket().emit(
+				emitToOrg(organizationId,
 					"job_visit:status_changed",
 					buildVisitStatusPayload(updatedVisit, visit.status, true, context),
 				);
@@ -125,7 +127,7 @@ export const clockInVisit = async (
 				});
 			} else {
 				// Secondary: tech clocked into an already-InProgress visit
-				getSocket().emit(
+				emitToOrg(organizationId,
 					"job_visit:status_changed",
 					buildSecondaryEventPayload(updatedVisit, "InProgress", context),
 				);
@@ -275,7 +277,7 @@ export const clockOutVisit = async (
 
 		if (updatedVisit) {
 			if (result.statusChangedToPaused) {
-				getSocket().emit(
+				emitToOrg(organizationId,
 					"job_visit:status_changed",
 					buildVisitStatusPayload(updatedVisit, "InProgress", true, context),
 				);
@@ -291,7 +293,7 @@ export const clockOutVisit = async (
 				});
 			} else if (!result.is_last_tech) {
 				// Secondary: tech clocked out but visit stays InProgress
-				getSocket().emit(
+				emitToOrg(organizationId,
 					"job_visit:status_changed",
 					buildSecondaryEventPayload(updatedVisit, "Paused", context),
 				);

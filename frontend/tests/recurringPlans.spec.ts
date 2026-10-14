@@ -13,8 +13,8 @@ function attachGuards(page: Page) {
 }
 
 async function navigateToJobsPage(page: Page) {
-	await page.click('a[href="/dispatch/jobs"]');
-	await page.waitForURL("/dispatch/jobs", { timeout: 10000 });
+	await page.click('a[href="/app/dispatch/jobs"]');
+	await page.waitForURL("/app/dispatch/jobs", { timeout: 10000 });
 	await expect(page.locator('h2:has-text("Jobs")')).toBeVisible({ timeout: 10000 });
 }
 
@@ -71,8 +71,8 @@ test.describe("Recurring Plans E2E - Navigation Flow", () => {
 		}
 
 		// Navigate to dispatch if not there
-		if (!sharedPage.url().includes("/dispatch")) {
-			await sharedPage.goto("/dispatch", { waitUntil: "domcontentloaded" });
+		if (!sharedPage.url().includes("/app/dispatch")) {
+			await sharedPage.goto("/app/dispatch", { waitUntil: "domcontentloaded" });
 		}
 
 		// Verify dispatch shell is loaded
@@ -83,15 +83,15 @@ test.describe("Recurring Plans E2E - Navigation Flow", () => {
 
 	test("should complete login flow and navigate to dashboard", async () => {
 		await expect(sharedPage.locator("text=Dispatch Demo")).toBeVisible();
-		await expect(sharedPage.locator('a[href="/dispatch/jobs"]')).toBeVisible();
-		await expect(sharedPage.locator('a[href="/dispatch"]')).toBeVisible();
+		await expect(sharedPage.locator('a[href="/app/dispatch/jobs"]')).toBeVisible();
+		await expect(sharedPage.locator('a[href="/app/dispatch"]')).toBeVisible();
 		await expect(sharedPage.locator("text=Online Now")).toBeVisible();
 	});
 
 	test("should navigate from dashboard to jobs page", async () => {
 		await navigateToJobsPage(sharedPage);
 
-		await expect(sharedPage).toHaveURL("/dispatch/jobs");
+		await expect(sharedPage).toHaveURL("/app/dispatch/jobs");
 		await expect(sharedPage.locator('h2:has-text("Jobs")')).toBeVisible();
 		await expect(sharedPage.locator('button:has-text("Jobs")')).toBeVisible();
 		await expect(

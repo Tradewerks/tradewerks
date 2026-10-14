@@ -5,7 +5,7 @@ import ReschedulePopup from "./ReschedulePopup";
 import OccurrenceReschedulePopup from "./OccurrenceReschedulePopup";
 import VisitClickPopup from "./VisitClickPopup";
 import OccurrenceClickPopup from "./OccurrenceClickPopup";
-import { visitStartLabel, visitEndLabel, getPriorityColor, SCROLL_ZONE_W, SCROLL_DELAY_MS } from "./scheduleBoardUtils";
+import { visitStartLabel, visitEndLabel, getPriorityColor, SCROLL_ZONE_W, SCROLL_DELAY_MS, localDateKey, getAnchoredPopupPos, CLICK_POPUP_H } from "./scheduleBoardUtils";
 import { formatTime } from "./dashboardCalendarUtils";
 import type { UpdateJobVisitInput } from "../../../types/jobs";
 import type { Technician } from "../../../types/technicians";
@@ -132,17 +132,8 @@ interface ClickedVisit {
 	rect: DOMRect;
 }
 
-const POPUP_W = 224;
-
 function getPopupPos(rect: DOMRect): { top: number; left: number } {
-	const vp = { w: window.innerWidth, h: window.innerHeight };
-	const PAD = 8;
-	const spaceRight = vp.w - rect.right - PAD;
-	const left = spaceRight >= POPUP_W
-		? rect.right + 4
-		: Math.max(PAD, rect.left - POPUP_W - 4);
-	const top = Math.max(PAD, Math.min(rect.top, vp.h - 260 - PAD));
-	return { top, left };
+	return getAnchoredPopupPos(rect, { popupH: CLICK_POPUP_H });
 }
 
 export default function MonthGrid({
@@ -608,7 +599,7 @@ export default function MonthGrid({
 				style={{
 					display: "grid",
 					gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-					borderBottom: "1px solid var(--color-border-subtle)",
+					borderBottom: "1px solid var(--color-grid-line)",
 					flexShrink: 0,
 				}}
 			>
@@ -623,7 +614,7 @@ export default function MonthGrid({
 							color: "var(--color-text-muted)",
 							textTransform: "uppercase",
 							letterSpacing: "0.05em",
-							borderRight: i < 6 ? "1px solid var(--color-border-subtle)" : "none",
+							borderRight: i < 6 ? "1px solid var(--color-grid-line)" : "none",
 						}}
 					>
 						{wd}
@@ -673,17 +664,17 @@ export default function MonthGrid({
 						<div
 							key={dateStr}
 							style={{
-								borderRight: di < 6 ? "1px solid var(--color-border-subtle)" : "none",
-								borderBottom: "1px solid var(--color-border-subtle)",
+								borderRight: di < 6 ? "1px solid var(--color-grid-line)" : "none",
+								borderBottom: "1px solid var(--color-grid-line)",
 								padding: 4,
 								boxSizing: "border-box",
 								position: "relative",
 								backgroundColor: isDragOver
 									? "rgba(59,130,246,0.1)"
 									: isToday
-									? "rgba(59,130,246,0.04)"
+									? "var(--color-grid-today-tint)"
 									: isOtherMonth
-									? "var(--color-base)"
+									? "var(--color-grid-cell-muted)"
 									: "transparent",
 								outline: isDragOver ? "2px inset rgba(59,130,246,0.6)" : "none",
 								transition: "background-color 0.1s",
@@ -740,8 +731,8 @@ export default function MonthGrid({
 											: { top: 0 }),
 										height: Math.round(cellHeight * 2),
 										zIndex: 200,
-										backgroundColor: "var(--color-canvas)",
-										border: "1px solid var(--color-border)",
+										backgroundColor: "var(--color-grid-float-bg)",
+										border: "1px solid var(--color-grid-line-strong)",
 										borderRadius: 6,
 										padding: 4,
 										boxShadow: "0 8px 24px rgba(0,0,0,0.65)",
@@ -889,7 +880,7 @@ export default function MonthGrid({
 			{/* Click-reschedule: visit (clock button) */}
 			{pendingClickReschedule?.type === "visit" && pendingClickReschedule.visit && (() => {
 				const v  = pendingClickReschedule.visit;
-				const nd = new Date(v.scheduled_start_at).toISOString().split("T")[0];
+				const nd = localDateKey(v.scheduled_start_at);
 				return (
 					<ReschedulePopup
 						visit={v}
@@ -915,7 +906,7 @@ export default function MonthGrid({
 			{/* Click-reschedule: occurrence (clock button) */}
 			{pendingClickReschedule?.type === "occurrence" && pendingClickReschedule.occurrence && (() => {
 				const occ = pendingClickReschedule.occurrence;
-				const nd  = new Date(occ.occurrence_start_at).toISOString().split("T")[0];
+				const nd  = localDateKey(occ.occurrence_start_at);
 				return (
 					<OccurrenceReschedulePopup
 						occurrence={occ}

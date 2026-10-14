@@ -33,11 +33,18 @@ import {
 	getItemForecast,
 	getInventoryMovements,
 	getInventoryItemById,
+	approveProvisionalItem,
 } from "../inventoryController.js";
 import { db } from "../../db.js";
 import { logActivity, buildChanges } from "../../services/logger.js";
 import { sendEmail } from "../../services/emailService.js";
 import { Prisma } from "../../../generated/prisma/client.js";
+
+// Module gating is not under test here: every module reads as on.
+vi.mock("../../services/entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
 
 vi.mock("../../db.js", () => {
 	const $extends = vi.fn();
@@ -1640,7 +1647,6 @@ describe("inventoryController", () => {
 
 		it.each([
 			["missing name", { location: "Shelf A" }],
-			["missing location", { name: "Widget" }],
 			["negative quantity", { name: "Widget", location: "A", quantity: -1 }],
 		])("returns validation error for %s", async (_, data) => {
 			const result = await createInventoryItem(data);
@@ -1672,6 +1678,53 @@ describe("inventoryController", () => {
 
 			await createInventoryItem({ name: "Widget", location: "Shelf A" });
 			expect(mockRecordMovements).not.toHaveBeenCalled();
+		});
+
+		it("creates an item with no location at all", async () => {
+			const tx = setupTransaction();
+			tx.inventory_item.create.mockResolvedValue(makeItem({ name: "Widget", location: null }));
+
+			const result = await createInventoryItem({ name: "Widget" });
+
+			expect(result.err).toBe("");
+			expect(tx.inventory_item.create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					data: expect.objectContaining({ location: null }),
+				}),
+			);
+		});
+
+		it("collapses a whitespace-only location to null", async () => {
+			const tx = setupTransaction();
+			tx.inventory_item.create.mockResolvedValue(makeItem({ name: "Widget", location: null }));
+
+			await createInventoryItem({ name: "Widget", location: "   " });
+
+			expect(tx.inventory_item.create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					data: expect.objectContaining({ location: null }),
+				}),
+			);
+		});
+
+		it("trims a supplied location", async () => {
+			const tx = setupTransaction();
+			tx.inventory_item.create.mockResolvedValue(makeItem({ name: "Widget", location: "A42 - 325" }));
+
+			await createInventoryItem({ name: "Widget", location: "  A42 - 325  " });
+
+			expect(tx.inventory_item.create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					data: expect.objectContaining({ location: "A42 - 325" }),
+				}),
+			);
+		});
+
+		it("still rejects a location over 255 characters", async () => {
+			const result = await createInventoryItem({ name: "Widget", location: "x".repeat(256) });
+
+			expect(result.err).toMatch(/Validation failed/);
+			expect(result.item).toBeUndefined();
 		});
 	});
 
@@ -2485,6 +2538,64 @@ describe("inventoryController", () => {
 			const result = await updateInventoryThreshold("item-1", { low_stock_threshold: null });
 			expect(result.err).toBe("");
 			expect(result.item?.low_stock_threshold).toBeNull();
+		});
+	});
+
+	// ---------------------------------------------------------------------------
+	// approveProvisionalItem
+	// ---------------------------------------------------------------------------
+	describe("approveProvisionalItem", () => {
+		function setupApprovalTransaction() {
+			const mockTx = {
+				inventory_item: {
+					findFirst: vi.fn(),
+					updateMany: vi.fn(),
+				},
+			};
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			mockDb.$transaction.mockImplementation(async (fn: (tx: typeof mockTx) => unknown) =>
+				fn(mockTx),
+			);
+			return mockTx;
+		}
+
+		it("sets a location when one is supplied at approval", async () => {
+			const tx = setupApprovalTransaction();
+			tx.inventory_item.findFirst.mockResolvedValue({ cost: 12 });
+			tx.inventory_item.updateMany.mockResolvedValue({ count: 1 });
+
+			await approveProvisionalItem("item-1", "org-1", { location: "A42 - 325" });
+
+			expect(tx.inventory_item.updateMany).toHaveBeenCalledWith(
+				expect.objectContaining({
+					data: expect.objectContaining({ location: "A42 - 325" }),
+				}),
+			);
+		});
+
+		it("leaves location untouched when none is supplied at approval", async () => {
+			const tx = setupApprovalTransaction();
+			tx.inventory_item.findFirst.mockResolvedValue({ cost: 12 });
+			tx.inventory_item.updateMany.mockResolvedValue({ count: 1 });
+
+			await approveProvisionalItem("item-1", "org-1", {});
+
+			const call = tx.inventory_item.updateMany.mock.calls[0][0];
+			expect(call.data).not.toHaveProperty("location");
+		});
+
+		it("clears a whitespace-only location to null at approval", async () => {
+			const tx = setupApprovalTransaction();
+			tx.inventory_item.findFirst.mockResolvedValue({ cost: 12 });
+			tx.inventory_item.updateMany.mockResolvedValue({ count: 1 });
+
+			await approveProvisionalItem("item-1", "org-1", { location: "   " });
+
+			expect(tx.inventory_item.updateMany).toHaveBeenCalledWith(
+				expect.objectContaining({
+					data: expect.objectContaining({ location: null }),
+				}),
+			);
 		});
 	});
 
@@ -3499,12 +3610,18 @@ describe("inventoryController", () => {
 			expect(result.skipped[0]).toMatchObject({ row: 2, reason: expect.stringContaining("name") });
 		});
 
-		it("skips rows missing location and reports the reason", async () => {
+		it("imports a row with no location", async () => {
+			const tx = setupTransaction();
+			tx.inventory_item.create.mockResolvedValue(makeItem({ name: "Widget", location: null }));
+
 			const buf = makeXlsxBuffer([{ name: "Widget" }]);
 			const result = await importInventoryFromFile(buf, "org-1");
 
-			expect(result.imported).toBe(0);
-			expect(result.skipped[0]).toMatchObject({ row: 2, reason: expect.stringContaining("location") });
+			expect(result.imported).toBe(1);
+			expect(result.skipped).toEqual([]);
+			expect(tx.inventory_item.create).toHaveBeenCalledWith(
+				expect.objectContaining({ data: expect.objectContaining({ location: null }) }),
+			);
 		});
 
 		it("reads and normalizes the unit column", async () => {
@@ -3865,15 +3982,15 @@ describe("inventoryController", () => {
 			expect(parseTemplate().sheetName).toBe("Inventory Import Template");
 		});
 
-		it("includes name* and location* as required-field headers", () => {
+		it("includes name* as a required-field header and location as optional", () => {
 			const { headers } = parseTemplate();
 			expect(headers).toContain("name*");
-			expect(headers).toContain("location*");
+			expect(headers).toContain("location");
 		});
 
 		it("includes all expected column headers", () => {
 			const { headers } = parseTemplate();
-			for (const col of ["name*", "sku", "description", "location*", "quantity", "unit_price", "cost", "low_stock_threshold", "alert_email"]) {
+			for (const col of ["name*", "sku", "description", "location", "quantity", "unit_price", "cost", "low_stock_threshold", "alert_email"]) {
 				expect(headers).toContain(col);
 			}
 		});

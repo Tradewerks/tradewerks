@@ -1,8 +1,9 @@
 import { useState, useMemo } from "react";
 import { X, Search, Plus, Minus } from "lucide-react";
 import FullPopup from "../ui/FullPopup";
-import { WIDGET_CATALOG, addWidget, removeWidget } from "../../lib/DashboardConfig";
+import { addWidget, removeWidget, type WidgetCatalog } from "../../lib/gridLayoutEngine";
 import { useAuthStore } from "../../auth/authStore";
+import { canSeeWidget } from "../../lib/permissionGates";
 import { useResolvedTheme } from "../../hooks/useApplyTheme";
 import type { Layout, LayoutItem } from "react-grid-layout";
 
@@ -11,6 +12,7 @@ interface AddWidgetModalProps {
 	onClose: () => void;
 	currentLayout: Layout;
 	onLayoutChange: (newLayout: Layout) => void;
+	catalog: WidgetCatalog & Record<string, { label: string; requiredPermission?: string; requiredAnyPermission?: readonly string[] }>;
 }
 
 const widgetHue = (id: string) => {
@@ -19,11 +21,11 @@ const widgetHue = (id: string) => {
 	return h;
 };
 
-function buildCompactLayout(layout: Layout) {
+function buildCompactLayout(catalog: AddWidgetModalProps["catalog"], layout: Layout) {
 	const sorted = [...layout].sort((a, b) => a.y - b.y || a.x - b.x);
 	const placed: LayoutItem[] = [];
 	for (const item of sorted) {
-		const h = Math.min(item.h, WIDGET_CATALOG[item.i]?.maxH ?? item.h);
+		const h = Math.min(item.h, catalog[item.i]?.maxH ?? item.h);
 		let newY = 0;
 		for (const p of placed) {
 			if (item.x < p.x + p.w && item.x + item.w > p.x)
@@ -35,10 +37,12 @@ function buildCompactLayout(layout: Layout) {
 }
 
 function LayoutPreview({
+	catalog,
 	layout,
 	hoveredId,
 	proposedId,
 }: {
+	catalog: AddWidgetModalProps["catalog"];
 	layout: Layout;
 	hoveredId: string | null;
 	proposedId: string | null;
@@ -51,7 +55,7 @@ function LayoutPreview({
 	);
 
 	const COLS = 12;
-	const { norm } = buildCompactLayout(layout);
+	const { norm } = buildCompactLayout(catalog, layout);
 	const totalH = Math.max(1, ...norm.map((item) => item.y + item.h));
 
 	return (
@@ -60,7 +64,7 @@ function LayoutPreview({
 				const hue = widgetHue(item.i);
 				const isProposed = item.i === proposedId;
 				const dim = !!hoveredId && item.i !== hoveredId && !isProposed;
-				const label = WIDGET_CATALOG[item.i]?.label ?? item.i;
+				const label = catalog[item.i]?.label ?? item.i;
 				const short = label.split(" ").slice(0, 2).join(" ");
 				return (
 					<div key={item.i} style={{
@@ -88,13 +92,10 @@ function LayoutPreview({
 	);
 }
 
-const AddWidgetModal = ({ isOpen, onClose, currentLayout, onLayoutChange }: AddWidgetModalProps) => {
+const AddWidgetModal = ({ isOpen, onClose, currentLayout, onLayoutChange, catalog }: AddWidgetModalProps) => {
 	const [search, setSearch] = useState("");
 	const [hoveredId, setHoveredId] = useState<string | null>(null);
 	const { user } = useAuthStore();
-
-	const canSee = (perm?: string) =>
-		!perm || user?.role === "admin" || (user?.permissions ?? []).includes(perm);
 
 	const activeIds = useMemo(
 		() => new Set(currentLayout.map((l) => l.i)),
@@ -105,15 +106,15 @@ const AddWidgetModal = ({ isOpen, onClose, currentLayout, onLayoutChange }: AddW
 
 	const previewLayout = useMemo(() => {
 		if (!proposedId) return currentLayout;
-		return addWidget(proposedId, currentLayout);
-	}, [proposedId, currentLayout]);
+		return addWidget(catalog, proposedId, currentLayout);
+	}, [proposedId, currentLayout, catalog]);
 
 	const filtered = useMemo(() => {
 		const q = search.toLowerCase();
-		return Object.entries(WIDGET_CATALOG).filter(([, w]) =>
-			canSee(w.requiredPermission) && w.label.toLowerCase().includes(q)
+		return Object.entries(catalog).filter(([, w]) =>
+			canSeeWidget(user, w) && w.label.toLowerCase().includes(q)
 		);
-	}, [search, user]);
+	}, [search, user, catalog]);
 
 	const activeWidgets    = filtered.filter(([id]) =>  activeIds.has(id));
 	const availableWidgets = filtered.filter(([id]) => !activeIds.has(id));
@@ -122,7 +123,7 @@ const AddWidgetModal = ({ isOpen, onClose, currentLayout, onLayoutChange }: AddW
 		if (activeIds.has(id)) {
 			onLayoutChange(removeWidget(id, currentLayout));
 		} else {
-			onLayoutChange(addWidget(id, currentLayout));
+			onLayoutChange(addWidget(catalog, id, currentLayout));
 		}
 	};
 
@@ -190,6 +191,7 @@ const AddWidgetModal = ({ isOpen, onClose, currentLayout, onLayoutChange }: AddW
 				</div>
 				<div className="flex-1 min-h-0 p-4 overflow-hidden">
 					<LayoutPreview
+						catalog={catalog}
 						layout={previewLayout}
 						hoveredId={hoveredId}
 						proposedId={proposedId}

@@ -2,10 +2,9 @@ import { PLOT_WINDOW_DAYS } from "./reorderChart";
 
 // Geometry for the item detail card's runway meter, kept out of the component so
 // the "how far along the track" arithmetic is testable without a DOM. The meter
-// reads in DAYS on the same 0→30d scale the org-wide priority bars use — the
-// card used to plot warehouse QUANTITY on an unlabelled axis scaled to
-// 1.35 × max(qty, reorder point), so its right edge was a number nobody could
-// name and its left edge carried a stockout DATE on a quantity scale.
+// reads in DAYS on the same 0→30d scale the org-wide priority bars use, because
+// a quantity-scaled axis mixes units: the right edge would be a number nobody
+// can name, and a stockout DATE has no place on a quantity scale.
 
 export interface RunwayMeter {
 	/** Fill width, 0–100. */

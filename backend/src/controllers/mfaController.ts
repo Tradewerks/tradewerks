@@ -199,9 +199,11 @@ export async function getMfaStatus(userId: string, role: string) {
 
 export async function resetMfa(targetUserId: string, targetRole: string, actorId: string, actorRole: string) {
     const organization_id = await getOrgId(targetUserId, targetRole);
+    // Rows carry the token role ("admin" for org admins); never touch platform_staff rows.
+    const roles = targetRole === "technician" ? ["technician"] : ["admin", "dispatcher"];
     await db.$transaction(async (tx) => {
-        await tx.mfa_credential.deleteMany({ where: { user_id: targetUserId } });
-        await tx.mfa_recovery_code.deleteMany({ where: { user_id: targetUserId } });
+        await tx.mfa_credential.deleteMany({ where: { user_id: targetUserId, role: { in: roles } } });
+        await tx.mfa_recovery_code.deleteMany({ where: { user_id: targetUserId, role: { in: roles } } });
     });
     await logActivity({
         event_type: "mfa.reset",

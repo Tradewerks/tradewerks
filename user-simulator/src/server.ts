@@ -5,6 +5,7 @@ import { techsRouter } from "./controlApi/techs.js";
 import { clientsRouter } from "./controlApi/clients.js";
 import { jobsRouter } from "./controlApi/jobs.js";
 import { visitsRouter } from "./controlApi/visits.js";
+import { arrivalDemoRouter } from "./controlApi/arrivalDemo.js";
 
 export function buildApp() {
 	const app = express();
@@ -26,6 +27,7 @@ export function buildApp() {
 	app.use("/api", clientsRouter);
 	app.use("/api", jobsRouter);
 	app.use("/api", visitsRouter);
+	app.use("/api", arrivalDemoRouter);
 
 	// Serve the built UI when present (dist after `npm run build` in ui/).
 	// In dev, users hit the Vite server directly.

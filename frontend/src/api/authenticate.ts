@@ -105,6 +105,13 @@ export const requestPasswordResetCall = async (id: string, role: string): Promis
     return response.data.data!;
 }
 
+export type ResetTokenStatus = "valid" | "expired" | "invalid";
+
+export const checkResetTokenCall = async (token: string, role: string | null): Promise<ResetTokenStatus> => {
+    const response = await api.post<ApiResponse<{ status: ResetTokenStatus }>>('/reset-password/check', { token, role });
+    return response.data.data?.status ?? "invalid";
+}
+
 export const resetPasswordCall = async (token: string, newPassword: string, role: string): Promise<AuthResponse> => {
     const response = await api.post<ApiResponse<AuthResponse>>('/reset-password', { token, newPassword, role });
 

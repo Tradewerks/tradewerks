@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { type CreateInvoiceInput, type CreateInvoiceLineItemInput } from "../../types/invoices";
+import { InvoiceStatusLabels, type InvoiceStatus, type CreateInvoiceInput, type CreateInvoiceLineItemInput } from "../../types/invoices";
 import { type LineItemType, type BaseLineItem } from "../../types/common";
 import { useAllClientsQuery } from "../../hooks/useClients";
 import { useAllJobsQuery } from "../../hooks/useJobs";
@@ -10,7 +10,10 @@ import type { OverlapWarning } from "../../types/invoices";
 import Dropdown from "../ui/Dropdown";
 import DatePicker from "../ui/DatePicker";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
+import { errorMessage } from "../../util/util";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { TemplateSearch, type TemplateSearchResult, type TemplateSearchClient } from "../ui/forms/TemplateSearch";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
@@ -135,10 +138,12 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		undoLineItemField,
 		clearLineItemField,
 		originalLineItems,
+		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
 	} = useLineItems({ minItems: 0, mode: "create", defaultTaxGroupId: defaultTaxGroup?.id ?? null });
 
+	const { data: inventoryItems = [] } = useAllInventoryQuery();
 	const lineItemsForCalc = useMemo(
 		() =>
 			activeLineItems.map((item) => ({
@@ -476,6 +481,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 						quantity: Number(item.quantity ?? 1),
 						unit_price: Number(item.unit_price ?? 0),
 						item_type: item.item_type ?? "",
+						inventory_item_id: item.inventory_item_id ?? null,
 						source_job_id: jobId,
 						source_visit_id: null,
 					});
@@ -516,6 +522,10 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 							quantity: Number(li.quantity),
 							unit_price: Number(li.unit_price),
 							item_type: li.item_type ?? "",
+							// The visit is where the link is real — a tech
+							// scanned or picked this part. Dropping it here was
+							// severing the only populated link in the system.
+							inventory_item_id: li.inventory_item_id ?? null,
 							source_visit_id: visit.id,
 							source_job_id: visit.job?.id ?? null,
 						});
@@ -648,6 +658,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 					| undefined,
 				taxable: item.taxable,
 				tax_group_id: item.tax_group_id ?? undefined,
+				inventory_item_id: item.inventory_item_id ?? undefined,
 				source_job_id: item.source_job_id ?? undefined,
 				source_visit_id: item.source_visit_id ?? undefined,
 			}));
@@ -711,7 +722,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 			setIsModalOpen(false);
 			resetForm();
 		} catch (error) {
-			setSubmitError(error instanceof Error ? error.message : "Failed to create invoice. Please try again.");
+			setSubmitError(errorMessage(error, "Failed to create invoice. Please try again."));
 		} finally {
 			setIsLoading(false);
 		}
@@ -1431,6 +1442,8 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 							</div>
 						)}
 						<LineItemsSection
+							inventoryItems={inventoryItems}
+							onLinkInventory={setLineItemInventoryItem}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={dirtyAddLineItem}
@@ -1470,11 +1483,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 
 				return (
 					<div className="space-y-3 lg:space-y-5 xl:space-y-6 min-w-0">
-						{submitError && (
-							<div className="rounded border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text">
-								{submitError}
-							</div>
-						)}
+						<FormErrorBanner message={submitError} />
 						<div className="p-3 bg-surface/50 rounded-lg border border-border/50 text-sm space-y-1.5">
 							<div className="flex justify-between items-center">
 								<span className="text-text-tertiary text-xs uppercase tracking-wide font-semibold">
@@ -1670,7 +1679,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 									{w.existing_invoices.map((inv) => (
 										<li key={inv.invoice_id}>
 											{inv.invoice_number} —{" "}
-											<span className="text-text-secondary">{inv.status}</span>
+											<span className="text-text-secondary">{InvoiceStatusLabels[inv.status as InvoiceStatus] ?? inv.status}</span>
 											{inv.billed_amount != null && (
 												<span className="ml-1 text-text-tertiary">(${inv.billed_amount.toFixed(2)} billed)</span>
 											)}

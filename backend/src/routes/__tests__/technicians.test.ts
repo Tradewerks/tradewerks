@@ -27,9 +27,20 @@ vi.mock("../../services/logger.js", () => ({
 	buildChanges: vi.fn(() => ({})),
 }));
 vi.mock("../../services/socketService.js", () => ({
-	getSocket: vi.fn(() => ({ emit: vi.fn(), to: vi.fn().mockReturnThis() })),
+	getSocket: vi.fn(() => ({
+		emit: vi.fn(),
+		to: vi.fn().mockReturnThis(),
+		in: vi.fn(() => ({ disconnectSockets: vi.fn() })),
+	})),
 	emitToOrg: vi.fn(),
 	emitInventoryUpdated: vi.fn(),
+}));
+const { entitlementLimits } = vi.hoisted(() => ({
+	entitlementLimits: {} as Record<string, number | null>,
+}));
+vi.mock("../../services/entitlementService.js", () => ({
+	getEntitlements: vi.fn(async () => ({ limits: entitlementLimits })),
+	isModuleOn: vi.fn(async () => true),
 }));
 vi.mock("../../controllers/jobVisitsController.js", () => ({ getJobVisitsByTechId: vi.fn(async () => []) }));
 vi.mock("../../controllers/vehiclesController.js", () => ({ setTechnicianVehicle: vi.fn() }));
@@ -43,11 +54,12 @@ vi.mock("../../services/wasabiService.js", () => ({
 
 import techniciansRouter from "../technicians.js";
 import { db } from "../../db.js";
-import { callRoute, type FakeDb } from "./harness.js";
+import { callRoute, leaves, type FakeDb } from "./harness.js";
 
 const fake = db as unknown as FakeDb;
 
 const SECRET_KEYS = ["password", "password_reset_token", "password_reset_token_expires_at"];
+const WITHHELD_KEYS = [...SECRET_KEYS, "hourly_rate", "cost_rate"];
 
 const technicianRow = {
 	id: "tech-1",
@@ -78,12 +90,12 @@ describe("GET /technicians — no credential columns in the payload (review B2 /
 		});
 		expect(list.status).toBe(200);
 		for (const key of SECRET_KEYS) expect(list.body.data[0]).not.toHaveProperty(key);
+		// Explicit allowlist, not the global omit — any `select` bypasses that omit.
+		// Must name no credential column and no pay column.
 		const listArgs = fake.technician.findMany.mock.calls[0][0];
-		expect(listArgs.select).toBeUndefined();
-		for (const key of SECRET_KEYS) expect(listArgs.omit?.[key]).not.toBe(false);
-		// nested visit_techs → tech is covered by the same global omit; the route
-		// must not select it explicitly with credential columns
-		expect(JSON.stringify(listArgs.include)).not.toMatch(/password/);
+		expect(listArgs.select).toBeDefined();
+		for (const key of WITHHELD_KEYS) expect(listArgs.select).not.toHaveProperty(key);
+		expect(JSON.stringify(listArgs.select)).not.toMatch(/password|hourly_rate|cost_rate/);
 
 		const one = await callRoute(techniciansRouter, "get", "/:id", {
 			user: { uid: "tech-1", role: "technician", permissions: [] },
@@ -128,7 +140,10 @@ describe("GET /technicians/:id/changes — limit validation + denylist (review P
 		expect(r.status).toBe(200);
 		expect(r.body.data[0].changes).toEqual({ status: { old: "Offline", new: "Available" } });
 		const where = JSON.stringify(fake.log.findMany.mock.calls[0][0].where);
-		expect(where).toContain('"actor_type":{"in":["technician"]}');
+		// Widened to include "agent" so a technician's change history also shows
+		// what an assistant did on their behalf; actor_id still pins it to them.
+		expect(where).toContain('"actor_type":{"in":["technician","agent"]}');
+		expect(where).toContain('"actor_id":"tech-1"');
 		expect(where).toContain('"contains":".password."');
 		expect(fake.log.findMany.mock.calls[0][0].take).toBe(6);
 	});
@@ -139,5 +154,116 @@ describe("GET /technicians/:id/changes — limit validation + denylist (review P
 			params: { id: "tech-1" },
 		});
 		expect(r.status).toBe(403);
+	});
+});
+
+describe("technician seats and deactivation (build plan 2)", () => {
+	const admin = { uid: "disp-1", role: "admin", organization_id: "org-1", permissions: null };
+	const body = {
+		name: "New Tech",
+		email: "new@example.com",
+		phone: "555",
+		title: "Tech",
+		description: "",
+		coords: { lat: 0, lon: 0 },
+		hire_date: new Date().toISOString(),
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		for (const k of Object.keys(entitlementLimits)) delete entitlementLimits[k];
+		fake.technician.findFirst.mockResolvedValue(null);
+		fake.dispatcher.findFirst.mockResolvedValue(null);
+	});
+
+	it("POST / refuses with 409 SEAT_LIMIT_REACHED at the cap, under the seat lock", async () => {
+		entitlementLimits.technicians = 5;
+		fake.technician.count.mockResolvedValue(5);
+		await expect(callRoute(techniciansRouter, "post", "/", { user: admin, body })).rejects.toMatchObject({
+			statusCode: 409,
+			code: "SEAT_LIMIT_REACHED",
+			message: "Your subscription includes 5 technicians. Deactivate one or upgrade to add more.",
+		});
+		const lockSql = fake.$executeRaw.mock.calls.map((c: unknown[]) => (c[0] as string[]).join("?"));
+		expect(lockSql.some((s: string) => s.includes("pg_advisory_xact_lock(7"))).toBe(true);
+		expect(fake.technician.create).not.toHaveBeenCalled();
+	});
+
+	it("over the cap after a downgrade still refuses", async () => {
+		entitlementLimits.technicians = 3;
+		fake.technician.count.mockResolvedValue(8);
+		await expect(callRoute(techniciansRouter, "post", "/", { user: admin, body })).rejects.toMatchObject({
+			statusCode: 409,
+		});
+	});
+
+	it("unlimited skips the count", async () => {
+		entitlementLimits.technicians = null;
+		fake.technician.create.mockResolvedValue({ id: "t-new", ...body, status: "Offline" });
+		const r = await callRoute(techniciansRouter, "post", "/", { user: admin, body });
+		expect(r.status).toBe(201);
+		expect(fake.technician.count).not.toHaveBeenCalled();
+	});
+
+	it("counts only active technicians", async () => {
+		entitlementLimits.technicians = 5;
+		fake.technician.count.mockResolvedValue(4);
+		fake.technician.create.mockResolvedValue({ id: "t-new", ...body, status: "Offline" });
+		await callRoute(techniciansRouter, "post", "/", { user: admin, body });
+		expect(leaves(fake.technician.count.mock.calls[0][0].where)).toEqual(
+			expect.arrayContaining([{ organization_id: "org-1" }, { deactivated_at: null }]),
+		);
+	});
+
+	it("deactivate refuses while the technician has an open visit", async () => {
+		fake.technician.findFirst.mockResolvedValue({ id: "tech-1", name: "Tess", deactivated_at: null });
+		fake.job_visit_technician.count.mockResolvedValue(2);
+		const r = await callRoute(techniciansRouter, "post", "/:id/deactivate", {
+			user: admin,
+			params: { id: "tech-1" },
+		});
+		expect(r.status).toBe(400);
+		expect(r.body.error.message).toBe("Tess has 2 open visits. Complete or reassign them first.");
+		expect(fake.technician.update).not.toHaveBeenCalled();
+	});
+
+	it("deactivate sets deactivated_at, goes Offline, leaves the vehicle, revokes refresh tokens", async () => {
+		fake.technician.findFirst.mockResolvedValue({ id: "tech-1", name: "Tess", deactivated_at: null });
+		fake.job_visit_technician.count.mockResolvedValue(0);
+		fake.technician.update.mockResolvedValue({ id: "tech-1", deactivated_at: new Date() });
+		fake.jwt_refresh_token.deleteMany.mockResolvedValue({ count: 1 });
+		const r = await callRoute(techniciansRouter, "post", "/:id/deactivate", {
+			user: admin,
+			params: { id: "tech-1" },
+		});
+		expect(r.status).toBe(200);
+		expect(fake.technician.update.mock.calls[0][0].data).toMatchObject({
+			deactivated_at: expect.any(Date),
+			status: "Offline",
+			current_vehicle_id: null,
+		});
+		expect(fake.jwt_refresh_token.deleteMany).toHaveBeenCalledWith({ where: { userId: "tech-1" } });
+	});
+
+	it("reactivate checks the seat cap", async () => {
+		entitlementLimits.technicians = 5;
+		fake.technician.findFirst.mockResolvedValue({ id: "tech-1", name: "Tess", deactivated_at: new Date() });
+		fake.technician.count.mockResolvedValue(5);
+		await expect(
+			callRoute(techniciansRouter, "post", "/:id/reactivate", { user: admin, params: { id: "tech-1" } }),
+		).rejects.toMatchObject({ statusCode: 409, code: "SEAT_LIMIT_REACHED" });
+	});
+
+	it("reactivate clears deactivated_at", async () => {
+		entitlementLimits.technicians = 5;
+		fake.technician.findFirst.mockResolvedValue({ id: "tech-1", name: "Tess", deactivated_at: new Date() });
+		fake.technician.count.mockResolvedValue(4);
+		fake.technician.update.mockResolvedValue({ id: "tech-1", deactivated_at: null });
+		const r = await callRoute(techniciansRouter, "post", "/:id/reactivate", {
+			user: admin,
+			params: { id: "tech-1" },
+		});
+		expect(r.status).toBe(200);
+		expect(fake.technician.update.mock.calls[0][0].data).toEqual({ deactivated_at: null });
 	});
 });

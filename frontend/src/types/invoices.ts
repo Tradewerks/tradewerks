@@ -1,5 +1,6 @@
 ﻿import type { ClientDetailsProps } from "../components/clients/ClientDetailsCard";
 import type { BaseNote, PricingBreakdown } from "./common";
+import type { DocumentLineage } from "./lineage";
 
 // ============================================================================
 // INVOICE STATUS
@@ -18,13 +19,15 @@ export const InvoiceStatusValues = [
 
 export type InvoiceStatus = (typeof InvoiceStatusValues)[number];
 
+// Enum values are DB-frozen; these are the display strings. Issued reads
+// "Created" and Paid reads "Fully Paid" (pairing with "Partially Paid").
 export const InvoiceStatusLabels: Record<InvoiceStatus, string> = {
 	Draft: "Draft",
-	Issued: "Issued",
+	Issued: "Created",
 	Sent: "Sent",
 	Viewed: "Viewed",
 	PartiallyPaid: "Partially Paid",
-	Paid: "Paid",
+	Paid: "Fully Paid",
 	Disputed: "Disputed",
 	Void: "Void",
 };
@@ -73,11 +76,37 @@ export interface InvoiceReference {
 	issue_date: Date | string | null;
 }
 
+/** Minimal shape of a neighbouring invoice in the revision/adjustment chain. */
+export interface InvoiceChainRef {
+	id: string;
+	invoice_number: string;
+}
+
+/** The documents a job came from — how an invoice is backtracked past the work. */
+export interface JobQuoteReference {
+	id: string;
+	quote_number: string;
+	title: string;
+	status: string;
+	total: number;
+	created_at: Date | string;
+}
+
+export interface JobRequestReference {
+	id: string;
+	title: string;
+	status: string;
+	created_at: Date | string;
+}
+
 export interface JobReference {
 	id: string;
 	job_number: string;
 	name: string;
 	status: string;
+	/** Resolved on the invoice detail GET; list endpoints leave these absent. */
+	quote?: JobQuoteReference | null;
+	request?: JobRequestReference | null;
 }
 
 export interface VisitReference {
@@ -115,6 +144,8 @@ export interface InvoiceLineItem {
 	tax_group_id: string | null;
 	tax_amount: number | null;
 	tax_group?: { id: string; name: string; rates?: { tax_rate: { id: string; name: string; rate: number } }[] } | null;
+	/** Catalog link, when the line was picked from inventory rather than typed. */
+	inventory_item_id?: string | null;
 }
 
 export interface CreateInvoiceLineItemInput {
@@ -129,6 +160,8 @@ export interface CreateInvoiceLineItemInput {
 	source_visit_id?: string | null;
 	taxable?: boolean;
 	tax_group_id?: string | null;
+	/** Catalog link. Reference only except on visits, where it plans and deducts stock. */
+	inventory_item_id?: string | null;
 }
 
 export interface UpdateInvoiceLineItemInput extends CreateInvoiceLineItemInput {
@@ -158,6 +191,17 @@ export interface CreateInvoicePaymentInput {
 	paid_at?: Date | string;
 	method?: PaymentMethod | null;
 	note?: string | null;
+}
+
+/**
+ * A refund is stored as a negative invoice_payment row, but the API is
+ * positive — a dispatcher never types a minus sign to give money back.
+ * The reason is required; the backend caps `amount` at what was actually paid.
+ */
+export interface RecordRefundInput {
+	amount: number;
+	reason: string;
+	method?: PaymentMethod | null;
 }
 
 // ============================================================================
@@ -220,6 +264,19 @@ export interface Invoice extends PricingBreakdown {
 	amount_paid: number;
 	balance_due: number;
 
+	// Revision / adjustment chain. Both directions are carried: a cross-reference
+	// has to name the neighbouring document, and "adjusted by" has no scalar to
+	// derive it from.
+	version?: number;
+	previous_invoice_id?: string | null;
+	previous_invoice?: InvoiceChainRef | null;
+	revised_invoice?: InvoiceChainRef | null;
+	adjusts_invoice_id?: string | null;
+	adjusts_invoice?: InvoiceChainRef | null;
+	adjustments?: InvoiceChainRef[];
+	/** Resolved chain, attached by getInvoiceById. Absent on list payloads. */
+	lineage?: DocumentLineage | null;
+
 	// Content
 	memo?: string | null;
 	internal_notes?: string | null;
@@ -244,6 +301,15 @@ export interface Invoice extends PricingBreakdown {
 	visits?: InvoiceVisit[];
 	payments?: InvoicePayment[];
 	notes?: InvoiceNote[];
+	/**
+	 * Jobs and visits a line names that `jobs` / `visits` do not — an adjustment
+	 * carries its root's attribution without the root's billing links. Detail
+	 * GET only, and kept separate because these bill nothing.
+	 */
+	unlinked_sources?: {
+		jobs: JobReference[];
+		visits: VisitReference[];
+	} | null;
 }
 
 // ============================================================================

@@ -1,4 +1,5 @@
 ﻿import { Router } from "express";
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { ErrorCodes, createSuccessResponse, createErrorResponse } from "../types/responses.js";
 import { getUserContext } from "../lib/context.js";
 import { db } from "../db.js";
@@ -32,12 +33,26 @@ import {
 	revokeReadiness,
 	getVehicleMovements,
 	type VehicleAdjustmentType,
+	getMaintenanceRecords,
+	createMaintenanceRecord,
+	updateMaintenanceRecord,
+	deleteMaintenanceRecord,
+	searchMaintenanceSourceLines,
+	getMaintenanceReminders,
+	createMaintenanceReminder,
+	updateMaintenanceReminder,
+	deleteMaintenanceReminder,
+	acknowledgeMaintenanceReminder,
+	unacknowledgeMaintenanceReminder,
+	completeMaintenanceReminder,
+	getMaintenanceAlerts,
 } from "../controllers/vehiclesController.js";
 import {
 	requirePermission,
 	requireAnyPermission,
 	requireVehiclePermission,
 } from "../lib/requirePermissions.js";
+import { getEntityHistory, INVALID_HISTORY_LIMIT, parseHistoryLimit } from "../controllers/logsController.js";
 
 const router = Router();
 
@@ -68,6 +83,7 @@ router.post("/", requirePermission("manage_vehicles"), async (req, res, next) =>
 
 router.get(
 	"/stock-conflicts",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians", "use_vehicles", "stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -89,7 +105,30 @@ router.get(
 );
 
 router.get(
+	"/maintenance-alerts",
+	requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle"),
+	async (req, res, next) => {
+		try {
+			const orgId = req.user!.organization_id as string;
+			let scopeVehicleId: string | undefined;
+			if (req.user?.role === "technician") {
+				const tech = await db.technician.findFirst({
+					where: { id: req.user.uid as string, organization_id: orgId },
+					select: { current_vehicle_id: true },
+				});
+				scopeVehicleId = tech?.current_vehicle_id ?? undefined;
+			}
+			const data = await getMaintenanceAlerts(orgId, scopeVehicleId);
+			res.json(createSuccessResponse(data, { count: data.length }));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
+
+router.get(
 	"/readiness",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -111,6 +150,7 @@ router.get(
 
 router.get(
 	"/restock-requests",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -130,6 +170,7 @@ router.get(
 
 router.post(
 	"/restock-requests/:requestId/dismiss",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -156,6 +197,7 @@ router.post(
 
 router.post(
 	"/restock-requests/:requestId/acknowledge",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -193,7 +235,7 @@ router.put("/:id", requirePermission("manage_technicians"), async (req, res, nex
 	}
 });
 
-router.get("/:id/stock", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle", "complete_own_restock"), async (req, res, next) => {
+router.get("/:id/stock", requireModule("vehicle_stock"), requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle", "complete_own_restock"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -207,7 +249,7 @@ router.get("/:id/stock", requireAnyPermission("view_vehicles", "manage_vehicles"
 	}
 });
 
-router.post("/:id/stock", requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
+router.post("/:id/stock", requireModule("vehicle_stock"), requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const context = getUserContext(req);
@@ -225,6 +267,7 @@ router.post("/:id/stock", requireVehiclePermission("stock_own_vehicle"), async (
 
 router.get(
 	"/:id/stock/fill-plan",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -243,6 +286,7 @@ router.get(
 
 router.post(
 	"/:id/stock/fill",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -263,6 +307,7 @@ router.post(
 
 router.get(
 	"/:id/usage-today",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians", "use_inventory"),
 	async (req, res, next) => {
 		try {
@@ -281,6 +326,7 @@ router.get(
 
 router.get(
 	"/:id/tomorrow-requirements",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -299,6 +345,7 @@ router.get(
 
 router.post(
 	"/:id/restock",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("complete_own_restock"),
 	async (req, res, next) => {
 		try {
@@ -325,6 +372,7 @@ router.post(
 
 router.get(
 	"/:id/restock/today",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_inventory", "manage_technicians", "use_inventory"),
 	async (req, res, next) => {
 		try {
@@ -346,11 +394,11 @@ const ADJUST_TYPE_PERMS: Partial<Record<VehicleAdjustmentType, string>> = {
 	transfer:           "adjust_transfer",
 	audit:              "adjust_audit",
 	warehouse_exchange: "adjust_warehouse_exchange",
-	supplier_purchase:  "adjust_supplier_purchase",
 };
 
 router.post(
 	"/:id/stock/adjust",
+	requireModule("vehicle_stock"),
 	requireVehiclePermission("stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -392,6 +440,7 @@ router.post(
 
 router.get(
 	"/:id/restock/history",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_inventory", "manage_technicians", "use_inventory", "stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -410,6 +459,7 @@ router.get(
 
 router.get(
 	"/:id/stock/adjustments",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_inventory", "manage_technicians", "use_inventory", "stock_own_vehicle"),
 	async (req, res, next) => {
 		try {
@@ -428,6 +478,7 @@ router.get(
 
 router.get(
 	"/:id/readiness",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("view_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -448,6 +499,7 @@ router.get(
 
 router.post(
 	"/:id/readiness",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -471,6 +523,7 @@ router.post(
 
 router.delete(
 	"/:id/readiness/:date",
+	requireModule("vehicle_stock"),
 	requireAnyPermission("manage_inventory", "manage_technicians"),
 	async (req, res, next) => {
 		try {
@@ -485,7 +538,7 @@ router.delete(
 	}
 );
 
-router.put("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
+router.put("/:id/stock/:itemId", requireModule("vehicle_stock"), requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
 	try {
 		const { id, itemId } = req.params as { id: string; itemId: string };
 		const context = getUserContext(req);
@@ -501,7 +554,7 @@ router.put("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"), 
 	}
 });
 
-router.delete("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
+router.delete("/:id/stock/:itemId", requireModule("vehicle_stock"), requireVehiclePermission("stock_own_vehicle"), async (req, res, next) => {
 	try {
 		const { id, itemId } = req.params as { id: string; itemId: string };
 		const context = getUserContext(req);
@@ -517,7 +570,7 @@ router.delete("/:id/stock/:itemId", requireVehiclePermission("stock_own_vehicle"
 	}
 });
 
-router.post("/:id/stock/:itemId/restock-request", requireVehiclePermission("view_vehicles"), async (req, res, next) => {
+router.post("/:id/stock/:itemId/restock-request", requireModule("vehicle_stock"), requireVehiclePermission("view_vehicles"), async (req, res, next) => {
 	try {
 		const { id, itemId } = req.params as { id: string; itemId: string };
 		const orgId = req.user!.organization_id as string;
@@ -539,7 +592,7 @@ router.post("/:id/stock/:itemId/restock-request", requireVehiclePermission("view
 	}
 });
 
-router.post("/:id/restock-requests/bulk", requireVehiclePermission("view_vehicles"), async (req, res, next) => {
+router.post("/:id/restock-requests/bulk", requireModule("vehicle_stock"), requireVehiclePermission("view_vehicles"), async (req, res, next) => {
 	try {
 		const vehicleId = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -557,7 +610,7 @@ router.post("/:id/restock-requests/bulk", requireVehiclePermission("view_vehicle
 	}
 });
 
-router.get("/:id/restock-requests", requireAnyPermission("stock_own_vehicle", "use_inventory", "manage_inventory"), async (req, res, next) => {
+router.get("/:id/restock-requests", requireModule("vehicle_stock"), requireAnyPermission("stock_own_vehicle", "use_inventory", "manage_inventory"), async (req, res, next) => {
 	try {
 		const vehicleId = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -575,7 +628,7 @@ router.get("/:id/restock-requests", requireAnyPermission("stock_own_vehicle", "u
 	}
 });
 
-router.get("/:id/movements", requireAnyPermission("view_inventory", "manage_technicians"), async (req, res, next) => {
+router.get("/:id/movements", requireModule("vehicle_stock"), requireAnyPermission("view_inventory", "manage_technicians"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const id = req.params.id as string;
@@ -590,6 +643,222 @@ router.get("/:id/movements", requireAnyPermission("view_inventory", "manage_tech
 			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
 		}
 		res.json(createSuccessResponse({ movements: result.movements, nextCursor: result.nextCursor }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// vehicle maintenance
+
+router.get("/:id/maintenance", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+
+		const result = await getMaintenanceRecords(orgId, id);
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.records, { count: result.records!.length }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/:id/maintenance", requireAnyPermission("manage_vehicles", "use_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+
+		const result = await createMaintenanceRecord(orgId, id, req.body, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.record));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.patch("/:id/maintenance/:recordId", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const recordId = req.params.recordId as string;
+
+		const result = await updateMaintenanceRecord(orgId, id, recordId, req.body, getUserContext(req));
+		if (result?.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.record));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.delete("/:id/maintenance/:recordId", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const recordId = req.params.recordId as string;
+
+		const result = await deleteMaintenanceRecord(orgId, recordId, id, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse("Maintenance record deleted"));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/:id/maintenance/purchase-lines", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const { q } = req.query as { q?: string };
+
+		const result = await searchMaintenanceSourceLines(orgId, id, q);
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.lines, { count: result.lines!.length }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// maintenance reminders
+
+router.get("/:id/maintenance/reminders", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+
+		const result = await getMaintenanceReminders(orgId, id);
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.reminders));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/:id/maintenance/reminders", requireAnyPermission("manage_vehicles", "use_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		
+		const result = await createMaintenanceReminder(orgId, id, req.body, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.reminder));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.patch("/:id/maintenance/reminders/:reminderId", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const reminderId = req.params.reminderId as string;
+
+		const result = await updateMaintenanceReminder(orgId, id, reminderId, req.body, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.reminder));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.delete("/:id/maintenance/reminders/:reminderId", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const reminderId = req.params.reminderId as string;
+
+		const result = await deleteMaintenanceReminder(orgId, id, reminderId, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse("Maintenance reminder deleted"));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/:id/maintenance/reminders/:reminderId/acknowledge", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const reminderId = req.params.reminderId as string;
+
+		const result = await acknowledgeMaintenanceReminder(orgId, id, reminderId, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.reminder));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/:id/maintenance/reminders/:reminderId/complete", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const reminderId = req.params.reminderId as string;
+
+		const result = await completeMaintenanceReminder(orgId, id, reminderId, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.reminder));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.post("/:id/maintenance/reminders/:reminderId/unacknowledge", requirePermission("manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+		const reminderId = req.params.reminderId as string;
+
+		const result = await unacknowledgeMaintenanceReminder(orgId, id, reminderId, getUserContext(req));
+		if (result.err) {
+			return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+		}
+		res.json(createSuccessResponse(result.reminder));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.get("/:id/changes", requireAnyPermission("view_vehicles", "manage_vehicles"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const id = req.params.id as string;
+
+		let limit: number;
+		try {
+			limit = parseHistoryLimit(req.query.limit);
+		} catch {
+			return res
+				.status(400)
+				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, INVALID_HISTORY_LIMIT));
+		}
+
+		const results = await getEntityHistory(orgId, "vehicle", id, limit);
+
+		if (results.err)
+			return res.status(500).json(createErrorResponse(ErrorCodes.SERVER_ERROR, results.err));
+		res.json(createSuccessResponse(results.rows, { count: results.rows.length, hasMore: results.hasMore, total: results.total }));
 	} catch (err) {
 		next(err);
 	}

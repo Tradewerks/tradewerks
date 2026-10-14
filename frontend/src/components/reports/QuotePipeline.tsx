@@ -20,7 +20,7 @@ interface QuotePipelineProps {
 }
 
 interface BucketConfig {
-	key: "draft" | "sent" | "viewed";
+	key: "draft" | "sent" | "viewed" | "disputed";
 	label: string;
 	color: string;
 }
@@ -29,6 +29,7 @@ const BUCKETS: BucketConfig[] = [
 	{ key: "draft", label: "Draft", color: "var(--color-chart-primary)" },
 	{ key: "sent", label: "Sent", color: "var(--color-chart-success)" },
 	{ key: "viewed", label: "Viewed", color: "var(--color-chart-info)" },
+	{ key: "disputed", label: "Disputed", color: "var(--color-chart-warning)" },
 ];
 
 function formatYAxisCurrency(value: number): string {

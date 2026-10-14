@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { fillCoords } from "../lib/geocode.js";
 import {
 	createClientSchema,
 	updateClientSchema,
@@ -103,6 +104,8 @@ export const insertClient = async (
 ) => {
 	try {
 		const parsed = createClientSchema.parse(data);
+		const geoErr = await fillCoords(parsed, true);
+		if (geoErr) return { err: geoErr };
 		const sdb = getScopedDb(organizationId);
 		// Scope the QB customer mapping to the org's current realm 
 		const accountId = parsed.qb_customer_id
@@ -114,7 +117,7 @@ export const insertClient = async (
 					organization_id: organizationId,
 					name: parsed.name,
 					address: parsed.address,
-					coords: parsed.coords,
+					coords: parsed.coords!, // fillCoords guarantees coords once address (required) is set
 					is_active: parsed.is_active ?? true,
 					last_activity: new Date(),
 				},
@@ -205,6 +208,8 @@ export const updateClient = async (
 ) => {
 	try {
 		const parsed = updateClientSchema.parse(data);
+		const geoErr = await fillCoords(parsed, true);
+		if (geoErr) return { err: geoErr };
 		const sdb = getScopedDb(organizationId);
 
 		const existing = await sdb.client.findFirst({ where: { id } });

@@ -15,6 +15,8 @@ export interface ToastEntry {
 	/** Overrides the kind's default icon — e.g. LabelQueueToast's QrCode glyph. */
 	icon?: ReactNode;
 	action?: ToastAction;
+	/** Set while the exit animation plays, before the entry is removed. */
+	leaving?: boolean;
 }
 
 export interface PushOptions {
@@ -25,6 +27,10 @@ export interface PushOptions {
 }
 
 const AUTO_DISMISS_MS = 4000;
+// Matches ToastViewport's duration-200 exit transition
+const EXIT_MS = 200;
+// Gap between toasts pushed in the same burst
+const STAGGER_MS = 150;
 
 interface ToastState {
 	toasts: ToastEntry[];
@@ -33,7 +39,9 @@ interface ToastState {
 }
 
 let nextId = 0;
+let nextShowAt = 0;
 
+// Holds the pending show timer, then the auto-dismiss timer
 const dismissTimers = new Map<number, number>();
 
 function clearDismissTimer(id: number) {
@@ -44,28 +52,35 @@ function clearDismissTimer(id: number) {
 	}
 }
 
-export const useToastStore = create<ToastState>((set) => ({
+export const useToastStore = create<ToastState>((set, get) => ({
 	toasts: [],
 	push: (kind, message, options) => {
 		const id = ++nextId;
-		set((s) => ({
-			toasts: [
-				...s.toasts,
-				{ id, kind, message, icon: options?.icon, action: options?.action },
-			],
-		}));
-		clearDismissTimer(id);
-		dismissTimers.set(
-			id,
-			window.setTimeout(() => {
-				dismissTimers.delete(id);
-				set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-			}, options?.durationMs ?? AUTO_DISMISS_MS),
-		);
+		const show = () => {
+			set((s) => ({
+				toasts: [
+					...s.toasts,
+					{ id, kind, message, icon: options?.icon, action: options?.action },
+				],
+			}));
+			dismissTimers.set(
+				id,
+				window.setTimeout(() => get().dismiss(id), options?.durationMs ?? AUTO_DISMISS_MS),
+			);
+		};
+		const now = Date.now();
+		const showAt = Math.max(now, nextShowAt);
+		nextShowAt = showAt + STAGGER_MS;
+		if (showAt === now) show();
+		else dismissTimers.set(id, window.setTimeout(show, showAt - now));
 		return id;
 	},
 	dismiss: (id) => {
 		clearDismissTimer(id);
-		set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+		if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;
+		set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) }));
+		window.setTimeout(() => {
+			set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+		}, EXIT_MS);
 	},
 }));

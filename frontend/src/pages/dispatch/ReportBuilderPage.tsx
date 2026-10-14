@@ -3,6 +3,7 @@ import { ArrowLeft, FileBarChart, Loader2, Save, SlidersHorizontal } from "lucid
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import AdaptableTable from "../../components/AdaptableTable";
 import PageHeader from "../../components/ui/PageHeader";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import ReportCustomizeDrawer, {
 	type AppliedReportConfig,
 	type SortDir,
@@ -102,6 +103,10 @@ function Builder({ source, name, reportId, initialConfig }: BuilderProps) {
 	const columns = useMemo(() => sourceColumnOptions(source), [source]);
 	const headerLabels = useMemo<Record<string, string>>(
 		() => Object.fromEntries(columns.map((c) => [c.key, c.label])),
+		[columns],
+	);
+	const sortableColumns = useMemo<Record<string, boolean>>(
+		() => Object.fromEntries(columns.map((c) => [c.key, true])),
 		[columns],
 	);
 	const defaultHidden = useMemo(() => sourceDefaultHidden(source), [source]);
@@ -257,6 +262,15 @@ function Builder({ source, name, reportId, initialConfig }: BuilderProps) {
 		setHidden(config.hidden);
 	};
 
+	const handleSortChange = (col: string) => {
+		if (sortKey === col) {
+			setSortDir(sortDir === "asc" ? "desc" : "asc");
+		} else {
+			setSortKey(col);
+			setSortDir("asc");
+		}
+	};
+
 	const activeConditionCount = conditions.filter(isConditionActive).length;
 	const showEmpty = total === 0 && !isLoading && !error;
 
@@ -292,6 +306,7 @@ function Builder({ source, name, reportId, initialConfig }: BuilderProps) {
 					<SlidersHorizontal size={14} />
 					{activeConditionCount > 0 ? `Customize · ${activeConditionCount}` : "Customize"}
 				</button>
+				<RefreshReportsButton />
 				<button
 					onClick={handleSave}
 					disabled={isSaving}
@@ -323,6 +338,10 @@ function Builder({ source, name, reportId, initialConfig }: BuilderProps) {
 							errListener={error}
 							columnVisibility={columnVisibility}
 							headerLabels={headerLabels}
+							sortableColumns={sortableColumns}
+							sortKey={sortKey}
+							sortDir={sortDir}
+							onSortChange={handleSortChange}
 						/>
 						<ReportPagination
 							page={queryParams.page ?? 0}

@@ -350,7 +350,9 @@ export interface GetOrCreateBatchArgs {
 	inventory_item_id: string;
 	batch_number: string;
 	expires_at?: Date | null;
+	/** Legacy free-text vendor. Callers set it alongside supplier_id, never alone. */
 	supplier?: string | null;
+	supplier_id?: string | null;
 	note?: string | null;
 	/** Per-unit cost paid for this lot. Only recorded when the header is created. */
 	unit_cost?: number | null;
@@ -384,6 +386,7 @@ export async function getOrCreateBatch(
 			code: shortCode("LOT"),
 			expires_at: args.expires_at ?? null,
 			supplier: args.supplier ?? null,
+			supplier_id: args.supplier_id ?? null,
 			unit_cost: args.unit_cost ?? null,
 			note: args.note ?? null,
 		},

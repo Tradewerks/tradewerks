@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from 'express';
 import {
 	ErrorCodes,
@@ -160,7 +161,7 @@ router.delete("/clients/:id", requirePermission("delete_clients"), async (req, r
 });
 
 // Quotes for a client
-router.get("/clients/:clientId/quotes", requirePermission("view_clients"), async (req, res, next) => {
+router.get("/clients/:clientId/quotes", requireModule("quotes"), requirePermission("view_clients"), async (req, res, next) => {
 	try {
 		const clientId = req.params.clientId as string;
 		const orgId = req.user!.organization_id as string;
@@ -612,7 +613,7 @@ router.get("/clients/:clientId/jobs", requireAnyPermission("view_clients", "view
 // ============================================
 // Same policy as /projects: technicians are hard-denied and dispatchers need
 // view_projects (project budgets are not part of the client view).
-router.get("/clients/:clientId/projects", denyTechnicians, requirePermission("view_projects"), async (req, res, next) => {
+router.get("/clients/:clientId/projects", requireModule("projects"), denyTechnicians, requirePermission("view_projects"), async (req, res, next) => {
     try {
         const clientId = req.params.clientId as string;
         const orgId = req.user!.organization_id as string;

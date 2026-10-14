@@ -18,7 +18,7 @@ import Card from "../../ui/Card";
 import EmptyState from "../../ui/EmptyState";
 import SegmentedToggle from "../../ui/SegmentedToggle";
 import { ChartChip, ChartTooltipShell, QueryErrorState } from "./chartShared";
-import { CHART_BODY_H, CHART_GRID, CHART_TICK, timeXAxis } from "./chartAxis";
+import { CHART_BODY_H, CHART_GRID, CHART_TICK, resolveTimeDomain, timeXAxis } from "./chartAxis";
 import { useChartNotes, unitBreakNote, UNIT_BREAK_DETAIL } from "./chartNotes";
 import LoadSvg from "../../../assets/icons/loading.svg?react";
 
@@ -148,6 +148,8 @@ export default function StockLevelChart({
 	const thresholdOffScale =
 		lowStockThreshold != null && lowStockThreshold > Math.max(observedPeak * 3, 10);
 	const overlayThreshold = thresholdOffScale ? null : lowStockThreshold;
+
+	const timeDomain = resolveTimeDomain(points, xDomain);
 
 	const modeToggle = (
 		<SegmentedToggle<Mode>
@@ -304,7 +306,7 @@ export default function StockLevelChart({
 							</defs>
 							<CartesianGrid {...CHART_GRID} />
 							<XAxis
-								{...timeXAxis(xDomain)}
+								{...timeXAxis(timeDomain)}
 								tickFormatter={(v: number) => formatDate(new Date(v))}
 							/>
 							{/* No rotated axis label: it renders in the same gutter as

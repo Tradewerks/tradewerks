@@ -160,6 +160,38 @@ describe("evaluateAnchorStop", () => {
 		expect(await evaluateAnchorStop("quote", "q1", makeDb({ quote: null }))).toBe("quote_missing");
 	});
 
+	// The chase is enrolled at send time, so a quote that later goes into
+	// dispute is still on the sequence: without these the client gets a
+	// "just checking in on that quote" email about the document they are
+	// contesting, and a superseded original keeps being chased after
+	// Revise & Resend.
+	it("quote: stops chasing a disputed or superseded quote", async () => {
+		expect(await evaluateAnchorStop("quote", "q1", makeDb({ quote: { status: "Disputed" } }))).toBe(
+			"quote_disputed",
+		);
+		expect(await evaluateAnchorStop("quote", "q1", makeDb({ quote: { status: "Revised" } }))).toBe(
+			"quote_revised",
+		);
+		// Still chased — these are the states the sequence exists for.
+		expect(await evaluateAnchorStop("quote", "q1", makeDb({ quote: { status: "Viewed" } }))).toBeNull();
+		expect(await evaluateAnchorStop("quote", "q1", makeDb({ quote: { status: "Issued" } }))).toBeNull();
+	});
+
+	// The invoice mirror of the quote case above, and the more damaging half:
+	// a payment-reminder sequence that keeps running through a dispute demands
+	// money for the exact balance the client has contested.
+	it("invoice: stops chasing a disputed invoice", async () => {
+		expect(await evaluateAnchorStop("invoice", "i1", makeDb({ invoice: { status: "Disputed" } }))).toBe(
+			"invoice_disputed",
+		);
+		// Still chased — an adjustment restores the invoice to one of these,
+		// and it is collectible again from that point.
+		expect(await evaluateAnchorStop("invoice", "i1", makeDb({ invoice: { status: "Viewed" } }))).toBeNull();
+		expect(
+			await evaluateAnchorStop("invoice", "i1", makeDb({ invoice: { status: "PartiallyPaid" } })),
+		).toBeNull();
+	});
+
 	it("invoice: stops when Paid/Void", async () => {
 		expect(await evaluateAnchorStop("invoice", "i1", makeDb({ invoice: { status: "Paid" } }))).toBe("invoice_paid");
 		expect(await evaluateAnchorStop("invoice", "i1", makeDb({ invoice: { status: "Void" } }))).toBe("invoice_void");

@@ -90,16 +90,6 @@ export const sendQuote = async (id: string, recipientEmail: string): Promise<Quo
 	return response.data.data!;
 };
 
-export const approveQuote = async (id: string): Promise<Quote> => {
-	const response = await api.post<ApiResponse<Quote>>(`/quotes/${id}/approve`);
-
-	if (!response.data.success) {
-		throw new Error(response.data.error?.message || "Failed to approve quote");
-	}
-
-	return response.data.data!;
-};
-
 export const rejectQuote = async (id: string, rejectionReason?: string): Promise<Quote> => {
 	const response = await api.post<ApiResponse<Quote>>(`/quotes/${id}/reject`, {
 		rejection_reason: rejectionReason,
@@ -112,21 +102,29 @@ export const rejectQuote = async (id: string, rejectionReason?: string): Promise
 	return response.data.data!;
 };
 
-export const recordQuoteView = async (id: string): Promise<Quote> => {
-	const response = await api.post<ApiResponse<Quote>>(`/quotes/${id}/view`);
+/**
+ * Supersedes a quote with a fresh revision. Bodyless: the server decides what
+ * the replacement contains, and which statuses may be revised from.
+ */
+export const reviseQuote = async (id: string): Promise<{ id: string; quote_number: string }> => {
+	const response = await api.post<ApiResponse<{ id: string; quote_number: string }>>(
+		`/quotes/${id}/revise`
+	);
 
 	if (!response.data.success) {
-		throw new Error(response.data.error?.message || "Failed to record quote view");
+		throw new Error(response.data.error?.message || "Failed to revise quote");
 	}
 
 	return response.data.data!;
 };
 
-export const reviseQuote = async (id: string): Promise<Quote> => {
-	const response = await api.post<ApiResponse<Quote>>(`/quotes/${id}/revise`);
+export const cancelQuote = async (id: string, reason?: string): Promise<Quote> => {
+	const response = await api.post<ApiResponse<Quote>>(`/quotes/${id}/cancel`, {
+		reason: reason,
+	});
 
 	if (!response.data.success) {
-		throw new Error(response.data.error?.message || "Failed to revise quote");
+		throw new Error(response.data.error?.message || "Failed to cancel quote");
 	}
 
 	return response.data.data!;

@@ -14,6 +14,10 @@ import { sendEmailVerificationEmail } from "../services/emailService.js";
 import { getAllPermissions } from "../lib/permissionCatalogs.js";
 import { getMfaEnabledUserIds, isMfaEnabled } from "../services/mfaService.js";
 import { db } from "../db.js"
+import { assertSeatAvailable } from "../lib/entitlements/seats.js";
+import type { HttpError } from "../types/responses.js";
+import { setUserActive } from "../services/userActiveCache.js";
+import { getSocket } from "../services/socketService.js";
 
 export const getAllDispatchers = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
@@ -60,6 +64,8 @@ export const insertDispatcher = async (
     try {
         const parsed = createDispatcherSchema.parse(data);
         const passwordProvided = parsed.password ? true : false;
+        // all emails in db are set to lower case
+        parsed.email = parsed.email.toLowerCase();
         const sdb = getScopedDb(organizationId);
         const existing = (await db.technician.findFirst({ where: { email: parsed.email } })) ??
                          (await db.dispatcher.findFirst({ where: { email: parsed.email } }));
@@ -76,6 +82,7 @@ export const insertDispatcher = async (
         // echoed in the API response anyway.
         const emailVerificationToken = randomUUID();
         const created = await sdb.$transaction(async (tx) => {
+            await assertSeatAvailable(tx, organizationId, "dispatchers");
             const { password: _pw, ...parsedWithoutPassword } = parsed;
             const dispatcher = await tx.dispatcher.create({
                 data: {
@@ -121,6 +128,7 @@ export const insertDispatcher = async (
 
         return { err: "", item: created };
     } catch (e) {
+        if ((e as HttpError).statusCode) throw e;
         if (e instanceof ZodError) {
             return {
                 err: `Validation failed: ${e.issues
@@ -141,6 +149,8 @@ export const updateDispatcher = async (
 ) => {
     try {
         const parsed = updateDispatcherSchema.parse(data);
+        // all emails in db are set to lower case
+        if (parsed.email) parsed.email = parsed.email.toLowerCase();
 
         const sdb = getScopedDb(organizationId);
         const existing = await sdb.dispatcher.findFirst({
@@ -162,6 +172,7 @@ export const updateDispatcher = async (
         }
 
         const changes = buildChanges(existing, parsed, [
+            "organization_id",
             "name",
             "email",
             "phone",
@@ -172,7 +183,7 @@ export const updateDispatcher = async (
             "theme",
         ] as const);
 
-        const { report_layout, ...rest } = parsed;
+        const { report_layout, dashboard_layout, kpi_layout, ...rest } = parsed;
         const updated = await sdb.$transaction(async (tx) => {
             const dispatcher = await tx.dispatcher.update({
                 where: { id },
@@ -184,7 +195,19 @@ export const updateDispatcher = async (
                                 ? Prisma.JsonNull
                                 : (report_layout as Prisma.InputJsonValue),
                     }),
-                },
+                    ...(dashboard_layout !== undefined && {
+                        dashboard_layout:
+                            dashboard_layout === null
+                                ? Prisma.JsonNull
+                                : (dashboard_layout as Prisma.InputJsonValue),
+                    }),
+                    ...(kpi_layout !== undefined && {
+                        kpi_layout:
+                            kpi_layout === null
+                                ? Prisma.JsonNull
+                                : (kpi_layout as Prisma.InputJsonValue),
+                    }),
+                } as Prisma.dispatcherUncheckedUpdateInput,
                 include: {
                     // Nothing needed to be included for now
                 },
@@ -325,4 +348,71 @@ export const changeDispatcherPassword = async (
         });
     });
     return { message: "Password updated successfully", err: ""};
+};
+
+export const deactivateDispatcher = async (id: string, organizationId: string, context?: UserContext) => {
+    const sdb = getScopedDb(organizationId);
+    const existing = await sdb.dispatcher.findFirst({ where: { id } });
+    if (!existing) return { err: "Dispatcher not found" };
+    if (existing.deactivated_at) return { err: `${existing.name} is already deactivated.` };
+    if (context?.dispatcherId === id) return { err: "You can't deactivate your own account." };
+    if (existing.role === "admin") {
+        const admins = await sdb.dispatcher.count({
+            where: { organization_id: organizationId, role: "admin", deactivated_at: null },
+        });
+        if (admins <= 1) return { err: `${existing.name} is the only active admin. Make someone else an admin first.` };
+    }
+
+    const item = await sdb.$transaction(async (tx) => {
+        const updated = await tx.dispatcher.update({ where: { id }, data: { deactivated_at: new Date() } });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: id } });
+        await logActivity({
+            event_type: "dispatcher.deactivated",
+            action: "updated",
+            entity_type: "dispatcher",
+            entity_id: id,
+            organization_id: organizationId,
+            actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+            actor_id: context?.techId || context?.dispatcherId,
+            changes: { deactivated_at: { old: null, new: updated.deactivated_at } },
+            ip_address: context?.ipAddress,
+            user_agent: context?.userAgent,
+        });
+        return updated;
+    });
+
+    setUserActive(id, false);
+    try {
+        getSocket().in(`dispatcher:${id}`).disconnectSockets(true);
+    } catch (err) {
+        log.warn({ err, id }, "deactivated dispatcher's socket not disconnected");
+    }
+    return { err: "", item };
+};
+
+export const reactivateDispatcher = async (id: string, organizationId: string, context?: UserContext) => {
+    const sdb = getScopedDb(organizationId);
+    const existing = await sdb.dispatcher.findFirst({ where: { id } });
+    if (!existing) return { err: "Dispatcher not found" };
+    if (!existing.deactivated_at) return { err: `${existing.name} is already active.` };
+
+    const item = await sdb.$transaction(async (tx) => {
+        await assertSeatAvailable(tx, organizationId, "dispatchers");
+        const updated = await tx.dispatcher.update({ where: { id }, data: { deactivated_at: null } });
+        await logActivity({
+            event_type: "dispatcher.reactivated",
+            action: "updated",
+            entity_type: "dispatcher",
+            entity_id: id,
+            organization_id: organizationId,
+            actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+            actor_id: context?.techId || context?.dispatcherId,
+            changes: { deactivated_at: { old: existing.deactivated_at, new: null } },
+            ip_address: context?.ipAddress,
+            user_agent: context?.userAgent,
+        });
+        return updated;
+    });
+    setUserActive(id, true);
+    return { err: "", item };
 };

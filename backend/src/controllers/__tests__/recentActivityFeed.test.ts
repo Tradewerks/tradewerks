@@ -34,6 +34,28 @@ describe("redactFeedRow (review P1-3 / S4)", () => {
 		const other = row({ event_type: "job.updated", changes: { email: { old: "a", new: "b" } } });
 		expect(redactFeedRow(other)).toBe(other);
 	});
+
+	// The reason on a failed send is the email provider's own rejection text. It
+	// names the sending domain, the recipient's domain and whether the account is
+	// approved, and logActivity pushes every feed event to org:<id> — a room the
+	// technician sockets are in. Same treatment as a dispute reason.
+	it("drops the provider message from a failed send", () => {
+		for (const event_type of ["quote.send_failed", "invoice.send_failed"]) {
+			const failed = row({
+				event_type,
+				entity_type: event_type.split(".")[0],
+				reason: "While your account is pending approval, all recipient addresses must share the same domain as the 'From' address.",
+			});
+			expect(redactFeedRow(failed).reason).toBeNull();
+		}
+	});
+
+	// Redaction is for the broadcast, not the record: the row itself keeps the
+	// provider text so the detail page can still show it behind view_*.
+	it("leaves a send that did not fail alone", () => {
+		const sent = row({ event_type: "quote.updated", reason: "status change" });
+		expect(redactFeedRow(sent)).toBe(sent);
+	});
 });
 
 describe("GET /logs/recent access + redaction (review P1-3 / S4)", () => {
@@ -97,5 +119,45 @@ describe("GET /logs/recent access + redaction (review P1-3 / S4)", () => {
 		const args = fake.log.findMany.mock.calls[0][0];
 		expect(args.take).toBe(50);
 		expect(leaves(args.where)).toEqual(expect.arrayContaining([{ timestamp: { lt: new Date("2026-08-01T00:00:00.000Z") } }]));
+	});
+});
+
+describe("dispute feed events (dispute attention surfaces §6.2)", () => {
+	const DISPUTE_EVENTS = [
+		"quote.dispute_opened",
+		"quote.dispute_resolved",
+		"invoice.dispute_opened",
+		"invoice.dispute_resolved",
+	];
+
+	it("strips reason from all four dispute events", () => {
+		for (const event_type of DISPUTE_EVENTS) {
+			const r = row({ event_type, reason: "Billed 2 hours, tech was there 1" });
+			expect(redactFeedRow(r).reason).toBeNull();
+		}
+	});
+
+	it("leaves reason (and row identity) alone on every other event", () => {
+		const other = row({ event_type: "quote.updated", reason: "kept" });
+		expect(redactFeedRow(other)).toBe(other);
+	});
+
+	it("technician PII redaction is unchanged", () => {
+		const tech = row({
+			event_type: "technician.updated",
+			changes: { status: { old: "Offline", new: "Available" }, email: { old: "a", new: "b" } },
+		});
+		expect(redactFeedRow(tech).changes).toEqual({ status: { old: "Offline", new: "Available" } });
+	});
+
+	it("GET /logs/recent asks for the dispute events", async () => {
+		await callHandlers(recentActivityRoute, {
+			user: { uid: "disp-1", role: "dispatcher", permissions: [] },
+		});
+		const where = fake.log.findMany.mock.calls[0][0].where;
+		const eventLeaf = leaves(where).find((l) => "event_type" in l) as
+			| { event_type: { in: string[] } }
+			| undefined;
+		expect(eventLeaf?.event_type.in).toEqual(expect.arrayContaining(DISPUTE_EVENTS));
 	});
 });

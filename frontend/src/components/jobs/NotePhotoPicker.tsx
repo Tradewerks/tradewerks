@@ -33,7 +33,9 @@ const uploadErrorMessage = (err: unknown): string => {
 };
 
 interface NotePhotoPickerProps {
-	jobId: string;
+	jobId?: string;
+	/** Overrides the default job-note upload endpoint; use for non-job entities (e.g. projects). */
+	uploadPhoto?: (file: File) => Promise<{ url: string; raw_url: string }>;
 	photos: NotePhoto[];
 	onPhotosChange: (photos: NotePhoto[]) => void;
 	disabled?: boolean;
@@ -49,6 +51,7 @@ interface NotePhotoPickerProps {
 
 export default function NotePhotoPicker({
 	jobId,
+	uploadPhoto,
 	photos,
 	onPhotosChange,
 	disabled,
@@ -84,7 +87,9 @@ export default function NotePhotoPicker({
 		setSelectedLabel("Before");
 
 		try {
-			const res = await uploadMutation.mutateAsync({ jobId, file });
+			const res = uploadPhoto
+				? await uploadPhoto(file)
+				: await uploadMutation.mutateAsync({ jobId: jobId!, file });
 			setPendingUpload(res);
 		} catch (err) {
 			setUploadError(uploadErrorMessage(err));

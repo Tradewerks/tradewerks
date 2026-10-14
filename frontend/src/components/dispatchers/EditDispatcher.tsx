@@ -151,7 +151,7 @@ export default function EditDispatcher({ isOpen, onClose, dispatcher }: EditDisp
                 )}
             </div>
         ),
-        [name, email, phone, title, description, organizationRoleId, dispatcherRoles, isLoading]
+        [name, email, phone, title, description, organizationRoleId, dispatcherRoles, isLoading, dispatcher.role]
     );
 
     return (

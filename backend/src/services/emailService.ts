@@ -7,9 +7,12 @@ import {
 	ErrorCodes,
 } from "../types/responses.js";
 import { log } from "../services/appLogger.js";
+import { translateSendError } from "./emailErrors.js";
 import { generateQuotePdf, generateInvoicePdf } from "../lib/pdf/pdfService.js";
 import { getQuoteById } from "../controllers/quotesController.js";
 import { getInvoiceById } from "../controllers/invoicesController.js";
+import { SUBSCRIPTION_PATH } from "../lib/entitlements/registry.js";
+import { getOrgBrand, type OrgBrand } from "./emailBranding.js";
 
 // ============================================================================
 // EMAIL TEMPORARILY DISABLED — pending Postmark sender approval.
@@ -222,116 +225,85 @@ export const sendOTPEmail = async (to: string, otp: string) => {
 const fmt = (v: unknown): string =>
 	`$${Number(v ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const generateQuoteEmailHtml = (
-	quoteNumber: string,
-	clientName: string,
-	total: string,
-	validUntil: string | null,
-): string => `
-<!DOCTYPE html>
-<html>
-  <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
-    <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08);">
-      <div style="background: #1e3a5f; padding: 28px 32px;">
-        <p style="color: #93c5fd; font-size: 13px; margin: 0 0 4px;">Epic HVAC Services</p>
-        <h1 style="color: white; font-size: 22px; margin: 0;">Quote ${quoteNumber}</h1>
-      </div>
-      <div style="padding: 32px;">
-        <p style="color: #374151; font-size: 15px; margin: 0 0 20px;">
-          Hi ${clientName},
-        </p>
-        <p style="color: #374151; font-size: 14px; line-height: 1.6; margin: 0 0 24px;">
-          Thank you for the opportunity. Please find your quote attached to this email as a PDF.
-        </p>
-        <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 16px 20px; margin-bottom: 24px;">
-          <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Quote Number</td>
-              <td style="color: #111827; font-size: 13px; font-weight: bold; text-align: right;">${quoteNumber}</td>
-            </tr>
-            <tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Total</td>
-              <td style="color: #111827; font-size: 13px; font-weight: bold; text-align: right;">${total}</td>
-            </tr>
-            ${
-				validUntil
-					? `<tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Valid Until</td>
-              <td style="color: #111827; font-size: 13px; font-weight: bold; text-align: right;">${validUntil}</td>
-            </tr>`
-					: ""
-			}
-          </table>
-        </div>
-        <p style="color: #6b7280; font-size: 13px; line-height: 1.6; margin: 0;">
-          If you have any questions or would like to proceed, please reply to this email or call us directly.
-        </p>
-      </div>
-      <div style="background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 16px 32px;">
-        <p style="color: #9ca3af; font-size: 12px; margin: 0;">Epic HVAC Services · La Crosse, WI</p>
-      </div>
-    </div>
-  </body>
-</html>
-`;
+const escapeHtml = (v: unknown): string =>
+	String(v ?? "")
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
 
-const generateInvoiceEmailHtml = (
-	invoiceNumber: string,
+// brand_color is free text from the settings form; only a hex color may reach inline CSS.
+const safeColor = (c: string): string => (/^#[0-9a-f]{3,8}$/i.test(c) ? c : "#1e3a5f");
+
+// "Acme Heating <quotes@…>" so the client sees who the email is from, not our shared sender.
+const fromWithName = (name: string): string => {
+	const clean = name.replace(/["<>\r\n]/g, "").trim();
+	return clean ? `"${clean}" <${POSTMARK_FROM_EMAIL}>` : POSTMARK_FROM_EMAIL;
+};
+
+const brandFooter = (brand: OrgBrand): string =>
+	[brand.name, brand.address, brand.phone, brand.website].filter(Boolean).join(" · ");
+
+/** Shared shell for quote and invoice emails, rendered in the sending organization's brand. */
+const generateDocumentEmailHtml = (
+	brand: OrgBrand,
+	heading: string,
 	clientName: string,
-	total: string,
-	balanceDue: string,
-	dueDate: string | null,
-): string => `
+	intro: string,
+	rows: [label: string, value: string, emphasis?: boolean][],
+	closing: string,
+): string => {
+	const color = safeColor(brand.color);
+	const logo = brand.logo_url
+		? `<img src="${escapeHtml(brand.logo_url)}" alt="${escapeHtml(brand.name)}" style="max-height: 40px; max-width: 200px; display: block; margin: 0 0 12px;" />`
+		: "";
+	const tableRows = rows
+		.map(
+			([label, value, emphasis]) => `<tr>
+              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">${escapeHtml(label)}</td>
+              <td style="color: ${emphasis ? "#dc2626" : "#111827"}; font-size: ${emphasis ? 14 : 13}px; font-weight: bold; text-align: right;">${escapeHtml(value)}</td>
+            </tr>`,
+		)
+		.join("");
+	const footer = brandFooter(brand);
+	return `
 <!DOCTYPE html>
 <html>
   <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px; margin: 0;">
     <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08);">
-      <div style="background: #1e3a5f; padding: 28px 32px;">
-        <p style="color: #93c5fd; font-size: 13px; margin: 0 0 4px;">Epic HVAC Services</p>
-        <h1 style="color: white; font-size: 22px; margin: 0;">Invoice ${invoiceNumber}</h1>
+      <div style="background: ${color}; padding: 28px 32px;">
+        ${logo}${brand.name ? `<p style="color: rgba(255,255,255,0.8); font-size: 13px; margin: 0 0 4px;">${escapeHtml(brand.name)}</p>` : ""}
+        <h1 style="color: white; font-size: 22px; margin: 0;">${escapeHtml(heading)}</h1>
       </div>
       <div style="padding: 32px;">
         <p style="color: #374151; font-size: 15px; margin: 0 0 20px;">
-          Hi ${clientName},
+          Hi ${escapeHtml(clientName)},
         </p>
         <p style="color: #374151; font-size: 14px; line-height: 1.6; margin: 0 0 24px;">
-          Please find your invoice attached to this email as a PDF. A summary is included below.
+          ${intro}
         </p>
         <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 16px 20px; margin-bottom: 24px;">
           <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Invoice Number</td>
-              <td style="color: #111827; font-size: 13px; font-weight: bold; text-align: right;">${invoiceNumber}</td>
-            </tr>
-            <tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Invoice Total</td>
-              <td style="color: #111827; font-size: 13px; font-weight: bold; text-align: right;">${total}</td>
-            </tr>
-            <tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Balance Due</td>
-              <td style="color: #dc2626; font-size: 14px; font-weight: bold; text-align: right;">${balanceDue}</td>
-            </tr>
-            ${
-				dueDate
-					? `<tr>
-              <td style="color: #6b7280; font-size: 13px; padding: 4px 0;">Due Date</td>
-              <td style="color: #111827; font-size: 13px; font-weight: bold; text-align: right;">${dueDate}</td>
-            </tr>`
-					: ""
-			}
+            ${tableRows}
           </table>
         </div>
         <p style="color: #6b7280; font-size: 13px; line-height: 1.6; margin: 0;">
-          Please reply to this email if you have any questions regarding this invoice.
+          ${closing}
         </p>
-      </div>
+      </div>${
+			footer
+				? `
       <div style="background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 16px 32px;">
-        <p style="color: #9ca3af; font-size: 12px; margin: 0;">Epic HVAC Services · La Crosse, WI</p>
-      </div>
+        <p style="color: #9ca3af; font-size: 12px; margin: 0;">${escapeHtml(footer)}</p>
+      </div>`
+				: ""
+		}
     </div>
   </body>
 </html>
 `;
+};
 
 const fmtDate = (d: Date | string | null | undefined): string | null => {
 	if (!d) return null;
@@ -359,9 +331,10 @@ export const sendQuoteEmail = async (
 		);
 		return;
 	}
-	const [quote, pdfBuffer] = await Promise.all([
+	const [quote, pdfBuffer, brand] = await Promise.all([
 		getQuoteById(quoteId, organizationId),
 		generateQuotePdf(quoteId, organizationId),
+		getOrgBrand(organizationId),
 	]);
 
 	if (!quote)
@@ -375,16 +348,24 @@ export const sendQuoteEmail = async (
 
 	try {
 		await client.sendEmail({
-			From: POSTMARK_FROM_EMAIL,
+			From: fromWithName(brand.name),
 			To: recipientEmail,
-			Subject: `Quote ${quote.quote_number} from Epic HVAC Services`,
-			HtmlBody: generateQuoteEmailHtml(
-				quote.quote_number,
+			Subject: brand.name
+				? `Quote ${quote.quote_number} from ${brand.name}`
+				: `Quote ${quote.quote_number}`,
+			HtmlBody: generateDocumentEmailHtml(
+				brand,
+				`Quote ${quote.quote_number}`,
 				clientName,
-				total,
-				validUntil,
+				"Thank you for the opportunity. Please find your quote attached to this email as a PDF.",
+				[
+					["Quote Number", quote.quote_number],
+					["Total", total],
+					...(validUntil ? [["Valid Until", validUntil] as [string, string]] : []),
+				],
+				"If you have any questions or would like to proceed, please reply to this email or call us directly.",
 			),
-			TextBody: `Hi ${clientName},\n\nPlease find your quote ${quote.quote_number} attached. Total: ${total}${validUntil ? `. Valid until: ${validUntil}` : ""}.\n\nEpic HVAC Services`,
+			TextBody: `Hi ${clientName},\n\nPlease find your quote ${quote.quote_number} attached. Total: ${total}${validUntil ? `. Valid until: ${validUntil}` : ""}.\n\n${brandFooter(brand)}`,
 			MessageStream: "outbound",
 			Attachments: [
 				{
@@ -406,9 +387,7 @@ export const sendQuoteEmail = async (
 			},
 			"Postmark failed to send quote email",
 		);
-		throw new Error(
-			`Email delivery failed: ${err.message ?? "unknown Postmark error"}`,
-		);
+		throw translateSendError(err);
 	}
 
 	log.info({ quoteId, recipientEmail }, "Quote email sent");
@@ -430,9 +409,10 @@ export const sendInvoiceEmail = async (
 		);
 		return;
 	}
-	const [invoice, pdfBuffer] = await Promise.all([
+	const [invoice, pdfBuffer, brand] = await Promise.all([
 		getInvoiceById(invoiceId, organizationId),
 		generateInvoicePdf(invoiceId, organizationId),
+		getOrgBrand(organizationId),
 	]);
 
 	if (!invoice)
@@ -445,17 +425,25 @@ export const sendInvoiceEmail = async (
 
 	try {
 		await client.sendEmail({
-			From: POSTMARK_FROM_EMAIL,
+			From: fromWithName(brand.name),
 			To: recipientEmail,
-			Subject: `Invoice ${invoice.invoice_number} from Epic HVAC Services`,
-			HtmlBody: generateInvoiceEmailHtml(
-				invoice.invoice_number,
+			Subject: brand.name
+				? `Invoice ${invoice.invoice_number} from ${brand.name}`
+				: `Invoice ${invoice.invoice_number}`,
+			HtmlBody: generateDocumentEmailHtml(
+				brand,
+				`Invoice ${invoice.invoice_number}`,
 				clientName,
-				total,
-				balanceDue,
-				dueDate,
+				"Please find your invoice attached to this email as a PDF. A summary is included below.",
+				[
+					["Invoice Number", invoice.invoice_number],
+					["Invoice Total", total],
+					["Balance Due", balanceDue, true],
+					...(dueDate ? [["Due Date", dueDate] as [string, string]] : []),
+				],
+				"Please reply to this email if you have any questions regarding this invoice.",
 			),
-			TextBody: `Hi ${clientName},\n\nPlease find invoice ${invoice.invoice_number} attached. Total: ${total}. Balance due: ${balanceDue}${dueDate ? `. Due: ${dueDate}` : ""}.\n\nEpic HVAC Services`,
+			TextBody: `Hi ${clientName},\n\nPlease find invoice ${invoice.invoice_number} attached. Total: ${total}. Balance due: ${balanceDue}${dueDate ? `. Due: ${dueDate}` : ""}.\n\n${brandFooter(brand)}`,
 			MessageStream: "outbound",
 			Attachments: [
 				{
@@ -477,9 +465,7 @@ export const sendInvoiceEmail = async (
 			},
 			"Postmark failed to send invoice email",
 		);
-		throw new Error(
-			`Email delivery failed: ${err.message ?? "unknown Postmark error"}`,
-		);
+		throw translateSendError(err);
 	}
 
 	log.info({ invoiceId, recipientEmail }, "Invoice email sent");
@@ -491,7 +477,7 @@ export const sendEmailVerificationEmail = async (
 	tempPassword?: string,
 ) => {
 	if (EMAIL_DISABLED) {
-		const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+		const verificationLink = `${process.env.FRONTEND_URL}/app/verify-email?token=${token}`;
 		log.info(
 			{ to, verificationLink, tempPassword },
 			"[EMAIL DISABLED] Skipping verification email — pending Postmark approval. Use the logged link to verify.",
@@ -499,7 +485,7 @@ export const sendEmailVerificationEmail = async (
 		return;
 	}
 	try {
-		const verificationLink = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+		const verificationLink = `${process.env.FRONTEND_URL}/app/verify-email?token=${token}`;
 		const tempPasswordSection = tempPassword
 			? `
 						<div style="margin: 20px 0; padding: 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -569,7 +555,7 @@ export const sendPasswordResetEmail = async (
 		return createSuccessResponse(null);
 	}
 	try {
-		const passwordResetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}&role=${role}`;
+		const passwordResetLink = `${process.env.FRONTEND_URL}/app/reset-password?token=${token}&role=${role}`;
 		const htmlContent = `
 			<!DOCTYPE html>
 			<html>
@@ -627,5 +613,134 @@ export const sendPasswordResetEmail = async (
 			ErrorCodes.SERVER_ERROR,
 			"Error sending password reset email",
 		);
+	}
+};
+
+export const sendStaffInviteEmail = async (
+	to: string,
+	name: string,
+	inviteUrl: string,
+	inviterName: string,
+) => {
+	if (EMAIL_DISABLED) {
+		// The invite URL is a credential: never log it. Staff copy it from the back office.
+		log.info({ to }, "[EMAIL DISABLED] Skipping staff invite email.");
+		return;
+	}
+	try {
+		const htmlContent = `
+			<!DOCTYPE html>
+			<html>
+				<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+					<div style="max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 32px;">
+						<h2 style="color: #1a1a1a; margin-bottom: 8px;">TradeWerks back office</h2>
+						<p style="color: #555; margin-bottom: 24px;">
+							Hi ${escapeHtml(name)}, ${escapeHtml(inviterName)} invited you to the TradeWerks back office.
+							The link below works once and expires in 48 hours.
+						</p>
+						<a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: white; background-color: #2563eb; border-radius: 8px; text-decoration: none;">
+							Accept invite
+						</a>
+					</div>
+				</body>
+			</html>
+		`;
+		await client.sendEmail({
+			From: POSTMARK_FROM_EMAIL,
+			To: to,
+			Subject: "Your TradeWerks back office invite",
+			HtmlBody: htmlContent,
+			TextBody: `${inviterName} invited you to the TradeWerks back office. Accept within 48 hours: ${inviteUrl}`,
+			MessageStream: "outbound",
+		});
+	} catch (error) {
+		log.error({ err: error }, "Failed to send staff invite email");
+	}
+};
+
+export const sendOrgAdminInviteEmail = async (
+	to: string,
+	company: string,
+	inviteUrl: string,
+	expires: Date,
+	timeZone: string,
+) => {
+	if (EMAIL_DISABLED) {
+		// The URL is a credential: never log it. Staff can copy it from the back office.
+		log.info({ to }, "[EMAIL DISABLED] Skipping org admin invite email.");
+		return;
+	}
+	const until = expires.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
+	try {
+		await client.sendEmail({
+			From: POSTMARK_FROM_EMAIL,
+			To: to,
+			Subject: `TradeWerks set up ${company} for you`,
+			HtmlBody: `
+			<!DOCTYPE html>
+			<html>
+				<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+					<div style="max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 32px;">
+						<h2 style="color: #1a1a1a; margin-bottom: 8px;">${escapeHtml(company)} is ready</h2>
+						<p style="color: #555; margin-bottom: 24px;">
+							TradeWerks set up your account. Set a password to sign in.
+							The link works once and expires on ${until}.
+						</p>
+						<a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: white; background-color: #2563eb; border-radius: 8px; text-decoration: none;">
+							Set your password
+						</a>
+					</div>
+				</body>
+			</html>`,
+			TextBody: `TradeWerks set up ${company} for you. Set your password (link expires ${until}): ${inviteUrl}`,
+			MessageStream: "outbound",
+		});
+	} catch (error) {
+		log.error({ err: error }, "Failed to send org admin invite email");
+	}
+};
+
+// Every active staff member hears about invites, disables and MFA resets, so a hijacked account cannot entrench quietly.
+export const sendStaffSecurityNotice = async (to: string[], subject: string, text: string) => {
+	if (EMAIL_DISABLED) {
+		log.info({ count: to.length, subject }, "[EMAIL DISABLED] Skipping staff security notice.");
+		return;
+	}
+	for (const addr of to) {
+		try {
+			await client.sendEmail({
+				From: POSTMARK_FROM_EMAIL,
+				To: addr,
+				Subject: subject,
+				HtmlBody: `<p style="font-family: Arial, sans-serif;">${escapeHtml(text)}</p>`,
+				TextBody: text,
+				MessageStream: "outbound",
+			});
+		} catch (error) {
+			log.error({ err: error }, "Failed to send staff security notice");
+		}
+	}
+};
+
+export const sendTrialEndingEmail = async (to: string[], subject: string, text: string) => {
+	if (EMAIL_DISABLED) {
+		log.info({ count: to.length, subject }, "[EMAIL DISABLED] Skipping trial ending email.");
+		return;
+	}
+	const base = process.env.FRONTEND_URL ?? "http://localhost:5173";
+	const link = `${base}${SUBSCRIPTION_PATH}`;
+	for (const addr of to) {
+		try {
+			await client.sendEmail({
+				From: POSTMARK_FROM_EMAIL,
+				To: addr,
+				Subject: subject,
+				HtmlBody: `<p style="font-family: Arial, sans-serif;">${escapeHtml(text)}</p><p style="font-family: Arial, sans-serif;"><a href="${link}">Review your subscription</a></p>`,
+				TextBody: `${text}\n\nReview your subscription: ${link}`,
+				MessageStream: "outbound",
+			});
+		} catch (error) {
+			log.error({ err: error }, "Failed to send trial ending email");
+		}
 	}
 };

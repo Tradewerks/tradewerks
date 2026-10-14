@@ -14,6 +14,7 @@ import Card from "../../components/ui/Card"
 import EditProjectModal from "../../components/projects/EditProjectModal"
 import AttachJobModal from "../../components/projects/AttachJobModal";
 import ChangeHistory from "../../components/activity/ChangeHistory";
+import ProjectNoteManager from "../../components/projects/ProjectNoteManager";
 import { useToast } from "../../components/ui/useToast";
 
 export default function ProjectDetailPage() {
@@ -189,7 +190,8 @@ export default function ProjectDetailPage() {
                     <Card title="Description">
                         <p>{project.description || "No description given"}</p>
                     </Card>
-                    <ChangeHistory scope={{kind: "entity", type: "project", id: projectId ?? ""}} /> 
+                    <ProjectNoteManager projectId={projectId ?? ""} />
+                    <ChangeHistory scope={{kind: "entity", type: "project", id: projectId ?? ""}} />
                 </div>
                 <div className="flex flex-col gap-4 min-w-0">
                     <BudgetCard

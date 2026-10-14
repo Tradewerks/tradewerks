@@ -1,9 +1,10 @@
 import { getOrgRealmId, qbFetch } from "../quickbooksService.js";
-import { qbQueryAll } from "./qbQuery.js";
+import { qbQueryAll, getAccountId } from "./qbQuery.js";
 import { getScopedDb } from "../../lib/context.js";
 import { db } from "../../db.js";
 import { httpError, ErrorCodes } from "../../types/responses.js";
 import { recordMovements, type ActorInfo } from "../stockMovements.js";
+import { throwOnMappingConflict } from "./qbMappingErrors.js";
 
 export interface QBItem {
     Id: string;
@@ -31,16 +32,39 @@ async function getIncomeAccountId(orgId: string): Promise<string> {
     return preferred ? preferred.Id as string : accounts[0].Id as string;
 }
 
-async function findOrCreateQBItem(orgId: string, name: string, unitPrice?: number): Promise<string> {
+// QBO's Item.Name caps at 100 chars; ours allows 255.
+const QB_ITEM_NAME_MAX = 100;
+
+async function findOrCreateQBItem(orgId: string, rawName: string, unitPrice?: number): Promise<string> {
+    const name = rawName.slice(0, QB_ITEM_NAME_MAX);
     const escaped = name.replace(/'/g, "\\'");
-    const existing = await qbQueryAll<QBItem>(orgId, "Item", `Name = '${escaped}'`);
-    if (existing.length) return existing[0].Id;
+    const existing = await qbQueryAll<QBItem & { SyncToken: string; ExpenseAccountRef?: { value: string } }>(
+        orgId, "Item", `Name = '${escaped}'`,
+    );
+    if (existing.length) {
+        const item = existing[0];
+        // An item created income-only (e.g. by an earlier invoice-only push) has no
+        // expense account, so QBO refuses it on a purchase-side line ("Select an
+        // account for this transaction") — backfill it once, in place.
+        if (!item.ExpenseAccountRef) {
+            const expenseAccountId = await getAccountId(orgId, "Expense");
+            await qbFetch(orgId, "POST", "/item", {
+                Id: item.Id,
+                SyncToken: item.SyncToken,
+                sparse: true,
+                ExpenseAccountRef: { value: expenseAccountId },
+            });
+        }
+        return item.Id;
+    }
 
     const incomeAccountId = await getIncomeAccountId(orgId);
+    const expenseAccountId = await getAccountId(orgId, "Expense");
     const created = (await qbFetch(orgId, "POST", "/item", {
-        Name: name, 
+        Name: name,
         Type: "Service",
         IncomeAccountRef: { value: incomeAccountId },
+        ExpenseAccountRef: { value: expenseAccountId },
         ...(unitPrice !== undefined && { UnitPrice: unitPrice })
     })) as any;
     return created.Item.Id as string;
@@ -92,8 +116,8 @@ export async function importQBItem(orgId: string, qbItemId: string, actor?: Acto
                 data: {
                     organization_id: orgId,
                     name: qbItem.Name,
+                    origin: "import",
                     description: qbItem.Description ?? "",
-                    location: "",
                     quantity: 0, // recordMovements sets the opening qty below
                     // No unit-of-measure field on the QBO Item — leave `unit` at its default rather than guess.
                     unit_price: qbItem.UnitPrice ?? null,
@@ -166,10 +190,7 @@ export async function linkQBItem(orgId: string, inventoryItemId: string, qbItemI
             }
         });
     } catch (error: any) {
-        if (error?.code === "P2002") {
-            throw httpError(409, ErrorCodes.CONFLICT, "This item or QuickBooks item has already been linked.");
-        }
-        throw error;
+        throwOnMappingConflict(error, "This item or QuickBooks item has already been linked.");
     }
 };
 

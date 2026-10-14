@@ -1,8 +1,10 @@
-import { useQuery, useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import * as vehicleApi from "../api/vehicles";
 import type {
 	VehicleStockItem,
 	VehicleStockConflict,
+	VehicleMaintenanceAlert,
 	VehicleUsageTodayGroup,
 	VehicleRestockRecord,
 	CompleteRestockInput,
@@ -16,12 +18,13 @@ import type {
 	AddVehicleStockItemInput,
 	UpdateVehicleStockItemInput,
 	AddPartsUsedInput,
-	SupplierPartUsedInput,
 	RestockRequestInput,
 	VehicleStockUsage,
 } from "../types/vehicles";
 import type { VisitLineItem } from "../types/jobs";
 import { qk, invalidate } from "../lib/queryKeys";
+
+const useQuery = moduleQuery("vehicle_stock");
 
 // ── Vehicle stock queries ──────────────────────────────────────────────────────
 
@@ -34,10 +37,18 @@ export const useVehicleStockQuery = (vehicleId: string | null | undefined): UseQ
 	});
 };
 
-export const useVehicleStockConflictsQuery = () =>
-	useQuery<VehicleStockConflict[]>({
+export const useVehicleStockConflictsQuery = () => {
+	return useQuery<VehicleStockConflict[]>({
 		queryKey: qk.vehicles.stockConflicts,
 		queryFn: vehicleApi.getStockConflicts,
+		staleTime: 30_000,
+	});
+};
+
+export const useMaintenanceAlertsQuery = () =>
+	useQuery<VehicleMaintenanceAlert[]>({
+		queryKey: qk.vehicles.maintenanceAlerts,
+		queryFn: vehicleApi.getMaintenanceAlerts,
 		staleTime: 30_000,
 	});
 
@@ -245,24 +256,6 @@ export const useUpdatePartsUsedQtyMutation = () => {
 			queryClient.invalidateQueries({ queryKey: ["jobVisits", visitId] });
 			queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 			if (vehicleId) invalidate.stockData(queryClient, vehicleId);
-		},
-	});
-};
-
-export const useAddSupplierPartUsedMutation = (visitId: string, vehicleId: string | null) => {
-	const qc = useQueryClient();
-	return useMutation<
-		{ lineItem: VisitLineItem; usage: VehicleStockUsage | null },
-		Error,
-		SupplierPartUsedInput
-	>({
-		mutationFn: (input: SupplierPartUsedInput) => vehicleApi.addSupplierPartUsed(visitId, input),
-		onSuccess: async () => {
-			await Promise.all([
-				qc.invalidateQueries({ queryKey: ["jobVisits", visitId] }),
-				qc.invalidateQueries({ queryKey: ["jobVisits"] }),
-				...(vehicleId ? [invalidate.stockData(qc, vehicleId)] : []),
-			]);
 		},
 	});
 };

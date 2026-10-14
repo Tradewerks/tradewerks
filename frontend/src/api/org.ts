@@ -1,3 +1,4 @@
+import { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
 import type { ProvisionalItem } from "../types/inventory";
@@ -20,7 +21,8 @@ export interface OrgSettings {
 	measurement_system: MeasurementSystem;
 	mfa_required: boolean;
 	brand_color: string | null;
-	followups_enabled: boolean;
+	/** Decimal over the wire, like tax_rate. Null means second sign-off is off. */
+	field_purchase_second_signoff_threshold: string | null;
 }
 
 export interface OrgSettingsUpdate {
@@ -34,7 +36,7 @@ export interface OrgSettingsUpdate {
 	measurement_system?: MeasurementSystem;
 	mfa_required?: boolean;
 	brand_color?: string | null;
-	followups_enabled?: boolean;
+	field_purchase_second_signoff_threshold?: number | null;
 }
 
 export const getOrgSettings = async (): Promise<OrgSettings> => {
@@ -72,8 +74,29 @@ export const getProvisionalItems = async (): Promise<ProvisionalItem[]> => {
 	return response.data.data || [];
 };
 
-export const approveItem = async (itemId: string, body?: { initial_warehouse_qty?: number }): Promise<void> => {
-	await api.post(`/inventory/${itemId}/approve`, body ?? {});
+/**
+ * Adopt a provisional item into the real catalog. The 400 for a missing
+ * cost basis is unwrapped here so the client shows the server's wording,
+ * not axios's.
+ */
+export const approveItem = async (
+	itemId: string,
+	body?: {
+		initial_warehouse_qty?: number;
+		cost?: number;
+		unit?: string;
+		low_stock_threshold?: number | null;
+		location?: string | null;
+	},
+): Promise<void> => {
+	try {
+		await api.post(`/inventory/${itemId}/approve`, body ?? {});
+	} catch (err) {
+		throw new Error(
+			(isAxiosError(err) ? err.response?.data?.error?.message : undefined) ||
+				"Failed to adopt item",
+		);
+	}
 };
 
 export const mergeItem = async (itemId: string, targetInventoryItemId: string): Promise<void> => {

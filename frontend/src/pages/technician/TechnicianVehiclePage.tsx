@@ -12,12 +12,13 @@ import {
 	ClipboardCheck,
 	History,
 	ListChecks,
-	Barcode,
+	BellPlus,
 } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { usePermission } from "../../hooks/usePermission";
 import { useTechnicianByIdQuery } from "../../hooks/useTechnicians";
-import { useVehiclesQuery, useSetTechnicianVehicleMutation } from "../../hooks/useVehicles";
+import { useVehiclesQuery, useSetTechnicianVehicleMutation, useVehicleMaintenanceReminderQuery } from "../../hooks/useVehicles";
+import { dueFor, STATUS_RANK, STATUS_LABEL, STATUS_CLASSNAME, type ReminderDue } from "../../util/vehicleMaintenanceStatus";
 import {
 	useVehicleStockQuery,
 	useRestockRequestMutation,
@@ -28,6 +29,7 @@ import {
 import RestockStatusList from "../../components/technicianComponents/RestockStatusList";
 import RemoveStockItemSheet from "../../components/technicianComponents/RemoveStockItemSheet";
 import FillToStandardPreview from "../../components/vehicles/FillToStandardPreview";
+import VehicleStockActionRow from "../../components/vehicles/VehicleStockActionRow";
 import { useOrgSettings } from "../../hooks/useOrg";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import { useBarcodeScanner } from "../../hooks/useBarcodeScanner";
@@ -44,6 +46,7 @@ import LotSheet, {
 	type LotSheetTarget,
 } from "../../components/inventory/tracking/LotSheet";
 import EmptyState from "../../components/ui/EmptyState";
+import { effectiveRestockMode, emptyVehicleStockCopy } from "../../lib/restockEmphasis";
 import SegmentedToggle from "../../components/ui/SegmentedToggle";
 import { useToast } from "../../components/ui/useToast";
 import type {
@@ -51,9 +54,13 @@ import type {
 	VehicleStockItem,
 	VehicleStockConflict,
 	BulkRestockInput,
+	VehicleMaintenanceReminder,
 } from "../../types/vehicles";
+import { MAINTENANCE_CATEGORY_LABELS } from "../../types/vehicles";
 import type { InventoryItem } from "../../types/inventory";
 import { unitLabel } from "../../lib/units";
+import CreateMaintenanceReminderModal from "../../components/vehicles/maintenance/CreateMaintenanceReminderModal";
+import TechPage from "../../components/technician/TechPage";
 
 // ── Vehicle Status ────────────────────────────────────────────────────────────
 
@@ -508,6 +515,56 @@ function StockConflictWarning({ conflicts }: { conflicts: VehicleStockConflict[]
 	);
 }
 
+function MaintenanceReminderWarning(
+	{ reminders, setIsCreateReminderModalOpen }: 
+	{ reminders: { reminder: VehicleMaintenanceReminder; due: ReminderDue }[]; setIsCreateReminderModalOpen: (open: boolean) => void }
+) {
+	const noneDue = reminders.length <= 0;
+	const hasOverdue = reminders.some(({ due }) => due.status === "overdue");
+	return (
+		<div className={`rounded-xl border ${hasOverdue ? "border-error" : "border-warning"} bg-base overflow-hidden`}>
+			<div className={`px-4 py-2.5 border-b flex items-center gap-2 ${hasOverdue ? "bg-error/10 border-error/30" : "bg-warning/10 border-warning/30"}`}>
+				{hasOverdue && (<AlertTriangle size={14} className={`shrink-0 ${hasOverdue ? "text-error-text" : "text-warning-text"}`} />)}
+				<span className={`text-sm font-semibold flex-1 ${hasOverdue ? "text-error-text" : "text-warning-text"}`}>
+					{hasOverdue ? "Maintenance due" : "Maintenance reminders"}
+				</span>
+				<button
+					className="inline-flex items-center gap-1.5 rounded-md bg-primary hover:bg-primary-hover px-3 py-1.5 text-xs font-semibold text-on-primary transition-colors"
+					onClick={() => setIsCreateReminderModalOpen(true)}
+				>
+					<BellPlus size={14}/> Create Reminder
+				</button>
+			</div>
+			<div className="divide-y divide-border-subtle">
+				{noneDue 
+				?  (
+					<>
+						<p className="p-2">No upcoming reminders</p>
+					</>
+				)
+				: reminders.map(({ reminder, due }) => (
+					<div key={reminder.id} className="px-4 py-3 flex items-center justify-between gap-2">
+						<div className="min-w-0">
+							<span className="text-sm font-semibold text-text-primary">{reminder.title}</span>
+							<span className="text-xs text-text-muted ml-2">
+								{MAINTENANCE_CATEGORY_LABELS[reminder.category]}
+							</span>
+						</div>
+						<div className="flex items-center gap-2 shrink-0">
+							{due.status !== "none" && (
+								<span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full ${STATUS_CLASSNAME[due.status]}`}>
+									{STATUS_LABEL[due.status]}
+								</span>
+							)}
+							<span className="text-xs text-text-muted">{due.dueLines[0]}</span>
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
 // ── Add to Stock Sheet ───────────────────────────────────────────────────────
 
 function AddStockItemSheet({
@@ -742,11 +799,18 @@ export default function TechnicianVehiclePage() {
 	const { data: techProfile, isLoading: techLoading } = useTechnicianByIdQuery(
 		user?.userId ?? null
 	);
+    const [isCreateReminderModalOpen, setIsCreateReminderModalOpen] = useState(false);
 	const { data: vehicles = [], isLoading: vehiclesLoading } = useVehiclesQuery();
 	const currentVehicleId = techProfile?.current_vehicle_id ?? null;
 	const { data: stockItems = [] } = useVehicleStockQuery(currentVehicleId);
 	const { data: stockConflicts = [] } = useVehicleStockConflictsQuery();
 	const myConflicts = stockConflicts.filter((c) => c.vehicleId === currentVehicleId);
+	const { data: maintenanceReminders = [] } = useVehicleMaintenanceReminderQuery(currentVehicleId);
+	const currentOdometerMi = vehicles.find((v) => v.id === currentVehicleId)?.current_odometer_mi ?? null;
+	const dueReminders = maintenanceReminders
+		.map((reminder) => ({ reminder, due: dueFor(reminder, currentOdometerMi) }))
+		.filter(({ due, reminder }) => (due.status === "overdue" || due.status === "duesoon") && reminder.acknowledged_at == null)
+		.sort((a, b) => STATUS_RANK[a.due.status] - STATUS_RANK[b.due.status] || a.due.urgency - b.due.urgency);
 	const setVehicle = useSetTechnicianVehicleMutation();
 	const restockMutation = useRestockRequestMutation();
 	const bulk = useBulkRestockMutation(currentVehicleId ?? "");
@@ -763,13 +827,10 @@ export default function TechnicianVehiclePage() {
 			"adjust_transfer",
 			"adjust_audit",
 			"adjust_warehouse_exchange",
-			"adjust_supplier_purchase",
 		];
 		return adjustPerms.some((p) => user.permissions.includes(p));
 	}, [user]);
-	// UX emphasis only — capability comes from permissions, never from the mode
-	const { data: orgSettings } = useOrgSettings();
-	const selfServeEmphasis = orgSettings?.restock_mode !== "dispatch_prepared";
+	const { data: orgSettings, isError: orgSettingsError } = useOrgSettings();
 
 	const [showVehicleList, setShowVehicleList] = useState(false);
 	const [adjustOpen, setAdjustOpen] = useState(false);
@@ -779,7 +840,6 @@ export default function TechnicianVehiclePage() {
 	const [stockEditMode, setStockEditMode] = useState<"add" | "remove">("add");
 	const [showInventory, setShowInventory] = useState(true);
 	const [fillOpen, setFillOpen] = useState(false);
-	const [showStockActions, setShowStockActions] = useState(false);
 	const [restockTarget, setRestockTarget] = useState<VehicleStockItem | null>(null);
 	const [restockQty, setRestockQty] = useState(1);
 	const [restockNote, setRestockNote] = useState("");
@@ -1121,7 +1181,7 @@ export default function TechnicianVehiclePage() {
 	if (switchPendingId) {
 		const pending = vehicles.find((v) => v.id === switchPendingId);
 		return (
-			<div className="max-w-lg mx-auto space-y-4">
+			<TechPage className="space-y-4">
 				<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 					<div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
 						<Truck size={15} className="text-text-muted" />
@@ -1163,12 +1223,12 @@ export default function TechnicianVehiclePage() {
 						</div>
 					</div>
 				</div>
-			</div>
+			</TechPage>
 		);
 	}
 
 	return (
-		<div className="max-w-lg mx-auto space-y-4">
+		<TechPage className="space-y-4">
 			{/* ── Vehicle card ──────────────────────────────────────────────────── */}
 			<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 				<div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
@@ -1325,12 +1385,17 @@ export default function TechnicianVehiclePage() {
 				<StockConflictWarning conflicts={myConflicts} />
 			)}
 
+			{/* ── Vehicle Reminders ─────────────────────────────────────────────── */}
+			{!showVehicleList && !showCheckOutConfirm && (
+				<MaintenanceReminderWarning reminders={dueReminders} setIsCreateReminderModalOpen={setIsCreateReminderModalOpen}/>
+			)}
+
 			{/* ── Inventory ─────────────────────────────────────────────────────── */}
 			{currentVehicleId && !showVehicleList && !showCheckOutConfirm && (
 				<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 					<button
 						onClick={() => setShowInventory((v) => !v)}
-						className="w-full px-4 py-3 flex items-center gap-2 text-left"
+						className="w-full px-4 py-3 flex items-center gap-2 text-left hover:cursor-pointer"
 					>
 						<Package size={15} className="text-text-muted" />
 						<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide flex-1">
@@ -1355,92 +1420,22 @@ export default function TechnicianVehiclePage() {
 
 					{showInventory && (
 						<>
-							{/* Action row: Fill to Standard / Adjust Stock / Request Restock */}
-							{!batchMode &&
-								(canStock ||
-									stockItems.length > 0) && (
-									<div className="px-4 py-2.5 border-b border-border-subtle space-y-2">
-										<div className="flex items-center gap-2">
-											{canStock &&
-												(selfServeEmphasis ||
-													showStockActions) && (
-													<button
-														onClick={() =>
-															setFillOpen(
-																true
-															)
-														}
-														className="flex-1 py-2 text-xs font-semibold rounded-lg bg-primary-hover hover:bg-primary text-on-primary transition-colors"
-													>
-														↑
-														Fill
-														to
-														Standard
-													</button>
-												)}
-											{canStock &&
-												(selfServeEmphasis ||
-													showStockActions) &&
-												canAdjustStock && (
-													<button
-														onClick={() =>
-															setAdjustOpen(
-																true
-															)
-														}
-														className="flex-1 py-2 text-xs font-semibold rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
-													>
-														Adjust
-														Stock
-													</button>
-												)}
-											{stockItems.length >
-												0 && (
-												<button
-													onClick={
-														handleOpenBatchMode
-													}
-													className="flex-1 py-2 text-xs font-semibold rounded-lg bg-primary-hover/10 border border-primary-hover/30 text-primary-text hover:bg-primary-hover/20 transition-colors"
-												>
-													Request
-													Restock
-												</button>
-											)}
-											{canFieldLoss && (
-												<button
-													onClick={() =>
-														setIsScannerOpen(
-															true
-														)
-													}
-													title="Scan barcode"
-													className="flex-shrink-0 h-8 w-8 flex items-center justify-center rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
-												>
-													<Barcode
-														size={
-															14
-														}
-													/>
-												</button>
-											)}
-										</div>
-										{canStock &&
-											!selfServeEmphasis &&
-											!showStockActions && (
-												<button
-													onClick={() =>
-														setShowStockActions(
-															true
-														)
-													}
-													className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-												>
-													Self-stocking
-													actions…
-												</button>
-											)}
-									</div>
-								)}
+							{!batchMode && (canStock || stockItems.length > 0) && (
+								<VehicleStockActionRow
+									restockMode={effectiveRestockMode(
+										orgSettings?.restock_mode,
+										orgSettingsError,
+									)}
+									canStock={canStock}
+									canAdjustStock={canAdjustStock}
+									canFieldLoss={canFieldLoss}
+									hasStockItems={stockItems.length > 0}
+									onFill={() => setFillOpen(true)}
+									onAdjust={() => setAdjustOpen(true)}
+									onRequestRestock={handleOpenBatchMode}
+									onScan={() => setIsScannerOpen(true)}
+								/>
+							)}
 
 							{/* Out of stock bar */}
 							{outOfStockItems.length > 0 && (
@@ -1700,41 +1695,41 @@ export default function TechnicianVehiclePage() {
 
 							{/* Stock list */}
 							{sortedItems.length === 0 ? (
-								<EmptyState
-									title={
-										searchQuery &&
-										filtersActive
-											? `No items match "${searchQuery}" in selected categories`
-											: searchQuery
-												? `No items match "${searchQuery}"`
-												: filtersActive
-													? "No items in selected categories"
-													: "No items in stock"
-									}
-									action={
-										searchQuery ||
-										filtersActive
-											? {
-													label: "Clear filters",
-													onClick: () => {
-														setSearchQuery(
-															""
-														);
-														setSelectedCategories(
-															[]
-														);
-													},
-													icon: (
-														<RotateCcw
-															size={
-																14
-															}
-														/>
-													),
-												}
-											: undefined
-									}
-								/>
+								searchQuery || filtersActive ? (
+									<EmptyState
+										title={
+											searchQuery && filtersActive
+												? `No items match "${searchQuery}" in selected categories`
+												: searchQuery
+													? `No items match "${searchQuery}"`
+													: "No items in selected categories"
+										}
+										action={{
+											label: "Clear filters",
+											onClick: () => {
+												setSearchQuery("");
+												setSelectedCategories([]);
+											},
+											icon: <RotateCcw size={14} />,
+										}}
+									/>
+								) : (
+									<EmptyState
+										{...emptyVehicleStockCopy(canStock)}
+										action={
+											canStock
+												? {
+														label: "Add stock items",
+														onClick: () => {
+															setStockEditMode("add");
+															setShowAddItem(true);
+														},
+														icon: <ListChecks size={14} />,
+													}
+												: undefined
+										}
+									/>
+								)
 							) : categoryGroups ? (
 								<div>
 									{categoryGroups.map(
@@ -1776,7 +1771,7 @@ export default function TechnicianVehiclePage() {
 					<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 						<button
 							onClick={() => setShowAddItem((v) => !v)}
-							className="w-full px-4 py-3 flex items-center gap-2 text-left"
+							className="w-full px-4 py-3 flex items-center gap-2 text-left hover:cursor-pointer"
 						>
 							<ListChecks
 								size={15}
@@ -1851,7 +1846,7 @@ export default function TechnicianVehiclePage() {
 					<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 						<button
 							onClick={() => setRestockOpen((v) => !v)}
-							className="w-full px-4 py-3 flex items-center gap-2 text-left"
+							className="w-full px-4 py-3 flex items-center gap-2 text-left hover:cursor-pointer"
 						>
 							<ClipboardCheck
 								size={15}
@@ -1886,7 +1881,7 @@ export default function TechnicianVehiclePage() {
 							onClick={() =>
 								setShowStockHistory((v) => !v)
 							}
-							className="w-full px-4 py-3 flex items-center gap-2 text-left"
+							className="w-full px-4 py-3 flex items-center gap-2 text-left hover:cursor-pointer"
 						>
 							<History
 								size={15}
@@ -1978,11 +1973,11 @@ export default function TechnicianVehiclePage() {
 			{restockTarget && (
 				<>
 					<div
-						className="fixed inset-0 z-40 bg-overlay"
+						className="fixed inset-0 z-[55] bg-overlay"
 						onClick={() => setRestockTarget(null)}
 					/>
 					<div
-						className="fixed inset-0 z-50 flex items-center justify-center px-4"
+						className="fixed inset-0 z-[60] flex items-center justify-center px-4"
 						onClick={() => setRestockTarget(null)}
 					>
 						<div
@@ -2080,7 +2075,7 @@ export default function TechnicianVehiclePage() {
 			{/* Fill to Standard modal */}
 			{fillOpen && currentVehicleId && (
 				<div
-					className="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
+					className="fixed inset-0 z-[60] flex items-center justify-center bg-overlay"
 					onClick={() => setFillOpen(false)}
 				>
 					<div
@@ -2121,11 +2116,11 @@ export default function TechnicianVehiclePage() {
 			{showBatchConfirm && (
 				<>
 					<div
-						className="fixed inset-0 z-40 bg-overlay"
+						className="fixed inset-0 z-[55] bg-overlay"
 						onClick={() => setShowBatchConfirm(false)}
 					/>
 					<div
-						className="fixed inset-0 z-50 flex items-center justify-center px-4"
+						className="fixed inset-0 z-[60] flex items-center justify-center px-4"
 						onClick={() => setShowBatchConfirm(false)}
 					>
 						<div
@@ -2254,6 +2249,14 @@ export default function TechnicianVehiclePage() {
 					</div>
 				</>
 			)}
-		</div>
+
+			{isCreateReminderModalOpen && (
+				<CreateMaintenanceReminderModal
+					vehicleId={currentVehicleId ?? ""}
+					isModalOpen={isCreateReminderModalOpen}
+					setIsModalOpen={setIsCreateReminderModalOpen}
+				/>
+			)}
+		</TechPage>
 	);
 }

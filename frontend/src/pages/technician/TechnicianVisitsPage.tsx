@@ -6,6 +6,7 @@ import { Search, MapPin, Calendar, Clock, Navigation, ChevronRight } from "lucid
 import { useNavigate } from "react-router-dom";
 import TechVisitCard from "../../components/technicianComponents/TechVisitCard";
 import { addSpacesToCamelCase, formatDateTime, FALLBACK_TIMEZONE } from "../../util/util";
+import TechPage from "../../components/technician/TechPage";
 
 type TabFilter = "available" | "mine" | "past";
 type SortMode = "time" | "distance";
@@ -333,7 +334,7 @@ export default function TechnicianVisitsPage() {
 	};
 
 	return (
-		<div className="text-text-primary">
+		<TechPage className="text-text-primary">
 			{/* Header */}
 			<div className="flex flex-col gap-3 mb-4">
 				<h2 className="text-2xl font-semibold">My Visits</h2>
@@ -630,6 +631,6 @@ export default function TechnicianVisitsPage() {
 						: `View all ${display.length} past visits`}
 				</button>
 			)}
-		</div>
+		</TechPage>
 	);
 }

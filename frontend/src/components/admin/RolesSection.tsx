@@ -52,7 +52,7 @@ const RolesSection = () => {
             }
             return true;
         });
-    }, [roles, showDispatchers, showTechnicians, defaultOnly, terms, searchInput]);
+    }, [roles, showDispatchers, showTechnicians, defaultOnly, terms, searchInput, activeTerms]);
 
     const clearAllFilters = () => {
         setSearchInput("");

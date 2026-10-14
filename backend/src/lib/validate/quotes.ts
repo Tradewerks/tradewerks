@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { baseLineItemSchema, discountTypeEnum, validateDiscountRange } from "./shared.js";
+import { coordsSchema, baseLineItemSchema, discountTypeEnum, validateDiscountRange } from "./shared.js";
 
 // Quote line items — no source traceability fields
 const quoteLineItemInputSchema = baseLineItemSchema;
@@ -11,12 +11,7 @@ export const createQuoteSchema = z
 		title: z.string().min(1, "Title is required").optional(),
 		description: z.string().optional(),
 		address: z.string().min(1, "Address is required").optional(),
-		coords: z
-			.object({
-				lat: z.number(),
-				lon: z.number(),
-			})
-			.optional(),
+		coords: coordsSchema.optional(),
 		priority: z
 			.enum(["Low", "Medium", "High", "Urgent", "Emergency"])
 			.optional()
@@ -75,12 +70,7 @@ export const updateQuoteSchema = z
 		title: z.string().min(1).optional(),
 		description: z.string().optional(),
 		address: z.string().min(1).optional(),
-		coords: z
-			.object({
-				lat: z.number(),
-				lon: z.number(),
-			})
-			.optional(),
+		coords: coordsSchema.optional(),
 		priority: z
 			.enum(["Low", "Medium", "High", "Urgent", "Emergency"])
 			.optional(),

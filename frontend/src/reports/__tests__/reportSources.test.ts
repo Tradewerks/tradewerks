@@ -24,6 +24,7 @@ const BACKEND_REPORT_KEYS = [
 	"field-added-revenue",
 	"revenue-by-line-item-type",
 	"revenue-line-items",
+	"projects",
 ] as const;
 
 describe("report sources ↔ backend registry", () => {
@@ -35,6 +36,7 @@ describe("report sources ↔ backend registry", () => {
 			"clients",
 			"quotes",
 			"payments",
+			"projects",
 		]);
 	});
 

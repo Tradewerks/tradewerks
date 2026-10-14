@@ -7,12 +7,11 @@ import StockMovementList from "../StockMovementList";
 import UsageReport from "../UsageReport";
 import type { ItemUsage, ItemUsageRow, MovementsPage, StockMovement } from "../../../../types/inventory";
 
-// Review U1: both paginated cards kept the previous page as placeholder data
-// while the next one loaded AND appended whatever `data` held on every change,
-// so "Load more" appended page 1 twice (a,b → a,b,a,b,c with a duplicate-key
-// warning). The pages now live in an infinite query; these tests pin the
-// observable contract — N rows, then exactly N+M after Load more — through the
-// real hooks, with only the api module mocked.
+// Both paginated cards live in an infinite query, so "Load more" appends the
+// next page onto the accumulated pages rather than re-appending whatever
+// `data` last held. These tests pin the observable contract — N rows, then
+// exactly N+M after Load more — through the real hooks, with only the api
+// module mocked.
 
 const getInventoryMovements = vi.fn();
 const getItemUsage = vi.fn();

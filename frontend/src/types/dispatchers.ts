@@ -1,6 +1,7 @@
 import z from "zod";
 import type { Layout } from "react-grid-layout";
 import type { ReportCategoryId } from "./reports";
+import type { DispatcherNotificationType } from "./notifications";
 
 export type ReportLayoutEntry = { order: string[]; hidden: string[] };
 export type ReportLayout = Partial<Record<ReportCategoryId, ReportLayoutEntry>>;
@@ -19,14 +20,17 @@ export interface Dispatcher {
   title: string;
   description: string;
   last_login: string;
+  deactivated_at: string | null;
   email_verified_at: Date | null;
   email_verification_token: string | null;
   role_id: string | null;
   organization_role: { id: string; name: string } | null;
   permissions: string[];
   theme: "dark" | "light" | "system";
+  muted_notification_types: DispatcherNotificationType[];
   dashboard_layout: Layout | null;
   report_layout: ReportLayout | null;
+  kpi_layout: Layout | null;
   mfaEnabled?: boolean;
   _count?: {
     created_quotes: number;
@@ -58,8 +62,10 @@ export interface UpdateDispatcherInput {
   description?: string;
   role?: string;
   theme?: "dark" | "light" | "system";
+  muted_notification_types?: DispatcherNotificationType[];
   dashboard_layout?: Layout | null;
   report_layout?: ReportLayout | null;
+  kpi_layout?: Layout | null;
 }
  
 export interface ChangeDispatcherPasswordInput {
@@ -94,6 +100,7 @@ export const UpdateDispatcherSchema = z
 		description: z.string().optional(),
 		last_login: z.coerce.date().optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
+		muted_notification_types: z.array(z.string()).optional(),
 		dashboard_layout: z.array(z.any()).nullable().optional(),
 		report_layout: z
 			.record(
@@ -102,6 +109,7 @@ export const UpdateDispatcherSchema = z
 			)
 			.nullable()
 			.optional(),
+		kpi_layout: z.array(z.any()).nullable().optional(),
 	})
 	.refine(
 		(data) =>
@@ -114,7 +122,9 @@ export const UpdateDispatcherSchema = z
 			data.description !== undefined ||
 			data.last_login !== undefined ||
 			data.theme !== undefined ||
+			data.muted_notification_types !== undefined ||
 			data.dashboard_layout !== undefined ||
-			data.report_layout !== undefined,
+			data.report_layout !== undefined ||
+			data.kpi_layout !== undefined,
 		{ message: "At least one field must be provided for update" }
 	);

@@ -1,8 +1,8 @@
-import { db } from "../db.js";
 import { getScopedDb } from "../lib/context.js";
 import { Prisma, followup_trigger_type } from "../../generated/prisma/client.js";
 import { resolveStepSendAt, resolveContactEmail } from "./followupEngine.js";
 import { log } from "./appLogger.js";
+import { isModuleOn } from "./entitlementService.js";
 
 // ============================================================================
 // Followup triggers — best-effort hooks called from entity controllers to
@@ -29,13 +29,7 @@ function run(fn: () => Promise<void>, label: string, ctx: Record<string, unknown
 	return fn().catch((err) => log.error({ err, ...ctx }, `followup trigger ${label} failed`));
 }
 
-async function orgFollowupsEnabled(orgId: string): Promise<boolean> {
-	const org = await db.organization.findUnique({
-		where: { id: orgId },
-		select: { followups_enabled: true },
-	});
-	return !!org?.followups_enabled;
-}
+const orgFollowupsEnabled = (orgId: string): Promise<boolean> => isModuleOn(orgId, "followups");
 
 /** Pick a client's best contact email (primary → billing → first, among those with an email). */
 async function resolveClientRecipient(sdb: ScopedDb, clientId: string): Promise<string | null> {
@@ -62,7 +56,7 @@ interface EnrollParams {
 
 /**
  * Enroll a client into every active sequence with the given trigger type.
- * Gated on the org's followups_enabled master switch. Duplicate active
+ * Gated on the org's Followups module. Duplicate active
  * enrollments for the same (sequence, anchor) are prevented by a partial unique
  * index and silently skipped, so re-firing a trigger is safe/idempotent.
  */

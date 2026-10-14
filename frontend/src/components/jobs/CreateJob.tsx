@@ -103,6 +103,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 		dirtyLineItemFields,
 		undoLineItemField,
 		clearLineItemField,
+		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
 	} = useLineItems({ minItems: 0, mode: "create" });
@@ -296,6 +297,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 							| "",
 						taxable: li.taxable ?? true,
 						tax_group_id: li.tax_group_id ?? null,
+						inventory_item_id: li.inventory_item_id ?? null,
 					}))
 				);
 			} else {
@@ -344,6 +346,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 								| "",
 							taxable: li.taxable ?? true,
 							tax_group_id: li.tax_group_id ?? null,
+							inventory_item_id: li.inventory_item_id ?? null,
 						}))
 					);
 				}
@@ -383,6 +386,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 				total: item.total,
 				taxable: item.taxable ?? true,
 				tax_group_id: item.tax_group_id ?? null,
+				inventory_item_id: item.inventory_item_id ?? null,
 			})),
 			tax_rate: resolvedTaxRate / 100,
 			tax_amount: resolvedTaxAmount,
@@ -531,6 +535,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 					| undefined,
 				taxable: item.taxable ?? true,
 				tax_group_id: item.tax_group_id ?? null,
+				inventory_item_id: item.inventory_item_id ?? null,
 			}));
 
 		const newJob: CreateJobInput = {
@@ -760,6 +765,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 					<div className="min-w-0 flex flex-col">
 						<ErrorDisplay path="line_items" />
 						<LineItemsSection
+							onLinkInventory={setLineItemInventoryItem}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={dirtyAddLineItem}

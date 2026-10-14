@@ -2,17 +2,19 @@
 import { useSearchParams } from "react-router-dom";
 import UsersSection from "../../components/admin/UsersSection";
 import SettingsSection from "../../components/admin/SettingsSection";
+import EntitlementsSection from "../../components/admin/EntitlementsSection";
 import RolesSection from "../../components/admin/RolesSection";
 import IntegrationSection from "../../components/admin/IntegrationSection";
 import { usePermission } from "../../hooks/usePermission";
 
-export type AdminTab = "users" | "settings" | "roles" | "integrations";
+export type AdminTab = "users" | "settings" | "entitlements" | "roles" | "integrations";
 
 const STORAGE_KEY = "adminPage_activeTab";
 
 const TABS: { id: AdminTab; label: string; permission?: string }[] = [
 	{ id: "users", label: "Users", permission: "view_admin" },
 	{ id: "settings", label: "Settings", permission: "manage_organization" },
+	{ id: "entitlements", label: "Subscription", permission: "manage_organization" },
 	{ id: "roles", label: "Roles", permission: "manage_roles" },
 	{ id: "integrations", label: "Integrations", permission: "manage_organization" },
 ];
@@ -73,6 +75,11 @@ export default function AdminPage() {
 			{activeTab === "settings" && (
 				<div role="tabpanel" id="tabpanel-settings" aria-labelledby="tab-settings">
 					<SettingsSection />
+				</div>
+			)}
+			{activeTab === "entitlements" && (
+				<div role="tabpanel" id="tabpanel-entitlements" aria-labelledby="tab-entitlements">
+					<EntitlementsSection />
 				</div>
 			)}
 			{activeTab === "roles" && (

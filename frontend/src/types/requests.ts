@@ -1,5 +1,5 @@
 ﻿import z from "zod";
-import type { Coordinates } from "./location";
+import { CoordinatesSchema, type Coordinates } from "./location";
 import type { ClientWithPrimaryContact } from "./clients";
 import type { Priority, BaseNote, QuoteReference, JobReference } from "./common";
 import { PriorityValues } from "./common";
@@ -101,6 +101,8 @@ export const CreateRequestSchema = z.object({
 	title: z.string().min(1, "Title is required"),
 	description: z.string().min(1, "Description is required"),
 	priority: z.enum(PriorityValues).default("Medium"),
+	address: z.string().optional(),
+	coords: CoordinatesSchema.optional(),
 	status: z.enum(RequestStatusValues).optional(),
 	requires_quote: z.boolean().default(false),
 	estimated_value: z.number().min(0).optional().nullable(),
@@ -112,6 +114,8 @@ export const UpdateRequestSchema = z.object({
 	title: z.string().min(1, "Title is required").optional(),
 	description: z.string().min(1, "Description is required").optional(),
 	priority: z.enum(PriorityValues).optional(),
+	address: z.string().optional(),
+	coords: CoordinatesSchema.optional(),
 	status: z.enum(RequestStatusValues).optional(),
 	requires_quote: z.boolean().optional(),
 	estimated_value: z.number().min(0).optional().nullable(),

@@ -1,4 +1,8 @@
 import { getValidToken, qbFetch, QB_BASE } from "../quickbooksService.js"
+import { getScopedDb } from "../../lib/context.js";
+import { db } from "../../db.js";
+import { ErrorCodes, httpError } from "../../types/responses.js";
+import { getOrgRealmId } from "../quickbooksService.js";
 
 export interface CustomerResponse {
   Customer: Customer;
@@ -105,3 +109,35 @@ export async function findAllQBCustomers(orgId: string): Promise<Customer[]> {
 
     return customers;
 }
+
+export async function pushClient(orgId: string, clientId: string): Promise<string> {
+    const sdb = getScopedDb(orgId);
+    const client = await sdb.client.findFirst({
+        where: { id: clientId }
+    });
+    if (!client) {
+        throw httpError(404, ErrorCodes.NOT_FOUND, "Client not found");
+    }
+
+    const accountId = await getOrgRealmId(orgId);
+    const existing = await db.client_external_mapping.findFirst({
+        where: {
+            provider: "quickbooks",
+            client_id: clientId,
+            account_id: accountId,
+            client: { organization_id: orgId },
+        }
+    });
+    if (existing) return existing.external_id;
+
+    const qbClientId = await findOrCreateQBCustomer(orgId, client.name);
+    await db.client_external_mapping.create({
+        data: {
+            client_id: clientId,
+            external_id: qbClientId,
+            provider: "quickbooks",
+            account_id: accountId
+        }
+    });
+    return qbClientId;
+};

@@ -1,0 +1,423 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SYSTEM 02 · FIELD — "Glove first"
+ * Designed from the technician's phone outward: warm neutrals, pine green as
+ * the working colour, hi-vis lime held back for the single next action.
+ * Dark mode is a cab at 5am, not a hacker theme.
+ * Type: Instrument Sans (UI) / JetBrains Mono (labels, IDs)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+	/* ── Backgrounds / Surfaces ──────────────────────────────────────────── */
+	--color-canvas:         #F7F6F2;   /* ground */
+	--color-base:           #FFFFFF;   /* card */
+	--color-surface:        #FCFBF8;
+	--color-surface-raised: #EDEBE4;   /* pressed/selected */
+	--color-surface-inset:  #E8E5DC;
+
+	/* ── Text ────────────────────────────────────────────────────────────── */
+	--color-text-primary:    #171B1D;   /* ink */
+	--color-text-secondary:  #3C4340;
+	--color-text-tertiary:   #4A524E;
+	--color-text-muted:      #6A706C;
+	--color-text-faint:      #7F8582;
+	--color-text-inverse:    #FFFFFF;
+	--color-text-link:       #2F5D8C;
+	--color-text-on-surface: #3C4340;
+
+	/* ── Primary — pine. The working colour. ─────────────────────────────── */
+	--color-primary:           #1F6F4A;
+	--color-primary-hover:     #18583B;
+	--color-primary-active:    #124630;
+	--color-primary-bg:        rgba(31, 111, 74, 0.10);
+	--color-primary-bg-subtle: rgba(31, 111, 74, 0.06);
+	--color-primary-bg-dim:    rgba(31, 111, 74, 0.04);
+	--color-primary-border:    rgba(31, 111, 74, 0.22);
+	--color-primary-text:      #175539;
+	--color-on-primary:        #FFFFFF;
+	--color-primary-disabled:  #8FA79A;
+
+	/* ── Borders ─────────────────────────────────────────────────────────── */
+	--color-border-subtle: #EAE8E1;
+	--color-border:        #E1DFD8;
+	--color-border-strong: #D3D0C6;
+	--color-border-card:   #E1DFD8;
+	--color-border-input:  #C6C2B6;
+
+	/* ── Overlay ─────────────────────────────────────────────────────────── */
+	--color-overlay: rgba(20, 22, 19, 0.62);
+
+	/* ── Confirm / Payment / QuickBooks ──────────────────────────────────── */
+	--color-confirm:       #1F6F4A;
+	--color-confirm-hover: #18583B;
+	--color-payment:       #A08A1F;
+	--color-payment-hover: #8A7619;
+	--color-quickbooks:       #2E8B3A;
+	--color-quickbooks-hover: #24702E;
+
+	/* ── Status: success — "Complete" ────────────────────────────────────── */
+	--color-success:             #1F6F4A;
+	--color-success-text:        #175539;
+	--color-success-bg:          #E7F0EA;
+	--color-success-border:      #C4DCCF;
+	--color-success-bright-text: #175539;
+
+	/* ── Status: error — "Callback". Red only where work stops. ──────────── */
+	--color-error:        #A5231C;
+	--color-error-strong: #8C1D18;
+	--color-error-text:   #8C1D18;
+	--color-error-bg:     #F9E7E4;
+	--color-error-border: #EACBC6;
+
+	/* ── Status: warning — hi-vis lime is the one colour that never changes
+	 * between modes. It marks the single next action and nothing else. ───── */
+	--color-warning:        #C8E24A;
+	--color-warning-text:   #6B4E00;
+	--color-warning-bg:     #F6EFDA;
+	--color-warning-border: #E3D5A9;
+	--color-on-warning:     #1A2005;
+
+	/* ── Status: info — "Drafted by AI" ──────────────────────────────────── */
+	--color-info:        #2F5D8C;
+	--color-info-text:   #1F4468;
+	--color-info-bg:     #E8EFF6;
+	--color-info-border: #CFDCEA;
+
+	/* ── Status: reviewing ───────────────────────────────────────────────── */
+	--color-reviewing:        #6B4E93;
+	--color-reviewing-text:   #573D7A;
+	--color-reviewing-bg:     #F0EBF7;
+	--color-reviewing-border: #D8CDE8;
+
+	/* ── Status: rejected ────────────────────────────────────────────────── */
+	--color-rejected:        #A5231C;
+	--color-rejected-text:   #8C1D18;
+	--color-rejected-bg:     #F9E7E4;
+	--color-rejected-border: #EACBC6;
+
+	/* ── Status: neutral / orange ────────────────────────────────────────── */
+	--color-neutral: #6A706C;
+	--color-orange:        #B4571E;
+	--color-orange-text:   #8F4416;
+	--color-orange-bg:     #FAEDE3;
+	--color-orange-border: #E9CFBA;
+
+	/* ── Priority ────────────────────────────────────────────────────────── */
+	--color-priority-emergency: #8C1D18;
+	--color-priority-urgent:    #A5231C;
+	--color-priority-high:      #8A7A00;   /* hi-vis reads as text at this value */
+	--color-priority-medium:    #A08A1F;
+	--color-priority-low:       #1F6F4A;
+	--color-priority-default:   #6A706C;
+
+	/* ── Visit status ────────────────────────────────────────────────────── */
+	--color-visit-scheduled:  #6A706C;
+	--color-visit-driving:    #2F5D8C;
+	--color-visit-onsite:     #8A7A00;
+	--color-visit-inprogress: #1F6F4A;
+	--color-visit-paused:     #B4571E;
+	--color-visit-delayed:    #A08A1F;
+	--color-visit-completed:  #1F6F4A;
+	--color-visit-cancelled:  #A5231C;
+
+	--color-visit-driving-text:   #1F4468;
+	--color-visit-completed-dark: #175539;
+	--color-visit-delayed-text:   #6B4E00;
+	--color-visit-paused-text:    #8F4416;
+
+	/* ── Schedule card surfaces ──────────────────────────────────────────── */
+	--color-card-bg:           #F1F5F1;
+	--color-occurrence-bg:     #F0EBF7;
+	--color-popup-bg:          #FFFFFF;
+	--color-occurrence-border: rgba(107, 78, 147, 0.26);
+
+	/* ── Schedule text ───────────────────────────────────────────────────── */
+	--color-sched-text-primary:      #171B1D;
+	--color-sched-text-secondary:    #3C4340;
+	--color-sched-text-muted:        rgba(23, 27, 29, 0.56);
+	--color-sched-text-client:       rgba(23, 27, 29, 0.62);
+	--color-sched-text-time:         rgba(23, 27, 29, 0.74);
+	--color-sched-text-faint:        #6A706C;
+	--color-sched-visit-title:       #171B1D;
+	--color-sched-occurrence-title:  #573D7A;
+	--color-sched-occurrence-badge:  #6B4E93;
+	--color-sched-today-bg:          #E7F0EA;
+	--color-sched-status-badge-bg:   rgba(31, 111, 74, 0.12);
+	--color-sched-status-badge-text: #175539;
+	--color-sched-open-ended-dash:   rgba(23, 27, 29, 0.24);
+
+	/* ── Calendar ────────────────────────────────────────────────────────── */
+	--color-cal-month-day: #3C4340;
+
+	/* ── Charts ──────────────────────────────────────────────────────────── */
+	--color-chart-primary:  #1F6F4A;
+	--color-chart-success:  #4E9E70;
+	--color-chart-warning:  #A08A1F;
+	--color-chart-info:     #2F5D8C;
+	--color-chart-error:    #A5231C;
+	--color-chart-fallback: #E1DFD8;
+	--color-chart-axis:     #6A706C;
+	--color-chart-hole-bg:  #F7F6F2;
+
+	/* ── Tech palette — field-legible, warm ──────────────────────────────── */
+	--color-tech-1:          #1F6F4A;
+	--color-tech-2:          #2F5D8C;
+	--color-tech-3:          #B4571E;
+	--color-tech-4:          #6B4E93;
+	--color-tech-5:          #A5231C;
+	--color-tech-6:          #2E8B7A;
+	--color-tech-7:          #8A7A00;
+	--color-tech-8:          #8C5A3C;
+	--color-tech-9:          #979C96;
+	--color-tech-unassigned: #6A706C;
+
+	--color-sched-tech-1:  #1F6F4A;
+	--color-sched-tech-2:  #2F5D8C;
+	--color-sched-tech-3:  #B4571E;
+	--color-sched-tech-4:  #6B4E93;
+	--color-sched-tech-5:  #A5231C;
+	--color-sched-tech-6:  #2E8B7A;
+	--color-sched-tech-7:  #8A7A00;
+	--color-sched-tech-8:  #A8477A;
+	--color-sched-tech-9:  #4E7A2E;
+	--color-sched-tech-10: #2E7A8B;
+	--color-sched-tech-11: #573D7A;
+	--color-sched-tech-12: #8C5A3C;
+
+	/* ── Mapbox ──────────────────────────────────────────────────────────── */
+	--color-mapbox-bg:       #FFFFFF;
+	--color-mapbox-bg-hover: #EDEBE4;
+	--color-mapbox-border:   #E1DFD8;
+
+	/* ── Gradient / special ──────────────────────────────────────────────── */
+	--color-gradient-tech-teal:      #2E8B7A;
+	--color-gradient-tech-teal-text: #1F6055;
+	--color-dispatcher-avatar-to:    #6B4E93;
+
+	/* ── Recurring Plan ──────────────────────────────────────────────────── */
+	--color-plan:       #6B4E93;
+	--color-plan-hover: #573D7A;
+	--color-plan-text:  #573D7A;
+
+	/* ── Lifecycle actions ───────────────────────────────────────────────── */
+	--color-action-drive:       #2F5D8C;
+	--color-action-drive-hover: #26496E;
+	--color-action-pause:       #B4571E;
+	--color-action-pause-hover: #8F4416;
+
+	--color-test: #F7F6F2;
+
+	/* ── Geometry — soft. Everything a glove touches is generous. ────────── */
+	--radius-xs:  4px;
+	--radius-sm:  6px;
+	--radius-md:  8px;
+	--radius-lg:  10px;
+	--radius-xl:  12px;
+	--radius-2xl: 16px;
+	--radius-3xl: 20px;
+
+	/* ── Type scale — one step up. No thin weights near sunlight. ────────── */
+	--text-xs:   0.8125rem;   /* 13px */
+	--text-sm:   0.9375rem;   /* 15px */
+	--text-base: 1.0625rem;   /* 17px */
+	--text-lg:   1.1875rem;   /* 19px */
+	--text-xl:   1.375rem;    /* 22px */
+}
+
+/* ── Dark · pre-dawn cab. Same geometry, warmer black. ──────────────────── */
+[data-theme="dark"] {
+	--color-canvas:         #141613;
+	--color-base:           #1D201D;
+	--color-surface:        #191C19;
+	--color-surface-raised: #282C28;
+	--color-surface-inset:  #0F110F;
+
+	--color-text-primary:    #EFEEE9;
+	--color-text-secondary:  #C7C6C1;
+	--color-text-tertiary:   #B0AFAA;
+	--color-text-muted:      #979C96;
+	--color-text-faint:      #838883;
+	--color-text-inverse:    #0C1A13;
+	--color-text-link:       #8FB3D4;
+	--color-text-on-surface: #C7C6C1;
+
+	/* Pine lightens for text and outlines; the filled primary stays the
+	   brightest thing on screen. */
+	--color-primary:           #5FB489;
+	--color-primary-hover:     #73C39A;
+	--color-primary-active:    #4EA378;
+	--color-primary-bg:        rgba(95, 180, 137, 0.16);
+	--color-primary-bg-subtle: rgba(95, 180, 137, 0.09);
+	--color-primary-bg-dim:    rgba(95, 180, 137, 0.05);
+	--color-primary-border:    rgba(95, 180, 137, 0.28);
+	--color-primary-text:      #7FCBA4;
+	--color-on-primary:        #0C1A13;
+	--color-primary-disabled:  #4A6055;
+
+	--color-border-subtle: #262A27;
+	--color-border:        #2E322F;
+	--color-border-strong: #3D423E;
+	--color-border-card:   #2E322F;
+	--color-border-input:  #454A46;
+
+	--color-overlay: rgba(10, 12, 10, 0.78);
+
+	--color-confirm:       #5FB489;
+	--color-confirm-hover: #73C39A;
+	--color-payment:       #DBBB63;
+	--color-payment-hover: #C9A94F;
+	--color-quickbooks:       #4FC05C;
+	--color-quickbooks-hover: #3FA84B;
+
+	--color-success:             #5FB489;
+	--color-success-text:        #7FCBA4;
+	--color-success-bg:          #17281F;
+	--color-success-border:      #2C4034;
+	--color-success-bright-text: #7FCBA4;
+
+	--color-error:        #E58179;
+	--color-error-strong: #E58179;
+	--color-error-text:   #E58179;
+	--color-error-bg:     #2A1917;
+	--color-error-border: #452724;
+
+	/* Hi-vis does not move between modes. */
+	--color-warning:        #C8E24A;
+	--color-warning-text:   #DBBB63;
+	--color-warning-bg:     #2A2312;
+	--color-warning-border: #453A1E;
+	--color-on-warning:     #1A2005;
+
+	--color-info:        #8FB3D4;
+	--color-info-text:   #8FB3D4;
+	--color-info-bg:     #17212A;
+	--color-info-border: #2A3A48;
+
+	--color-reviewing:        #B49AD8;
+	--color-reviewing-text:   #B49AD8;
+	--color-reviewing-bg:     #1F1A2A;
+	--color-reviewing-border: #362C47;
+
+	--color-rejected:        #E58179;
+	--color-rejected-text:   #E58179;
+	--color-rejected-bg:     #2A1917;
+	--color-rejected-border: #452724;
+
+	--color-neutral: #979C96;
+	--color-orange:        #E09361;
+	--color-orange-text:   #E09361;
+	--color-orange-bg:     #2A1D13;
+	--color-orange-border: #453121;
+
+	--color-priority-emergency: #E58179;
+	--color-priority-urgent:    #E09361;
+	--color-priority-high:      #C8E24A;
+	--color-priority-medium:    #DBBB63;
+	--color-priority-low:       #5FB489;
+	--color-priority-default:   #979C96;
+
+	--color-visit-scheduled:  #979C96;
+	--color-visit-driving:    #8FB3D4;
+	--color-visit-onsite:     #C8E24A;
+	--color-visit-inprogress: #5FB489;
+	--color-visit-paused:     #E09361;
+	--color-visit-delayed:    #DBBB63;
+	--color-visit-completed:  #5FB489;
+	--color-visit-cancelled:  #E58179;
+
+	--color-visit-driving-text:   #8FB3D4;
+	--color-visit-completed-dark: #7FCBA4;
+	--color-visit-delayed-text:   #DBBB63;
+	--color-visit-paused-text:    #E09361;
+
+	--color-card-bg:           #1A211C;
+	--color-occurrence-bg:     #1F1A2A;
+	--color-popup-bg:          #1D201D;
+	--color-occurrence-border: rgba(180, 154, 216, 0.30);
+
+	--color-sched-text-primary:      #EFEEE9;
+	--color-sched-text-secondary:    #C7C6C1;
+	--color-sched-text-muted:        rgba(239, 238, 233, 0.56);
+	--color-sched-text-client:       rgba(239, 238, 233, 0.62);
+	--color-sched-text-time:         rgba(239, 238, 233, 0.74);
+	--color-sched-text-faint:        #838883;
+	--color-sched-visit-title:       #EFEEE9;
+	--color-sched-occurrence-title:  #B49AD8;
+	--color-sched-today-bg:          #17281F;
+	--color-sched-status-badge-bg:   rgba(95, 180, 137, 0.16);
+	--color-sched-status-badge-text: #7FCBA4;
+	--color-sched-open-ended-dash:   rgba(239, 238, 233, 0.34);
+
+	--color-cal-month-day: #C7C6C1;
+
+	--color-chart-primary:  #5FB489;
+	--color-chart-success:  #7FCBA4;
+	--color-chart-warning:  #DBBB63;
+	--color-chart-info:     #8FB3D4;
+	--color-chart-error:    #E58179;
+	--color-chart-fallback: #2E322F;
+	--color-chart-axis:     #979C96;
+	--color-chart-hole-bg:  #141613;
+
+	--color-mapbox-bg:       #1D201D;
+	--color-mapbox-bg-hover: #282C28;
+	--color-mapbox-border:   #2E322F;
+
+	--color-gradient-tech-teal:      #5FB4A8;
+	--color-gradient-tech-teal-text: #5FB4A8;
+	--color-dispatcher-avatar-to:    #B49AD8;
+
+	--color-plan:       #B49AD8;
+	--color-plan-hover: #9F81CC;
+	--color-plan-text:  #B49AD8;
+
+	--color-action-drive:       #8FB3D4;
+	--color-action-drive-hover: #A5C3DE;
+	--color-action-pause:       #E09361;
+	--color-action-pause-hover: #C97F4F;
+
+	--anim-surface-flash: rgba(40, 44, 40, 0.45);
+}
+
+[data-palette="warm"],
+[data-palette="neutral"] {
+	--color-canvas:         #F7F6F2;
+	--color-base:           #FFFFFF;
+	--color-surface:        #FCFBF8;
+	--color-surface-raised: #EDEBE4;
+	--color-surface-inset:  #E8E5DC;
+	--color-border-subtle:  #EAE8E1;
+	--color-border:         #E1DFD8;
+	--color-border-strong:  #D3D0C6;
+	--color-border-card:    #E1DFD8;
+	--color-border-input:   #C6C2B6;
+	--color-mapbox-bg:      #FFFFFF;
+	--color-mapbox-bg-hover:#EDEBE4;
+	--color-chart-fallback: #E1DFD8;
+	--color-chart-hole-bg:  #F7F6F2;
+}
+
+/* Bare `rounded` is a fixed utility in Tailwind v4 — override explicitly. */
+.rounded { border-radius: 8px; }
+
+/* Pills stay pills; status chips round fully. */
+.rounded-sm { border-radius: 6px; }
+
+/* Labels, IDs and time windows in mono — the only place mono appears. */
+.uppercase,
+.font-mono,
+[class*="tabular"] {
+	font-family: "JetBrains Mono", ui-monospace, monospace;
+	letter-spacing: 0.06em;
+}
+
+/* No thin weights anywhere near sunlight. */
+.font-light, .font-thin, .font-extralight {
+	font-weight: 400;
+}
+
+/* Every standalone touch target clears a gloved thumb. Scoped so dense
+ * scheduling chips (which are also buttons) keep their own density. */
+button.px-4, button.px-5, button.px-6,
+button[type="submit"] {
+	min-height: 40px;
+}

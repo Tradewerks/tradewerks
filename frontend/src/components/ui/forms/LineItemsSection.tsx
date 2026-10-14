@@ -1,7 +1,7 @@
 ﻿import { Plus, Download } from "lucide-react";
 import { useState } from "react";
 import LineItemCard, { type SourceJob } from "./LineItemCard";
-import type { BaseLineItem } from "../../../types/common";
+import type { BaseLineItem, LineItemDisposition } from "../../../types/common";
 import type { InventoryItem } from "../../../types/inventory";
 import type { TaxGroup } from "../../../types/tax";
 import { formatTaxGroupLabel } from "../../../types/tax";
@@ -34,6 +34,19 @@ interface LineItemsSectionProps {
 	// When true, the header row sticks to the top of the nearest scroll container
 	stickyHeader?: boolean;
 	inventoryItems?: InventoryItem[];
+	/** Visit and recurring-plan forms — see LineItemCard's showDisposition. */
+	showDisposition?: boolean;
+	vehicles?: { id: string; name: string }[];
+	onDispositionChange?: (
+		id: string,
+		disposition: LineItemDisposition | null,
+		vehicleId?: string | null,
+	) => void;
+	// Without it the picker stays hidden and material lines fall back to freetext.
+	onLinkInventory?: (
+		id: string,
+		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+	) => void;
 	// Tax
 	taxGroups?: TaxGroup[];
 	clientExempt?: boolean;
@@ -62,6 +75,10 @@ const LineItemsSection = ({
 	importLoading = false,
 	stickyHeader = false,
 	inventoryItems,
+	showDisposition,
+	vehicles,
+	onDispositionChange,
+	onLinkInventory,
 	taxGroups = [],
 	clientExempt = false,
 	onTaxChange,
@@ -161,6 +178,10 @@ const LineItemsSection = ({
 						onUpdateSource={onUpdateSource}
 						sourceJobs={sourceJobs}
 						inventoryItems={inventoryItems}
+						showDisposition={showDisposition}
+						vehicles={vehicles}
+						onDispositionChange={onDispositionChange}
+						onLinkInventory={onLinkInventory}
 						taxGroups={taxGroups}
 						clientExempt={clientExempt}
 						onTaxChange={onTaxChange}

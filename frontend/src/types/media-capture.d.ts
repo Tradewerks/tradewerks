@@ -17,4 +17,18 @@ declare global {
 		torch?: boolean;
 		zoom?: number;
 	}
+
+	// Chromium-only, and read off `window` so the absence on iOS Safari is a
+	// runtime branch rather than a crash.
+	interface ImageCapture {
+		takePhoto(photoSettings?: Record<string, unknown>): Promise<Blob>;
+		grabFrame(): Promise<ImageBitmap>;
+	}
+
+	interface Window {
+		ImageCapture?: {
+			prototype: ImageCapture;
+			new (track: MediaStreamTrack): ImageCapture;
+		};
+	}
 }

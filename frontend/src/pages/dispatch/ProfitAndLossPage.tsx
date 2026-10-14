@@ -1,12 +1,18 @@
 import { useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { BarChart3, PlugZap } from "lucide-react";
+import { BarChart3, Info, PlugZap } from "lucide-react";
 import PageControls from "../../components/ui/PageControls";
 import PageHeader from "../../components/ui/PageHeader";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
 import ProfitAndLossStatement from "../../components/reports/ProfitAndLossStatement";
+import SyncedClientsToggle from "../../components/reports/SyncedClientsToggle";
 import { parseDateRangeFromParams, resolveDateRange } from "../../util/dateRangeUtils";
-import { useQBStatusQuery, useQBProfitAndLossReportQuery } from "../../hooks/useQuickbooks";
+import {
+	useQBStatusQuery,
+	useQBProfitAndLossReportQuery,
+	useSyncedClientFilter,
+} from "../../hooks/useQuickbooks";
 import type { QBProfitAndLossQuery } from "../../types/quickbooks";
 
 type AccountingMethod = "Accrual" | "Cash";
@@ -27,10 +33,11 @@ export default function ProfitAndLossPage() {
 	const endDate = resolved ? toQBDate(resolved.end) : undefined;
 
 	const [method, setMethod] = useState<AccountingMethod>("Accrual");
+	const { enabled: syncedOnly, setEnabled: setSyncedOnly, mappedCount, customer } = useSyncedClientFilter();
 
 	const query = useMemo<QBProfitAndLossQuery>(
-		() => ({ start_date: startDate, end_date: endDate, accounting_method: method }),
-		[startDate, endDate, method],
+		() => ({ start_date: startDate, end_date: endDate, accounting_method: method, customer }),
+		[startDate, endDate, method, customer],
 	);
 
 	const { data: status } = useQBStatusQuery();
@@ -64,10 +71,26 @@ export default function ProfitAndLossPage() {
 								</button>
 							))}
 						</div>
+						<SyncedClientsToggle
+							active={syncedOnly}
+							onToggle={() => setSyncedOnly((v) => !v)}
+							mappedCount={mappedCount}
+						/>
 						<DateRangeFilter paramKey="period" />
+						<RefreshReportsButton />
 					</>
 				}
 			/>
+
+			{connected && !syncedOnly && (
+				<div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border mb-4">
+					<Info size={14} className="text-text-tertiary shrink-0 mt-0.5" />
+					<p className="text-xs text-text-tertiary">
+						Showing all QuickBooks data, including customers not linked to a client in this
+						app. Turn on "Synced clients only" to limit this report to clients you've linked.
+					</p>
+				</div>
+			)}
 
 			<div className="shadow-sm border border-border-subtle p-4 bg-base rounded-lg overflow-x-auto text-left">
 				{!connected ? (

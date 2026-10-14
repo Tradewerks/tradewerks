@@ -53,6 +53,7 @@ export const insertRequestNote = async (
 		const created = await sdb.$transaction(async (tx) => {
 			const noteData: Prisma.request_noteCreateInput = {
 				request: { connect: { id: requestId } },
+				organization: { connect: { id: organizationId } },
 				content: parsed.content,
 				...(context?.techId && {
 					creator_tech: { connect: { id: context.techId } },

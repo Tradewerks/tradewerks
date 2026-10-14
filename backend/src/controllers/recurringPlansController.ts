@@ -6,7 +6,15 @@ import {
 } from "../../generated/prisma/client.js";
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
+import { parentBreadcrumb } from "./logsController.js";
 import { getScopedDb } from "../lib/context.js";
+import { getClosedWindows } from "../services/moduleWindowService.js";
+import {
+	assertInventoryItemsInOrg,
+	assertDispositionVehiclesInOrg,
+	plannedLineItemFields,
+	templateDispositionFields,
+} from "../lib/inventory.js";
 import {
 	createRecurringPlanSchema,
 	updateRecurringPlanSchema,
@@ -196,6 +204,50 @@ async function generateOccurrencesForPlan(
 		start_date: startDate,
 		end_date: generationEndDate,
 	};
+}
+
+// Dates the rule would have produced while the org had Recurring Plans switched
+// off and that were never generated. Generation never looks backwards, so these
+// are gone for good; the plan page lists them so the gap is visible.
+export async function getSkippedDatesForJob(jobId: string, orgId: string): Promise<Date[]> {
+	const sdb = getScopedDb(orgId);
+	const job = await sdb.job.findFirst({
+		where: { id: jobId },
+		select: { recurring_plan_id: true },
+	});
+	if (!job?.recurring_plan_id) return [];
+	const plan = await sdb.recurring_plan.findFirst({
+		where: { id: job.recurring_plan_id },
+		include: { rules: { include: { by_weekday: true } } },
+	});
+	if (!plan || plan.rules.length === 0) return [];
+
+	const windows = await getClosedWindows(orgId, "recurring_plans");
+	const planEnd = plan.ends_at ? new Date(plan.ends_at) : null;
+	const candidates: Date[] = [];
+	for (const w of windows) {
+		const end = planEnd && planEnd < w.on ? planEnd : w.on;
+		if (end <= w.off) continue;
+		for (const d of calculateOccurrenceDates(
+			plan.rules[0],
+			new Date(plan.starts_at),
+			w.off,
+			end,
+			plan.timezone ?? "UTC",
+		)) {
+			// The rule works in whole days; keep only starts inside the window itself.
+			if (d.start >= w.off && d.start <= end) candidates.push(d.start);
+		}
+	}
+	if (candidates.length === 0) return [];
+	const existing = await sdb.recurring_occurrence.findMany({
+		where: { recurring_plan_id: plan.id, occurrence_start_at: { in: candidates } },
+		select: { occurrence_start_at: true },
+	});
+	const have = new Set(existing.map((o) => o.occurrence_start_at.getTime()));
+	return candidates
+		.filter((d) => !have.has(d.getTime()))
+		.sort((a, b) => a.getTime() - b.getTime());
 }
 
 function calculateOccurrenceDates(
@@ -520,6 +572,16 @@ export const insertRecurringPlan = async (
 
 			// Create template line items
 			if (parsed.line_items && parsed.line_items.length > 0) {
+				await assertInventoryItemsInOrg(
+					tx,
+					organizationId,
+					parsed.line_items.map((i) => i.inventory_item_id),
+				);
+				await assertDispositionVehiclesInOrg(
+					tx,
+					organizationId,
+					parsed.line_items.map((i) => i.disposition_vehicle_id),
+				);
 				await tx.recurring_plan_line_item.createMany({
 					data: parsed.line_items.map((item, idx) => ({
 						recurring_plan_id: plan.id,
@@ -529,6 +591,8 @@ export const insertRecurringPlan = async (
 						unit_price: item.unit_price,
 						item_type: item.item_type ?? null,
 						sort_order: item.sort_order ?? idx,
+						inventory_item_id: item.inventory_item_id ?? null,
+						...templateDispositionFields(item.inventory_item_id, item),
 					})),
 				});
 			}
@@ -798,6 +862,16 @@ export const updateRecurringPlan = async (
 
 			// Update line items if provided
 			if (parsed.line_items) {
+				await assertInventoryItemsInOrg(
+					tx,
+					organizationId,
+					parsed.line_items.map((i) => i.inventory_item_id),
+				);
+				await assertDispositionVehiclesInOrg(
+					tx,
+					organizationId,
+					parsed.line_items.map((i) => i.disposition_vehicle_id),
+				);
 				const existingItemIds = new Set(
 					existing.line_items.map((item) => item.id),
 				);
@@ -830,6 +904,13 @@ export const updateRecurringPlan = async (
 								unit_price: item.unit_price,
 								item_type: item.item_type ?? null,
 								sort_order: item.sort_order ?? 0,
+								...(item.inventory_item_id !== undefined && {
+									inventory_item_id: item.inventory_item_id,
+									...templateDispositionFields(
+										item.inventory_item_id,
+										item,
+									),
+								}),
 							},
 						});
 					} else {
@@ -842,6 +923,11 @@ export const updateRecurringPlan = async (
 								unit_price: item.unit_price,
 								item_type: item.item_type ?? null,
 								sort_order: item.sort_order ?? 0,
+								inventory_item_id: item.inventory_item_id ?? null,
+								...templateDispositionFields(
+									item.inventory_item_id,
+									item,
+								),
 							},
 						});
 					}
@@ -1030,6 +1116,10 @@ export const updateRecurringPlan = async (
 					.join(", ")}`,
 			};
 		}
+		// Without this the org guards surface as an opaque internal error.
+		if (e instanceof Error && e.message.startsWith("Validation failed:")) {
+			return { err: e.message };
+		}
 		log.error({ err: e }, "Update recurring plan error");
 		return { err: "Internal server error" };
 	}
@@ -1060,6 +1150,16 @@ export const updateRecurringPlanLineItems = async (
 		}
 
 		const updated = await sdb.$transaction(async (tx) => {
+			await assertInventoryItemsInOrg(
+				tx,
+				organizationId,
+				parsed.line_items.map((i) => i.inventory_item_id),
+			);
+			await assertDispositionVehiclesInOrg(
+				tx,
+				organizationId,
+				parsed.line_items.map((i) => i.disposition_vehicle_id),
+			);
 			const existingItemIds = new Set(
 				plan.line_items.map((item) => item.id),
 			);
@@ -1092,6 +1192,10 @@ export const updateRecurringPlanLineItems = async (
 							unit_price: item.unit_price,
 							item_type: item.item_type ?? null,
 							sort_order: item.sort_order ?? 0,
+							...(item.inventory_item_id !== undefined && {
+								inventory_item_id: item.inventory_item_id,
+								...templateDispositionFields(item.inventory_item_id, item),
+							}),
 						},
 					});
 				} else {
@@ -1104,6 +1208,8 @@ export const updateRecurringPlanLineItems = async (
 							unit_price: item.unit_price,
 							item_type: item.item_type ?? null,
 							sort_order: item.sort_order ?? 0,
+							inventory_item_id: item.inventory_item_id ?? null,
+							...templateDispositionFields(item.inventory_item_id, item),
 						},
 					});
 				}
@@ -1149,6 +1255,10 @@ export const updateRecurringPlanLineItems = async (
 					.map((err) => err.message)
 					.join(", ")}`,
 			};
+		}
+		// Without this the org guards surface as an opaque internal error.
+		if (e instanceof Error && e.message.startsWith("Validation failed:")) {
+			return { err: e.message };
 		}
 		log.error({ err: e }, "Update recurring plan line items error");
 		return { err: "Internal server error" };
@@ -1493,6 +1603,7 @@ export const skipOccurrence = async (
 			action: "updated",
 			entity_type: "recurring_occurrence",
 			entity_id: occurrenceId,
+			organization_id: organizationId,
 			actor_type: context?.techId
 				? "technician"
 				: context?.dispatcherId
@@ -1502,6 +1613,7 @@ export const skipOccurrence = async (
 			changes: {
 				status: { old: "planned", new: "skipped" },
 				skip_reason: { old: null, new: parsed.skip_reason },
+				...parentBreadcrumb("recurring_plan", occurrence.recurring_plan_id),
 			},
 			ip_address: context?.ipAddress,
 			user_agent: context?.userAgent,
@@ -1608,6 +1720,7 @@ export const rescheduleOccurrence = async (
 			action: "updated",
 			entity_type: "recurring_occurrence",
 			entity_id: occurrenceId,
+			organization_id: organizationId,
 			actor_type: context?.techId
 				? "technician"
 				: context?.dispatcherId
@@ -1623,6 +1736,7 @@ export const rescheduleOccurrence = async (
 					old: occurrence.occurrence_end_at,
 					new: newEndDate,
 				},
+				...parentBreadcrumb("recurring_plan", occurrence.recurring_plan_id),
 			},
 			ip_address: context?.ipAddress,
 			user_agent: context?.userAgent,
@@ -1663,7 +1777,12 @@ export const bulkSkipOccurrences = async (
 		const parsed = bulkSkipOccurrencesSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
 
-		const result = await sdb.$transaction(async (tx) => {
+		const { result, representativePlanId } = await sdb.$transaction(async (tx) => {
+			const representative = await tx.recurring_occurrence.findUnique({
+				where: { id: parsed.occurrence_ids[0] },
+				select: { recurring_plan_id: true },
+			});
+
 			const updated = await tx.recurring_occurrence.updateMany({
 				where: {
 					id: { in: parsed.occurrence_ids },
@@ -1676,7 +1795,7 @@ export const bulkSkipOccurrences = async (
 				},
 			});
 
-			return updated;
+			return { result: updated, representativePlanId: representative?.recurring_plan_id ?? null };
 		});
 
 		await logActivity({
@@ -1684,6 +1803,7 @@ export const bulkSkipOccurrences = async (
 			action: "updated",
 			entity_type: "recurring_occurrence",
 			entity_id: parsed.occurrence_ids[0],
+			organization_id: organizationId,
 			actor_type: context?.techId
 				? "technician"
 				: context?.dispatcherId
@@ -1693,6 +1813,7 @@ export const bulkSkipOccurrences = async (
 			changes: {
 				count: { old: null, new: result.count },
 				skip_reason: { old: null, new: parsed.skip_reason },
+				...(representativePlanId ? parentBreadcrumb("recurring_plan", representativePlanId) : {}),
 			},
 			ip_address: context?.ipAddress,
 			user_agent: context?.userAgent,
@@ -1796,7 +1917,19 @@ export const generateVisitFromOccurrence = async (
 								source: "recurring_plan",
 								item_type: item.item_type,
 								sort_order: idx,
-								inventory_item_id: item.inventory_item_id ?? null,
+								// A generated visit's parts are planned parts —
+								// same lifecycle a dispatcher gets when they
+								// attach an item by hand, so readiness and the
+								// completion deduction see them identically.
+								// Intent rides along with the link: a plan
+								// whose part is vendor-direct generates
+								// vendor-direct visit lines, not warehouse
+								// deductions.
+								...plannedLineItemFields(
+									item.inventory_item_id,
+									Number(item.quantity),
+									item,
+								),
 							})),
 						},
 					},

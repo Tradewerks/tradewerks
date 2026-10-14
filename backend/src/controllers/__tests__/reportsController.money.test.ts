@@ -44,8 +44,9 @@ beforeEach(() => {
 	vi.clearAllMocks();
 });
 
-// Review R3: recurring-plan container jobs sit InProgress for the life of the
-// plan and were being reported as stalled backlog.
+// Recurring-plan container jobs sit InProgress for the life of the plan; the
+// backlog query must exclude them, or every recurring plan reports as
+// stalled backlog.
 describe("getJobBacklog", () => {
 	it("excludes recurring-plan container jobs from the backlog", async () => {
 		mockDb.$queryRaw.mockResolvedValue([]);
@@ -56,8 +57,9 @@ describe("getJobBacklog", () => {
 	});
 });
 
-// Review R5: field-added revenue counted items on Scheduled/Paused/Cancelled
-// visits, and the summary's item count summed per-tech shares.
+// Field-added revenue counts only items on Completed visits, and the
+// summary's item count is distinct items — an item split across two techs'
+// shares counts once, not twice.
 describe("getFieldAddedRevenueReport", () => {
 	const item = (id: string, total: number, techIds: string[]) => ({
 		id,

@@ -1,8 +1,9 @@
 ﻿import { useState, useMemo, useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight, Eye, EyeOff } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import MonthMiniCard from "./MonthMiniCard";
 import TechFilter from "./TechFilter";
+import ScheduleToolbar from "./ScheduleToolbar";
+import WeekStripDayColumn, { type CompactItem } from "./WeekStripDayColumn";
 import ReschedulePopup from "./ReschedulePopup";
 import OccurrenceReschedulePopup from "./OccurrenceReschedulePopup";
 import VisitClickPopup from "./VisitClickPopup";
@@ -10,15 +11,39 @@ import OccurrenceClickPopup from "./OccurrenceClickPopup";
 import {
 	buildTechOrder,
 	getTechColor,
-	getWeekDays,
 	groupVisitsByDay,
 	visitStartLabel,
 	getPriorityColor,
+	localDateKey,
+	getAnchoredPopupPos,
 	SCROLL_ZONE_W,
 	SCROLL_DELAY_MS,
+	CLICK_POPUP_H,
+	prefersReducedMotion,
 } from "./scheduleBoardUtils";
-import { extractVisits, extractOccurrences, formatTime } from "./dashboardCalendarUtils";
+import {
+	extractVisits,
+	extractOccurrences,
+	formatTime,
+	buildAgendaGroups,
+	buildChronologicalAgenda,
+	itemStart,
+} from "./dashboardCalendarUtils";
 import type { OccurrenceWithPlan, VisitWithJob } from "./dashboardCalendarUtils";
+import DayAgenda from "./DayAgenda";
+import { useTodayKey } from "./useTodayKey";
+import { isAnytimeEntry, type AgendaEntry } from "./agendaRows";
+import {
+	colModeForWidth,
+	defaultZoom,
+	effectiveZoom,
+	navLabels,
+	shiftAnchor,
+	visibleWindow,
+	windowLabel,
+	type ColMode,
+} from "./stripWindow";
+import { buildStripTemplate } from "./weekTemplate";
 import type { Job, UpdateJobVisitInput } from "../../../types/jobs";
 import type { Technician } from "../../../types/technicians";
 import { useUpdateJobVisitMutation } from "../../../hooks/useJobs";
@@ -54,28 +79,6 @@ interface WeekStripProps {
 	technicians: Technician[];
 }
 
-/** Returns the Monday of the current week at midnight local time */
-function getThisMonday(): Date {
-	const today = new Date();
-	const day = today.getDay();
-	const monday = new Date(today);
-	monday.setDate(today.getDate() - ((day + 6) % 7));
-	monday.setHours(0, 0, 0, 0);
-	return monday;
-}
-
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MAX_VISIBLE       = 3;
-const MAX_VISIBLE_TODAY = 8;
-const POPUP_W           = 224;
-
-function colMaxLines(pxWidth: number): number {
-	if (pxWidth >= 180) return 2;
-	if (pxWidth >= 120) return 3;
-	if (pxWidth >= 80)  return 4;
-	return 5;
-}
-
 const STATUS_SORT_ORDER: Record<string, number> = {
 	InProgress: 0, OnSite: 0,
 	Driving: 1,
@@ -91,25 +94,55 @@ function visitTimeLabel(v: VisitWithJob): string {
 }
 
 function occurrenceTimeLabel(occ: OccurrenceWithPlan): string {
-	const d = new Date(occ.occurrence_start_at);
-	if (d.getHours() === 0 && d.getMinutes() === 0) return "";
+	if (isAnytimeEntry({ type: "occ", item: occ })) return "";
 	return formatTime(occ.occurrence_start_at);
 }
 
 function getPopupPos(rect: DOMRect): { top: number; left: number } {
-	const PAD = 8;
-	const spaceRight = window.innerWidth - rect.right - PAD;
-	const left = spaceRight >= POPUP_W
-		? rect.right + 4
-		: Math.max(PAD, rect.left - POPUP_W - 4);
-	const top = Math.max(PAD, Math.min(rect.top, window.innerHeight - 300 - PAD));
-	return { top, left };
+	return getAnchoredPopupPos(rect, { popupH: CLICK_POPUP_H });
+}
+
+const NO_ITEMS: CompactItem[] = [];
+
+function buildCompactItems(
+	visits: VisitWithJob[],
+	occs: OccurrenceWithPlan[],
+	isToday: boolean
+): CompactItem[] {
+	const items: CompactItem[] = [
+		...visits.map((v) => ({ key: `v:${v.id}`, type: "visit" as const, item: v })),
+		...occs.map((o) => ({ key: `o:${o.id}`, type: "occ" as const, item: o })),
+	];
+	// Today is triaged by live status first; other days keep API order.
+	if (isToday) {
+		items.sort((a, b) => {
+			const sa = a.type === "visit" ? (STATUS_SORT_ORDER[a.item.status] ?? 3) : 3;
+			const sb = b.type === "visit" ? (STATUS_SORT_ORDER[b.item.status] ?? 3) : 3;
+			return sa !== sb ? sa - sb : itemStart(a) - itemStart(b);
+		});
+	}
+	return items;
 }
 
 export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 	const navigate = useNavigate();
 
-	const [weekStart, setWeekStart] = useState<Date>(getThisMonday);
+	const todayStr = useTodayKey();
+	const [anchor, setAnchor] = useState<string>(todayStr);
+	// colMode starts "full" (the RO corrects it after mount) and today is always inside
+	// its own week, so the default-zoom rule reduces to today here.
+	const [zoomedDay, setZoomedDay] = useState<string | null>(todayStr);
+	// At midnight, a strip still parked on the old today follows the date; one the user
+	// navigated elsewhere stays put.
+	const [prevToday, setPrevToday] = useState(todayStr);
+	if (prevToday !== todayStr) {
+		setPrevToday(todayStr);
+		if (anchor === prevToday) {
+			setAnchor(todayStr);
+			setZoomedDay((z) => (z === prevToday ? todayStr : z));
+		}
+	}
+	const [animateZoom, setAnimateZoom] = useState(false);
 	const [showVisits, setShowVisits] = useState(true);
 	const [showOccurrences, setShowOccurrences] = useState(true);
 	const [selectedTechs, setSelectedTechs] = useState<Set<string>>(new Set());
@@ -129,21 +162,21 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		occurrence?: OccurrenceWithPlan;
 		anchorRect: DOMRect;
 	} | null>(null);
+	const [agendaSort, setAgendaSort] = useState<"tech" | "time">("time");
 
 	const popupRef = useRef<HTMLDivElement>(null);
 	const occurrencePopupRef = useRef<HTMLDivElement>(null);
 
 	const [scrollZone, setScrollZone] = useState<"left" | "right" | null>(null);
 	const [scrollProgress, setScrollProgress] = useState(0);
-	const [colMode, setColMode] = useState<"full" | "three" | "one">("full");
-	const [containerWidth, setContainerWidth] = useState(0);
+	const [colMode, setColMode] = useState<ColMode>("full");
 
 	const containerRef       = useRef<HTMLDivElement>(null);
 	const weekGridRef        = useRef<HTMLDivElement>(null);
 	const scrollZoneRef      = useRef<"left" | "right" | null>(null);
 	const scrollEnterTimeRef = useRef<number | null>(null);
 	const scrollRafRef       = useRef<number | null>(null);
-	const dragOriginWeekRef  = useRef<Date | null>(null);
+	const dragOriginRef      = useRef<string | null>(null);
 	const hasPendingPopupRef = useRef(false);
 
 	const isDragging = draggingVisitId !== null || draggingOccurrenceId !== null;
@@ -157,11 +190,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 	useEffect(() => {
 		const el = containerRef.current;
 		if (!el) return;
-		const ro = new ResizeObserver(([entry]) => {
-			const w = entry.contentRect.width;
-			setContainerWidth(w);
-			setColMode(w >= 600 ? "full" : w >= 350 ? "three" : "one");
-		});
+		const ro = new ResizeObserver(([entry]) => setColMode(colModeForWidth(entry.contentRect.width)));
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, []);
@@ -198,34 +227,34 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		() => new Map(globalTechOrder.map((id, i) => [id, getTechColor(i)])),
 		[globalTechOrder]
 	);
+	const techNameMap = useMemo(
+		() => new Map(technicians.map((t) => [t.id, t.name])),
+		[technicians]
+	);
 
-	const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart]);
-	const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+	const reducedMotion = useMemo(prefersReducedMotion, []);
 
-	const visibleDays = useMemo(() => {
-		if (colMode === "full") return weekDays;
-		const todayIdx = weekDays.indexOf(todayStr);
-		if (colMode === "one") return todayIdx >= 0 ? [weekDays[todayIdx]] : [weekDays[0]];
-		if (todayIdx < 0) return weekDays.slice(0, 3);
-		const start = Math.max(0, Math.min(todayIdx - 1, weekDays.length - 3));
-		return weekDays.slice(start, start + 3);
-	}, [colMode, weekDays, todayStr]);
-
+	const days = useMemo(() => visibleWindow(anchor, colMode), [anchor, colMode]);
+	const zoom = effectiveZoom(days, zoomedDay, colMode);
 	const isNarrow = colMode !== "full";
+	const { prev: prevLabel, next: nextLabel } = navLabels(colMode);
 
-	const weekLabel = useMemo(() => {
-		const first = new Date(weekDays[0] + "T12:00:00");
-		const last  = new Date(weekDays[6] + "T12:00:00");
-		const fmt = (d: Date, opts: Intl.DateTimeFormatOptions) =>
-			d.toLocaleDateString("en-US", opts);
-		return `${fmt(first, { month: "short", day: "numeric" })} – ${fmt(last, { month: "short", day: "numeric", year: "numeric" })}`;
-	}, [weekDays]);
+	function goTo(nextAnchor: string) {
+		setAnimateZoom(false);
+		setAnchor(nextAnchor);
+		setZoomedDay(defaultZoom(visibleWindow(nextAnchor, colMode), todayStr, colMode));
+	}
+
+	function toggleZoom(day: string) {
+		setAnimateZoom(true);
+		setZoomedDay((d) => (d === day ? null : day));
+	}
 
 	const allVisits = useMemo(
 		() => extractVisits(jobs) as VisitWithJob[],
 		[jobs]
 	);
-	const allOccurrences = useMemo(() => extractOccurrences(jobs), [jobs]);
+	const allOccurrences = useMemo(() => extractOccurrences(jobs, todayStr), [jobs, todayStr]);
 
 	const filteredVisits = useMemo(() => {
 		const visible = showVisits ? allVisits : [];
@@ -248,7 +277,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 	const occurrencesByDay = useMemo(() => {
 		const map: Record<string, OccurrenceWithPlan[]> = {};
 		for (const occ of visibleOccurrences) {
-			const day = new Date(occ.occurrence_start_at).toISOString().split("T")[0];
+			const day = localDateKey(occ.occurrence_start_at);
 			if (!map[day]) map[day] = [];
 			map[day].push(occ);
 		}
@@ -289,11 +318,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 			const progress = Math.min(1, (Date.now() - enterTime) / SCROLL_DELAY_MS);
 			setScrollProgress(progress);
 			if (progress >= 1) {
-				setWeekStart((d) => {
-					const nd = new Date(d);
-					nd.setDate(nd.getDate() + (zone === "left" ? -7 : 7));
-					return nd;
-				});
+				setAnchor((a) => shiftAnchor(a, colMode, zone === "left" ? -1 : 1));
 				scrollEnterTimeRef.current = Date.now();
 			}
 			scrollRafRef.current = requestAnimationFrame(tick);
@@ -313,32 +338,29 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		setScrollProgress(0);
 	}
 
-	function restoreOriginWeek() {
-		if (dragOriginWeekRef.current) setWeekStart(dragOriginWeekRef.current);
-		dragOriginWeekRef.current = null;
+	function restoreOrigin() {
+		if (dragOriginRef.current) setAnchor(dragOriginRef.current);
+		dragOriginRef.current = null;
 		hasPendingPopupRef.current = false;
 	}
 
 	// ── Drag handlers ────────────────────────────────────────────────────────
 
-	function handleVisitDragStart(e: React.DragEvent, visit: VisitWithJob, fromDateStr: string) {
-		dragOriginWeekRef.current = weekStart;
-		setDraggingVisitId(visit.id);
-
-		// Native fallback: if the card unmounts mid-drag (e.g. week shift via scroll zone),
-		// React's synthetic dragend won't fire. A native listener on the source element
-		// fires reliably even on detached DOM nodes.
-		const el = e.currentTarget as HTMLElement;
+	// If the card unmounts mid-drag (e.g. a window shift via the scroll zone), React's
+	// synthetic dragend never fires; a native listener on the source node still does.
+	function listenNativeDragEnd(el: EventTarget) {
 		function onNativeDragEnd() {
 			el.removeEventListener("dragend", onNativeDragEnd);
-			setDragOverDate(null);
-			setDraggingVisitId(null);
-			setDraggingOccurrenceId(null);
-			clearScrollZone();
-			if (!hasPendingPopupRef.current) restoreOriginWeek();
+			handleDragEnd();
 		}
 		el.addEventListener("dragend", onNativeDragEnd);
+	}
 
+	function handleVisitDragStart(e: React.DragEvent, visit: VisitWithJob, fromDateStr: string) {
+		dragOriginRef.current = anchor;
+		setDraggingVisitId(visit.id);
+
+		listenNativeDragEnd(e.currentTarget);
 		e.dataTransfer.setData(
 			"text/plain",
 			JSON.stringify({ type: "visit", visitId: visit.id, fromDateStr })
@@ -347,20 +369,10 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 	}
 
 	function handleOccurrenceDragStart(e: React.DragEvent, occ: OccurrenceWithPlan, fromDateStr: string) {
-		dragOriginWeekRef.current = weekStart;
+		dragOriginRef.current = anchor;
 		setDraggingOccurrenceId(occ.id);
 
-		const el = e.currentTarget as HTMLElement;
-		function onNativeDragEnd() {
-			el.removeEventListener("dragend", onNativeDragEnd);
-			setDragOverDate(null);
-			setDraggingVisitId(null);
-			setDraggingOccurrenceId(null);
-			clearScrollZone();
-			if (!hasPendingPopupRef.current) restoreOriginWeek();
-		}
-		el.addEventListener("dragend", onNativeDragEnd);
-
+		listenNativeDragEnd(e.currentTarget);
 		const startMs = new Date(occ.occurrence_start_at).getTime();
 		const endMs   = new Date(occ.occurrence_end_at).getTime();
 		e.dataTransfer.setData(
@@ -375,7 +387,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		setDraggingVisitId(null);
 		setDraggingOccurrenceId(null);
 		clearScrollZone();
-		if (!hasPendingPopupRef.current) restoreOriginWeek();
+		if (!hasPendingPopupRef.current) restoreOrigin();
 	}
 
 	function handleDragOver(e: React.DragEvent, dateStr: string) {
@@ -439,7 +451,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		};
 
 		if (parsed.fromDateStr === toDateStr) {
-			restoreOriginWeek();
+			restoreOrigin();
 			return;
 		}
 
@@ -470,7 +482,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 	// ── Mutation handlers ────────────────────────────────────────────────────
 
 	async function handleVisitSave(visitId: string, data: UpdateJobVisitInput) {
-		dragOriginWeekRef.current = null;
+		dragOriginRef.current = null;
 		hasPendingPopupRef.current = false;
 		try {
 			await updateVisit({ id: visitId, data });
@@ -482,12 +494,12 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 
 	function handleVisitRescheduleCancel() {
 		setPendingDrop(null);
-		restoreOriginWeek();
+		restoreOrigin();
 	}
 
 	async function handleOccurrenceSave(input: RescheduleOccurrenceInput & { scope: "this" | "future" }) {
 		if (!pendingOccurrenceDrop) return;
-		dragOriginWeekRef.current = null;
+		dragOriginRef.current = null;
 		hasPendingPopupRef.current = false;
 		const { occurrence } = pendingOccurrenceDrop;
 		try {
@@ -504,12 +516,12 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 
 	function handleOccurrenceRescheduleCancel() {
 		setPendingOccurrenceDrop(null);
-		restoreOriginWeek();
+		restoreOrigin();
 	}
 
 	async function handleOccurrenceGenerate(input: Omit<RescheduleOccurrenceInput, "scope">) {
 		if (!pendingOccurrenceDrop) return;
-		dragOriginWeekRef.current = null;
+		dragOriginRef.current = null;
 		hasPendingPopupRef.current = false;
 		const { occurrence } = pendingOccurrenceDrop;
 		setGeneratingVisitId(occurrence.id);
@@ -540,8 +552,102 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		setGeneratingVisitId(null);
 	}
 
+	function isEntryDragging(entry: AgendaEntry): boolean {
+		return entry.type === "visit"
+			? draggingVisitId === entry.item.id
+			: draggingOccurrenceId === entry.item.id || generatingVisitId === entry.item.id;
+	}
+
+	function isEntryGhost(entry: AgendaEntry): boolean {
+		return entry.type === "visit"
+			? pendingDrop?.visit.id === entry.item.id
+			: pendingOccurrenceDrop?.occurrence.id === entry.item.id;
+	}
+
+	function toggleVisitPopup(visit: VisitWithJob, rect: DOMRect) {
+		setClickedOccurrence(null);
+		setClickedVisit((prev) => (prev?.visit.id === visit.id ? null : { visit, rect }));
+	}
+
+	function toggleOccurrencePopup(occ: OccurrenceWithPlan, rect: DOMRect) {
+		setClickedVisit(null);
+		setClickedOccurrence((prev) => (prev?.occ.id === occ.id ? null : { occ, rect }));
+	}
+
+	function renderCard(ci: CompactItem, dateStr: string, maxLines: number) {
+		if (ci.type === "visit") {
+			const v = ci.item;
+			const techs = (v.visit_techs ?? []).map((vt) => ({
+				id: vt.tech_id,
+				color: techColorMap.get(vt.tech_id) ?? "var(--color-tech-unassigned)",
+			}));
+			return (
+				<MonthMiniCard
+					visitName={v.job_obj?.name ?? "Visit"}
+					priorityColor={getPriorityColor(v.job_obj?.priority)}
+					timeLabel={visitTimeLabel(v)}
+					techs={techs}
+					maxLines={maxLines}
+					isDragging={isEntryDragging(ci)}
+					isGhost={isEntryGhost(ci)}
+					onDragStart={(e) => handleVisitDragStart(e, v, dateStr)}
+					onDragEnd={handleDragEnd}
+					onClick={(e) => {
+						e.stopPropagation();
+						toggleVisitPopup(v, e.currentTarget.getBoundingClientRect());
+					}}
+				/>
+			);
+		}
+		const occ = ci.item;
+		return (
+			<MonthMiniCard
+				visitName={occ.job_obj?.name ?? "Recurring"}
+				priorityColor={getPriorityColor(occ.job_obj?.priority)}
+				timeLabel={occurrenceTimeLabel(occ)}
+				techs={[]}
+				maxLines={maxLines}
+				isOccurrence
+				isDragging={isEntryDragging(ci)}
+				isGhost={isEntryGhost(ci)}
+				onDragStart={(e) => handleOccurrenceDragStart(e, occ, dateStr)}
+				onDragEnd={handleDragEnd}
+				onClick={(e) => {
+					e.stopPropagation();
+					toggleOccurrencePopup(occ, e.currentTarget.getBoundingClientRect());
+				}}
+			/>
+		);
+	}
+
+	function renderAgenda(dateStr: string) {
+		const dayVisits = effectiveVisitsByDay[dateStr] ?? [];
+		const dayOccs = effectiveOccurrencesByDay[dateStr] ?? [];
+		const groups =
+			agendaSort === "tech"
+				? buildAgendaGroups(dayVisits, dayOccs, technicians, techColorMap, globalTechOrder)
+				: buildChronologicalAgenda(dayVisits, dayOccs);
+		return (
+			<DayAgenda
+				groups={groups}
+				techColorMap={techColorMap}
+				techNameMap={techNameMap}
+				isToday={dateStr === todayStr}
+				onVisitClick={toggleVisitPopup}
+				onVisitDragStart={(e, v) => handleVisitDragStart(e, v, dateStr)}
+				onOccurrenceClick={toggleOccurrencePopup}
+				onOccurrenceDragStart={(e, occ) => handleOccurrenceDragStart(e, occ, dateStr)}
+				onDragEnd={handleDragEnd}
+				sortMode={agendaSort}
+				onSortModeChange={setAgendaSort}
+				isRowDragging={isEntryDragging}
+				isRowGhost={isEntryGhost}
+			/>
+		);
+	}
+
 	return (
-		<div ref={containerRef} style={{
+		<div ref={containerRef} data-schedule-strip style={{
 			display: "flex",
 			flexDirection: "column",
 			height: "100%",
@@ -553,249 +659,81 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 			userSelect: "none",
 		}}>
 
-			{/* ── Toolbar ──────────────────────────────────────────────────────── */}
-			<div className="flex items-center gap-1.5 px-3 border-b border-border-subtle shrink-0" style={{ height: 44, backgroundColor: "var(--color-base)" }}>
-
-				{/* Today */}
-				<button
-					onClick={() => setWeekStart(getThisMonday())}
-					className="h-7 px-3 rounded text-[11px] font-medium border border-border text-text-secondary hover:border-border-strong hover:text-text-primary transition-colors shrink-0"
-				>
-					Today
-				</button>
-
-				{/* Prev / Next — nav can shrink so the tech filter always fits */}
-				<div className="flex items-center min-w-0">
-					<button
-						onClick={() => setWeekStart((d) => { const n = new Date(d); n.setDate(d.getDate() - 7); return n; })}
-						className="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:bg-surface hover:text-text-secondary transition-colors shrink-0"
-					>
-						<ChevronLeft size={14} />
-					</button>
-					<span className={`text-[13px] font-semibold text-text-primary text-center tracking-tight truncate ${isNarrow ? "min-w-0" : "min-w-[176px]"}`}>
-						{weekLabel}
-					</span>
-					<button
-						onClick={() => setWeekStart((d) => { const n = new Date(d); n.setDate(d.getDate() + 7); return n; })}
-						className="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:bg-surface hover:text-text-secondary transition-colors shrink-0"
-					>
-						<ChevronRight size={14} />
-					</button>
-				</div>
-
-				{/* Divider */}
-				<div className="w-px h-4 bg-border mx-1 shrink-0" />
-
-				{/* Visits toggle */}
-				<button
-					onClick={() => setShowVisits((v) => !v)}
-					className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
-						showVisits
-							? "bg-primary/10 border-primary/25 text-primary-text"
-							: "border-transparent text-text-muted hover:text-text-secondary"
-					}`}
-				>
-					{showVisits ? <Eye size={12} /> : <EyeOff size={12} />}
-					{!isNarrow && "Visits"}
-				</button>
-
-				{/* Recurring toggle */}
-				<button
-					onClick={() => setShowOccurrences((v) => !v)}
-					className={`flex items-center gap-1.5 h-7 px-2.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
-						showOccurrences
-							? "bg-reviewing-bg border-reviewing-border text-reviewing-text"
-							: "border-transparent text-text-muted hover:text-text-secondary"
-					}`}
-				>
-					{showOccurrences ? <Eye size={12} /> : <EyeOff size={12} />}
-					{!isNarrow && "Recurring"}
-				</button>
-
-				{/* Divider */}
-				<div className="w-px h-4 bg-border mx-1 shrink-0" />
-
-				<TechFilter
-					technicians={technicians}
-					selected={selectedTechs}
-					onChange={setSelectedTechs}
-					techColorMap={techColorMap}
-				/>
-			</div>
+			<ScheduleToolbar
+				className="bg-base"
+				periodLabel={windowLabel(days, colMode)}
+				prevLabel={prevLabel}
+				nextLabel={nextLabel}
+				onToday={() => goTo(todayStr)}
+				onPrev={() => goTo(shiftAnchor(anchor, colMode, -1))}
+				onNext={() => goTo(shiftAnchor(anchor, colMode, 1))}
+				showVisits={showVisits}
+				onToggleVisits={() => setShowVisits((v) => !v)}
+				showOccurrences={showOccurrences}
+				onToggleOccurrences={() => setShowOccurrences((v) => !v)}
+				compact={isNarrow}
+				techFilter={
+					<TechFilter
+						technicians={technicians}
+						selected={selectedTechs}
+						onChange={setSelectedTechs}
+						techColorMap={techColorMap}
+					/>
+				}
+			/>
 
 			{/* ── Week grid ────────────────────────────────────────────────────── */}
 			<div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
 			<div
 				ref={weekGridRef}
-				style={{ display: "grid", gridTemplateColumns: visibleDays.map(d => d === todayStr ? "2fr" : "1fr").join(" "), gridTemplateRows: "minmax(0, 1fr)", flex: 1, minHeight: 0, position: "relative" }}
+				style={{
+					display: "grid",
+					gridTemplateColumns: buildStripTemplate(days, zoom),
+					gridTemplateRows: "minmax(0, 1fr)",
+					flex: 1,
+					minHeight: 0,
+					position: "relative",
+					transition:
+						animateZoom && !reducedMotion
+							? "grid-template-columns 180ms ease-out"
+							: undefined,
+				}}
 				onDragOver={handleGridDragOver}
 				onDragLeave={handleGridDragLeave}
 			>
-				{visibleDays.map((dateStr, i) => {
-					const dayNum = parseInt(dateStr.split("-")[2]);
+				{days.map((dateStr, i) => {
 					const isToday = dateStr === todayStr;
-					const weekIdx = weekDays.indexOf(dateStr);
-					const label = WEEKDAY_LABELS[weekIdx >= 0 ? weekIdx : i];
-					const totalFr = visibleDays.reduce((sum, d) => sum + (d === todayStr ? 2 : 1), 0);
-					const colFr   = isToday ? 2 : 1;
-					const colPx   = containerWidth > 0 ? Math.floor(containerWidth * colFr / totalFr) : (isToday ? 200 : 120);
-					const maxLines = colMaxLines(colPx);
+					const isZoomed = dateStr === zoom;
 					return (
-						<div
+						<WeekStripDayColumn
 							key={dateStr}
-							style={{
-								borderRight: i < visibleDays.length - 1 ? "1px solid var(--color-border-subtle)" : "none",
-								display: "flex",
-								flexDirection: "column",
-								minHeight: 0,
-								overflow: "hidden",
+							dateStr={dateStr}
+							isToday={isToday}
+							isZoomed={isZoomed}
+							showZoomButton={colMode !== "one"}
+							isLast={i === days.length - 1}
+							onToggleZoom={() => toggleZoom(dateStr)}
+							onShowMore={() => {
+								setAnimateZoom(true);
+								setZoomedDay(dateStr);
 							}}
-						>
-							{/* Day header */}
-							<div style={{
-								flexShrink: 0,
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "space-between",
-								padding: "5px 7px 4px",
-								borderBottom: "1px solid var(--color-border-subtle)",
-								backgroundColor: "var(--color-base)",
-							}}>
-								<span style={{ fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-text-tertiary)" }}>
-									{label}
-								</span>
-								<div style={{
-									width: 22, height: 22, borderRadius: "50%",
-									display: "flex", alignItems: "center", justifyContent: "center",
-									fontSize: 11, fontWeight: 600,
-									backgroundColor: isToday ? "var(--color-primary)" : "transparent",
-									color: isToday ? "#fff" : "var(--color-text-muted)",
-								}}>
-									{dayNum}
-								</div>
-							</div>
-							{/* Day body — drop zone + cards */}
-							<div
-								style={{
-									flex: 1,
-									minHeight: 0,
-									overflowY: "auto",
-									padding: 4,
-									display: "flex",
-									flexDirection: "column",
-									gap: 2,
-									backgroundColor: dragOverDate === dateStr
-										? "rgba(59,130,246,0.08)"
-										: isToday
-											? "rgba(59,130,246,0.035)"
-											: "transparent",
-									outline: dragOverDate === dateStr ? "2px inset rgba(59,130,246,0.4)" : "none",
-									transition: "background-color 0.1s",
-								}}
-								onDragOver={(e) => handleDragOver(e, dateStr)}
-								onDragLeave={handleDragLeave}
-								onDrop={(e) => handleDrop(e, dateStr)}
-							>
-								{(() => {
-									const dayVisits  = effectiveVisitsByDay[dateStr]      ?? [];
-									const dayOccs    = effectiveOccurrencesByDay[dateStr] ?? [];
-									const allItems   = [
-										...dayVisits.map((v) => ({ type: "visit" as const, item: v })),
-										...dayOccs.map((o)   => ({ type: "occ"   as const, item: o })),
-									];
-									if (isToday) {
-										allItems.sort((a, b) => {
-											const sa = a.type === "visit" ? (STATUS_SORT_ORDER[a.item.status] ?? 3) : 3;
-											const sb = b.type === "visit" ? (STATUS_SORT_ORDER[b.item.status] ?? 3) : 3;
-											if (sa !== sb) return sa - sb;
-											const ta = new Date(a.type === "visit" ? (a.item.scheduled_start_at ?? 0) : (a.item.occurrence_start_at ?? 0)).getTime();
-											const tb = new Date(b.type === "visit" ? (b.item.scheduled_start_at ?? 0) : (b.item.occurrence_start_at ?? 0)).getTime();
-											return ta - tb;
-										});
-									}
-									const maxVisible  = isToday ? MAX_VISIBLE_TODAY : MAX_VISIBLE;
-									const visible     = allItems.slice(0, maxVisible);
-									const hiddenCount = Math.max(0, allItems.length - maxVisible);
-
-									return (
-										<>
-											{visible.map((di) => {
-												if (di.type === "visit") {
-													const v = di.item;
-													const techs = (v.visit_techs ?? []).map((vt) => ({
-														id: vt.tech_id,
-														color: techColorMap.get(vt.tech_id) ?? "var(--color-tech-unassigned)",
-													}));
-													return (
-														<MonthMiniCard
-															key={v.id}
-															visitName={v.job_obj?.name ?? "Visit"}
-															priorityColor={getPriorityColor(v.job_obj?.priority)}
-															timeLabel={visitTimeLabel(v)}
-															techs={techs}
-															maxLines={maxLines}
-															isDragging={draggingVisitId === v.id}
-																isGhost={pendingDrop?.visit.id === v.id}
-															onDragStart={(e) => handleVisitDragStart(e, v, dateStr)}
-															onDragEnd={handleDragEnd}
-															onClick={(e) => {
-																e.stopPropagation();
-																setClickedOccurrence(null);
-																const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-																setClickedVisit((prev) => prev?.visit.id === v.id ? null : { visit: v, rect });
-															}}
-														/>
-													);
-												} else {
-													const occ = di.item;
-													const isGenerating = generatingVisitId === occ.id;
-													return (
-														<MonthMiniCard
-															key={occ.id}
-															visitName={occ.job_obj?.name ?? "Recurring"}
-															priorityColor={getPriorityColor(occ.job_obj?.priority)}
-															timeLabel={occurrenceTimeLabel(occ)}
-															techs={[]}
-															maxLines={maxLines}
-															isOccurrence
-															isDragging={draggingOccurrenceId === occ.id || isGenerating}
-																isGhost={pendingOccurrenceDrop?.occurrence.id === occ.id}
-															onDragStart={(e) => handleOccurrenceDragStart(e, occ, dateStr)}
-															onDragEnd={handleDragEnd}
-															onClick={(e) => {
-																e.stopPropagation();
-																setClickedVisit(null);
-																const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-																setClickedOccurrence((prev) => prev?.occ.id === occ.id ? null : { occ, rect });
-															}}
-														/>
-													);
-												}
-											})}
-
-											{hiddenCount > 0 && (
-												<button
-													onClick={() => navigate("/dispatch/schedule")}
-													style={{
-														fontSize: 9,
-														fontWeight: 600,
-														color: "var(--color-visit-driving-text)",
-														background: "none",
-														border: "none",
-														cursor: "pointer",
-														padding: "1px 0",
-														textAlign: "left",
-														fontFamily: "inherit",
-													}}
-												>
-													+{hiddenCount} more
-												</button>
-											)}
-										</>
-									);
-								})()}
-							</div>
-						</div>
+							onOpenInSchedule={() => navigate(`/dispatch/schedule?week=${dateStr}&zoom=1`)}
+							isDragOver={dragOverDate === dateStr}
+							onDragOver={(e) => handleDragOver(e, dateStr)}
+							onDragLeave={handleDragLeave}
+							onDrop={(e) => handleDrop(e, dateStr)}
+							items={
+								isZoomed
+									? NO_ITEMS
+									: buildCompactItems(
+											effectiveVisitsByDay[dateStr] ?? [],
+											effectiveOccurrencesByDay[dateStr] ?? [],
+											isToday
+										)
+							}
+							renderCard={(ci, maxLines) => renderCard(ci, dateStr, maxLines)}
+							agenda={isZoomed ? renderAgenda(dateStr) : null}
+						/>
 					);
 				})}
 
@@ -960,7 +898,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		{/* ── Click-reschedule: visit (clock button) ───────────────────────── */}
 		{pendingClickReschedule?.type === "visit" && pendingClickReschedule.visit && (() => {
 			const v  = pendingClickReschedule.visit;
-			const nd = new Date(v.scheduled_start_at).toISOString().split("T")[0];
+			const nd = localDateKey(v.scheduled_start_at);
 			return (
 				<ReschedulePopup
 					visit={v}
@@ -986,7 +924,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		{/* ── Click-reschedule: occurrence (clock button) ──────────────────── */}
 		{pendingClickReschedule?.type === "occurrence" && pendingClickReschedule.occurrence && (() => {
 			const occ = pendingClickReschedule.occurrence;
-			const nd  = new Date(occ.occurrence_start_at).toISOString().split("T")[0];
+			const nd  = localDateKey(occ.occurrence_start_at);
 			return (
 				<OccurrenceReschedulePopup
 					occurrence={occ}

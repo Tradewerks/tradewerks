@@ -21,7 +21,14 @@ vi.mock("../../services/lowStockAlerts.js", () => ({
 	sendLowStockAlert: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { getVehicleReadiness, getFleetReadiness, confirmReadiness, revokeReadiness } from "../vehiclesController.js";
+import {
+	getVehicleReadiness,
+	getFleetReadiness,
+	confirmReadiness,
+	revokeReadiness,
+	getTomorrowRequirements,
+} from "../vehiclesController.js";
+import { READINESS_LINE_ITEM_WHERE } from "../../lib/inventory.js";
 import { getScopedDb } from "../../lib/context.js";
 import { db } from "../../db.js";
 
@@ -328,5 +335,56 @@ describe("revokeReadiness", () => {
 		const result = await revokeReadiness("vehicle-1", "org-1", "2026-06-10");
 
 		expect(result.err).toBe("No readiness confirmation found for this date");
+	});
+});
+
+// Two reads answer "needed tomorrow"; both must use the same predicate or
+// they can disagree with each other.
+describe("readiness line-item predicate", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	it("counts only linked, live, stock-consuming lines", () => {
+		// Spelled out, not read off the constant.
+		expect(READINESS_LINE_ITEM_WHERE).toEqual({
+			inventory_item_id: { not: null },
+			fulfillment_status: { not: "voided" },
+			OR: [{ disposition: null }, { disposition: "consume" }],
+		});
+	});
+
+	it("applies the predicate in the batched readiness read", async () => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		mockGetScopedDb.mockReturnValue(makeSdb() as any);
+		setupBatchMocks({ visits: [makeVisit([makeLineItem("inv-1", 2)])] });
+
+		await getVehicleReadiness("vehicle-1", "org-1", "2026-06-10");
+
+		expect(mockDb.job_visit.findMany).toHaveBeenCalledWith(
+			expect.objectContaining({
+				include: expect.objectContaining({
+					line_items: expect.objectContaining({ where: READINESS_LINE_ITEM_WHERE }),
+				}),
+			}),
+		);
+	});
+
+	it("applies the predicate in tomorrow's requirements, on both the visit filter and the lines", async () => {
+		const jobVisitFindMany = vi.fn().mockResolvedValue([]);
+		const sdb = {
+			vehicle: { findFirst: vi.fn().mockResolvedValue(makeVehicle()) },
+			organization: { findFirst: vi.fn().mockResolvedValue({ timezone: "UTC" }) },
+			technician: { findMany: vi.fn().mockResolvedValue([makeTech()]) },
+			job_visit: { findMany: jobVisitFindMany },
+			vehicle_stock_item: { findMany: vi.fn().mockResolvedValue([]) },
+		};
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		mockGetScopedDb.mockReturnValue(sdb as any);
+
+		const result = await getTomorrowRequirements("vehicle-1", "org-1");
+
+		expect(result.err).toBeUndefined();
+		const args = jobVisitFindMany.mock.calls[0][0];
+		expect(args.where.line_items).toEqual({ some: READINESS_LINE_ITEM_WHERE });
+		expect(args.include.line_items.where).toEqual(READINESS_LINE_ITEM_WHERE);
 	});
 });

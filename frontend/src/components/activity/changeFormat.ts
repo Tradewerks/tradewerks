@@ -1,4 +1,4 @@
-import { History, Link2, Pencil, Plus, Send, ShieldCheck, Trash2, Unlink, UserCheck, UserX } from "lucide-react";
+import { Check, Flag, History, Link2, Lock, LockOpen, Pencil, Plus, Repeat, Send, ShieldCheck, Trash2, Unlink, UserCheck, UserX, X } from "lucide-react";
 import type React from "react";
 import type { ActivityLog } from "../../types/logs";
 
@@ -35,6 +35,7 @@ const ACTION_VERBS: Record<string, string> = {
 	authorized: "authorized",
 	assigned: "assigned",
 	removed: "removed",
+	converted: "converted",
 };
 
 type EntryStyle = { icon: React.ElementType; color: string; bg: string };
@@ -58,6 +59,12 @@ const VERB_STYLES: Record<string, EntryStyle> = {
 	authorized: { icon: ShieldCheck, color: "text-success-text", bg: "bg-success/10" },
 	assigned: { icon: UserCheck, color: "text-success-text", bg: "bg-success/10" },
 	removed: { icon: UserX, color: "text-error-text", bg: "bg-error/10" },
+	converted: { icon: Repeat, color: "text-primary-text", bg: "bg-primary/10" },
+	approved: { icon: Lock, color: "text-success-text", bg: "bg-success/10" },
+	unapproved: { icon: LockOpen, color: "text-warning-text", bg: "bg-warning/10" },
+	accepted: { icon: Check, color: "text-success-text", bg: "bg-success/10" },
+	rejected: { icon: X, color: "text-error-text", bg: "bg-error/10" },
+	reported: { icon: Flag, color: "text-warning-text", bg: "bg-warning/10" },
 };
 
 export const OTHER_FILTER_KEY = "other";
@@ -71,7 +78,10 @@ export const ACTION_FILTERS = [
 	{ key: "attached", label: "Attached", verbs: ["attached"], ...VERB_STYLES.attached },
 	{ key: "detached", label: "Detached", verbs: ["detached"], ...VERB_STYLES.detached },
 	{ key: "sent", label: "Sent", verbs: ["sent"], ...VERB_STYLES.sent },
-	{ key: "authorized", label: "Authorized", verbs: ["authorized"], ...VERB_STYLES.authorized },
+	{ key: "authorized", label: "Authorized", verbs: ["authorized", "approved", "accepted"], ...VERB_STYLES.authorized },
+	{ key: "rejected", label: "Rejected", verbs: ["rejected", "unapproved"], ...VERB_STYLES.rejected },
+	{ key: "reported", label: "Reported", verbs: ["reported"], ...VERB_STYLES.reported },
+	{ key: "converted", label: "Converted", verbs: ["converted"], ...VERB_STYLES.converted },
 	// Catch-all for verbs no chip above lists (failed, push_failed, reuse_detected, …)
 	{ key: OTHER_FILTER_KEY, label: "Other", verbs: [], ...DEFAULT_STYLE },
 ] as const;
@@ -102,20 +112,43 @@ const ENTITY_LABELS: Record<string, string> = {
 	client_note: "Client note",
 	contact: "Contact",
 	project: "Project",
+	project_note: "Project note",
 	technician: "Technician",
 	dispatcher: "Dispatcher",
 	vehicle: "Vehicle",
+	vehicle_stock_item: "Stock item",
+	vehicle_stock_adjustment: "Stock adjustment",
+	vehicle_restock_request: "Restock request",
+	vehicle_restock_record: "Restock",
+	vehicle_maintenance_record: "Maintenance record",
+	vehicle_maintenance_reminder: "Maintenance reminder",
 	inventory_item: "Inventory item",
 	recurring_plan: "Recurring plan",
 	recurring_occurrence: "Recurring occurrence",
 	organization_role: "Role",
+	organization_role_assignment: "Role assignment",
 	saved_report: "Saved report",
 	mfa: "Two-factor authentication",
+	organization: "Organization settings",
+	timesheet: "Timesheet",
+	technician_shift: "Shift",
+	shift_correction: "Time correction",
 };
 
 const HEADLINE_OVERRIDES: Record<string, string> = {
 	"project.job_attached": "Job attached",
 	"project.job_detached": "Job detached",
+	"quote.converted": "Quote converted to job",
+	"request.converted": "Request converted to job",
+	"request.quoted": "Request converted to quote",
+	"request.quote_approved": "Linked quote approved",
+	"request.quote_rejected": "Linked quote rejected",
+	"timesheet.created": "Week approved",
+	"timesheet.deleted": "Week unapproved",
+	"timesheet.time_edited": "Times edited",
+	"timesheet.issue_reported": "Time issue reported",
+	"timesheet.correction_accepted": "Time correction accepted",
+	"timesheet.correction_rejected": "Time correction rejected",
 };
 
 const humanize = (raw: string): string => {
@@ -131,7 +164,7 @@ const FIELD_LABELS: Record<string, string> = {
 	target_end_at: "Target end",
 	starts_at: "Start date",
 	completed_at: "Completed",
-	issue_date: "Issue date",
+	issue_date: "Created date",
 	due_date: "Due date",
 	client_id: "Client",
 	project_id: "Project",
@@ -151,9 +184,38 @@ const FIELD_LABELS: Record<string, string> = {
 	tax_rate: "Tax rate",
 	unit_price: "Unit price",
 	internal_notes: "Internal notes",
+	dispute_resolution: "Dispute outcome",
+	// Not in ID_REF_FIELDS: a replacement is a quote on a quote's log and an
+	// invoice on an invoice's, and RefType is keyed by field name alone with no
+	// way to vary by the log row's entity. A labelled UUID still beats a bare one.
+	replacement: "Replacement document",
+	restock_mode: "Vehicle restock workflow",
+	measurement_system: "Measurement system",
+	field_purchase_second_signoff_threshold: "Second sign-off threshold",
+	brand_color: "Brand color",
 };
 
-const labelFor = (key: string): string => FIELD_LABELS[key] ?? humanize(key);
+// Enum-valued fields whose stored code is not a readable word.
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+	restock_mode: { tech_self_serve: "Technician self-serve", dispatch_prepared: "Dispatch prepared" },
+	measurement_system: { imperial: "Imperial", metric: "Metric" },
+};
+
+// Timesheet edits key break and visit times as "break.<id>.started_at" / "entry.<id>.clocked_in_at".
+const SHIFT_PART_LABELS: Record<string, string> = {
+	started_at: "start",
+	ended_at: "end",
+	clocked_in_at: "clock-in",
+	clocked_out_at: "clock-out",
+};
+
+const labelFor = (key: string): string => {
+	const [part, , field] = key.split(".");
+	if ((part === "break" || part === "entry") && field) {
+		return `${part === "break" ? "Break" : "Visit"} ${SHIFT_PART_LABELS[field] ?? humanize(field).toLowerCase()}`;
+	}
+	return FIELD_LABELS[key] ?? humanize(key);
+};
 
 // Denormalized context, not field edits — these belong in the subtitle, not rows.
 const BREADCRUMB_KEYS = new Set([
@@ -193,9 +255,12 @@ const readBreadcrumb = (log: ActivityLog, keys: string[]): string | null => {
 };
 
 const buildSubtitle = (log: ActivityLog): string | null => {
+	const note = readBreadcrumb(log, ["_note"]);
 	const parts = [
 		readBreadcrumb(log, REFERENCE_KEYS),
 		readBreadcrumb(log, ["client_name", "_client_name"]),
+		readBreadcrumb(log, ["_day"]),
+		note && `"${note}"`,
 	].filter(Boolean) as string[];
 	return parts.length ? parts.join(" · ") : null;
 };
@@ -221,16 +286,19 @@ const CURRENCY_FIELDS = new Set([
 	"estimated_total",
 	"actual_total",
 	"estimated_value",
+	"field_purchase_second_signoff_threshold",
 ]);
 
 // Money-ish names that are not money. `discount_value` is a percent OR an amount
 const NEVER_CURRENCY = new Set(["tax_rate", "discount_value", "quantity", "generated_count"]);
 
 // Stored at UTC midnight — rendering in the org timezone shows the previous day.
-const DATE_ONLY_FIELDS = new Set(["starts_at", "target_end_at", "due_date", "issue_date"]);
+const DATE_ONLY_FIELDS = new Set(["starts_at", "target_end_at", "due_date", "issue_date", "performed_at", "due_at", "baseline_at"]);
 
 export const formatValue = (key: string, value: unknown, tz: string): string => {
 	if (value === null || value === undefined || value === "") return EM_DASH;
+
+	if (typeof value === "string" && VALUE_LABELS[key]?.[value]) return VALUE_LABELS[key][value];
 
 	if (typeof value === "boolean") return value ? "Yes" : "No";
 
@@ -272,16 +340,20 @@ export const formatValue = (key: string, value: unknown, tz: string): string => 
 	return String(value);
 };
 
+export const entityLabelFor = (entityType: string): string => ENTITY_LABELS[entityType] ?? humanize(entityType);
+
 export const formatChange = (log: ActivityLog, tz: string): ChangeEntry => {
 	const verb = getVerb(log);
-	const entity = ENTITY_LABELS[log.entity_type] ?? humanize(log.entity_type);
+	const entity = entityLabelFor(log.entity_type);
 
 	const rows: ChangeRow[] = log.changes
 		? Object.entries(log.changes).flatMap(([key, delta]) => {
 				if (isBreadcrumb(key) || isSensitiveKey(key)) return [];
 
 				const from = formatValue(key, delta.old, tz);
-				const to = formatValue(key, delta.new, tz);
+				const to = key === "acknowledged_at" && delta.new == null
+					? "Unacknowledged"
+					: formatValue(key, delta.new, tz);
 				if (from === to) return [];
 
 				return [{ key, label: labelFor(key), from, to, refType: ID_REF_FIELDS[key]}];
@@ -290,6 +362,7 @@ export const formatChange = (log: ActivityLog, tz: string): ChangeEntry => {
 
 	return {
 		headline:
+			(log.event_type === "timesheet.issue_reported" && rows.length ? "Time correction suggested" : null) ??
 			HEADLINE_OVERRIDES[log.event_type] ??
 			([entity, verb].filter(Boolean).join(" ") || "Change recorded"),
 		subtitle: buildSubtitle(log),
@@ -298,7 +371,7 @@ export const formatChange = (log: ActivityLog, tz: string): ChangeEntry => {
 	};
 };
 
-export type RefType = "client" | "project" | "dispatcher" | "organization_role" | "job";
+export type RefType = "client" | "project" | "dispatcher" | "organization_role" | "job" | "recurring_plan";
 
 export const ID_REF_FIELDS: Record<string, RefType> = {
 	client_id: "client",

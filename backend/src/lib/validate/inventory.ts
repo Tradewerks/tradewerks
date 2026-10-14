@@ -1,6 +1,7 @@
 import z from "zod";
 import { UNIT_CODES, normalizeUnitCode } from "../units.js";
 import { STOCK_QTY_MESSAGE, isStorableStockQty } from "./shared.js";
+import { supplierCaptureFields } from "./suppliers.js";
 
 // Quantities are fractional (12.5 ft of line set is ordinary), bounded to
 // numeric(10,2) via isStorableStockQty rather than left to Postgres — see
@@ -36,6 +37,20 @@ const barcodeField = z
 		return trimmed === "" ? null : trimmed;
 	});
 
+// Optional, and "" / whitespace collapse to null so there is exactly one
+// representation of "no location". Three creation paths wrote "" to satisfy the
+// old NOT NULL constraint; the migration cleared those and this keeps them gone.
+export const locationField = z
+	.string()
+	.max(255)
+	.nullable()
+	.optional()
+	.transform((v) => {
+		if (v == null) return v;
+		const trimmed = v.trim();
+		return trimmed === "" ? null : trimmed;
+	});
+
 export const updateThresholdSchema = z.object({
     low_stock_threshold: stockQty(z.number().min(0, "Threshold must not be negative")).nullable().optional(),
 });
@@ -46,7 +61,7 @@ export const createInventoryItemSchema = z
 	.object({
 		name: z.string().min(1, "Name is required").max(255),
 		description: z.string().max(5000).default(""),
-		location: z.string().min(1, "Location is required").max(255),
+		location: locationField,
 		quantity: stockQty(z.number().min(0, "Quantity must not be negative")).default(0),
 		unit: unitField.default("each"),
 		unit_price: z.number().min(0).nullable().optional(),
@@ -68,6 +83,9 @@ export const createInventoryItemSchema = z
 		// configured standard cost) — deriving one from the other would invent
 		// purchase history that was never stated.
 		cost_at_receipt: z.number().min(0).nullable().optional(),
+		// Only consulted when quantity > 0 — an opening count of zero is not a
+		// purchase, so there's no vendor to attribute it to.
+		...supplierCaptureFields,
 	})
 	// Plain create doesn't accept serial/batch capture data — a tracked item's
 	// initial stock must go through POST /inventory/:id/receive instead, which
@@ -82,7 +100,7 @@ export type CreateInventoryItemInput = z.infer<typeof createInventoryItemSchema>
 export const updateInventoryItemSchema = z.object({
 	name: z.string().min(1).max(255).optional(),
 	description: z.string().max(5000).optional(),
-	location: z.string().min(1).max(255).optional(),
+	location: locationField,
 	// quantity intentionally omitted — stock changes go through adjustInventoryStock → recordMovements
 	unit: unitField.optional(),
 	// Changing `unit` while stock is on hand re-denominates that stock (250 each
@@ -132,6 +150,7 @@ export type ScanQueryInput = z.infer<typeof scanQuerySchema>;
 export const usageQuerySchema = z.object({
 	limit: z.coerce.number().int().min(1).max(100).optional(),
 	offset: z.coerce.number().int().min(0).optional(),
+	created_after: z.coerce.date().optional(),
 });
 
 export type UsageQueryInput = z.infer<typeof usageQuerySchema>;
@@ -156,9 +175,10 @@ export const consumptionTrendQuerySchema = z.object({
 export type ConsumptionTrendQueryInput = z.infer<typeof consumptionTrendQuerySchema>;
 
 // GET /inventory/:id/forecast — lookbackDays is the consumption window the
-// reorder forecast averages over. Bounded: an unbounded or non-numeric value
-// used to reach `new Date(now - NaN)` / an absurd window and 500. 10 years is
-// far past any useful average; default matches getItemForecast's own fallback.
+// reorder forecast averages over. Bounded, because an unbounded or
+// non-numeric value reaches `new Date(now - NaN)` — an absurd window and a
+// 500 — if it isn't. 10 years is far past any useful average; default
+// matches getItemForecast's own fallback.
 export const forecastQuerySchema = z.object({
 	lookbackDays: z.coerce.number().int().min(1).max(3650).default(90),
 });

@@ -1,4 +1,5 @@
 ﻿import type { StockStatus } from "../types/inventory";
+import { isAxiosError } from "axios";
 
 export const camelCaseToRegular = (str: string) => {
 	return str
@@ -54,6 +55,49 @@ export const formatDate = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
 		timeZone: tz,
 	});
 };
+
+// Rail rows are one line wide; the year only earns its space when it differs.
+export function formatShortDate(
+	date: Date | string,
+	tz = FALLBACK_TIMEZONE,
+	now: Date = new Date(),
+): string {
+	const d = new Date(date);
+	const year = (x: Date) => x.toLocaleDateString("en-US", { year: "numeric", timeZone: tz });
+	return d.toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		...(year(d) === year(now) ? {} : { year: "numeric" }),
+		timeZone: tz,
+	});
+}
+
+/**
+ * Whole days from now to `date` — negative once it is in the past. Compared on
+ * the calendar-day boundary rather than the millisecond, so a document expiring
+ * later today reads as 0 days rather than "tomorrow".
+ */
+export function daysUntil(date: Date | string): number {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const then = new Date(date);
+	const target = Date.UTC(then.getFullYear(), then.getMonth(), then.getDate());
+	const now = new Date();
+	const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+	return Math.round((target - today) / DAY_MS);
+}
+
+export function addMonths(isoDate: string, months: number): string {
+	const [y, m, d] = isoDate.slice(0, 10).split("-").map(Number);
+	return new Date(y, m - 1 + months, d).toISOString().slice(0, 10);
+}
+
+export function addInterval(isoDate: string, unit: "days" | "weeks" | "months" | "years", count: number): string {
+	if (unit === "months") return addMonths(isoDate, count);
+	if (unit === "years") return addMonths(isoDate, count * 12);
+	const [y, m, d] = isoDate.slice(0, 10).split("-").map(Number);
+	const days = unit === "weeks" ? count * 7 : count;
+	return new Date(y, m - 1, d + days).toISOString().slice(0, 10);
+}
 
 export const formatDateOnly = (date: Date | string) => {
 	return new Date(date).toLocaleDateString("en-US", {
@@ -218,4 +262,42 @@ export function isDispatcherRole(role: string): boolean {
 
 export function isAdmin(role: string): boolean {
 	return role === "ADMIN";
+}
+
+/**
+ * What a caught mutation error can actually be shown to a user as. On an
+ * axios error it reads the API's { error: { message } } envelope, which is
+ * what carries a worded 422/403 refusal — AxiosError.message is only
+ * "Request failed with status code 422". Falls back to a plain Error's
+ * message, then to `fallback`.
+ */
+export function errorMessage(err: unknown, fallback: string): string {
+	if (isAxiosError(err)) {
+		const data = err.response?.data as { error?: { message?: unknown } } | undefined;
+		const enveloped = data?.error?.message;
+		return typeof enveloped === "string" && enveloped ? enveloped : fallback;
+	}
+	return err instanceof Error && err.message ? err.message : fallback;
+}
+
+// datetime-local reads and writes wall clock. Seeding it from toISOString()
+// would show the UTC instant and then re-submit it as local, shifting the
+// timestamp by the offset on every save.
+export const fmtHours = (h: number) => {
+	const m = Math.round(h * 60);
+	const hh = Math.floor(m / 60);
+	const mm = String(m % 60).padStart(2, "0");
+	return hh ? `${hh}h ${mm}m` : `${m}m`;
+};
+
+export function atShiftTime(date: string, shiftStart: string, time: string): Date {
+	const d = new Date(`${date}T${time}`);
+	if (time < shiftStart) d.setDate(d.getDate() + 1);
+	return d;
+}
+
+export function toLocalInputValue(iso: string | null): string {
+	if (!iso) return "";
+	const d = new Date(iso);
+	return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }

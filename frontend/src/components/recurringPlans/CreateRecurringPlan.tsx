@@ -11,6 +11,7 @@ import {
 import {
 	type LineItemType,
 	type BaseLineItem,
+	type LineItemDisposition,
 	PriorityValues,
 	type Priority,
 } from "../../types/common";
@@ -28,6 +29,8 @@ import type { GeocodeResult } from "../../types/location";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAllInventoryQuery } from "../../hooks/useInventory";
+import { useVehiclesQuery } from "../../hooks/useVehicles";
 import TimeConstraints, { type TimeConstraintsState } from "../ui/forms/TimeConstraints";
 import {
 	BillingConfiguration,
@@ -135,9 +138,21 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		resetLineItems,
 		dirtyLineItemFields,
 		undoLineItemField,
+		setLineItemInventoryItem,
+		setLineItemDisposition,
 		clearLineItemField,
 		seedLineItems,
 	} = useLineItems({ minItems: 0, mode: "create" });
+	const { data: inventoryItems = [] } = useAllInventoryQuery();
+	const { data: vehicles = [] } = useVehiclesQuery("active");
+	// Draft-dirty wrapper, same as the other line-item mutators.
+	const dirtySetLineItemDisposition = useCallback(
+		(id: string, disposition: LineItemDisposition | null, vehicleId?: string | null) => {
+			setLineItemDisposition(id, disposition, vehicleId);
+			markDirty();
+		},
+		[setLineItemDisposition, markDirty]
+	);
 	const dirtyAddLineItem = useCallback(() => {
 		addLineItem();
 		markDirty();
@@ -341,6 +356,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 						quantity: number;
 						unit_price: number;
 						item_type?: string | null;
+						inventory_item_id?: string | null;
+						disposition?: LineItemDisposition | null;
+						disposition_vehicle_id?: string | null;
 					}>;
 					time_constraints?: {
 						arrivalConstraint: string;
@@ -383,6 +401,10 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 							item_type: (li.item_type ?? "") as
 								| LineItemType
 								| "",
+							inventory_item_id: li.inventory_item_id ?? null,
+							disposition: li.disposition ?? null,
+							disposition_vehicle_id:
+								li.disposition_vehicle_id ?? null,
 						}))
 					);
 				}
@@ -439,6 +461,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 				unit_price: item.unit_price,
 				item_type: item.item_type,
 				total: item.total,
+				inventory_item_id: item.inventory_item_id ?? null,
+				disposition: item.disposition ?? null,
+				disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 			})),
 			time_constraints: timeConstraintsState
 				? {
@@ -566,6 +591,11 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 			unit_price: Number(item.unit_price),
 			item_type: (item.item_type || undefined) as LineItemType | undefined,
 			sort_order: index,
+			// Plan lines are the template a generated visit is stamped from —
+			// dropping the link here would strand the picker's whole purpose.
+			inventory_item_id: item.inventory_item_id ?? null,
+			disposition: item.disposition ?? null,
+			disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 		}));
 
 		const preparedRule = {
@@ -948,6 +978,11 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 					<div className="min-w-0 flex flex-col">
 						<ErrorDisplay path="line_items" />
 						<LineItemsSection
+							inventoryItems={inventoryItems}
+							onLinkInventory={setLineItemInventoryItem}
+							showDisposition
+							vehicles={vehicles}
+							onDispositionChange={dirtySetLineItemDisposition}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={dirtyAddLineItem}

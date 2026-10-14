@@ -9,12 +9,12 @@ import type {
 	AddVehicleStockItemInput,
 	UpdateVehicleStockItemInput,
 	AddPartsUsedInput,
-	SupplierPartUsedInput,
 	RestockRequestInput,
 	RestockRequest,
 	BulkRestockInput,
 	BulkRestockResult,
 	VehicleStockConflict,
+	VehicleMaintenanceAlert,
 	VehicleUsageTodayGroup,
 	VehicleRestockRecord,
 	CompleteRestockInput,
@@ -25,6 +25,13 @@ import type {
 	ApplyFillInput,
 	FillResultLine,
 	TomorrowRequirementVisit,
+	VehicleMaintenanceRecord,
+	CreateMaintenanceRecordInput,
+	UpdateMaintenanceRecordInput,
+	MaintenanceSourceLine,
+	VehicleMaintenanceReminder,
+	CreateMaintenanceReminderInput,
+	UpdateMaintenanceReminderInput,
 } from "../types/vehicles";
 import type { VisitLineItem } from "../types/jobs";
 
@@ -156,6 +163,12 @@ export const getStockConflicts = async (): Promise<VehicleStockConflict[]> => {
 	return response.data.data || [];
 };
 
+export const getMaintenanceAlerts = async (): Promise<VehicleMaintenanceAlert[]> => {
+	const response = await api.get<ApiResponse<VehicleMaintenanceAlert[]>>("/vehicles/maintenance-alerts");
+	if (!response.data.success) throw new Error(response.data.error?.message || "Failed to load maintenance alerts");
+	return response.data.data || [];
+};
+
 export const getFillPlan = async (vehicleId: string): Promise<FillPlan> => {
 	const response = await api.get<ApiResponse<FillPlan>>(`/vehicles/${vehicleId}/stock/fill-plan`);
 	if (!response.data.success) throw new Error(response.data.error?.message || "Failed to load fill plan");
@@ -193,18 +206,6 @@ export const updatePartsUsedQty = async (
 	);
 	if (!response.data.success) throw new Error(response.data.error?.message || "Failed to update part quantity");
 	return response.data.data ?? null;
-};
-
-export const addSupplierPartUsed = async (
-	visitId: string,
-	input: SupplierPartUsedInput,
-): Promise<{ lineItem: VisitLineItem; usage: VehicleStockUsage | null }> => {
-	const response = await api.post<ApiResponse<{ lineItem: VisitLineItem; usage: VehicleStockUsage | null }>>(
-		`/job-visits/${visitId}/parts-used/supplier`,
-		input,
-	);
-	if (!response.data.success) throw new Error(response.data.error?.message || "Failed to add supplier part");
-	return response.data.data!;
 };
 
 export const getTomorrowRequirements = async (vehicleId: string): Promise<TomorrowRequirementVisit[]> => {
@@ -293,3 +294,79 @@ export const revokeVehicleReadiness = async (
 		throw new Error(res.data.error?.message ?? "Failed to revoke readiness");
 	return res.data.data;
 };
+
+// Vehicle maintenance
+
+export const getMaintenanceRecords = async (vehicleId: string): Promise<VehicleMaintenanceRecord[]> => {
+	const response = await api.get<ApiResponse<VehicleMaintenanceRecord[]>>(`/vehicles/${vehicleId}/maintenance`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Get maintenance records failed");
+	return response.data.data || [];
+}
+
+export const createMaintenanceRecord = async (vehicleId: string, data: CreateMaintenanceRecordInput): Promise<VehicleMaintenanceRecord> => {
+	const response = await api.post<ApiResponse<VehicleMaintenanceRecord>>(`/vehicles/${vehicleId}/maintenance`, data);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Create maintenance record failed");
+	return response.data.data!;
+}
+
+export const updateMaintenanceRecord = async (vehicleId: string, recordId: string, data: UpdateMaintenanceRecordInput): Promise<VehicleMaintenanceRecord> => {
+	const response = await api.patch<ApiResponse<VehicleMaintenanceRecord>>(`/vehicles/${vehicleId}/maintenance/${recordId}`, data);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Update maintenance record failed");
+	return response.data.data!;
+}
+
+export const deleteMaintenanceRecord = async (vehicleId: string, recordId: string): Promise<void> => {
+	const response = await api.delete<ApiResponse<unknown>>(`/vehicles/${vehicleId}/maintenance/${recordId}`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Delete maintenance record failed");
+}
+
+export const getMaintenanceReminders = async (vehicleId: string): Promise<VehicleMaintenanceReminder[]> => {
+	const response = await api.get<ApiResponse<VehicleMaintenanceReminder[]>>(`/vehicles/${vehicleId}/maintenance/reminders`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Get maintenance reminders failed");
+	return response.data.data || [];
+}
+
+export const createMaintenanceReminder = async (vehicleId: string, data: CreateMaintenanceReminderInput): Promise<VehicleMaintenanceReminder> => {
+	const response = await api.post<ApiResponse<VehicleMaintenanceReminder>>(`/vehicles/${vehicleId}/maintenance/reminders`, data);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Create maintenance reminder failed");
+	return response.data.data!;
+}
+
+export const updateMaintenanceReminder = async (vehicleId: string, reminderId: string, data: UpdateMaintenanceReminderInput): Promise<VehicleMaintenanceReminder> => {
+	const response = await api.patch<ApiResponse<VehicleMaintenanceReminder>>(`/vehicles/${vehicleId}/maintenance/reminders/${reminderId}`, data);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Update maintenance reminder failed");
+	return response.data.data!;
+}
+
+export const deleteMaintenanceReminder = async (vehicleId: string, reminderId: string): Promise<void> => {
+	const response = await api.delete<ApiResponse<unknown>>(`/vehicles/${vehicleId}/maintenance/reminders/${reminderId}`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Delete maintenance reminder failed");
+}
+
+export const acknowledgeMaintenanceReminder = async (vehicleId: string, reminderId: string): Promise<VehicleMaintenanceReminder> => {
+	const response = await api.post<ApiResponse<VehicleMaintenanceReminder>>(`/vehicles/${vehicleId}/maintenance/reminders/${reminderId}/acknowledge`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Acknowledge maintenance reminder failed");
+	return response.data.data!;
+}
+
+export const unacknowledgeMaintenanceReminder = async (vehicleId: string, reminderId: string): Promise<VehicleMaintenanceReminder> => {
+	const response = await api.post<ApiResponse<VehicleMaintenanceReminder>>(`/vehicles/${vehicleId}/maintenance/reminders/${reminderId}/unacknowledge`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Unacknowledge maintenance reminder failed");
+	return response.data.data!;
+}
+
+export const completeMaintenanceReminder = async (vehicleId: string, reminderId: string): Promise<VehicleMaintenanceReminder> => {
+	const response = await api.post<ApiResponse<VehicleMaintenanceReminder>>(`/vehicles/${vehicleId}/maintenance/reminders/${reminderId}/complete`);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Complete maintenance reminder failed");
+	return response.data.data!;
+}
+
+export const searchMaintenanceSourceLines = async (vehicleId: string, q?: string): Promise<MaintenanceSourceLine[]> => {
+	const response = await api.post<ApiResponse<MaintenanceSourceLine[]>>(
+		`/vehicles/${vehicleId}/maintenance/purchase-lines`,
+		undefined,
+		{ params: q ? { q } : undefined },
+	);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Search failed");
+	return response.data.data || [];
+}

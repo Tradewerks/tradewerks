@@ -82,6 +82,19 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 	Void: { bg: "#fee2e2", text: "#991b1b" },
 };
 
+// Enum values are DB-frozen; these are the display strings, matching the app's
+// InvoiceStatusLabels. Issued reads "Created", Paid reads "Fully Paid".
+const STATUS_LABELS: Record<string, string> = {
+	Draft: "Draft",
+	Issued: "Created",
+	Sent: "Sent",
+	Viewed: "Viewed",
+	PartiallyPaid: "Partially Paid",
+	Paid: "Fully Paid",
+	Disputed: "Disputed",
+	Void: "Void",
+};
+
 // Sent and Viewed are internal workflow states — not meaningful to the invoice recipient
 const HIDE_BADGE_STATUSES = new Set(["Sent", "Viewed"]);
 
@@ -548,7 +561,7 @@ export function InvoicePdfTemplate({ invoice, org }: { invoice: InvoicePdfProps;
 						<Text style={s.sectionHeading}>Invoice Details</Text>
 						{!HIDE_BADGE_STATUSES.has(invoice.status) && (
 							<View style={[s.badge, { backgroundColor: bc.bg }]}>
-								<Text style={[s.badgeText, { color: bc.text }]}>{invoice.status}</Text>
+								<Text style={[s.badgeText, { color: bc.text }]}>{STATUS_LABELS[invoice.status] ?? invoice.status}</Text>
 							</View>
 						)}
 						<View style={s.metaRow}>

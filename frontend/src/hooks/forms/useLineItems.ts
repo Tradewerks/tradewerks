@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from "react";
-import type { BaseLineItem, EditableLineItem } from "../../types/common";
+import type { BaseLineItem, EditableLineItem, LineItemDisposition } from "../../types/common";
 
 interface UseLineItemsOptions {
 	initialItems?: BaseLineItem[] | EditableLineItem[];
@@ -14,6 +14,7 @@ type SeedInput = Array<
 		source_visit_id?: string | null;
 		taxable?: boolean;
 		tax_group_id?: string | null;
+		inventory_item_id?: string | null;
 	}
 >;
 
@@ -26,6 +27,15 @@ interface UseLineItemsReturn {
 	updateLineItem: (id: string, field: keyof BaseLineItem, value: string | number | boolean) => void;
 	updateLineItemSource: (id: string, sourceJobId: string | null, sourceVisitId: string | null) => void;
 	undoLineItemSource: (id: string) => void;
+	setLineItemInventoryItem: (
+		id: string,
+		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+	) => void;
+	setLineItemDisposition: (
+		id: string,
+		disposition: LineItemDisposition | null,
+		vehicleId?: string | null,
+	) => void;
 	setLineItemTaxGroup: (id: string, groupId: string | null, taxable: boolean) => void;
 	setAllLineItemsTaxGroup: (groupId: string | null, taxable: boolean) => void;
 	// "start from existing" / template pre-fill — REPLACES all items
@@ -50,6 +60,7 @@ const blankItem = (defaultTaxGroupId?: string | null): BaseLineItem => ({
 	total: 0,
 	taxable: true,
 	tax_group_id: defaultTaxGroupId ?? null,
+	inventory_item_id: null,
 });
 
 export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsReturn => {
@@ -102,6 +113,7 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 						total: item.total,
 						taxable: item.taxable ?? true,
 						tax_group_id: item.tax_group_id ?? null,
+						inventory_item_id: item.inventory_item_id ?? null,
 						...(item.source_job_id !== undefined && { source_job_id: item.source_job_id }),
 						...(item.source_visit_id !== undefined && { source_visit_id: item.source_visit_id }),
 					});
@@ -148,6 +160,7 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 					total: Number(s.quantity) * Number(s.unit_price),
 					taxable: s.taxable ?? true,
 					tax_group_id: s.tax_group_id ?? defaultTaxGroupId ?? null,
+					inventory_item_id: s.inventory_item_id ?? null,
 					// Preserve source attribution if provided
 					...(s.source_job_id !== undefined && {
 						source_job_id: s.source_job_id,
@@ -185,6 +198,7 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 					total: Number(s.quantity) * Number(s.unit_price),
 					taxable: s.taxable ?? true,
 					tax_group_id: s.tax_group_id ?? defaultTaxGroupId ?? null,
+					inventory_item_id: s.inventory_item_id ?? null,
 					...(s.source_job_id !== undefined && { source_job_id: s.source_job_id }),
 					...(s.source_visit_id !== undefined && { source_visit_id: s.source_visit_id }),
 				} as BaseLineItem;
@@ -248,6 +262,17 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 						updated.total =
 							Number(updated.quantity) *
 							Number(updated.unit_price);
+					}
+					// Retyping the name or switching to labor drops the link rather than
+					// leaving a stale one that would deduct the wrong part at completion.
+					if (
+						item.inventory_item_id &&
+						((field === "name" && value !== item.name) ||
+							(field === "item_type" &&
+								value !== "material" &&
+								value !== "equipment"))
+					) {
+						updated.inventory_item_id = null;
 					}
 					return updated;
 				})
@@ -346,6 +371,95 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 		[originalLineItems]
 	);
 
+	/**
+	 * Bind a line to a catalog item, or clear the binding.
+	 *
+	 * Linking overwrites the name: a link whose text no longer names the item
+	 * is worse than none, because the invoice reads one thing and the stock
+	 * deduction does another. Unit price follows on link only — an unlink
+	 * leaves the price the customer was already quoted alone.
+	 */
+	const setLineItemInventoryItem = useCallback(
+		(
+			id: string,
+			link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+		) => {
+			setLineItems((prev) =>
+				prev.map((item) => {
+					if (item.id !== id) return item;
+					if (!link) return { ...item, inventory_item_id: null };
+					const unitPrice = link.unit_price ?? item.unit_price;
+					return {
+						...item,
+						inventory_item_id: link.inventory_item_id,
+						name: link.name,
+						unit_price: unitPrice,
+						total: Number(item.quantity) * Number(unitPrice),
+						// Picking a part IS the classification, so an untyped line gets typed
+						// here. `material` is the safe default: both stock types behave
+						// identically downstream. An existing type is never overwritten.
+						item_type: item.item_type || "material",
+					};
+				}),
+			);
+
+			const original = originalLineItems.get(id);
+			if (original) {
+				const nextId = link?.inventory_item_id ?? null;
+				setDirtyLineItemFields((prev) => ({
+					...prev,
+					[`li:${id}:inventory_item_id`]:
+						(original.inventory_item_id ?? null) !== nextId,
+					...(link && {
+						[`li:${id}:name`]: original.name !== link.name,
+						...(link.unit_price !== null && {
+							[`li:${id}:unit_price`]:
+								Number(original.unit_price) !== link.unit_price,
+						}),
+						// Only when the link supplied the type, so undo doesn't light up for a
+						// field nobody touched.
+						...(!original.item_type && {
+							[`li:${id}:item_type`]: true,
+						}),
+					}),
+				}));
+			}
+		},
+		[originalLineItems],
+	);
+
+	/**
+	 * Separate from setLineItemInventoryItem because re-stamping the lifecycle
+	 * would resurrect a technician's `voided` as `planned` and put a part they
+	 * said they didn't use back into the deduction. A destination is dropped
+	 * unless the disposition is `receive`.
+	 */
+	const setLineItemDisposition = useCallback(
+		(id: string, disposition: LineItemDisposition | null, vehicleId?: string | null) => {
+			setLineItems((prev) =>
+				prev.map((item) =>
+					item.id !== id
+						? item
+						: {
+								...item,
+								disposition,
+								disposition_vehicle_id:
+									disposition === "receive" ? (vehicleId ?? null) : null,
+							},
+				),
+			);
+
+			const original = originalLineItems.get(id);
+			if (original) {
+				setDirtyLineItemFields((prev) => ({
+					...prev,
+					[`li:${id}:disposition`]: (original.disposition ?? null) !== disposition,
+				}));
+			}
+		},
+		[originalLineItems],
+	);
+
 	const setLineItemTaxGroup = useCallback(
 		(id: string, groupId: string | null, taxable: boolean) => {
 			setLineItems((prev) =>
@@ -424,6 +538,8 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 		updateLineItem,
 		updateLineItemSource,
 		undoLineItemSource,
+		setLineItemInventoryItem,
+		setLineItemDisposition,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
 		seedLineItems,

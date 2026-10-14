@@ -37,7 +37,10 @@ import type {
 import type { ReceiveInventoryInput } from "../../types/tracking";
 import SerialCaptureList from "./tracking/SerialCaptureList";
 import BatchCaptureFields, { type BatchCaptureValue } from "./tracking/BatchCaptureFields";
+import SupplierPicker from "./SupplierPicker";
+import type { SupplierCapture } from "../../types/suppliers";
 import UnitSelect from "../ui/forms/UnitSelect";
+import ToggleSwitch from "../ui/ToggleSwitch";
 import {
 	DEFAULT_UNIT_CODE,
 	formatQty,
@@ -58,10 +61,14 @@ interface CreateInventoryItemProps {
 	onClose: () => void;
 	existingItem?: InventoryItem | null;
 	prefillBarcode?: string;
+	/** Seeds the Name field on a fresh create (e.g. from an unmatched search). */
+	initialName?: string;
 	/** Distinct categories already in use, for the Category datalist. Passed in
 	 *  by callers that already hold the item list, so the modal doesn't fire a
 	 *  second full-inventory request just to suggest strings. */
 	categorySuggestions?: string[];
+	/** Fired on a successful create (not edit), with the new item. */
+	onCreated?: (item: InventoryItem) => void;
 }
 
 const BASE_STEPS: { id: Step; label: string }[] = [
@@ -167,48 +174,14 @@ function seedUnit(stored: string | null | undefined): string {
 	return normalizeUnitCode(raw) ?? (raw || DEFAULT_UNIT_CODE);
 }
 
-// Shared role="switch" toggle markup used for every on/off control in this
-// form (tracking toggles, low-stock alert, email alerts).
-function ToggleSwitch({
-	checked,
-	onChange,
-	disabled,
-	label,
-	ariaLabel,
-}: {
-	checked: boolean;
-	onChange: () => void;
-	disabled?: boolean;
-	label?: string;
-	ariaLabel?: string;
-}) {
-	return (
-		<button
-			type="button"
-			role="switch"
-			aria-checked={checked}
-			aria-label={ariaLabel ?? label}
-			onClick={onChange}
-			disabled={disabled}
-			className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-				checked ? "bg-primary-hover" : "bg-surface-raised"
-			}`}
-		>
-			<span
-				className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-					checked ? "translate-x-4.5" : "translate-x-0.5"
-				}`}
-			/>
-		</button>
-	);
-}
-
 export default function CreateInventoryItem({
 	isOpen,
 	onClose,
 	existingItem,
 	prefillBarcode,
 	categorySuggestions = [],
+	onCreated,
+	initialName,
 }: CreateInventoryItemProps) {
 	const isEdit = !!existingItem;
 
@@ -261,8 +234,10 @@ export default function CreateInventoryItem({
 		mode: "new",
 		batch_number: "",
 		expires_at: null,
-		supplier: "",
 	});
+	// Who the opening quantity was bought from. Only meaningful on create: an
+	// edit never moves stock, so there's no receipt to attribute.
+	const [openingSupplier, setOpeningSupplier] = useState<SupplierCapture>({});
 
 	const createMutation = useCreateInventoryItemMutation();
 	const updateMutation = useUpdateInventoryItemMutation();
@@ -450,7 +425,7 @@ export default function CreateInventoryItem({
 			setCategory(existingItem.category || "");
 			setBarcode(existingItem.barcode || "");
 			setDescription(existingItem.description);
-			setLocation(existingItem.location);
+			setLocation(existingItem.location || "");
 			setQuantity(existingItem.quantity);
 			setUnit(seedUnit(existingItem.unit));
 			setUnitPrice(
@@ -483,6 +458,12 @@ export default function CreateInventoryItem({
 		}
 	}, [isOpen, existingItem, prefillBarcode]);
 
+	useEffect(() => {
+		if (isOpen && !existingItem && initialName) {
+			setName(initialName);
+		}
+	}, [isOpen, existingItem, initialName]);
+
 	const resetForm = useCallback(() => {
 		resetWizard();
 		setQbSearchOpen(false);
@@ -513,7 +494,8 @@ export default function CreateInventoryItem({
 		setIsSerialized(false);
 		setIsBatchTracked(false);
 		setSerialCaptureValues([]);
-		setBatchCaptureValue({ mode: "new", batch_number: "", expires_at: null, supplier: "" });
+		setBatchCaptureValue({ mode: "new", batch_number: "", expires_at: null });
+		setOpeningSupplier({});
 	}, [resetWizard]);
 
 	useEffect(() => {
@@ -551,11 +533,8 @@ export default function CreateInventoryItem({
 			const msg = tooLong("Name", name, LIMITS.name);
 			if (msg) e.name = msg;
 		}
-		if (!location.trim()) e.location = "Location is required.";
-		else {
-			const msg = tooLong("Location", location, LIMITS.location);
-			if (msg) e.location = msg;
-		}
+		const locationMsg = tooLong("Location", location, LIMITS.location);
+		if (locationMsg) e.location = locationMsg;
 		const skuMsg = tooLong("SKU", sku, LIMITS.sku);
 		if (skuMsg) e.sku = skuMsg;
 		const categoryMsg = tooLong("Category", category, LIMITS.category);
@@ -804,7 +783,7 @@ export default function CreateInventoryItem({
 			category: category.trim() || null,
 			barcode: barcode.trim() || null,
 			description: description.trim(),
-			location: location.trim(),
+			location: location.trim() || null,
 			quantity,
 			// No trim-or-default: the select can't emit a blank or an alias. On an
 			// edit, handleSubmit strips this unless the user actually changed it.
@@ -912,8 +891,11 @@ export default function CreateInventoryItem({
 				if (selectedTagIds.length > 0) {
 					await setTagsMutation.mutateAsync({ itemId: created.id, tagIds: selectedTagIds });
 				}
+				onCreated?.(created);
 			} else {
-				const data: CreateInventoryItemInput = buildPayload();
+				// The opening quantity is a receipt, so it carries a vendor; the
+				// server drops the field when quantity is 0 and nothing moves.
+				const data: CreateInventoryItemInput = { ...buildPayload(), ...openingSupplier };
 				// Tracked-but-zero-qty items are created in a single call same as
 				// any plain item — there's nothing to receive (see
 				// handleCreateTrackedItemStage for the tracked+qty>0 path, which
@@ -925,6 +907,7 @@ export default function CreateInventoryItem({
 					await setTagsMutation.mutateAsync({ itemId: created.id, tagIds: selectedTagIds });
 				}
 				await queueNewItemLabel(created);
+				onCreated?.(created);
 			}
 			onClose();
 		} catch (e) {
@@ -975,6 +958,7 @@ export default function CreateInventoryItem({
 
 			const input: ReceiveInventoryInput = {
 				qty: quantity,
+				...openingSupplier,
 				...(isSerialized ? { serial_numbers: serialCaptureValues.map((s) => s.trim()) } : {}),
 				...(isBatchTracked
 					? batchCaptureValue.mode === "existing"
@@ -983,7 +967,6 @@ export default function CreateInventoryItem({
 								batch: {
 									batch_number: batchCaptureValue.batch_number.trim(),
 									expires_at: batchCaptureValue.expires_at,
-									supplier: batchCaptureValue.supplier.trim() || undefined,
 								},
 							}
 					: {}),
@@ -1016,6 +999,7 @@ export default function CreateInventoryItem({
 				// no-op
 			}
 
+			onCreated?.({ ...created, quantity });
 			onClose();
 		} catch (e) {
 			// Create may have succeeded while receive failed — the item then
@@ -1292,7 +1276,7 @@ export default function CreateInventoryItem({
 							</div>
 							<div className="min-w-0">
 								<label className={LABEL}>
-									Location *
+									Location
 								</label>
 								<input
 									type="text"
@@ -1679,6 +1663,23 @@ export default function CreateInventoryItem({
 								<FieldMessage>{shownErrors.cost}</FieldMessage>
 							</div>
 						</div>
+
+						{/* Only on create with stock arriving: an edit moves nothing, so
+						    there is no receipt to attribute to a vendor. */}
+						{!isEdit && quantity > 0 && (
+							<div className="min-w-0 max-w-sm">
+								<SupplierPicker
+									value={openingSupplier}
+									onChange={setOpeningSupplier}
+									label="Supplier (optional)"
+									disabled={isLoading}
+								/>
+								<p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+									Who the opening {unitLabel(unit, quantity)} came from.
+									Recorded on the receipt, not on the item.
+								</p>
+							</div>
+						)}
 
 						{showTrackingControls && (
 							<div className="border border-border rounded-lg p-3 space-y-3">

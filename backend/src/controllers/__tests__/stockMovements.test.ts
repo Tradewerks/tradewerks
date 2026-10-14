@@ -17,6 +17,9 @@ const ORG = "org-1";
 function makeTx(overrides: Record<string, unknown> = {}) {
 	return {
 		$queryRaw: vi.fn().mockResolvedValue([]),
+		// Written on intake that names a vendor AND records a cost — the
+		// self-maintaining vendor price list (batched insert-on-conflict).
+		$executeRaw: vi.fn().mockResolvedValue(0),
 		inventory_item: {
 			findMany: vi.fn().mockResolvedValue([]),
 			update: vi.fn().mockResolvedValue(undefined),
@@ -27,6 +30,11 @@ function makeTx(overrides: Record<string, unknown> = {}) {
 		},
 		stock_movement: {
 			createMany: vi.fn().mockResolvedValue({ count: 0 }),
+		},
+		// Org-scope check on caller-supplied supplier_id for intake movements.
+		// Tests that use "sup-1"/"sup-2" rely on both resolving as in-org.
+		supplier: {
+			findMany: vi.fn().mockResolvedValue([{ id: "sup-1" }, { id: "sup-2" }]),
 		},
 		...overrides,
 	};
@@ -532,6 +540,195 @@ describe("recordMovements", () => {
 		// null, not 0 — an unrecorded purchase cost is unknown, and the
 		// weighted-average cost series excludes it rather than averaging in zero.
 		expect(data[0].unit_cost).toBeNull();
+	});
+
+	it("persists supplier_id on both intake reasons", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([
+			makeItemRow("item-1", 5),
+			makeItemRow("item-2", 5),
+		]);
+
+		const movements: MovementInput[] = [
+			{
+				inventory_item_id: "item-1",
+				qty: 2,
+				from_location_type: "external",
+				to_location_type: "warehouse",
+				reason: "receive",
+				supplier_id: "sup-1",
+			},
+			{
+				inventory_item_id: "item-2",
+				qty: 3,
+				from_location_type: "external",
+				to_location_type: "vehicle",
+				to_vehicle_id: "veh-1",
+				reason: "supplier_purchase",
+				supplier_id: "sup-2",
+			},
+		];
+		await recordMovements(tx as unknown as Tx, ORG, ACTOR, movements);
+
+		const { data } = tx.stock_movement.createMany.mock.calls[0][0] as { data: Record<string, unknown>[] };
+		expect(data[0].supplier_id).toBe("sup-1");
+		expect(data[1].supplier_id).toBe("sup-2");
+	});
+
+	it("drops supplier_id on a non-intake reason", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([makeItemRow("item-1", 5)]);
+
+		const m: MovementInput = {
+			inventory_item_id: "item-1",
+			qty: 2,
+			from_location_type: "warehouse",
+			to_location_type: "vehicle",
+			to_vehicle_id: "veh-1",
+			reason: "restock",
+			supplier_id: "sup-1",
+		};
+		await recordMovements(tx as unknown as Tx, ORG, ACTOR, [m]);
+
+		const { data } = tx.stock_movement.createMany.mock.calls[0][0] as { data: Record<string, unknown>[] };
+		// Enforced here, not left to callers: an internal transfer that inherited a
+		// vendor would inflate that vendor's purchase history with stock it never sold.
+		expect(data[0].supplier_id).toBeNull();
+	});
+
+	it("records the price paid against that vendor's price list", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([makeItemRow("item-1", 5)]);
+
+		const m: MovementInput = {
+			inventory_item_id: "item-1",
+			qty: 2,
+			from_location_type: "external",
+			to_location_type: "warehouse",
+			reason: "receive",
+			supplier_id: "sup-1",
+			unit_cost: 572.15,
+		};
+		await recordMovements(tx as unknown as Tx, ORG, ACTOR, [m]);
+
+		// A price list maintained by hand goes stale immediately; this one learns
+		// from the purchase that just happened, via a single batched upsert.
+		expect(tx.$executeRaw).toHaveBeenCalledOnce();
+		const [, ids, orgIds, supplierIds, itemIds, prices] = tx.$executeRaw.mock.calls[0] as [
+			unknown,
+			string[],
+			string[],
+			string[],
+			string[],
+			number[],
+		];
+		expect(ids).toHaveLength(1);
+		expect(orgIds[0]).toBe(ORG);
+		expect(supplierIds[0]).toBe("sup-1");
+		expect(itemIds[0]).toBe("item-1");
+		expect(Number(prices[0])).toBe(572.15);
+	});
+
+	it("learns nothing from a purchase with no vendor, or a vendor with no price", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([
+			makeItemRow("item-1", 5),
+			makeItemRow("item-2", 5),
+		]);
+
+		await recordMovements(tx as unknown as Tx, ORG, ACTOR, [
+			{
+				inventory_item_id: "item-1",
+				qty: 2,
+				from_location_type: "external",
+				to_location_type: "warehouse",
+				reason: "receive",
+				unit_cost: 572.15,
+			},
+			{
+				inventory_item_id: "item-2",
+				qty: 2,
+				from_location_type: "external",
+				to_location_type: "warehouse",
+				reason: "receive",
+				supplier_id: "sup-1",
+			},
+		]);
+
+		expect(tx.$executeRaw).not.toHaveBeenCalled();
+	});
+
+	it("rejects a supplier_id that does not resolve to an org-scoped supplier", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([makeItemRow("item-1", 5)]);
+		tx.supplier.findMany.mockResolvedValue([]); // caller's supplier_id isn't in this org
+
+		const m: MovementInput = {
+			inventory_item_id: "item-1",
+			qty: 2,
+			from_location_type: "external",
+			to_location_type: "warehouse",
+			reason: "receive",
+			supplier_id: "sup-foreign",
+		};
+		await expect(recordMovements(tx as unknown as Tx, ORG, ACTOR, [m])).rejects.toThrow(
+			"not found in org scope",
+		);
+	});
+
+	it("upserts the price list once per (supplier, item) pair, not once per movement", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([makeItemRow("item-1", 5)]);
+
+		// Two movements on the same vendor+item in one batch (e.g. a receipt split
+		// across serial lines) should collapse into a single upsert, keeping the
+		// last observation's price.
+		await recordMovements(tx as unknown as Tx, ORG, ACTOR, [
+			{
+				inventory_item_id: "item-1",
+				qty: 1,
+				from_location_type: "external",
+				to_location_type: "warehouse",
+				reason: "receive",
+				supplier_id: "sup-1",
+				unit_cost: 10,
+			},
+			{
+				inventory_item_id: "item-1",
+				qty: 1,
+				from_location_type: "external",
+				to_location_type: "warehouse",
+				reason: "receive",
+				supplier_id: "sup-1",
+				unit_cost: 12,
+			},
+		]);
+
+		expect(tx.$executeRaw).toHaveBeenCalledOnce();
+		const [, ids, , , , prices] = tx.$executeRaw.mock.calls[0] as [
+			unknown,
+			string[],
+			string[],
+			string[],
+			string[],
+			number[],
+		];
+		expect(ids).toHaveLength(1);
+		expect(Number(prices[0])).toBe(12);
+	});
+
+	it("learns nothing from an internal move, even when both are present", async () => {
+		tx.inventory_item.findMany.mockResolvedValue([makeItemRow("item-1", 5)]);
+
+		await recordMovements(tx as unknown as Tx, ORG, ACTOR, [
+			{
+				inventory_item_id: "item-1",
+				qty: 2,
+				from_location_type: "warehouse",
+				to_location_type: "vehicle",
+				to_vehicle_id: "veh-1",
+				reason: "restock",
+				supplier_id: "sup-1",
+				unit_cost: 572.15,
+			},
+		]);
+
+		// Moving stock to a van is not a purchase, and must not restate a price.
+		expect(tx.$executeRaw).not.toHaveBeenCalled();
 	});
 });
 

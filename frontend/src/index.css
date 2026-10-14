@@ -1,6 +1,25 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
 @import "tailwindcss";
+/* The landing page builds its own Tailwind (components/landing/landing.css). */
+@source not "./components/landing";
+@source not "./pages/LandingPage.tsx";
 @import "./styles/theme.css";
+
+/* Tailwind 4 preflight leaves buttons at cursor:default. Inline/utility cursors
+   (e.g. grab on draggable cards) still win over this base layer. */
+@layer base {
+	button:not(:disabled),
+	[role="button"]:not([aria-disabled="true"]),
+	label[for],
+	summary {
+		cursor: pointer;
+	}
+
+	button:disabled,
+	[role="button"][aria-disabled="true"] {
+		cursor: not-allowed;
+	}
+}
 
 :root {
 	--main: var(--color-base);
@@ -9,6 +28,16 @@
 	--anim-primary-30: rgba(59, 130, 246, 0.3);
 	/* Light default — dark override lives in [data-theme="dark"] in theme.css */
 	--anim-surface-flash: rgba(0, 0, 0, 0.08);
+}
+
+/* Root scroll surfaces. The app shell is h-screen with its own inner scroller,
+   so the document never scrolls — but an inner overscroll still chains to it and
+   rubber-bands, exposing the UA white behind the app. Kill the chaining and paint
+   the canvas token here so any bounce that slips through stays on-theme. */
+html,
+body {
+	background-color: var(--color-canvas);
+	overscroll-behavior: none;
 }
 
 /* Scrollbar */
@@ -137,6 +166,18 @@ input[type="number"] {
 	}
 	to {
 		top: 100%;
+	}
+}
+
+/* Live-tech ring: expands and fades out behind a status dot */
+@keyframes livePulse {
+	from {
+		transform: scale(1);
+		opacity: 0.6;
+	}
+	to {
+		transform: scale(2.6);
+		opacity: 0;
 	}
 }
 

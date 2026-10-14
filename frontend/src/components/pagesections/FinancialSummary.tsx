@@ -39,6 +39,9 @@ export interface FinancialSummaryLineItem {
 
 export interface FinancialSummaryProps {
 	lineItems: FinancialSummaryLineItem[];
+	/** Line ids contested by a dispute. Optional: a document with no dispute —
+	 *  which is every job and visit — passes nothing and renders unchanged. */
+	contestedIds?: ReadonlySet<string>;
 
 	// Financials
 	taxSnapshot?: TaxSnapshot | null;
@@ -83,6 +86,7 @@ export default function FinancialSummary({
 	taxSnapshot,
 	legacyTaxRate,
 	legacyTaxAmount,
+	contestedIds,
 	subtotal,
 	discountAmount,
 	discountType,
@@ -208,10 +212,12 @@ export default function FinancialSummary({
 									item.total != null
 										? Number(item.total)
 										: Number(item.quantity) * Number(item.unit_price);
+								const isContested =
+									item.id != null && contestedIds?.has(item.id) === true;
 								return (
 									<div
 										key={item.id ?? index}
-										className="border-b border-border-subtle hover:bg-surface/30 transition-colors"
+										className={`border-b border-border-subtle hover:bg-surface/30 transition-colors${isContested ? " border-l-2 border-l-warning-border" : ""}`}
 									>
 										{/* Primary row */}
 										<div className="grid grid-cols-12 gap-2 pt-3 pb-1 items-center">
@@ -219,6 +225,11 @@ export default function FinancialSummary({
 												<p className="text-text-primary font-medium break-words">
 													{item.name}
 												</p>
+												{isContested && (
+													<span className="mt-0.5 inline-block text-xs font-medium text-warning-text">
+														Contested
+													</span>
+												)}
 											</div>
 											<div className="col-span-2 min-w-0 flex justify-center">
 												{item.item_type && (

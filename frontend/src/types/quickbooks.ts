@@ -1,3 +1,4 @@
+import { BarChart3, Scale, Waves, ListChecks, BookOpen, type LucideIcon } from "lucide-react";
 import type { InventoryItem } from "./inventory"
 
 export interface QBItemLite {
@@ -14,6 +15,56 @@ export interface QBItemLite {
 
 export interface MappedQBItem {
     inventory_item_id: string;
+    external_id: string;
+}
+
+export interface MappedQBCustomer {
+    client_id: string;
+    external_id: string;
+}
+
+// Mirrors QBVendorRow in backend/src/services/qb/qbVendors.ts.
+export interface QBVendorLite {
+    Id: string;
+    DisplayName: string;
+    CompanyName?: string;
+    AcctNum?: string;
+    PrimaryPhone?: { FreeFormNumber?: string };
+    PrimaryEmailAddr?: { Address?: string };
+    Active?: boolean;
+    /** Set when this QBO vendor already maps to one of our suppliers. */
+    linkedSupplierId: string | null;
+    /**
+     * An unlinked supplier with the same normalized name. Offered so the operator
+     * links what they already have instead of importing a second copy of it.
+     */
+    suggestedSupplierId: string | null;
+    suggestedSupplierName: string | null;
+}
+
+export interface MappedQBVendor {
+    supplier_id: string;
+    external_id: string;
+}
+
+// Mirrors QBEmployeeRow in backend/src/services/qb/qbEmployees.ts.
+export interface QBEmployeeLite {
+    Id: string;
+    DisplayName: string;
+    GivenName?: string;
+    FamilyName?: string;
+    PrimaryPhone?: { FreeFormNumber?: string };
+    PrimaryEmailAddr?: { Address?: string };
+    Active?: boolean;
+    /** Set when this QBO employee already maps to one of our technicians. */
+    linkedTechnicianId: string | null;
+    /** An unlinked technician matching by email, else by name. */
+    suggestedTechnicianId: string | null;
+    suggestedTechnicianName: string | null;
+}
+
+export interface MappedQBEmployee {
+    technician_id: string;
     external_id: string;
 }
 
@@ -148,4 +199,126 @@ interface ReportSummary {
 interface ReportColData {
   id?: string;
   value: string;
+}
+
+export type QBReportTypeId = "ProfitAndLoss" | "BalanceSheet" | "CashFlow" | "TrialBalance" | "GeneralLedger";
+
+export interface QBReportTypeMeta {
+  id: QBReportTypeId;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  /**
+   * Whether QBO's `customer` report filter actually narrows this report type.
+   * Confirmed empirically against a live sandbox: ProfitAndLoss/GeneralLedger/
+   * CashFlow all changed output when filtered by customer; TrialBalance ignored
+   * the param entirely. BalanceSheet did change but in a way that doesn't map
+   * to a coherent "balance sheet for this customer" (it's a point-in-time
+   * statement, not customer-scoped) — left off to avoid a misleading report.
+   */
+  supportsClientFilter?: boolean;
+};
+
+export const QB_REPORT_TYPES: QBReportTypeMeta[] = [
+  { id: "ProfitAndLoss", label: "Profit & Loss", description: "Income and expenses over a period", icon: BarChart3, supportsClientFilter: true },
+  { id: "BalanceSheet", label: "Balance Sheet", description: "Assets, liabilities, and equity as of a date", icon: Scale },
+  { id: "CashFlow", label: "Cash Flow", description: "Cash in/out across operating, investing, financing", icon: Waves, supportsClientFilter: true },
+  { id: "TrialBalance", label: "Trial Balance", description: "Debit/credit balances by account", icon: ListChecks },
+  { id: "GeneralLedger", label: "General Ledger", description: "Detailed transaction ledger by account", icon: BookOpen, supportsClientFilter: true },
+];
+
+export type QBReportQuery = QBProfitAndLossQuery;
+
+export type QBReportPayload = QBProfitAndLossReport;
+
+// Mirrors backend/src/services/qb/qbPurchases.ts.
+
+/** QuickBooks reference object, e.g. VendorRef / APAccountRef. */
+export interface QBRef {
+    value: string;
+    name?: string;
+}
+
+export interface QBMetaData {
+    CreateTime: string;
+    LastUpdatedTime: string;
+}
+
+/** A QBO postal address (ShipAddr / VendorAddr). Line1-5 are free-form, printable lines. */
+export interface QBAddress {
+    Id?: string;
+    Line1?: string;
+    Line2?: string;
+    Line3?: string;
+    Line4?: string;
+    Line5?: string;
+    City?: string;
+    Country?: string;
+    CountrySubDivisionCode?: string;
+    PostalCode?: string;
+    Lat?: string;
+    Long?: string;
+}
+
+export interface QBEmailAddress {
+    Address: string;
+}
+
+export interface QBCustomField {
+    DefinitionId: string;
+    Name: string;
+    Type: string; // "StringType", etc.
+    StringValue?: string;
+}
+
+export interface QBItemBasedExpenseLineDetail {
+    ItemRef: QBRef;
+    CustomerRef?: QBRef;
+    ClassRef?: QBRef;
+    TaxCodeRef?: QBRef;
+    PriceLevelRef?: QBRef;
+    MarkupInfo?: { Percent?: number; PriceLevelRef?: QBRef };
+    Qty?: number;
+    UnitPrice?: number;
+    BillableStatus?: "Billable" | "NotBillable" | "HasBeenBilled";
+}
+
+export interface QBAccountBasedExpenseLineDetail {
+    AccountRef: QBRef;
+    CustomerRef?: QBRef;
+    ClassRef?: QBRef;
+    TaxCodeRef?: QBRef;
+    BillableStatus?: "Billable" | "NotBillable" | "HasBeenBilled";
+}
+
+export interface QBPurchaseOrderLine {
+    Id?: string;
+    LineNum?: number;
+    Description?: string;
+    Amount: number;
+    DetailType: "ItemBasedExpenseLineDetail" | "AccountBasedExpenseLineDetail";
+    ProjectRef?: QBRef;
+    ItemBasedExpenseLineDetail?: QBItemBasedExpenseLineDetail;
+    AccountBasedExpenseLineDetail?: QBAccountBasedExpenseLineDetail;
+}
+
+export interface QBPurchaseOrder {
+    Id: string;
+    SyncToken: string;
+    domain: string;
+    sparse: boolean;
+    DocNumber?: string;
+    TxnDate: string;
+    TotalAmt: number;
+    POStatus?: "Open" | "Closed";
+    EmailStatus?: "NotSet" | "NeedToSend" | "EmailSent";
+    POEmail?: QBEmailAddress;
+    APAccountRef: QBRef;
+    CurrencyRef?: QBRef;
+    VendorRef: QBRef;
+    ShipAddr?: QBAddress;
+    VendorAddr?: QBAddress;
+    Line: QBPurchaseOrderLine[];
+    CustomField?: QBCustomField[];
+    MetaData: QBMetaData;
 }

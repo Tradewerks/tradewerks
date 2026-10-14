@@ -4,7 +4,7 @@ import {
     createSuccessResponse,
     createErrorResponse,
 } from "../types/responses.js";
-import { 
+import {
     getProjects,
     getProjectById,
     insertProject,
@@ -13,9 +13,17 @@ import {
     attachJob,
     detachJob,
 } from "../controllers/projectsController.js";
+import {
+    getProjectNotes,
+    insertProjectNote,
+    updateProjectNote,
+    deleteProjectNote,
+} from "../controllers/projectNotesController.js";
 import { denyTechnicians, requirePermission, } from "../lib/requirePermissions.js";
 import { getUserContext } from "../lib/context.js";
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
+import { imageUpload } from "../lib/upload.js";
+import { signImageUrl, uploadFile } from "../services/wasabiService.js";
 
 const router = Router();
 
@@ -180,4 +188,117 @@ router.get("/:id/changes", requirePermission("view_projects"), async (req, res, 
     }
 });
 
-export default router;
+router.get("/:projectId/notes", requirePermission("view_projects"), async (req, res, next) => {
+    try {
+        const projectId = req.params.projectId as string;
+        const orgId = req.user!.organization_id as string;
+        const notes = await getProjectNotes(projectId, orgId);
+        res.json(createSuccessResponse(notes, { count: notes.length }));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post("/:projectId/notes", requirePermission("edit_projects"), async (req, res, next) => {
+    try {
+        const projectId = req.params.projectId as string;
+        const orgId = req.user!.organization_id as string;
+        const context = getUserContext(req);
+        const result = await insertProjectNote(projectId, req.body, orgId, context);
+
+        if (result.err) {
+            return res
+                .status(400)
+                .json(
+                    createErrorResponse(
+                        ErrorCodes.VALIDATION_ERROR,
+                        result.err,
+                    ),
+                );
+        }
+
+        res.status(201).json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.put("/:projectId/notes/:noteId", requirePermission("edit_projects"), async (req, res, next) => {
+    try {
+        const { projectId, noteId } = req.params as { projectId: string; noteId: string };
+        const orgId = req.user!.organization_id as string;
+        const context = getUserContext(req);
+        const result = await updateProjectNote(projectId, noteId, req.body, orgId, context);
+
+        if (result.err) {
+            return res
+                .status(400)
+                .json(
+                    createErrorResponse(
+                        ErrorCodes.VALIDATION_ERROR,
+                        result.err,
+                    ),
+                );
+        }
+
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.delete("/:projectId/notes/:noteId", requirePermission("edit_projects"), async (req, res, next) => {
+    try {
+        const { projectId, noteId } = req.params as { projectId: string; noteId: string };
+        const orgId = req.user!.organization_id as string;
+        const context = getUserContext(req);
+        const result = await deleteProjectNote(projectId, noteId, orgId, context);
+
+        if (result.err) {
+            return res
+                .status(400)
+                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+        }
+
+        res.status(200).json(
+            createSuccessResponse({
+                message: result.message || "Note deleted successfully",
+            }),
+        );
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post(
+    "/:projectId/notes/upload-photo",
+    requirePermission("edit_projects"),
+    imageUpload.single("photo"),
+    async (req, res, next) => {
+        try {
+            if (!req.file) {
+                return res
+                    .status(400)
+                    .json(
+                        createErrorResponse(
+                            ErrorCodes.VALIDATION_ERROR,
+                            "No image file provided",
+                        ),
+                    );
+            }
+
+            const rawUrl = await uploadFile(
+                req.file.buffer,
+                req.file.mimetype,
+                req.file.originalname,
+                "project-notes-photos"
+            );
+            const signedUrl = await signImageUrl(rawUrl);
+            res.json(createSuccessResponse({ url: signedUrl, raw_url: rawUrl }));
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+export default router;

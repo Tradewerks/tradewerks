@@ -2,12 +2,13 @@
 import { useNavigate } from "react-router-dom";
 import { Activity, ArrowUpRight, Briefcase, ChevronDown, Clock, Layers, Route, User, Users, Wrench } from "lucide-react";
 import type { Technician } from "../../../types/technicians";
-import { TechnicianStatusDotColors } from "../../../types/technicians";
+import { TechnicianStatusDotColors, TechnicianStatusLabels } from "../../../types/technicians";
 import type { TechRouteData } from "../../../types/location";
 import type { Client } from "../../../types/clients";
 import { useLiveVisitUpdates } from "../../../hooks/useLiveVisitUpdates";
 import type { FeedEvent } from "../../../types/technicians";
 import { getEventText, getStatusColor, timeAgo } from "./visitFeedUtils";
+import LiveDot from "./LiveDot";
 
 export interface MapFilters {
 	showClients: boolean;
@@ -306,12 +307,14 @@ export default function MapPanel({
 										label={tech.name}
 										sublabel={
 											validCoords
-												? tech.status
+												? TechnicianStatusLabels[tech.status]
 												: "no location"
 										}
 										dot={
-											<span
-												className={`w-2 h-2 rounded-full flex-shrink-0 ${TechnicianStatusDotColors[tech.status]}`}
+											<LiveDot
+												status={tech.status}
+												lastPingAt={tech.last_ping_at}
+												dotClassName={TechnicianStatusDotColors[tech.status]}
 											/>
 										}
 									/>

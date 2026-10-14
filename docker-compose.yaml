@@ -16,6 +16,11 @@ services:
     ports:
       - "3000:3000"
     env_file:
+      # Carries the receipt-OCR settings too - RECEIPT_OCR_PROVIDER and the
+      # MINDEE_* credentials it selects. Deliberately NOT
+      # repeated under `environment` below: that block outranks env_file, so an
+      # entry there would blank a key the operator had set in .env.
+      # See backend/.env.example for what each provider value does.
       - ./backend/.env
     environment:
       NODE_OPTIONS: "--max-old-space-size=4096"

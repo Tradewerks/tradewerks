@@ -189,7 +189,20 @@ export function filterRows<T extends ReportRow>(rows: T[], params: PaginateParam
 		const type = params.sortType ?? "text";
 		const factor = params.sortDir === "desc" ? -1 : 1;
 		const key = params.sortKey;
-		result = [...result].sort((a, b) => compareValues(a[key], b[key], type) * factor);
+		result = [...result].sort((a, b) => {
+			const cellA = a[key];
+			const cellB = b[key];
+			const missingA = isEmptyCell(cellA);
+			const missingB = isEmptyCell(cellB);
+			// Missing/placeholder cells ("—", null, "") always sort last, regardless
+			// of direction — otherwise a currency/date column's numeric fallback
+			// (toNumber/toTime -> -Infinity) flips which end they land on when the
+			// sort direction flips, mixing them in with genuinely low real values.
+			if (missingA && missingB) return 0;
+			if (missingA) return 1;
+			if (missingB) return -1;
+			return compareValues(cellA, cellB, type) * factor;
+		});
 	}
 
 	return result;

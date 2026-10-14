@@ -51,6 +51,8 @@ const randomToken = () => {
 
 export const authenticateUser = async (email: string, password: string) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+    // all emails in db are set to lower case; login is not case sensitive
+    email = email.toLowerCase();
     // password is omitted globally (db.ts); opt back in for the credential check.
     const user = (await db.dispatcher.findUnique({ where: { email }, omit: { password: false } }))
               ?? (await db.technician.findUnique({ where: { email }, omit: { password: false } }));
@@ -126,7 +128,7 @@ const mintAccessToken = async (userId: string, role: string): Promise<string> =>
     const user = role === "technician"
         ? await db.technician.findUnique({ where: { id: userId } })
         : await db.dispatcher.findUnique({ where: { id: userId } });
-    if (!user) throw new OAuthError(OAuthErrorCodes.INVALID_GRANT, "User no longer exists", 400);
+    if (!user || user.deactivated_at) throw new OAuthError(OAuthErrorCodes.INVALID_GRANT, "User no longer exists", 400);
 
     let orgTimezone: string | null = null;
     if (user.organization_id) {

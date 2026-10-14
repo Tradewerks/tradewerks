@@ -20,11 +20,12 @@ import { usePermission } from "../../hooks/usePermission";
 import PageReportSection from "../../components/reports/PageReportSection";
 import SortControl from "../../components/ui/SortControl";
 import type { SortDir } from "../../util/sortUtil";
-import { 
+import {
 	withDir,
 	compareByOrder,
 	compareDateNullsLast,
-	comparePriority
+	comparePriority,
+	compareString
 } from "../../util/sortUtil";
 
 const requestStatusOptions = RequestStatusValues.map((s) => ({
@@ -41,6 +42,15 @@ const sortLabels: Record<string, string> = {
 	priority: "Priority",
 	status: "Status",
 	date: "Date",
+	client: "Client",
+	title: "Title",
+};
+
+// Display column ids whose value isn't the sortable one — "created" shows a
+// formatted date but the real value is `created_at` (already driven by the
+// existing "date" sort key).
+const COLUMN_SORT_KEY: Record<string, string> = {
+	created: "date",
 };
 
 export default function RequestsPage() {
@@ -137,6 +147,10 @@ export default function RequestsPage() {
 				? withDir((a, b) => compareByOrder(a.status, b.status, RequestStatusValues), dir)
 				: sortParam === "date"
 				? (a, b) => compareDateNullsLast(dir)(a.created_at, b.created_at)
+				: sortParam === "client"
+				? withDir((a, b) => compareString(a.client?.name, b.client?.name), dir)
+				: sortParam === "title"
+				? withDir((a, b) => compareString(a.title, b.title), dir)
 				: (a, b) => {
 					// default: status, then priority (Emergency first)
 					const statusDiff = compareByOrder(a.status, b.status, RequestStatusValues);
@@ -171,6 +185,18 @@ export default function RequestsPage() {
 		next.delete("sort");
 		next.delete("dir");
 		navigate(`/dispatch/requests${next.toString() ? `?${next.toString()}` : ""}`);
+	};
+
+	const handleSortChange = (col: string) => {
+		const key = COLUMN_SORT_KEY[col] ?? col;
+		const next = new URLSearchParams(location.search);
+		if (next.get("sort") === key) {
+			next.set("dir", next.get("dir") === "asc" ? "desc" : "asc");
+		} else {
+			next.set("sort", key);
+			next.set("dir", "asc");
+		}
+		navigate(`/dispatch/requests?${next.toString()}`);
 	};
 
 	const clearAllFilters = () => {
@@ -228,6 +254,8 @@ export default function RequestsPage() {
 								{ value: "priority", label: "Priority" },
 								{ value: "status", label: "Status" },
 								{ value: "date", label: "Date" },
+								{ value: "client", label: "Client" },
+								{ value: "title", label: "Title" },
 							]}
 							defaultDirByField={{ priority: "desc", status: "asc", date: "desc" }}
 						/>
@@ -295,6 +323,16 @@ export default function RequestsPage() {
 							</div>
 						),
 					}}
+					sortableColumns={{
+						status: true,
+						priority: true,
+						client: true,
+						title: true,
+						created: true,
+					}}
+					sortKey={sortParam === "date" ? "created" : (sortParam ?? "")}
+					sortDir={dirParam === "asc" ? "asc" : "desc"}
+					onSortChange={handleSortChange}
 				/>
 			</div>
 

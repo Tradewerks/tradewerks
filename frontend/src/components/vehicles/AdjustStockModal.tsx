@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { X, Barcode } from "lucide-react";
+import { X, Receipt } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useDialogA11y } from "../../hooks/useDialogA11y";
+import { usePermission } from "../../hooks/usePermission";
 import { useAdjustStockMutation } from "../../hooks/useVehicleStock";
-import { useAllInventoryQuery, useBarcodeScanHandler } from "../../hooks/useInventory";
-import { BarcodeScanner } from "../inventory/BarcodeScanner";
 import type {
 	VehicleStockItem,
 	VehicleAdjustmentType,
@@ -11,10 +11,6 @@ import type {
 } from "../../types/vehicles";
 import { ADJUSTMENT_TYPE_LABELS } from "../../types/vehicles";
 import { useAuthStore } from "../../auth/authStore";
-import SerialCaptureList from "../inventory/tracking/SerialCaptureList";
-import BatchCaptureFields, {
-	type BatchCaptureValue,
-} from "../inventory/tracking/BatchCaptureFields";
 import ExistingUnitPicker from "./ExistingUnitPicker";
 import ExistingBatchPicker, { type BatchPickDirection } from "./ExistingBatchPicker";
 import type { SerialUnitStatus } from "../../types/tracking";
@@ -25,7 +21,6 @@ const ADJUST_TYPE_PERMS: Record<VehicleAdjustmentType, string> = {
 	transfer: "adjust_transfer",
 	audit: "adjust_audit",
 	warehouse_exchange: "adjust_warehouse_exchange",
-	supplier_purchase: "adjust_supplier_purchase",
 };
 
 const TYPE_META: Record<
@@ -52,11 +47,6 @@ const TYPE_META: Record<
 		description: "Override count to match physical reality — no accounting impact",
 		warehouseEffect: null,
 	},
-	supplier_purchase: {
-		description:
-			"Bought on a job — enters the truck, records cost, no warehouse change",
-		warehouseEffect: null,
-	},
 };
 
 function TypeStep({
@@ -65,12 +55,14 @@ function TypeStep({
 	onNext,
 	onClose,
 	availableTypes,
+	vehicleId,
 }: {
 	selected: VehicleAdjustmentType | null;
 	onSelect: (t: VehicleAdjustmentType) => void;
 	onNext: () => void;
 	onClose: () => void;
 	availableTypes: VehicleAdjustmentType[];
+	vehicleId: string;
 }) {
 	return (
 		<>
@@ -133,6 +125,7 @@ function TypeStep({
 						})}
 					</>
 				)}
+				<BuyFromSupplierDoorway vehicleId={vehicleId} />
 			</div>
 			<StepFooter
 				onBack={onClose}
@@ -142,6 +135,34 @@ function TypeStep({
 				nextDisabled={!selected}
 			/>
 		</>
+	);
+}
+
+/**
+ * Buying externally is not a stock adjustment: it spends money, so it needs a
+ * grant, a limit, a receipt and a dispatcher's yes — this tile hands off to
+ * that flow instead of adjusting stock directly. The tile stays because the
+ * muscle memory does.
+ */
+function BuyFromSupplierDoorway({ vehicleId }: { vehicleId?: string | null }) {
+	const canBuy = usePermission("request_field_purchase");
+	if (!canBuy) return null;
+	return (
+		<Link
+			// The truck rides along, so a part bought to restock it defaults back
+			// onto it instead of into the warehouse.
+			to={`/technician/purchases${vehicleId ? `?vehicleId=${vehicleId}` : ""}`}
+			className="block w-full text-left px-4 py-3 rounded-lg border border-dashed border-border bg-surface hover:bg-surface-raised transition-colors"
+		>
+			<span className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+				<Receipt size={14} className="text-text-muted" />
+				Record a field purchase
+			</span>
+			<p className="text-xs text-text-secondary mt-1">
+				Bought a part at a store or supply house. Photograph the receipt to get
+				reimbursed.
+			</p>
+		</Link>
 	);
 }
 
@@ -165,11 +186,20 @@ function QuantitiesStep({
 	onNext: () => void;
 }) {
 	const [clampedId, setClampedId] = useState<string | null>(null);
+	const [filter, setFilter] = useState("");
 	const isDecreaseOnly = isDecreaseOnlyType(type);
 	const isReturn = type === "warehouse_exchange";
 	const hasChanges = isDecreaseOnly
 		? stockItems.some((i) => quantities[i.id] < Number(i.qty_on_hand))
 		: stockItems.some((i) => quantities[i.id] !== Number(i.qty_on_hand));
+
+	// Filtering hides rows, never edits them: a quantity typed and then filtered
+	// out is still counted by `hasChanges` and still submitted.
+	const shown = useMemo(() => {
+		const q = filter.trim().toLowerCase();
+		if (!q) return stockItems;
+		return stockItems.filter((i) => i.inventory_item.name.toLowerCase().includes(q));
+	}, [stockItems, filter]);
 
 	return (
 		<>
@@ -193,13 +223,30 @@ function QuantitiesStep({
 						</span>
 					</div>
 				)}
+				<div className="mb-3">
+					<NoteField value={note} onChange={onNoteChange} />
+				</div>
+				{stockItems.length > 8 && (
+					<input
+						type="text"
+						value={filter}
+						onChange={(e) => setFilter(e.target.value)}
+						placeholder="Filter items…"
+						className="w-full mb-2 text-sm bg-surface border border-border-input rounded-md px-3 py-2 text-text-primary placeholder:text-faint outline-none focus:border-primary"
+					/>
+				)}
 				<div className="bg-surface rounded-lg border border-border overflow-hidden mb-3">
 					<div className="grid grid-cols-[1fr_72px_80px] px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
 						<span>Item</span>
 						<span className="text-center">Current</span>
 						<span className="text-center">New Qty</span>
 					</div>
-					{stockItems.map((item) => {
+					{shown.length === 0 && (
+						<div className="px-4 py-6 text-center text-xs text-text-muted">
+							No items match that.
+						</div>
+					)}
+					{shown.map((item) => {
 						const current = Number(item.qty_on_hand);
 						const newQty = quantities[item.id] ?? current;
 						const changed = isDecreaseOnly
@@ -284,7 +331,6 @@ function QuantitiesStep({
 						);
 					})}
 				</div>
-				<NoteField value={note} onChange={onNoteChange} />
 			</div>
 			<StepFooter
 				onBack={onBack}
@@ -296,302 +342,10 @@ function QuantitiesStep({
 	);
 }
 
-function SupplierStep({
-	supplierRows,
-	note,
-	onRowChange,
-	onNewItemChange,
-	newItem,
-	onNoteChange,
-	onBack,
-	onNext,
-}: {
-	supplierRows: Record<string, { cost: number; qty: number }>;
-	note: string;
-	onRowChange: (id: string, field: "cost" | "qty", value: number | null) => void;
-	onNewItemChange: (field: "name" | "cost" | "qty", value: string | number) => void;
-	newItem: { name: string; cost: number; qty: number };
-	onNoteChange: (v: string) => void;
-	onBack: () => void;
-	onNext: () => void;
-}) {
-	const { data: catalog = [] } = useAllInventoryQuery();
-	const [search, setSearch] = useState("");
-	const [isScannerOpen, setIsScannerOpen] = useState(false);
-	const [scanError, setScanError] = useState<string | null>(null);
-	const { handleScan: scanAndBranch } = useBarcodeScanHandler(
-		(item) => {
-			if (!catalog.some((c) => c.id === item.id)) {
-				setScanError("Item not in catalog");
-				return;
-			}
-			setSearch(item.name);
-			onRowChange(item.id, "qty", supplierRows[item.id]?.qty ?? 1);
-		},
-		() => setScanError("No item found for that code")
-	);
-
-	const handleScan = async (code: string) => {
-		setScanError(null);
-		await scanAndBranch(code);
-	};
-
-	const searchable = useMemo(() => {
-		const q = search.trim().toLowerCase();
-		if (!q) return catalog;
-		return catalog.filter(
-			(c) =>
-				c.name.toLowerCase().includes(q) ||
-				(c.category ?? "").toLowerCase().includes(q)
-		);
-	}, [catalog, search]);
-
-	const canNext =
-		(newItem.name.trim() !== "" && newItem.qty > 0) ||
-		Object.values(supplierRows).some((r) => r.qty > 0);
-
-	return (
-		<>
-			<div className="px-5 py-4">
-				<p className="text-xs text-text-secondary mb-3">
-					Record items purchased from a supplier. Choose from the
-					catalog or enter a new item. No warehouse impact.
-				</p>
-
-				{/* New item row */}
-				<div className="bg-surface rounded-lg border border-border overflow-hidden mb-3">
-					<div className="grid grid-cols-[1fr_64px_80px] px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
-						<span>New Item</span>
-						<span className="text-center">Cost ($)</span>
-						<span className="text-center">Qty</span>
-					</div>
-					<div className="grid grid-cols-[1fr_64px_80px] items-center px-4 py-2 gap-2">
-						<input
-							type="text"
-							value={newItem.name}
-							onChange={(e) =>
-								onNewItemChange(
-									"name",
-									e.target.value
-								)
-							}
-							placeholder="Item name…"
-							className="text-sm bg-base border border-border-input rounded px-2 py-0.5 text-text-primary placeholder:text-faint outline-none focus:border-primary"
-						/>
-						<input
-							type="number"
-							min={0}
-							step={0.01}
-							value={
-								newItem.cost === 0
-									? ""
-									: newItem.cost
-							}
-							onChange={(e) =>
-								onNewItemChange(
-									"cost",
-									clampNumber(e.target.value, {
-										step: 0.01,
-										fallback: 0,
-									})
-								)
-							}
-							placeholder="0.00"
-							className="w-full text-center text-sm bg-base border border-border-input rounded px-1 py-0.5 text-text-primary outline-none focus:border-primary"
-						/>
-						<div className="flex justify-center">
-							<input
-								type="number"
-								min={1}
-								value={newItem.qty}
-								onChange={(e) =>
-									onNewItemChange(
-										"qty",
-										clampNumber(e.target.value, {
-											min: 1,
-											step: 1,
-											fallback: 1,
-										})
-									)
-								}
-								className={`w-16 text-center text-sm rounded border ${newItem.name.trim() ? "border-primary text-text-primary font-semibold" : "border-border-input text-text-secondary"} bg-base px-1 py-0.5 outline-none focus:border-primary`}
-							/>
-						</div>
-					</div>
-				</div>
-
-				{/* Catalog search */}
-				<div className="flex items-center gap-2 mb-1">
-					<input
-						type="text"
-						value={search}
-						onChange={(e) => setSearch(e.target.value)}
-						placeholder="Search catalog…"
-						className="w-full text-sm bg-surface border border-border-input rounded-md px-3 py-2 text-text-primary placeholder:text-faint outline-none focus:border-primary"
-					/>
-					<button
-						type="button"
-						onClick={() => setIsScannerOpen(true)}
-						title="Scan barcode"
-						className="h-[34px] w-[34px] shrink-0 flex items-center justify-center rounded-md border border-border-input text-text-muted hover:text-primary hover:border-primary transition-colors"
-					>
-						<Barcode size={16} />
-					</button>
-				</div>
-				{scanError && (
-					<div
-						role="alert"
-						className="bg-error-bg border border-error-border rounded-md px-3 py-2 mb-2 text-sm text-error-text"
-					>
-						{scanError}
-					</div>
-				)}
-				{isScannerOpen && (
-					<BarcodeScanner
-						onScan={(code) => {
-							setIsScannerOpen(false);
-							handleScan(code);
-						}}
-						onClose={() => setIsScannerOpen(false)}
-					/>
-				)}
-
-				<div className="bg-surface rounded-lg border border-border overflow-hidden mb-3">
-					<div className="grid grid-cols-[1fr_64px_80px] px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
-						<span>Catalog Item</span>
-						<span className="text-center">Cost ($)</span>
-						<span className="text-center">Qty</span>
-					</div>
-					{searchable.length === 0 && (
-						<div className="px-4 py-6 text-center text-xs text-text-muted">
-							No matching catalog items.
-						</div>
-					)}
-					{searchable.map((item) => {
-						const row = supplierRows[item.id];
-						const isAdded = !!row;
-						return (
-							<div
-								key={item.id}
-								className={`grid grid-cols-[1fr_64px_80px] items-center px-4 py-2 border-b border-border-subtle last:border-0 ${isAdded ? "bg-primary/5" : ""}`}
-							>
-								<div className="min-w-0">
-									<span className="block text-sm text-text-primary truncate">
-										{item.name}
-									</span>
-									{item.category && (
-										<span className="block text-[10px] text-text-muted truncate">
-											{
-												item.category
-											}
-										</span>
-									)}
-								</div>
-								<div className="flex justify-center">
-									{isAdded ? (
-										<input
-											type="number"
-											min={0}
-											step={0.01}
-											value={
-												row.cost ===
-												0
-													? ""
-													: row.cost
-											}
-											onChange={(
-												e
-											) =>
-												onRowChange(
-													item.id,
-													"cost",
-													clampNumber(
-														e
-															.target
-															.value,
-														{
-															step: 0.01,
-															fallback: 0,
-														}
-													)
-												)
-											}
-											placeholder="0.00"
-											className="w-full text-center text-sm bg-base border border-primary rounded px-1 py-0.5 text-text-primary outline-none focus:border-primary"
-										/>
-									) : (
-										<span className="text-sm text-text-muted">
-											—
-										</span>
-									)}
-								</div>
-								<div className="flex justify-center">
-									{isAdded ? (
-										<input
-											type="number"
-											min={1}
-											value={
-												row.qty
-											}
-											onChange={(
-												e
-											) =>
-												onRowChange(
-													item.id,
-													"qty",
-													clampNumber(
-														e
-															.target
-															.value,
-														{
-															min: 1,
-															step: 1,
-															fallback: 1,
-														}
-													)
-												)
-											}
-											className="w-16 text-center text-sm rounded border border-primary text-text-primary font-semibold bg-base px-1 py-0.5 outline-none focus:border-primary"
-										/>
-									) : (
-										<button
-											onClick={() =>
-												onRowChange(
-													item.id,
-													"qty",
-													1
-												)
-											}
-											className="px-2 py-0.5 text-xs font-semibold bg-primary hover:bg-primary-hover text-on-primary rounded transition-colors"
-										>
-											+ Add
-										</button>
-									)}
-								</div>
-							</div>
-						);
-					})}
-				</div>
-
-				<NoteField value={note} onChange={onNoteChange} />
-			</div>
-			<StepFooter
-				onBack={onBack}
-				onNext={onNext}
-				nextLabel="Review →"
-				nextDisabled={!canNext}
-			/>
-		</>
-	);
-}
-
 function ConfirmStep({
 	type,
 	stockItems,
 	quantities,
-	catalogById,
-	supplierRows,
-	supplierNewItem,
 	note,
 	onBack,
 	onConfirm,
@@ -601,9 +355,6 @@ function ConfirmStep({
 	type: VehicleAdjustmentType;
 	stockItems: VehicleStockItem[];
 	quantities: Record<string, number>;
-	catalogById: Record<string, { name: string }>;
-	supplierRows: Record<string, { cost: number; qty: number }>;
-	supplierNewItem: { name: string; cost: number; qty: number };
 	note: string;
 	onBack: () => void;
 	onConfirm: () => void;
@@ -618,87 +369,6 @@ function ConfirmStep({
 			? newQty < Number(i.qty_on_hand)
 			: newQty !== Number(i.qty_on_hand);
 	});
-
-	if (type === "supplier_purchase") {
-		const catalogEntries = Object.entries(supplierRows).filter(([, r]) => r.qty > 0);
-		const hasNew = supplierNewItem.name.trim() !== "" && supplierNewItem.qty > 0;
-		const totalLines = catalogEntries.length + (hasNew ? 1 : 0);
-		return (
-			<>
-				<div className="px-5 py-4">
-					<p className="text-xs text-text-secondary mb-3">
-						Review supplier purchase. No warehouse impact.
-					</p>
-					<div className="bg-surface rounded-lg border border-border overflow-hidden mb-3">
-						<div className="grid grid-cols-[1fr_64px_80px] px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
-							<span>
-								Supplier Purchase — {totalLines}{" "}
-								item{totalLines !== 1 ? "s" : ""}
-							</span>
-							<span className="text-center">Cost</span>
-							<span className="text-center">Qty</span>
-						</div>
-						{hasNew && (
-							<div className="grid grid-cols-[1fr_64px_80px] items-center px-4 py-2 border-b border-border-subtle last:border-0 bg-primary/5">
-								<div className="min-w-0">
-									<span className="block text-sm text-text-primary truncate">
-										{supplierNewItem.name.trim()}
-									</span>
-									<span className="block text-[10px] text-text-muted">
-										New item
-									</span>
-								</div>
-								<span className="text-center text-sm text-text-secondary">
-									{supplierNewItem.cost > 0
-										? `$${supplierNewItem.cost.toFixed(2)}`
-										: "—"}
-								</span>
-								<span className="text-center text-sm font-semibold text-success">
-									+{supplierNewItem.qty}
-								</span>
-							</div>
-						)}
-						{catalogEntries.map(([id, row]) => (
-							<div
-								key={id}
-								className="grid grid-cols-[1fr_64px_80px] items-center px-4 py-2 border-b border-border-subtle last:border-0"
-							>
-								<span className="text-sm text-text-primary truncate">
-									{catalogById[id]?.name ??
-										id}
-								</span>
-								<span className="text-center text-sm text-text-secondary">
-									{row.cost > 0
-										? `$${row.cost.toFixed(2)}`
-										: "—"}
-								</span>
-								<span className="text-center text-sm font-semibold text-success">
-									+{row.qty}
-								</span>
-							</div>
-						))}
-					</div>
-					{note && (
-						<p className="text-xs text-text-secondary italic mb-3">
-							Note: {note}
-						</p>
-					)}
-					{error && (
-						<p className="text-xs text-error-text bg-error/10 border border-error/30 rounded-md px-3 py-2">
-							{error}
-						</p>
-					)}
-				</div>
-				<StepFooter
-					onBack={onBack}
-					onNext={onConfirm}
-					nextLabel="Apply Adjustment"
-					nextDisabled={totalLines === 0}
-					isPending={isPending}
-				/>
-			</>
-		);
-	}
 
 	return (
 		<>
@@ -818,7 +488,9 @@ function StepFooter({
 	isPending?: boolean;
 }) {
 	return (
-		<div className="flex items-center justify-between px-5 py-3 border-t border-border">
+		// Sticky, not trailing: every step renders inside the modal's scrolling
+		// body, so a long list would otherwise push "Review →" below the fold with it.
+		<div className="sticky bottom-0 z-10 flex items-center justify-between px-5 py-3 border-t border-border bg-base">
 			<button
 				onClick={onBack}
 				disabled={isPending}
@@ -891,21 +563,12 @@ function existingBatchDirectionFor(type: VehicleAdjustmentType, delta: number): 
 	return "unconstrained";
 }
 
-const DEFAULT_NEW_BATCH: BatchCaptureValue = {
-	mode: "new",
-	batch_number: "",
-	expires_at: null,
-	supplier: "",
-};
-
 function TrackingStep({
 	type,
 	vehicleId,
 	lines,
 	serialValues,
 	onSerialChange,
-	newBatchValues,
-	onNewBatchChange,
 	batchPickValues,
 	onBatchPickChange,
 	onBack,
@@ -917,23 +580,17 @@ function TrackingStep({
 	lines: TrackingLineReq[];
 	serialValues: Record<string, string[]>;
 	onSerialChange: (key: string, value: string[]) => void;
-	newBatchValues: Record<string, BatchCaptureValue>;
-	onNewBatchChange: (key: string, value: BatchCaptureValue) => void;
 	batchPickValues: Record<string, string | null>;
 	onBatchPickChange: (key: string, value: string | null) => void;
 	onBack: () => void;
 	onNext: () => void;
 	canProceed: boolean;
 }) {
-	const isNewCapture = type === "supplier_purchase";
-
 	return (
 		<>
 			<div className="px-5 py-4 space-y-3">
 				<p className="text-xs text-text-secondary mb-1">
-					{isNewCapture
-						? "Record serial numbers or lot info for the tracked items in this purchase."
-						: "Select which existing serialized units or lots this adjustment affects."}
+					Select which existing serialized units or lots this adjustment affects.
 				</p>
 				{lines.map((line) => (
 					<div
@@ -949,18 +606,7 @@ function TrackingStep({
 							</span>
 						</div>
 
-						{line.isSerialized && isNewCapture && (
-							<SerialCaptureList
-								itemId={line.inventoryItemId}
-								targetCount={line.qty}
-								value={serialValues[line.key] ?? []}
-								onChange={(v) =>
-									onSerialChange(line.key, v)
-								}
-							/>
-						)}
-
-						{line.isSerialized && !isNewCapture && (
+						{line.isSerialized && (
 							<ExistingUnitPicker
 								itemId={line.inventoryItemId}
 								itemName={line.name}
@@ -978,23 +624,7 @@ function TrackingStep({
 							/>
 						)}
 
-						{line.isBatchTracked && isNewCapture && (
-							<BatchCaptureFields
-								itemId={line.inventoryItemId}
-								value={
-									newBatchValues[line.key] ??
-									DEFAULT_NEW_BATCH
-								}
-								onChange={(v) =>
-									onNewBatchChange(
-										line.key,
-										v
-									)
-								}
-							/>
-						)}
-
-						{line.isBatchTracked && !isNewCapture && (
+						{line.isBatchTracked && (
 							<ExistingBatchPicker
 								itemId={line.inventoryItemId}
 								vehicleId={vehicleId}
@@ -1087,71 +717,32 @@ export default function AdjustStockModal({
 			])
 		)
 	);
-	const [supplierRows, setSupplierRows] = useState<
-		Record<string, { cost: number; qty: number }>
-	>({});
-	const [supplierNewItem, setSupplierNewItem] = useState({ name: "", cost: 0, qty: 1 });
-
-	// Tracking-step capture state, keyed by TrackingLineReq.key (stock_item_id
-	// for existing lines, inventory_item_id for supplier_purchase catalog
-	// lines). serialValues doubles as both new_serials (supplier_purchase) and
-	// serial_unit_ids (every other type) — the two are mutually exclusive per
-	// line since a line's type never changes mid-flow.
+	// Tracking-step capture state, keyed by TrackingLineReq.key, which is the
+	// stock_item_id of the line being adjusted.
 	const [serialValues, setSerialValues] = useState<Record<string, string[]>>(() =>
 		initialSerialUnitId && initialFocusItemId
 			? { [initialFocusItemId]: [initialSerialUnitId] }
 			: {}
 	);
-	const [newBatchValues, setNewBatchValues] = useState<Record<string, BatchCaptureValue>>({});
 	const [batchPickValues, setBatchPickValues] = useState<Record<string, string | null>>({});
 
 	const adjustMutation = useAdjustStockMutation(vehicleId);
 	const { user } = useAuthStore();
-	const { data: catalog = [] } = useAllInventoryQuery();
 
 	const availableTypes = useMemo<VehicleAdjustmentType[]>(() => {
 		const allTypes = Object.keys(TYPE_META) as VehicleAdjustmentType[];
 		if (!user || user.role !== "technician") return allTypes;
 		return allTypes.filter((t) => user.permissions.includes(ADJUST_TYPE_PERMS[t]));
 	}, [user]);
-	const catalogById = useMemo(
-		() => Object.fromEntries(catalog.map((c) => [c.id, { name: c.name }])),
-		[catalog]
-	);
-
 	const handleQtyChange = (id: string, qty: number) => {
 		setQuantities((prev) => ({ ...prev, [id]: qty }));
 	};
 
-	// Lines that need serial/batch capture before this adjustment can submit.
-	// supplier_purchase draws from the catalog rows being purchased (new_item
-	// lines are never tracked — a freshly-created provisional item can't
-	// already be serialized/batch-tracked); every other type draws from the
-	// on-truck lines actually changing, exactly mirroring handleConfirm's own
+	// Lines that need serial/batch capture before this adjustment can submit:
+	// the on-truck lines actually changing, mirroring handleConfirm's own
 	// changedLines derivation below so the two never disagree.
 	const trackingLines = useMemo<TrackingLineReq[]>(() => {
 		if (!selectedType) return [];
-
-		if (selectedType === "supplier_purchase") {
-			const lines: TrackingLineReq[] = [];
-			for (const [id, row] of Object.entries(supplierRows)) {
-				if (row.qty <= 0) continue;
-				const item = catalog.find((c) => c.id === id);
-				if (!item || (!item.is_serialized && !item.is_batch_tracked))
-					continue;
-				lines.push({
-					key: id,
-					inventoryItemId: id,
-					name: item.name,
-					qty: row.qty,
-					unit: item.unit,
-					delta: row.qty,
-					isSerialized: item.is_serialized,
-					isBatchTracked: item.is_batch_tracked,
-				});
-			}
-			return lines;
-		}
 
 		const isDecreaseOnly = isDecreaseOnlyType(selectedType);
 		const lines: TrackingLineReq[] = [];
@@ -1178,7 +769,7 @@ export default function AdjustStockModal({
 			});
 		}
 		return lines;
-	}, [selectedType, supplierRows, catalog, stockItems, quantities, vehicleId]);
+	}, [selectedType, stockItems, quantities, vehicleId]);
 
 	const needsTrackingStep = trackingLines.length > 0;
 	const visibleSteps = useMemo(
@@ -1193,83 +784,16 @@ export default function AdjustStockModal({
 				(serialValues[line.key] ?? []).length === line.qty;
 			const batchOk =
 				!line.isBatchTracked ||
-				selectedType !== "supplier_purchase" || // existing-batch pick is always optional (FIFO fallback)
-				(() => {
-					const bv = newBatchValues[line.key];
-					if (!bv) return false;
-					return bv.mode === "new"
-						? bv.batch_number.trim().length > 0
-						: !!bv.batch_id;
-				})();
+				true; // existing-batch pick is always optional (FIFO fallback)
 			return serialOk && batchOk;
 		});
-	}, [trackingLines, selectedType, serialValues, newBatchValues]);
+	}, [trackingLines, serialValues]);
 
 	const handleConfirm = async () => {
 		if (!selectedType) return;
 		setSubmitError(null);
 
 		try {
-			if (selectedType === "supplier_purchase") {
-				const lines: AdjustStockInput["lines"] = [];
-				Object.entries(supplierRows)
-					.filter(([, r]) => r.qty > 0)
-					.forEach(([inventory_item_id, r]) => {
-						const item = catalog.find(
-							(c) => c.id === inventory_item_id
-						);
-						const line: AdjustStockInput["lines"][number] = {
-							inventory_item_id,
-							qty_after: r.qty,
-						};
-						if (item?.is_serialized) {
-							line.new_serials =
-								serialValues[inventory_item_id] ??
-								[];
-						}
-						if (item?.is_batch_tracked) {
-							const bv =
-								newBatchValues[inventory_item_id];
-							if (bv?.mode === "new") {
-								line.new_batch = {
-									batch_number:
-										bv.batch_number.trim(),
-									expires_at: bv.expires_at,
-									supplier:
-										bv.supplier.trim() ||
-										undefined,
-								};
-							} else if (bv?.mode === "existing") {
-								line.batch_picks = [
-									{
-										batch_id: bv.batch_id,
-										qty: r.qty,
-									},
-								];
-							}
-						}
-						lines.push(line);
-					});
-				if (supplierNewItem.name.trim() && supplierNewItem.qty > 0) {
-					lines.push({
-						new_item: {
-							name: supplierNewItem.name.trim(),
-							cost: supplierNewItem.cost,
-						},
-						qty_after: supplierNewItem.qty,
-					});
-				}
-				if (lines.length === 0) return;
-				await adjustMutation.mutateAsync({
-					type: "supplier_purchase",
-					note: note.trim() || null,
-					lines,
-				});
-				onSuccess?.();
-				onClose();
-				return;
-			}
-
 			const isDecreaseOnly = isDecreaseOnlyType(selectedType);
 			const changedLines = stockItems
 				.filter((i) =>
@@ -1321,7 +845,9 @@ export default function AdjustStockModal({
 			<div
 				{...dialogA11y}
 				aria-label={STEP_TITLES[modalStep]}
-				className="bg-canvas border border-border rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col"
+				// overflow-hidden, not just rounded-xl: the step footers are sticky with an
+				// opaque bg-base, so without clipping they paint square over the bottom corners.
+				className="bg-canvas border border-border rounded-xl overflow-hidden shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col"
 			>
 				{/* Header */}
 				<div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-shrink-0">
@@ -1367,7 +893,7 @@ export default function AdjustStockModal({
 				</div>
 
 				{/* Scrollable body */}
-				<div className="flex-1 overflow-auto min-h-0">
+				<div className="flex-1 overflow-auto rounded-xl min-h-0">
 					{modalStep === "type" && (
 						<TypeStep
 							selected={selectedType}
@@ -1375,59 +901,10 @@ export default function AdjustStockModal({
 							onNext={() => setModalStep("quantities")}
 							onClose={onClose}
 							availableTypes={availableTypes}
+							vehicleId={vehicleId}
 						/>
 					)}
-					{modalStep === "quantities" &&
-						selectedType === "supplier_purchase" && (
-							<SupplierStep
-								supplierRows={supplierRows}
-								note={note}
-								onRowChange={(id, field, value) => {
-									setSupplierRows((prev) => ({
-										...prev,
-										[id]: {
-											...(prev[
-												id
-											] ?? {
-												cost: 0,
-												qty: 1,
-											}),
-											[field]:
-												value ??
-												0,
-										},
-									}));
-								}}
-								onNewItemChange={(field, value) =>
-									setSupplierNewItem((p) => ({
-										...p,
-										[field]: value,
-									}))
-								}
-								newItem={supplierNewItem}
-								onNoteChange={setNote}
-								onBack={() => {
-									setSupplierRows({});
-									setSupplierNewItem({
-										name: "",
-										cost: 0,
-										qty: 1,
-									});
-									setNote("");
-									setModalStep("type");
-								}}
-								onNext={() =>
-									setModalStep(
-										needsTrackingStep
-											? "tracking"
-											: "confirm"
-									)
-								}
-							/>
-						)}
-					{modalStep === "quantities" &&
-						selectedType &&
-						selectedType !== "supplier_purchase" && (
+					{modalStep === "quantities" && selectedType && (
 							<QuantitiesStep
 								type={selectedType}
 								stockItems={stockItems}
@@ -1474,13 +951,6 @@ export default function AdjustStockModal({
 									[key]: v,
 								}))
 							}
-							newBatchValues={newBatchValues}
-							onNewBatchChange={(key, v) =>
-								setNewBatchValues((prev) => ({
-									...prev,
-									[key]: v,
-								}))
-							}
 							batchPickValues={batchPickValues}
 							onBatchPickChange={(key, v) =>
 								setBatchPickValues((prev) => ({
@@ -1498,9 +968,6 @@ export default function AdjustStockModal({
 							type={selectedType}
 							stockItems={stockItems}
 							quantities={quantities}
-							catalogById={catalogById}
-							supplierRows={supplierRows}
-							supplierNewItem={supplierNewItem}
 							note={note}
 							onBack={() => {
 								setSubmitError(null);

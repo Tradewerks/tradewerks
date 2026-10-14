@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Plus, Wrench } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useVehiclesQuery, useCreateVehicleMutation } from "../../hooks/useVehicles";
+import { useMaintenanceAlertsQuery } from "../../hooks/useVehicleStock";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import VehicleCard from "../../components/vehicles/VehicleCard";
 import { getStockHealth } from "../../components/vehicles/stockHealth";
-import VehicleStockConflictsSidebar from "../../components/vehicles/VehicleStockConflictsSidebar";
+import VehicleAlertsSidebar from "../../components/vehicles/VehicleAlertsSidebar";
 import VehicleReadinessPanel from "../../components/vehicles/VehicleReadinessPanel";
 import CreateVehicle from "../../components/vehicles/CreateVehicle";
 import EditVehicle from "../../components/vehicles/EditVehicle";
@@ -35,6 +36,8 @@ function FleetPulse({
 	relevantCount,
 	selectedDate,
 	setSelectedDate,
+	overdueCount,
+	dueSoonCount,
 }: {
 	vehicles: Vehicle[];
 	stockFilter: string | null;
@@ -43,6 +46,8 @@ function FleetPulse({
 	relevantCount: number;
 	selectedDate: string;
 	setSelectedDate: (d: string) => void;
+	overdueCount: number;
+	dueSoonCount: number;
 }) {
 	let out = 0;
 	let low = 0;
@@ -79,7 +84,7 @@ function FleetPulse({
 				</div>
 
 				{/* Count filters */}
-				<div className="flex items-center gap-1 text-xs font-semibold">
+				<div className="flex items-center gap-1 text-xs font-semibold" title="Stock Alerts">
 					<button
 						onClick={() => onFilter(null)}
 						className={`px-2 py-0.5 rounded border transition-colors ${chip(stockFilter === null, "neutral")}`}
@@ -106,6 +111,26 @@ function FleetPulse({
 						className={`px-2 py-0.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${chip(stockFilter === "issues", "warning")}`}
 					>
 						{issues} with issues
+					</button>
+				</div>
+
+				<div className="w-px h-4 bg-border-subtle flex-shrink-0" />
+
+				<div className="flex items-center gap-1 text-xs font-semibold" title="Vehicle Maintenance Reminders">
+					<Wrench size={12} className="text-text-muted flex-shrink-0" />
+					<button
+						onClick={() => onFilter(stockFilter === "maintenance-overdue" ? null : "maintenance-overdue")}
+						disabled={overdueCount === 0}
+						className={`px-2 py-0.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${chip(stockFilter === "maintenance-overdue", "error")}`}
+					>
+						{overdueCount} overdue
+					</button>
+					<button
+						onClick={() => onFilter(stockFilter === "maintenance-duesoon" ? null : "maintenance-duesoon")}
+						disabled={dueSoonCount === 0}
+						className={`px-2 py-0.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${chip(stockFilter === "maintenance-duesoon", "warning")}`}
+					>
+						{dueSoonCount} due soon
 					</button>
 				</div>
 			</div>
@@ -166,6 +191,7 @@ export default function VehiclesPage() {
 	};
 
 	const { data: vehicles, isLoading, error } = useVehiclesQuery(statusParam ?? undefined);
+	const { data: maintenanceAlerts = [] } = useMaintenanceAlertsQuery();
 	const { mutateAsync: createVehicle } = useCreateVehicleMutation();
 
 	const [selectedDate, setSelectedDate] = useState<string>(
@@ -197,6 +223,10 @@ export default function VehiclesPage() {
 
 	const MANAGE_VEHICLES = usePermission("manage_inventory");
 
+	const openAlerts = maintenanceAlerts.filter((a) => !a.acknowledged);
+	const overdueVehicleIds = new Set(openAlerts.filter((a) => a.status === "overdue").map((a) => a.vehicleId));
+	const dueSoonVehicleIds = new Set(openAlerts.filter((a) => a.status === "duesoon").map((a) => a.vehicleId));
+
 	const filteredVehicles = vehicles?.filter((v) => {
 		if (activeTerms.length > 0) {
 			const matchesTerms = activeTerms.every((term) => {
@@ -214,6 +244,8 @@ export default function VehiclesPage() {
 			if (stockFilter === "out" && health !== "out") return false;
 			if (stockFilter === "low" && health === "ok") return false;
 			if (stockFilter === "issues" && health === "ok") return false;
+			if (stockFilter === "maintenance-overdue" && !overdueVehicleIds.has(v.id)) return false;
+			if (stockFilter === "maintenance-duesoon" && !dueSoonVehicleIds.has(v.id)) return false;
 		}
 		return true;
 	});
@@ -290,6 +322,8 @@ export default function VehiclesPage() {
 						relevantCount={relevantCount}
 						selectedDate={selectedDate}
 						setSelectedDate={setSelectedDate}
+						overdueCount={overdueVehicleIds.size}
+						dueSoonCount={dueSoonVehicleIds.size}
 					/>
 				)}
 
@@ -366,7 +400,7 @@ export default function VehiclesPage() {
 					/>
 				)}
 			</div>
-			<VehicleStockConflictsSidebar />
+			<VehicleAlertsSidebar />
 			{readinessPanelVehicleId && (() => {
 				const panelVehicle = (vehicles ?? []).find((v) => v.id === readinessPanelVehicleId);
 				const panelReadiness = readinessMap.get(readinessPanelVehicleId);

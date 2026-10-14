@@ -2,9 +2,9 @@
  * recomputeDocumentTotals.ts
  *
  * Shared tax recomputation logic for quotes, invoices, jobs, and job visits.
- * Single source of truth — eliminates the near-identical functions that
- * previously existed in invoiceService.ts (recomputeInvoiceTotals) and
- * quotesController.ts (recomputeQuoteTotals).
+ * Single source of truth: quotes, invoices, jobs, and job visits all call
+ * this instead of each keeping its own near-identical recompute function that
+ * could drift out of sync with the others.
  */
 import { Prisma } from "../../generated/prisma/client.js";
 import { calculateDocumentTax, centsToDollars } from "../services/taxEngine.js";
@@ -14,6 +14,16 @@ import {
 } from "./taxHelpers.js";
 
 export type DocumentModel = "invoice" | "quote" | "job" | "job_visit";
+
+/**
+ * The recompute either ran, or was skipped for a reason the caller may need
+ * to act on: `not_found` means the id resolves to nothing (a lock caller
+ * must not treat that as a successful no-op), `locked` means the snapshot is
+ * already frozen (a legitimate no-op).
+ */
+export type RecomputeResult =
+	| { ok: true }
+	| { ok: false; reason: "not_found" | "locked" };
 
 /**
  * Recompute tax/discount/total fields for any document model.
@@ -37,7 +47,7 @@ export async function recomputeDocumentTotals(
 	organizationId: string,
 	tx: Prisma.TransactionClient,
 	lockedAt?: Date,
-): Promise<boolean> {
+): Promise<RecomputeResult> {
 	// ── 1. Fetch document fields needed for tax calculation ──────────────────
 	const lineItemSelect = {
 		select: {
@@ -55,6 +65,8 @@ export async function recomputeDocumentTotals(
 		discount_type: string | null;
 		discount_value: Prisma.Decimal | null;
 		amount_paid?: Prisma.Decimal | null;
+		/** Invoice only. Non-null marks this row as an adjustment document. */
+		adjusts_invoice_id?: string | null;
 		line_items: Array<{
 			id: string;
 			total: Prisma.Decimal;
@@ -72,6 +84,7 @@ export async function recomputeDocumentTotals(
 				discount_type: true,
 				discount_value: true,
 				amount_paid: true,
+				adjusts_invoice_id: true,
 				line_items: lineItemSelect,
 			},
 		});
@@ -113,14 +126,14 @@ export async function recomputeDocumentTotals(
 		doc = visit ? { ...visit, client_id: visit.job.client_id } : null;
 	}
 
-	if (!doc) return false;
+	if (!doc) return { ok: false, reason: "not_found" };
 	if (
 		(model === "invoice" || model === "quote") &&
 		doc.tax_snapshot != null
 	) {
 		const snap = doc.tax_snapshot as { locked_at?: string };
 		// "draft" = unlocked (recompute freely); ISO string = locked (skip).
-		if (snap.locked_at !== "draft") return false;
+		if (snap.locked_at !== "draft") return { ok: false, reason: "locked" };
 	}
 
 	// ── 2. Resolve tax inputs for each line item ─────────────────────────────
@@ -219,7 +232,18 @@ export async function recomputeDocumentTotals(
 	};
 
 	if (model === "invoice") {
-		const balanceDue = Math.max(0, total - Number(doc.amount_paid ?? 0));
+		// An adjustment document may be a credit, and a credit's balance is
+		// genuinely negative — the organisation owes it back. Flooring it at
+		// zero made every credit invisible to receivables (which filter on a
+		// non-zero balance), so AR kept reporting the original's full amount
+		// while the revenue reports had already netted the credit.
+		//
+		// The floor stays for ordinary invoices: there a balance below zero
+		// means over-payment, which belongs on the payment record rather than
+		// turning the invoice itself into a liability.
+		const isAdjustment = doc.adjusts_invoice_id != null;
+		const rawBalance = total - Number(doc.amount_paid ?? 0);
+		const balanceDue = isAdjustment ? rawBalance : Math.max(0, rawBalance);
 		await tx.invoice.update({
 			where: { id: documentId },
 			data: { ...sharedData, balance_due: balanceDue },
@@ -240,14 +264,14 @@ export async function recomputeDocumentTotals(
 		});
 	}
 
-	return true;
+	return { ok: true };
 }
 
 export async function recomputeJobTotals(
 	jobId: string,
 	organizationId: string,
 	tx: Prisma.TransactionClient,
-): Promise<boolean> {
+): Promise<RecomputeResult> {
 	return recomputeDocumentTotals("job", jobId, organizationId, tx);
 }
 
@@ -255,7 +279,7 @@ export async function recomputeVisitTotals(
 	visitId: string,
 	organizationId: string,
 	tx: Prisma.TransactionClient,
-): Promise<boolean> {
+): Promise<RecomputeResult> {
 	return recomputeDocumentTotals("job_visit", visitId, organizationId, tx);
 }
 
@@ -274,11 +298,20 @@ export async function lockDocumentTaxSnapshot(
 	tx: Prisma.TransactionClient,
 	lockedAt: Date = new Date(),
 ): Promise<void> {
-	await recomputeDocumentTotals(
+	const result = await recomputeDocumentTotals(
 		model,
 		documentId,
 		organizationId,
 		tx,
 		lockedAt,
 	);
+	// A missing document means the caller handed us an id that resolves to
+	// nothing; silently skipping the lock would let createAdjustmentInvoice
+	// write a zero-tax credit and report success (DW-32). An already-locked
+	// snapshot is a legitimate no-op.
+	if (!result.ok && result.reason === "not_found") {
+		throw new Error(
+			`Cannot lock tax snapshot: ${model} ${documentId} not found`,
+		);
+	}
 }

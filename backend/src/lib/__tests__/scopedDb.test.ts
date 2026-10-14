@@ -59,6 +59,7 @@ async function runHook(orgId: string, op: string, model: string, args: any) {
 const ORG_MODEL = "inventory_item"; // organization_id column
 const REL_MODEL = "vehicle_stock_item"; // scoped via vehicle.organization_id
 const VISIT_MODEL = "job_visit"; // scoped via job.organization_id
+const TIME_MODEL = "visit_tech_time_entry"; // scoped via visit.job.organization_id
 const FREE_MODEL = "organization"; // not scoped at all
 
 beforeEach(() => {
@@ -102,6 +103,49 @@ describe("getScopedDb — read scoping", () => {
 	it("leaves unscoped models untouched", async () => {
 		const { query } = await runHook(ORG_A, "findMany", FREE_MODEL, { where: { id: "x" } });
 		expect(query).toHaveBeenCalledWith({ where: { id: "x" } });
+	});
+
+	// groupBy was unhooked until the labor-cost work needed it, so every grouped
+	// aggregate over a scoped model read across tenants. The 20 groupBy calls in
+	// reportsController hand-write organization_id, which is why it went unnoticed.
+	it("hooks groupBy at all — an unhooked aggregate reads across tenants", () => {
+		expect(Object.keys(hooksFor(ORG_A))).toContain("groupBy");
+	});
+
+	it("injects organization_id into groupBy for org-scoped models", async () => {
+		const { query } = await runHook(ORG_A, "groupBy", ORG_MODEL, {
+			by: ["status"],
+			_sum: { qty_on_hand: true },
+		});
+		expect(query).toHaveBeenCalledWith({
+			by: ["status"],
+			_sum: { qty_on_hand: true },
+			where: { AND: [{}, { organization_id: ORG_A }] },
+		});
+	});
+
+	it("injects the two-hop relation filter into groupBy for visit_tech_time_entry", async () => {
+		const { query } = await runHook(ORG_A, "groupBy", TIME_MODEL, {
+			by: ["visit_id"],
+			_sum: { hours_worked: true },
+		});
+		expect(query).toHaveBeenCalledWith({
+			by: ["visit_id"],
+			_sum: { hours_worked: true },
+			where: { AND: [{}, { visit: { job: { organization_id: ORG_A } } }] },
+		});
+	});
+
+	// The registration key is matched by exact string against the lowercase Prisma
+	// model name; it had been written `Visit_tech_time_entry`, which matched nothing
+	// and injected no filter while looking registered.
+	it("scopes visit_tech_time_entry on findMany (lowercase registration key)", async () => {
+		const { query } = await runHook(ORG_A, "findMany", TIME_MODEL, {
+			where: { clocked_out_at: null },
+		});
+		expect(query).toHaveBeenCalledWith({
+			where: { AND: [{ clocked_out_at: null }, { visit: { job: { organization_id: ORG_A } } }] },
+		});
 	});
 });
 
@@ -183,9 +227,9 @@ describe("getScopedDb — findUnique merges org filter as a sibling", () => {
 	// findUnique/findUniqueOrThrow must stay on `query` — the transaction-aware
 	// client Prisma already bound this call to — rather than rerouting to a
 	// separate model/operation on the base `db`, which runs on its own connection
-	// and can't see a still-open transaction's own uncommitted writes (the bug
-	// this scoping previously had: adding a vehicle stock item inside a
-	// $transaction would 404 on its own just-created row).
+	// and can't see a still-open transaction's own uncommitted writes: adding a
+	// vehicle stock item inside a $transaction and then looking it up here must
+	// not 404 on its own just-created row.
 	it("merges organization_id as a sibling of the unique id for org-scoped models", async () => {
 		const hooks = hooksFor(ORG_A);
 		const query = vi.fn().mockResolvedValue({ id: "i1" });
@@ -287,6 +331,51 @@ describe("getScopedDb — serial/batch tracking registries", () => {
 // silently dropping the tenant guard OR the caller's predicate. AND-compose keeps
 // both. These assert both conditions survive, per relation-scoped model.
 
+describe("getScopedDb — assistant conversation models", () => {
+	it("scopes assistant_conversation by its own organization_id", async () => {
+		const { query } = await runHook(ORG_A, "findMany", "assistant_conversation", { where: { user_id: "u1" } });
+		expect(query).toHaveBeenCalledWith({
+			where: { AND: [{ user_id: "u1" }, { organization_id: ORG_A }] },
+		});
+	});
+
+	it("scopes assistant_message through its conversation", async () => {
+		const { query } = await runHook(ORG_A, "findMany", "assistant_message", { where: { conversation_id: "c1" } });
+		expect(query).toHaveBeenCalledWith({
+			where: { AND: [{ conversation_id: "c1" }, { conversation: { organization_id: ORG_A } }] },
+		});
+	});
+
+	it("scopes assistant_tool_call two relations deep", async () => {
+		const { query } = await runHook(ORG_A, "findMany", "assistant_tool_call", {});
+		expect(query).toHaveBeenCalledWith({
+			where: { AND: [{}, { message: { conversation: { organization_id: ORG_A } } }] },
+		});
+	});
+
+	it("forces the caller's org onto a created conversation", async () => {
+		// A chat row that could be created into another org would let one tenant
+		// write history into another's account.
+		const { query } = await runHook(ORG_A, "create", "assistant_conversation", {
+			data: { organization_id: ORG_B, user_id: "u1", user_role: "dispatcher" },
+		});
+		expect(query).toHaveBeenCalledWith({
+			data: { organization_id: ORG_A, user_id: "u1", user_role: "dispatcher" },
+		});
+	});
+
+	it("refuses to update a conversation belonging to another org", async () => {
+		const { query } = await runHook(ORG_A, "update", "assistant_conversation", {
+			where: { id: "conv-1" },
+			data: { title: "x" },
+		});
+		expect(query).toHaveBeenCalledWith({
+			where: { id: "conv-1", organization_id: ORG_A },
+			data: { title: "x" },
+		});
+	});
+});
+
 describe("getScopedDb — same-key relation collision (H2)", () => {
 	it("keeps BOTH caller movement.to_location_type and injected movement.organization_id", async () => {
 		const callerWhere = { movement: { to_location_type: "consumed" } };
@@ -323,6 +412,7 @@ describe("getScopedDb — same-key relation collision (H2)", () => {
 		"vehicle_stock_batch",
 		"stock_movement_serial",
 		"stock_movement_batch",
+		"visit_tech_time_entry",
 	];
 
 	for (const model of REL_MODELS) {

@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import {
 	Briefcase,
-	Phone,
+	Inbox,
 	FileText,
 	ReceiptText,
 	Repeat,
@@ -29,7 +29,7 @@ const FEED_FILTERS = [
 	},
 	{
 		key: "requests",
-		icon: Phone,
+		icon: Inbox,
 		label: "Requests",
 		color: "text-orange-text",
 		bg: "bg-orange-bg",
@@ -41,7 +41,7 @@ const FEED_FILTERS = [
 		label: "Quotes",
 		color: "text-primary-text",
 		bg: "bg-primary/10",
-		eventTypes: new Set(["quote.created", "quote.updated"]),
+		eventTypes: new Set(["quote.created", "quote.updated", "quote.dispute_opened", "quote.dispute_resolved"]),
 	},
 	{
 		key: "jobs",
@@ -70,7 +70,7 @@ const FEED_FILTERS = [
 		label: "Invoices",
 		color: "text-success-text",
 		bg: "bg-success/10",
-		eventTypes: new Set(["invoice.created", "invoice.updated", "invoice_payment.created"]),
+		eventTypes: new Set(["invoice.created", "invoice.updated", "invoice.dispute_opened", "invoice.dispute_resolved", "invoice_payment.created"]),
 	},
 ] as const;
 

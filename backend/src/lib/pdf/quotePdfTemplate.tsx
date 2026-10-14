@@ -66,6 +66,21 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 // Sent and Viewed are internal workflow states ─ not meaningful to the quote recipient
 const HIDE_BADGE_STATUSES = new Set(["Sent", "Viewed"]);
 
+// Enum values are DB-frozen; these are the display strings, matching the
+// app's QuoteStatusLabels. Issued reads "Created".
+const STATUS_LABELS: Record<string, string> = {
+	Draft: "Draft",
+	Issued: "Created",
+	Sent: "Sent",
+	Viewed: "Viewed",
+	Approved: "Approved",
+	Disputed: "Disputed",
+	Rejected: "Rejected",
+	Revised: "Revised",
+	Expired: "Expired",
+	Cancelled: "Cancelled",
+};
+
 const badgeColors = (status: string) =>
 	STATUS_COLORS[status] ?? { bg: "#f3f4f6", text: "#6b7280" };
 
@@ -402,7 +417,7 @@ export function QuotePdfTemplate({ quote, org }: { quote: QuotePdfProps; org: Or
 						<Text style={s.sectionHeading}>Quote Details</Text>
 						{!HIDE_BADGE_STATUSES.has(quote.status) && (
 							<View style={[s.badge, { backgroundColor: bc.bg }]}>
-								<Text style={[s.badgeText, { color: bc.text }]}>{quote.status}</Text>
+								<Text style={[s.badgeText, { color: bc.text }]}>{STATUS_LABELS[quote.status] ?? quote.status}</Text>
 							</View>
 						)}
 						<View style={s.metaRow}>

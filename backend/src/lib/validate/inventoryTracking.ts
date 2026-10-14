@@ -1,5 +1,6 @@
 import z from "zod";
 import { STOCK_QTY_MESSAGE, isStorableStockQty } from "./shared.js";
+import { supplierCaptureFields } from "./suppliers.js";
 
 // Batch expiry dates round-trip through native `<input type="date">` controls
 // on the frontend, which emit a bare "YYYY-MM-DD" — not the full ISO-8601
@@ -32,10 +33,17 @@ export const receiveInventorySchema = z
 		// unknown rather than guessed — price-history reports coverage instead
 		// of averaging in a fake 0.
 		unit_cost: z.number().nonnegative().optional(),
+		// Receipt-level vendor, applied to both the movement and (when a new lot
+		// is created) the lot header, so the two can't disagree about origin.
+		...supplierCaptureFields,
 		batch: z
 			.object({
 				batch_number: z.string().trim().min(1).max(100),
 				expires_at: expiresAtField,
+				// Legacy free-text vendor. Superseded by the receipt-level
+				// supplier_id/supplier_name above, but still accepted so an older
+				// client's receive records an origin — the controller promotes it
+				// to a real supplier entity.
 				supplier: z.string().trim().max(200).optional(),
 				// Lot-level twin of the movement's unit_cost, stored on the lot
 				// header so a batch's paid cost is readable without walking its

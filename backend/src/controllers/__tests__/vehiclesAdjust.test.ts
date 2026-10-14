@@ -322,32 +322,18 @@ describe("adjustStock", () => {
 		expect(movementsFromLastCall()).toEqual([]);
 	});
 
-	it("supplier_purchase (new item): creates a provisional item and records external → vehicle", async () => {
-		const sdb = makeSdb([]);
-		sdb._tx.inventory_item.create = vi.fn().mockResolvedValue({ id: "prov-1" });
+	// Buying externally is a field purchase now: a grant, a limit, a receipt and
+	// a review. Refused here so the wizard cannot be used to go around them.
+	it("refuses supplier_purchase, which is no longer an adjustment", async () => {
+		makeSdb([]);
 		const result = await adjustStock(
 			"vehicle-1",
-			{ type: "supplier_purchase", lines: [{ new_item: { name: "Fuse 30A", cost: 4.5 }, qty_after: 3 }] },
+			{ type: "supplier_purchase", lines: [{ stock_item_id: STOCK_ITEM_UUID, qty_after: 1 }] },
 			"org-1",
 			{ techId: "tech-1" },
 		);
-		expect(result.err).toBeUndefined();
-		expect(sdb._tx.inventory_item.create).toHaveBeenCalledWith(expect.objectContaining({
-			data: expect.objectContaining({ name: "Fuse 30A", provisional: true, created_by_tech_id: "tech-1", quantity: 0 }),
-		}));
-		const movements = movementsFromLastCall();
-		expect(movements).toEqual([
-			expect.objectContaining({ qty: 3, from_location_type: "external", to_location_type: "vehicle",
-				to_vehicle_id: "vehicle-1", reason: "supplier_purchase" }),
-		]);
-	});
-
-	it("supplier_purchase requires new_item or inventory_item_id, not stock_item_id", async () => {
-		makeSdb([]);
-		const result = await adjustStock("vehicle-1",
-			{ type: "supplier_purchase", lines: [{ stock_item_id: STOCK_ITEM_UUID, qty_after: 1 }] },
-			"org-1", { techId: "tech-1" });
 		expect(result.err).toMatch(/Validation failed/);
+		expect(mockRecordMovements).not.toHaveBeenCalled();
 	});
 
 	it("multi-line: creates adjustment record with two lines + two movements", async () => {
@@ -415,111 +401,6 @@ describe("adjustStock", () => {
 	// Serial / batch tracking wiring (B-T3)
 	// ---------------------------------------------------------------------------
 	describe("serial/batch tracking", () => {
-		it("supplier_purchase with new_serials creates serial units directly on the vehicle", async () => {
-			// new_item lines resolve to the freshly created provisional item's id
-			// ("prov-1", from inventory_item.create's mocked return) — not the
-			// hardcoded "inv-2" the upsert mock returns.
-			const sdb = makeSdb([], [{ id: "prov-1", is_serialized: true, is_batch_tracked: false }]);
-			const result = await adjustStock(
-				"vehicle-1",
-				{
-					type: "supplier_purchase",
-					lines: [
-						{
-							new_item: { name: "Compressor", cost: 200 },
-							qty_after: 2,
-							new_serials: ["SN-A", "SN-B"],
-						},
-					],
-				},
-				"org-1",
-				{ techId: "tech-1" },
-			);
-
-			expect(result.err).toBeUndefined();
-			expect(sdb._tx.inventory_item.findMany).toHaveBeenCalled();
-			expect(movementsFromLastCall()).toEqual([
-				expect.objectContaining({
-					qty: 2,
-					from_location_type: "external",
-					to_location_type: "vehicle",
-					to_vehicle_id: "vehicle-1",
-					reason: "supplier_purchase",
-					serial: { create: [{ serial_number: "SN-A" }, { serial_number: "SN-B" }] },
-				}),
-			]);
-		});
-
-		it("supplier_purchase with new_batch creates the batch header via getOrCreateBatch", async () => {
-			const sdb = makeSdb([], [{ id: "prov-1", is_serialized: false, is_batch_tracked: true }]);
-			const result = await adjustStock(
-				"vehicle-1",
-				{
-					type: "supplier_purchase",
-					lines: [
-						{
-							new_item: { name: "Refrigerant", cost: 80 },
-							qty_after: 10,
-							new_batch: { batch_number: "B-500" },
-						},
-					],
-				},
-				"org-1",
-				{ techId: "tech-1" },
-			);
-
-			expect(result.err).toBeUndefined();
-			expect(sdb._tx.stock_batch.create).toHaveBeenCalledWith(
-				expect.objectContaining({ data: expect.objectContaining({ batch_number: "B-500" }) }),
-			);
-			expect(movementsFromLastCall()).toEqual([
-				expect.objectContaining({
-					qty: 10,
-					from_location_type: "external",
-					to_location_type: "vehicle",
-					reason: "supplier_purchase",
-					batch_allocations: [{ batch_id: "batch-1", qty: 10 }],
-				}),
-			]);
-		});
-
-		it("supplier_purchase with new_serials AND new_batch (dual-tracked item) attaches the batch id to created serials", async () => {
-			const sdb = makeSdb([], [{ id: "prov-1", is_serialized: true, is_batch_tracked: true }]);
-			const result = await adjustStock(
-				"vehicle-1",
-				{
-					type: "supplier_purchase",
-					lines: [
-						{
-							new_item: { name: "Compressor", cost: 200 },
-							qty_after: 2,
-							new_serials: ["SN-A", "SN-B"],
-							new_batch: { batch_number: "B-500" },
-						},
-					],
-				},
-				"org-1",
-				{ techId: "tech-1" },
-			);
-
-			expect(result.err).toBeUndefined();
-			expect(sdb._tx.stock_batch.create).toHaveBeenCalledWith(
-				expect.objectContaining({ data: expect.objectContaining({ batch_number: "B-500" }) }),
-			);
-			expect(movementsFromLastCall()).toEqual([
-				expect.objectContaining({
-					qty: 2,
-					reason: "supplier_purchase",
-					serial: {
-						create: [
-							{ serial_number: "SN-A", batch_id: "batch-1" },
-							{ serial_number: "SN-B", batch_id: "batch-1" },
-						],
-					},
-				}),
-			]);
-		});
-
 		it("field_loss with serial_unit_ids builds a loss movement carrying serial.unit_ids", async () => {
 			makeSdb([STOCK_ITEM], [{ id: "inv-1", is_serialized: true, is_batch_tracked: false }]);
 			const suIds = [
@@ -579,7 +460,7 @@ describe("adjustStock", () => {
 			]);
 		});
 
-		it("rejects a serialized line with neither serial_unit_ids nor new_serials", async () => {
+		it("rejects a serialized line with no serial_unit_ids", async () => {
 			makeSdb([STOCK_ITEM], [{ id: "inv-1", is_serialized: true, is_batch_tracked: false }]);
 			const result = await adjustStock(
 				"vehicle-1",
@@ -587,7 +468,7 @@ describe("adjustStock", () => {
 				"org-1",
 				CONTEXT,
 			);
-			expect(result.err).toMatch(/serial_unit_ids|new_serials/);
+			expect(result.err).toMatch(/serial_unit_ids/);
 			expect(mockRecordMovements).not.toHaveBeenCalled();
 		});
 
@@ -603,18 +484,6 @@ describe("adjustStock", () => {
 				CONTEXT,
 			);
 			expect(result.err).toMatch(/serial_unit_ids/);
-			expect(mockRecordMovements).not.toHaveBeenCalled();
-		});
-
-		it("rejects new_serials and new_batch on non-supplier_purchase types (Zod)", async () => {
-			makeSdb([STOCK_ITEM]);
-			const result = await adjustStock(
-				"vehicle-1",
-				{ type: "field_loss", lines: [{ stock_item_id: STOCK_ITEM_UUID, qty_after: 2, new_serials: ["SN-A", "SN-B"] }] },
-				"org-1",
-				CONTEXT,
-			);
-			expect(result.err).toMatch(/Validation failed/);
 			expect(mockRecordMovements).not.toHaveBeenCalled();
 		});
 

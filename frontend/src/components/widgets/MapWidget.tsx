@@ -33,7 +33,7 @@ export default function MapWidget() {
 						containerRef={mapContainerRef}
 						staticMarkers={markers}
 						techRoutes={techRoutes}
-						showRoutes={false}
+						showRoutes
 					/>
 				</div>
 			</div>

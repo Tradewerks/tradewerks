@@ -1,4 +1,5 @@
 import { getScopedDb } from "../lib/context.js";
+import { resolveVendorPrice } from "../services/suppliers.js";
 import {
 	normalizedMonthly,
 	planPerPeriodAmount,
@@ -19,6 +20,8 @@ import { round2 } from "../lib/reports/numbers.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { log } from "../services/appLogger.js";
 import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
+import { computeConsumptionCosts, ConsumptionCostRow } from "../lib/reports/costing.js";
+import { buildShiftSegments } from "./timesheetController.js";
 
 // Upper bound on rows pulled into memory for the in-JS report aggregations
 const REPORT_ROW_CAP = 10000;
@@ -708,18 +711,22 @@ export const getArrivalPerformance = async (
 // QUOTE PIPELINE
 // ============================================================================
 
+// A quote still awaiting a decision — not yet Approved, Revised, or one of
+// LOST_QUOTE_STATUSES. Was declared locally in two places with the same
+// literal (DW-71); one source of truth so the pipeline stat and the page
+// summary's quote widget can't drift apart on what "open" means.
+const QUOTE_OPEN_STATUSES = ["Draft", "Sent", "Viewed", "Disputed"] as const;
+
 export const getQuotePipeline = async (startDate: string, endDate: string, organizationId: string) => {
 	const start = parseReportDate(startDate, "start");
 	const end = parseReportDate(endDate, "end");
-
-	const OPEN_STATUSES = ["Draft", "Sent", "Viewed"] as const;
 
 	const sdb = getScopedDb(organizationId);
 	const grouped = await sdb.quote.groupBy({
 		by: ["status"],
 		where: {
 			organization_id: organizationId,
-			status: { in: [...OPEN_STATUSES] },
+			status: { in: [...QUOTE_OPEN_STATUSES] },
 			created_at: { gte: start, lte: end },
 		},
 		_sum: { total: true },
@@ -730,6 +737,7 @@ export const getQuotePipeline = async (startDate: string, endDate: string, organ
 		Draft: { revenue: 0, count: 0 },
 		Sent: { revenue: 0, count: 0 },
 		Viewed: { revenue: 0, count: 0 },
+		Disputed: { revenue: 0, count: 0 },
 	};
 
 	let totalRevenue = 0;
@@ -754,6 +762,7 @@ export const getQuotePipeline = async (startDate: string, endDate: string, organ
 		draft: buckets.Draft,
 		sent: buckets.Sent,
 		viewed: buckets.Viewed,
+		disputed: buckets.Disputed,
 	};
 };
 
@@ -784,7 +793,7 @@ export const getMileageReport = async (
 
 	const visits = await sdb.job_visit.findMany({
 		where: {
-			estimated_drive_miles: { not: null },
+			OR: [{ estimated_drive_miles: { not: null } }, { estimated_return_drive_miles: { not: null } }],
 			job: { organization_id: organizationId },
 			...(Object.keys(dateFilter).length && { scheduled_start_at: dateFilter }),
 		},
@@ -811,7 +820,7 @@ export const getMileageReport = async (
 		jobAddress: v.job.address,
 		clientName: v.job.client?.name ?? "Unknown Client",
 		visitDate: v.scheduled_start_at.toISOString(),
-		miles: Number(v.estimated_drive_miles ?? 0),
+		miles: Number(v.estimated_drive_miles ?? 0) + Number(v.estimated_return_drive_miles ?? 0),
 		visitStatus: v.status,
 		technicianNames: v.visit_techs.map((vt) => vt.tech.name).join(", ") || "Unassigned",
 	}));
@@ -830,6 +839,27 @@ export interface TimesheetReportRow {
 	grossHours: number;
 	breakHours: number;
 	payableHours: number;
+	visitHours: number;
+	driveHours: number;
+	visitCount: number;
+}
+
+type TimeSpan = { start: Date; end: Date };
+type VisitSpan = TimeSpan & { visitId: string };
+
+export function shiftSplitHours(
+	shift: TimeSpan,
+	entries: TimeSpan[],
+	drives: TimeSpan[],
+	breaks: (TimeSpan & { paid: boolean })[],
+) {
+	const tag = <T extends TimeSpan>(s: T) => ({ ...s, label: "", sub: "" });
+	const segments = buildShiftSegments(shift, entries.map(tag), drives.map(tag), breaks.map(tag));
+	const hoursOf = (type: string) =>
+		segments
+			.filter((s) => s.type === type)
+			.reduce((h, s) => h + (s.end.getTime() - s.start.getTime()) / 3_600_000, 0);
+	return { visitHours: hoursOf("job"), driveHours: hoursOf("drive") };
 }
 
 export const getTimesheetReport = async (
@@ -850,20 +880,64 @@ export const getTimesheetReport = async (
 		},
 		include: {
 			tech: { select: { id: true, name: true } },
+			breaks: { select: { started_at: true, ended_at: true, is_paid: true } },
 		},
 		orderBy: { started_at: "desc" },
 	});
 
-	return shifts.map((s) => ({
-		shiftId: s.id,
-		technicianId: s.tech.id,
-		technicianName: s.tech.name,
-		startedAt: s.started_at.toISOString(),
-		endedAt: s.ended_at!.toISOString(),
-		grossHours: Number(s.gross_hours ?? 0),
-		breakHours: Number(s.break_hours ?? 0),
-		payableHours: Number(s.payable_hours),
-	}));
+	const entriesByTech = new Map<string, VisitSpan[]>();
+	const drivesByTech = new Map<string, TimeSpan[]>();
+	const addSpan = <T extends TimeSpan>(map: Map<string, T[]>, techId: string, span: T) =>
+		map.set(techId, [...(map.get(techId) ?? []), span]);
+	if (shifts.length) {
+		const techIds = [...new Set(shifts.map((s) => s.tech_id))];
+		const from = shifts[shifts.length - 1].started_at;
+		const to = new Date(Math.max(...shifts.map((s) => s.ended_at!.getTime())));
+		const [entries, drives] = await Promise.all([
+			sdb.visit_tech_time_entry.findMany({
+				where: {
+					tech_id: { in: techIds },
+					clocked_out_at: { not: null, gt: from },
+					clocked_in_at: { lt: to },
+				},
+				select: { tech_id: true, visit_id: true, clocked_in_at: true, clocked_out_at: true },
+			}),
+			sdb.visit_tech_drive.findMany({
+				where: {
+					tech_id: { in: techIds },
+					ended_at: { not: null, gt: from },
+					started_at: { lt: to },
+				},
+				select: { tech_id: true, started_at: true, ended_at: true },
+			}),
+		]);
+		for (const e of entries)
+			addSpan(entriesByTech, e.tech_id, { start: e.clocked_in_at, end: e.clocked_out_at!, visitId: e.visit_id });
+		for (const d of drives) addSpan(drivesByTech, d.tech_id, { start: d.started_at, end: d.ended_at! });
+	}
+
+	return shifts.map((s) => {
+		const entries = entriesByTech.get(s.tech_id) ?? [];
+		return {
+			shiftId: s.id,
+			technicianId: s.tech.id,
+			technicianName: s.tech.name,
+			startedAt: s.started_at.toISOString(),
+			endedAt: s.ended_at!.toISOString(),
+			grossHours: Number(s.gross_hours ?? 0),
+			breakHours: Number(s.break_hours ?? 0),
+			payableHours: Number(s.payable_hours),
+			...shiftSplitHours(
+				{ start: s.started_at, end: s.ended_at! },
+				entries,
+				drivesByTech.get(s.tech_id) ?? [],
+				s.breaks.map((b) => ({ start: b.started_at, end: b.ended_at ?? s.ended_at!, paid: b.is_paid })),
+			),
+			visitCount: new Set(
+				entries.filter((e) => e.start < s.ended_at! && e.end > s.started_at).map((e) => e.visitId),
+			).size,
+		};
+	});
 };
 
 // ============================================================================
@@ -896,6 +970,23 @@ type ReorderForecastRow = {
 	belowReorderPoint: boolean;
 	// Computed once here so every surface (table, chart, detail page, export) agrees. Band geometry stays frontend.
 	severity: ReorderSeverity;
+	// Who to buy it from. Null throughout when the item has no vendor on file —
+	// the forecast still says what to buy, it just can't say where.
+	preferredSupplierId: string | null;
+	preferredSupplierName: string | null;
+	// The vendor's part number, which is what you actually order by.
+	vendorSku: string | null;
+	preferredUnitPrice: number | null;
+	// Which figure the price came from. Stated because a negotiated rate and a
+	// one-off counter price deserve different confidence.
+	priceSource: "contract" | "observed" | "none";
+	// Whether someone CHOSE this vendor or we fell back to whoever sold it last.
+	// Without this the table would present a guess as a decision.
+	vendorSource: "preferred" | "recent" | "none";
+	// Units needed to get back to the reorder point — the existing warehouse-scoped
+	// threshold, not an invented order policy. Null when no threshold is set.
+	shortfallQty: number | null;
+	estimatedShortfallCost: number | null;
 };
 
 export type ReorderSeverity = "critical" | "warning" | "healthy" | "unknown";
@@ -955,6 +1046,73 @@ export const reorderSeverity = (input: {
 // "Days of stock" = org-wide on-hand (warehouse + vehicles) / org-wide daily
 // consumption. Warehouse<->vehicle transfers are not demand; `loss` is excluded
 // from the rate even though it does drain stock.
+/**
+ * Names a vendor and a price on every forecast row that has one.
+ *
+ * The forecast has always been able to say WHAT to buy and WHEN, then stopped
+ * there. One query for the whole page (not one per row) attaches the rest.
+ *
+ * Vendor choice: an explicitly preferred row wins; otherwise the most recent
+ * purchase stands in, flagged as such — falling back is more useful than a blank
+ * column, but presenting the fallback as a decision would be a lie.
+ *
+ * Price choice: a negotiated `contract_price` beats an observed `last_price`,
+ * because one is what you WILL pay and the other is what you happened to pay.
+ */
+const attachPreferredVendors = async (
+	organizationId: string,
+	rows: ReorderForecastRow[],
+): Promise<void> => {
+	if (rows.length === 0) return;
+	const sdb = getScopedDb(organizationId);
+
+	const vendorRows = await sdb.supplier_item.findMany({
+		where: {
+			organization_id: organizationId,
+			inventory_item_id: { in: rows.map((r) => r.itemId) },
+			// A retired vendor must not be the answer to "who do I buy this from".
+			supplier: { is_active: true },
+		},
+		select: {
+			inventory_item_id: true,
+			supplier_id: true,
+			vendor_sku: true,
+			contract_price: true,
+			last_price: true,
+			last_purchased_at: true,
+			is_preferred: true,
+			supplier: { select: { name: true } },
+		},
+		// Preferred first, then most recently purchased — so the first row seen
+		// per item is the one to use and later rows can be skipped. Postgres
+		// defaults NULLS FIRST on a desc sort, which would rank a contract-only
+		// row (never actually purchased, last_purchased_at: null) ahead of a row
+		// with a real recent purchase date — the opposite of "most recent" wins.
+		orderBy: [{ is_preferred: "desc" }, { last_purchased_at: { sort: "desc", nulls: "last" } }],
+	});
+
+	const chosen = new Map<string, (typeof vendorRows)[number]>();
+	for (const v of vendorRows) {
+		if (!chosen.has(v.inventory_item_id)) chosen.set(v.inventory_item_id, v);
+	}
+
+	for (const row of rows) {
+		const v = chosen.get(row.itemId);
+		if (!v) continue;
+
+		const { price, priceSource } = resolveVendorPrice(v.contract_price, v.last_price);
+
+		row.preferredSupplierId = v.supplier_id;
+		row.preferredSupplierName = v.supplier.name;
+		row.vendorSku = v.vendor_sku;
+		row.preferredUnitPrice = price;
+		row.priceSource = priceSource;
+		row.vendorSource = v.is_preferred ? "preferred" : "recent";
+		row.estimatedShortfallCost =
+			price != null && row.shortfallQty != null ? price * row.shortfallQty : null;
+	}
+};
+
 const buildReorderForecast = async (
 	organizationId: string,
 	opts: { lookbackDays: number; itemId?: string },
@@ -1117,8 +1275,23 @@ const buildReorderForecast = async (
 				lowStockThreshold,
 				warehouseQuantity,
 			}),
+			// Filled in below, once the vendor rows for the whole page are read
+			// in one query instead of one per item.
+			preferredSupplierId: null,
+			preferredSupplierName: null,
+			vendorSku: null,
+			preferredUnitPrice: null,
+			priceSource: "none" as const,
+			vendorSource: "none" as const,
+			shortfallQty:
+				lowStockThreshold == null
+					? null
+					: Math.max(0, lowStockThreshold - warehouseQuantity),
+			estimatedShortfallCost: null,
 		};
 	});
+
+	await attachPreferredVendors(organizationId, built);
 
 	// Severity first, then runway. Sorting on projectedStockoutDate alone mapped
 	// null to Infinity, burying rows with no measured usage below every healthy
@@ -1341,6 +1514,29 @@ export const getInventoryReportPage = async (
 // ============================================================================
 
 // Outstanding invoice balances bucketed by how far past due
+//
+// Disputed invoices are still owed, so they stay in the receivables total,
+// but ageing them alongside uncontested debt misstates collection risk.
+// They are reported separately instead.
+// The invoice statuses aged receivables leaves out — Draft (not issued yet),
+// Paid (settled), Void (cancelled) and Disputed (owed, but reported apart). One
+// list feeds the two raw AR queries below and the Prisma-path
+// AGING_INVOICE_STATUS, so a new status can't land in one and miss the others.
+const AR_EXCLUDED_STATUSES = ["Draft", "Paid", "Void", "Disputed"] as const;
+const AR_EXCLUDED_STATUS_SQL = Prisma.raw(
+	AR_EXCLUDED_STATUSES.map((s) => `'${s}'`).join(", "),
+);
+
+// An invoice row that belongs on aged receivables: a positive balance past its
+// terms, or any credit (a negative balance nets now and never ages). `alias` is
+// "" for the un-aliased queries and "i." for the joined ones — the only thing
+// that differed between the four hand-written copies.
+const arCollectableSql = (alias: "" | "i." = "") =>
+	Prisma.sql`(
+		(${Prisma.raw(`${alias}balance_due`)} > 0 AND COALESCE(${Prisma.raw(`${alias}due_date`)}, ${Prisma.raw(`${alias}created_at`)}) <= NOW())
+		OR ${Prisma.raw(`${alias}balance_due`)} < 0
+	)`;
+
 export const getAgedReceivables = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
 
@@ -1349,6 +1545,10 @@ export const getAgedReceivables = async (organizationId: string) => {
 	>`
 		SELECT
 			CASE
+				-- A credit reduces what is owed NOW, so it never ages: ageing it
+				-- would read as the organisation being slow to repay itself,
+				-- which is not a collection-risk fact about the client.
+				WHEN balance_due < 0 THEN '0-30'
 				WHEN COALESCE(due_date, created_at) > NOW() - INTERVAL '31 days' THEN '0-30'
 				WHEN COALESCE(due_date, created_at) > NOW() - INTERVAL '61 days' THEN '31-60'
 				WHEN COALESCE(due_date, created_at) > NOW() - INTERVAL '91 days' THEN '61-90'
@@ -1358,10 +1558,26 @@ export const getAgedReceivables = async (organizationId: string) => {
 			SUM(balance_due)::float AS amount
 		FROM invoice
 		WHERE organization_id = ${organizationId}
-			AND status NOT IN ('Draft', 'Paid', 'Void')
-			AND balance_due > 0
-			AND COALESCE(due_date, created_at) <= NOW()
+			AND status NOT IN (${AR_EXCLUDED_STATUS_SQL})
+			-- <> 0, not > 0: a net-negative adjustment is a credit the client
+			-- can spend against this balance, so excluding it overstates
+			-- receivables by the whole credit until someone applies it.
+			-- Credits skip the due-date gate for the same reason they skip
+			-- ageing — terms govern when a charge becomes collectable, not
+			-- when a credit becomes real.
+			AND ${arCollectableSql()}
 		GROUP BY bucket
+	`;
+
+	const disputedRows = await sdb.$queryRaw<
+		{ amount: number | null; count: number }[]
+	>`
+		SELECT SUM(balance_due)::float AS amount,
+			COUNT(*)::int          AS count
+		FROM invoice
+		WHERE organization_id = ${organizationId}
+			AND status = 'Disputed'
+			AND ${arCollectableSql()}
 	`;
 
 	const BUCKETS = ["0-30", "31-60", "61-90", "90+"] as const;
@@ -1376,13 +1592,23 @@ export const getAgedReceivables = async (organizationId: string) => {
 		};
 	});
 
+	const disputedTotal = round2(disputedRows[0]?.amount);
+
 	return {
 		data,
-		totalOutstanding: data.reduce((sum, d) => sum + d.amount, 0),
+		disputedTotal,
+		// Reported alongside disputedTotal so a caller can reconcile the header
+		// count with totalOutstanding, which includes the disputed money.
+		disputedCount: disputedRows[0]?.count ?? 0,
+		totalOutstanding: data.reduce((sum, d) => sum + d.amount, 0) + disputedTotal,
 	};
 };
 
 // Outstanding invoice balances bucketed by age and grouped per client
+//
+// Disputed invoices are still owed, so they stay in the receivables total,
+// but ageing them alongside uncontested debt misstates collection risk.
+// They are reported separately instead.
 export const getAgedReceivablesByClient = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
 
@@ -1401,38 +1627,99 @@ export const getAgedReceivablesByClient = async (organizationId: string) => {
 		SELECT
 			c.id   AS "clientId",
 			c.name AS "clientName",
-			SUM(CASE WHEN COALESCE(i.due_date, i.created_at) > NOW() - INTERVAL '31 days'
+			-- Credits never age (see getAgedReceivables): they land in the
+			-- current bucket so they net against what is owed now.
+			SUM(CASE WHEN i.balance_due < 0
+					  OR COALESCE(i.due_date, i.created_at) > NOW() - INTERVAL '31 days'
 				THEN i.balance_due ELSE 0 END)::float AS "bucket0_30",
-			SUM(CASE WHEN COALESCE(i.due_date, i.created_at) <= NOW() - INTERVAL '31 days'
+			SUM(CASE WHEN i.balance_due > 0
+					  AND COALESCE(i.due_date, i.created_at) <= NOW() - INTERVAL '31 days'
 					  AND COALESCE(i.due_date, i.created_at) >  NOW() - INTERVAL '61 days'
 				THEN i.balance_due ELSE 0 END)::float AS "bucket31_60",
-			SUM(CASE WHEN COALESCE(i.due_date, i.created_at) <= NOW() - INTERVAL '61 days'
+			SUM(CASE WHEN i.balance_due > 0
+					  AND COALESCE(i.due_date, i.created_at) <= NOW() - INTERVAL '61 days'
 					  AND COALESCE(i.due_date, i.created_at) >  NOW() - INTERVAL '91 days'
 				THEN i.balance_due ELSE 0 END)::float AS "bucket61_90",
-			SUM(CASE WHEN COALESCE(i.due_date, i.created_at) <= NOW() - INTERVAL '91 days'
+			SUM(CASE WHEN i.balance_due > 0
+					  AND COALESCE(i.due_date, i.created_at) <= NOW() - INTERVAL '91 days'
 				THEN i.balance_due ELSE 0 END)::float AS "bucket90plus",
 			SUM(i.balance_due)::float AS "total",
 			COUNT(*)::int             AS "count"
 		FROM invoice i
 		JOIN client c ON c.id = i.client_id
 		WHERE i.organization_id = ${organizationId}
-			AND i.status NOT IN ('Draft', 'Paid', 'Void')
-			AND i.balance_due > 0
-			AND COALESCE(i.due_date, i.created_at) <= NOW()
+			AND i.status NOT IN (${AR_EXCLUDED_STATUS_SQL})
+			AND ${arCollectableSql("i.")}
 		GROUP BY c.id, c.name
-		ORDER BY "total" DESC
 	`;
 
-	return rows.map((r) => ({
-		clientId: r.clientId,
-		clientName: r.clientName,
-		bucket0_30: round2(r.bucket0_30),
-		bucket31_60: round2(r.bucket31_60),
-		bucket61_90: round2(r.bucket61_90),
-		bucket90plus: round2(r.bucket90plus),
-		total: round2(r.total),
-		count: r.count,
-	}));
+	const disputedRows = await sdb.$queryRaw<
+		{ clientId: string; clientName: string; disputed: number | null; count: number }[]
+	>`
+		SELECT
+			c.id   AS "clientId",
+			c.name AS "clientName",
+			SUM(i.balance_due)::float AS "disputed",
+			COUNT(*)::int             AS "count"
+		FROM invoice i
+		JOIN client c ON c.id = i.client_id
+		WHERE i.organization_id = ${organizationId}
+			AND i.status = 'Disputed'
+			AND ${arCollectableSql("i.")}
+		GROUP BY c.id, c.name
+	`;
+
+	const byClient = new Map<
+		string,
+		{
+			clientId: string;
+			clientName: string;
+			bucket0_30: number | null;
+			bucket31_60: number | null;
+			bucket61_90: number | null;
+			bucket90plus: number | null;
+			total: number | null;
+			disputed: number | null;
+			count: number;
+		}
+	>();
+
+	for (const r of rows) byClient.set(r.clientId, { ...r, disputed: 0 });
+	for (const d of disputedRows) {
+		const existing = byClient.get(d.clientId);
+		if (existing) {
+			existing.disputed = d.disputed;
+			existing.count += d.count;
+		} else {
+			byClient.set(d.clientId, {
+				clientId: d.clientId,
+				clientName: d.clientName,
+				bucket0_30: 0,
+				bucket31_60: 0,
+				bucket61_90: 0,
+				bucket90plus: 0,
+				total: 0,
+				disputed: d.disputed,
+				count: d.count,
+			});
+		}
+	}
+
+	return [...byClient.values()]
+		.map((r) => ({
+			clientId: r.clientId,
+			clientName: r.clientName,
+			bucket0_30: round2(r.bucket0_30),
+			bucket31_60: round2(r.bucket31_60),
+			bucket61_90: round2(r.bucket61_90),
+			bucket90plus: round2(r.bucket90plus),
+			disputed: round2(r.disputed),
+			// Rounded once, over the sum: round2(a) + round2(b) can land a cent
+			// away from the buckets this total is meant to reconcile with.
+			total: round2(Number(r.total ?? 0) + Number(r.disputed ?? 0)),
+			count: r.count,
+		}))
+		.sort((a, b) => b.total - a.total);
 };
 
 export interface TaxLiabilityRow {
@@ -1702,6 +1989,136 @@ export const getJobsReportPage = async (
 	});
 	if (!res) return null;
 	return { rows: res.rows.map(mapJobRaw), total: res.total, page: res.page, pageSize: res.pageSize };
+};
+
+// ============================================================================
+// PROJECTS
+// ============================================================================
+
+const PROJECTS_INCLUDE = {
+	client: { select: { name: true } },
+	_count: { select: { jobs: true } },
+	jobs: { select: { estimated_total: true, actual_total: true }},
+	manager_dispatcher: { select: { name: true }}
+} satisfies Prisma.projectInclude;
+
+const projectsBaseWhere = (
+	organizationId: string,
+	startDate?: string,
+	endDate?: string,
+): Record<string, unknown> => {
+	const dateFilter = buildDateFilter(startDate, endDate);
+	return {
+		organization_id: organizationId,
+		...(Object.keys(dateFilter).length && { created_at: dateFilter }),
+	};
+};
+
+// p = project, c = client, md = manager_dispatcher
+const PROJECTS_SQL_COLUMNS: ColumnMap = {
+	projectNumber: t("p.project_number"),
+	name: t("p.name"),
+	clientName: t("c.name"),
+	status: t("p.status::text"),
+	priority: t("p.priority::text"),
+	managerName: t("md.name"),
+	address: t("p.address"),
+	budget: cur("p.budget"),
+	startsAt: dt("p.starts_at"),
+	targetEndAt: dt("p.target_end_at"),
+	createdAt: dt("p.created_at"),
+	completedAt: dt("p.completed_at"),
+	cancelledAt: dt("p.cancelled_at"),
+	jobCount: n('(SELECT COUNT(*) FROM "job" j WHERE j.project_id = p.id)'),
+	estimatedTotal: cur(
+		'(SELECT CASE WHEN COUNT(j.id) = 0 THEN NULL ELSE COALESCE(SUM(j.estimated_total), 0) END FROM "job" j WHERE j.project_id = p.id)',
+	),
+	actualTotal: cur(
+		'(SELECT CASE WHEN COUNT(j.id) = 0 THEN NULL ELSE COALESCE(SUM(j.actual_total), 0) END FROM "job" j WHERE j.project_id = p.id)',
+	),
+	variance: cur(
+		'(SELECT CASE WHEN COUNT(j.id) = 0 THEN NULL ELSE COALESCE(SUM(j.actual_total), 0) - COALESCE(SUM(j.estimated_total), 0) END FROM "job" j WHERE j.project_id = p.id)',
+	),
+};
+
+const mapProjectRaw = (project: Prisma.projectGetPayload<{ include: typeof PROJECTS_INCLUDE }>) => {
+	const jobCount = project._count.jobs;
+	const totals = project.jobs.reduce(
+		(acc, j) => {
+			acc.estimatedTotal += Number(j.estimated_total ?? 0);
+			acc.actualTotal += Number(j.actual_total ?? 0);
+			return acc;
+		},
+		{ estimatedTotal: 0, actualTotal: 0 },
+	);
+	const estimatedTotal = jobCount > 0 ? totals.estimatedTotal : null;
+	const actualTotal = jobCount > 0 ? totals.actualTotal : null;
+	const variance = jobCount > 0 ? totals.actualTotal - totals.estimatedTotal : null;
+
+	return {
+		id: project.id,
+		projectNumber: project.project_number,
+		name: project.name,
+		clientName: project.client.name,
+		status: project.status,
+		priority: project.priority,
+		managerName: project.manager_dispatcher?.name ?? null,
+		address: project.address,
+		startsAt: project.starts_at,
+		targetEndAt: project.target_end_at,
+		completedAt: project.completed_at,
+		cancelledAt: project.cancelled_at,
+		createdAt: project.created_at,
+		budget: project.budget != null ? Number(project.budget) : null,
+		estimatedTotal,
+		actualTotal,
+		variance,
+		jobCount,
+	};
+};
+
+export const getProjectsReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	organizationId: string,
+) => {
+	const sdb = getScopedDb(organizationId);
+	const projects = await sdb.project.findMany({
+		where: projectsBaseWhere(organizationId, startDate, endDate),
+		orderBy: { created_at: "desc" },
+		include: PROJECTS_INCLUDE,
+	});
+	
+	return projects.map(mapProjectRaw);
+}
+
+export const getProjectsReportPage = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	organizationId: string,
+	params: PaginateParams,
+): Promise<PageResult<ReturnType<typeof mapProjectRaw>> | null> => {
+	const sdb = getScopedDb(organizationId);
+	const df = buildDateFilter(startDate, endDate);
+	const baseParams: unknown[] = [organizationId];
+	let baseWhere = "p.organization_id = $1";
+	if (df.gte) baseWhere += ` AND p.created_at >= $${baseParams.push(df.gte)}`;
+	if (df.lte) baseWhere += ` AND p.created_at <= $${baseParams.push(df.lte)}`;
+
+	const res = await runIdPrefilter({
+		sdb,
+		from: '"project" p JOIN "client" c ON c.id = p.client_id LEFT JOIN "dispatcher" md ON md.id = p.manager_dispatcher_id',
+		baseWhere,
+		baseParams,
+		idExpr: "p.id",
+		columns: PROJECTS_SQL_COLUMNS,
+		defaultOrder: { expr: "p.created_at", dir: "desc" },
+		params,
+		hydrate: (ids) => sdb.project.findMany({ where: { id: { in: ids } }, include: PROJECTS_INCLUDE }),
+		rowId: (r) => r.id,
+	});
+	if (!res) return null;
+	return { rows: res.rows.map(mapProjectRaw), total: res.total, page: res.page, pageSize: res.pageSize };
 };
 
 // ============================================================================
@@ -2933,10 +3350,137 @@ export const getPaymentsReportPage = async (
 };
 
 // ============================================================================
+// COGs (cost of goods) Report
+// ============================================================================
+
+const summarizeCostSource = (events: ConsumptionCostRow[]) => {
+	const priced = events.filter((e) => e.costSource !== "no_cost_data");
+	const pricedQty = round2(priced.reduce((s, e) => s + e.qtyConsumed, 0));
+	const pricedTotal = round2(priced.reduce((s, e) => s + e.totalCost, 0));
+	const totalCogs = priced.length === 0 ? null : pricedTotal;
+	const hasNoData = events.some(e=> e.costSource === "no_cost_data");
+	const allWac = events.every(e => e.costSource === "wac");
+	const costCoverage = allWac ? "Full"
+		: !hasNoData ? "Estimated"
+		: priced.length > 0 ? "Partial"
+		: "No Cost Data";
+	return { totalCogs, costCoverage, pricedQty, pricedTotal };
+}
+
+export interface CogsTrendPoint {
+	month: string;
+	totalCogs: number;
+}
+
+const buildCogsTrend = (events: ConsumptionCostRow[]): CogsTrendPoint[] => {
+	const byMonth = new Map<string, number>();
+	for (const e of events) {
+		if (e.costSource === "no_cost_data") continue;
+		const month = monthKey(e.consumedAt);
+		byMonth.set(month, (byMonth.get(month) ?? 0) + e.totalCost);
+	}
+	return [...byMonth.entries()]
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([month, totalCogs]) => ({ month, totalCogs: round2(totalCogs) }));
+}
+
+export const getCogsByJobReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined, 
+	orgId: string
+) => {
+	const { rows: events, truncated } = await computeConsumptionCosts(orgId, { 
+		startDate: startDate ? new Date(startDate): undefined,
+		endDate: endDate ? new Date (endDate) : undefined
+	});
+	
+	const trend = buildCogsTrend(events);
+
+	const byJob = new Map<string, ConsumptionCostRow[]>();
+	for (const e of events) {
+		(byJob.get(e.jobId) ?? byJob.set(e.jobId, []).get(e.jobId)!).push(e);
+	}
+
+	const sdb = getScopedDb(orgId);
+	const jobs = await sdb.job.findMany({
+		where: { id: { in: [...byJob.keys()]}},
+		include: { client: { select: { name: true }}},
+	});
+	const rows = jobs.map((job) =>{
+		const evs = byJob.get(job.id)!;
+		const { totalCogs, costCoverage } = summarizeCostSource(evs);
+		return {
+			id: job.id,
+			jobNumber: job.job_number,
+			name: job.name,
+			clientName: job.client.name,
+			status: job.status,
+			totalCogs,
+			costCoverage, 
+			itemCount: new Set(evs.map(e => e.inventoryItemId)).size,
+			qtyConsumed: round2(evs.reduce((s, e) => s + e.qtyConsumed, 0)),
+			lastConsumedAt: evs.reduce((max, e) => (e.consumedAt > max ? e.consumedAt : max), evs[0].consumedAt),
+		};
+	});
+
+	return { rows, truncated, trend }
+}
+
+export const getCogsByItemReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined, 
+	orgId: string
+) => {
+	const { rows: events, truncated } = await computeConsumptionCosts(orgId, { 
+		startDate: startDate ? new Date(startDate): undefined,
+		endDate: endDate ? new Date (endDate) : undefined
+	});
+
+	const trend = buildCogsTrend(events);
+
+	const byItem = new Map<string, ConsumptionCostRow[]>();
+	for (const e of events) {
+		(byItem.get(e.inventoryItemId) ?? byItem.set(e.inventoryItemId, []).get(e.inventoryItemId)!).push(e);
+	}
+
+	const sdb = getScopedDb(orgId);
+	const items = await sdb.inventory_item.findMany({
+		where: { id: { in: [...byItem.keys()]}},
+	});
+	const rows = items.map((item) =>{
+		const evs = byItem.get(item.id)!;
+		const { totalCogs, costCoverage, pricedQty, pricedTotal } = summarizeCostSource(evs);
+		return {
+			id: item.id,
+			name: item.name,
+			sku: item.sku,
+			category: item.category,
+			unit: item.unit,
+			quantity: item.quantity,
+			totalCogs,
+			costCoverage,
+			jobCount: new Set(evs.map(e => e.jobId)).size,
+			qtyConsumed: round2(evs.reduce((s, e) => s + e.qtyConsumed, 0)),
+			avgUnitCost: pricedQty > 0 ? round2(pricedTotal / pricedQty) : null,
+			lastConsumedAt: evs.reduce((max, e) => (e.consumedAt > max ? e.consumedAt : max), evs[0].consumedAt),
+		};
+	});
+
+	return { rows, truncated, trend }
+}
+
+// ============================================================================
 // QUOTE CONVERSION
 // ============================================================================
 
+// The won/lost definitions the quote funnel and the paged Quotes page share.
+// Both the JS aggregation and the SQL FILTER clauses below read these, so the
+// two win rates can't drift for one date range (DW-24). Compile-time literals,
+// safe to interpolate into the query text.
+const WON_QUOTE_STATUS = "Approved" as const;
 const LOST_QUOTE_STATUSES = ["Rejected", "Expired", "Cancelled"] as const;
+const WON_STATUS_SQL = `'${WON_QUOTE_STATUS}'`;
+const LOST_STATUS_SQL = LOST_QUOTE_STATUSES.map((s) => `'${s}'`).join(", ");
 
 const QUOTE_INCLUDE = {
 	client: { select: { name: true } },
@@ -2992,6 +3536,7 @@ export const getQuoteFunnelReport = async (
 	const funnel = { created: quotes.length, issued: 0, sent: 0, viewed: 0, approved: 0 };
 	let valueWon = 0;
 	let valueLost = 0;
+	let wonCount = 0;
 	let lostCount = 0;
 	const approveDays: number[] = [];
 	const bySourceMap = new Map<string, { quotes: number; approved: number }>();
@@ -3007,7 +3552,10 @@ export const getQuoteFunnelReport = async (
 		if (approved) funnel.approved++;
 
 		const total = Number(q.total);
-		if (q.status === "Approved") valueWon += total;
+		if (q.status === WON_QUOTE_STATUS) {
+			valueWon += total;
+			wonCount++;
+		}
 		if ((LOST_QUOTE_STATUSES as readonly string[]).includes(q.status)) {
 			valueLost += total;
 			lostCount++;
@@ -3025,11 +3573,15 @@ export const getQuoteFunnelReport = async (
 		return row;
 	});
 
-	const decided = funnel.approved + lostCount;
+	// Win rate is decided by CURRENT status so that it, valueWon and valueLost
+	// all describe one population. funnel.approved is timestamp-driven and would
+	// count a quote that was approved and then disputed into Cancelled on both
+	// sides of the ratio; it stays timestamp-driven as a funnel STAGE count.
+	const decided = wonCount + lostCount;
 
 	return {
 		funnel,
-		winRate: decided > 0 ? Math.round((funnel.approved / decided) * 100) : null,
+		winRate: decided > 0 ? Math.round((wonCount / decided) * 100) : null,
 		avgDaysToApprove: approveDays.length
 			? round2(approveDays.reduce((a, b) => a + b, 0) / approveDays.length)
 			: null,
@@ -3097,6 +3649,7 @@ interface FunnelScalarRow {
 	sent: number;
 	viewed: number;
 	approved: number;
+	wonCount: number;
 	valueWon: number;
 	valueLost: number;
 	lostCount: number;
@@ -3136,9 +3689,10 @@ export const getQuoteFunnelSummary = async (
 			COUNT(*) FILTER (WHERE q.sent_at IS NOT NULL OR q.viewed_at IS NOT NULL OR q.approved_at IS NOT NULL)::int AS sent,
 			COUNT(*) FILTER (WHERE q.viewed_at IS NOT NULL OR q.approved_at IS NOT NULL)::int AS viewed,
 			COUNT(*) FILTER (WHERE q.approved_at IS NOT NULL)::int AS approved,
-			COALESCE(SUM(q.total) FILTER (WHERE q.status = 'Approved'), 0)::float AS "valueWon",
-			COALESCE(SUM(q.total) FILTER (WHERE q.status IN ('Rejected','Expired','Cancelled')), 0)::float AS "valueLost",
-			COUNT(*) FILTER (WHERE q.status IN ('Rejected','Expired','Cancelled'))::int AS "lostCount",
+			COUNT(*) FILTER (WHERE q.status = ${WON_STATUS_SQL})::int AS "wonCount",
+			COALESCE(SUM(q.total) FILTER (WHERE q.status = ${WON_STATUS_SQL}), 0)::float AS "valueWon",
+			COALESCE(SUM(q.total) FILTER (WHERE q.status IN (${LOST_STATUS_SQL})), 0)::float AS "valueLost",
+			COUNT(*) FILTER (WHERE q.status IN (${LOST_STATUS_SQL}))::int AS "lostCount",
 			AVG(ROUND((EXTRACT(EPOCH FROM (q.approved_at - COALESCE(q.sent_at, q.issued_at, q.created_at))) / 86400.0)::numeric, 1)) FILTER (WHERE q.approved_at IS NOT NULL)::float AS "avgDays"
 		FROM quote q
 		WHERE ${whereSql}`,
@@ -3164,12 +3718,14 @@ export const getQuoteFunnelSummary = async (
 		viewed: scalar?.viewed ?? 0,
 		approved: scalar?.approved ?? 0,
 	};
+	// Same current-status population as getQuoteFunnelReport above.
+	const wonCount = scalar?.wonCount ?? 0;
 	const lostCount = scalar?.lostCount ?? 0;
-	const decided = funnel.approved + lostCount;
+	const decided = wonCount + lostCount;
 
 	return {
 		funnel,
-		winRate: decided > 0 ? Math.round((funnel.approved / decided) * 100) : null,
+		winRate: decided > 0 ? Math.round((wonCount / decided) * 100) : null,
 		avgDaysToApprove: scalar?.avgDays != null ? round2(scalar.avgDays) : null,
 		valueWon: round2(scalar?.valueWon ?? 0),
 		valueLost: round2(scalar?.valueLost ?? 0),
@@ -3259,6 +3815,111 @@ export const getTechnicianScorecard = async (
 	return rows;
 };
 
+// ===========================================================================================
+// Job Profitability
+// ===========================================================================================
+
+const JOB_BILLING_SELECT = {
+	job_number: true,
+	name: true,
+	client: { select: { name: true } },
+} as const;
+
+
+/* 
+*	 missng labor cost
+*/
+export const getJobProfitabilityReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	orgId: string,
+) => {
+	const sdb = getScopedDb(orgId);
+	const dateFilter = buildDateFilter(startDate, endDate);
+
+	// COGS is job-lifetime on purpose: the period selects which jobs were billed,
+	// then each is costed over its whole life. Its own truncation flag comes from
+	// the 10k consumption-event cap in costing.ts and must be forwarded — dropping
+	// it understates COGS and therefore OVERSTATES profit.
+	const jobCogs = await getCogsByJobReport(undefined, undefined, orgId);
+	const invoices = await sdb.invoice.findMany({
+		where: {
+			status: { notIn: ["Draft", "Void"] },
+			...(Object.keys(dateFilter).length && {
+				OR: [{ issue_date: dateFilter }, { issue_date: null, created_at: dateFilter }],
+			}),
+		},
+		take: REPORT_ROW_CAP,
+		include: {
+			jobs: {
+				include: {
+					job: { select: JOB_BILLING_SELECT },
+				},
+			},
+			visits: {
+				include: {
+					visit: {
+						select: {
+							job_id: true,
+							job: { select: JOB_BILLING_SELECT },
+						},
+					},
+				},
+			},
+		},
+	});
+
+	// Gross margin 
+	const cogsByJob = new Map(jobCogs.rows.map((r) => [String(r.id), r]));
+
+	type BilledJobMeta = (typeof invoices)[number]["jobs"][number]["job"];
+	const jobRevenue = new Map<string, { revenue: number; job: BilledJobMeta }>();
+	const addRevenue = (jobId: string, amount: unknown, job: BilledJobMeta) => {
+		const prev = jobRevenue.get(jobId);
+		jobRevenue.set(jobId, {
+			revenue: (prev?.revenue ?? 0) + Number(amount ?? 0),
+			job: prev?.job ?? job,
+		});
+	};
+
+	for (const i of invoices) {
+		for (const j of i.jobs) addRevenue(j.job_id, j.billed_amount, j.job);
+		for (const v of i.visits) addRevenue(v.visit.job_id, v.billed_amount, v.visit.job);
+	}
+
+	// Net margin
+	
+
+	const rows = [...jobRevenue.entries()]
+		.map(([jobId, { revenue, job }]) => {
+			const cogs = round2(Number(cogsByJob.get(jobId)?.totalCogs ?? 0));
+			const profit = round2(revenue - cogs);
+			const margin = revenue > 0 ? round2((profit / revenue) * 100) : null;
+			return {
+				jobId,
+				jobNumber: job.job_number,
+				jobName: job.name,
+				clientName: job.client?.name ?? null,
+				revenue: round2(revenue),
+				cogs,
+				profit,
+				margin,
+			};
+		})
+		.sort((a, b) => b.revenue - a.revenue);
+
+	// Three independent caps can each make these figures incomplete, and all three
+	// warrant the same warning: consumption events (understates COGS -> overstates
+	// profit), invoices scanned (understates revenue), and report rows (drops jobs).
+	const rowsTruncated = rows.length > REPORT_ROW_CAP;
+	const truncated = rowsTruncated || jobCogs.truncated || invoices.length >= REPORT_ROW_CAP;
+	return { rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows, truncated };
+}
+
+// =========================================================================================================
+// Page Summary
+// =========================================================================================================
+
 export const PAGES = ["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects"] as const;
 export type SummaryPage = (typeof PAGES)[number];
 export const BREAKDOWNS: Record<SummaryPage, string[]> = {
@@ -3283,6 +3944,14 @@ interface PageSummaryResponse {
 // voided_at — total/balance_due keep their values), so the money figures below leave
 // both out, matching the invoices, revenue and aged-receivables reports.
 const ISSUED_INVOICE_STATUS = { notIn: ["Draft", "Void"] } satisfies Prisma.invoiceWhereInput["status"];
+
+// Disputed invoices are still owed, so they stay in the receivables total,
+// but ageing them alongside uncontested debt misstates collection risk.
+// They are reported separately instead.
+const AGING_INVOICE_STATUS = {
+	notIn: [...AR_EXCLUDED_STATUSES],
+} satisfies Prisma.invoiceWhereInput["status"];
+const DISPUTED_INVOICE_STATUS = { equals: "Disputed" } satisfies Prisma.invoiceWhereInput["status"];
 
 export const isSummaryPage = (page: string): page is SummaryPage =>
 	(PAGES as readonly string[]).includes(page);
@@ -3345,15 +4014,14 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			break;
 		}
 		case "quotes": {
-			const OPEN_STATUSES = ["Draft", "Sent", "Viewed"] as const;
 			const createdRangeSql = Prisma.sql`
 				${dated?.gte ? Prisma.sql`AND created_at >= ${dated.gte}` : Prisma.empty}
 				${dated?.lte ? Prisma.sql`AND created_at <= ${dated.lte}` : Prisma.empty}`;
 			const [total, open, pipeline, approved, rows] = await Promise.all([
 				sdb.quote.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.quote.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES]}, ...createdWhere }}),
+				sdb.quote.count({ where: { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES]}, ...createdWhere }}),
 				sdb.quote.aggregate({
-					where: { organization_id: orgId, status: { in: [...OPEN_STATUSES]}, ...createdWhere },
+					where: { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES]}, ...createdWhere },
 					_sum: { total: true }
 				}),
 				sdb.quote.aggregate({ 
@@ -3466,14 +4134,14 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",           value: total,                                    format: "number" },
-				{ label: "Issued",          value: Number(issued._sum.total ?? 0),           format: "currency" },
+				{ label: "Created",         value: Number(issued._sum.total ?? 0),           format: "currency" },
 				{ label: "Collected",       value: Number(collected._sum.amount ?? 0),       format: "currency" },
 				{ label: "Avg. Days to Pay", value: Number(avgDays),                          format: "duration" },
 			];
 			break;
 		}
 		case "clients": {
-			const [total, added, active, openBalance, income] = await Promise.all([
+			const [total, added, active, agingBalance, disputedBalance, income] = await Promise.all([
 				sdb.client.count({ where: { organization_id: orgId } }),
 				sdb.client.count({ where: { organization_id: orgId, ...createdWhere } }),
 				sdb.client.count({ where: { organization_id: orgId, is_active: true } }),
@@ -3481,8 +4149,22 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				sdb.invoice.aggregate({
 					where: {
 						organization_id: orgId,
-						status: { notIn: ["Draft", "Paid", "Void"] },
-						balance_due: { gt: 0 },
+						status: AGING_INVOICE_STATUS,
+						// not: 0, so an unapplied credit nets against the
+						// client's open balance instead of being invisible.
+						balance_due: { not: 0 },
+					},
+					_sum: { balance_due: true },
+				}),
+				// Disputed invoices are still owed, so they stay in the receivables
+				// total (see AGING_INVOICE_STATUS above) — added back in below.
+				sdb.invoice.aggregate({
+					where: {
+						organization_id: orgId,
+						status: DISPUTED_INVOICE_STATUS,
+						// not: 0, so an unapplied credit nets against the
+						// client's open balance instead of being invisible.
+						balance_due: { not: 0 },
 					},
 					_sum: { balance_due: true },
 				}),
@@ -3491,6 +4173,8 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 					_sum: { total: true },
 				}),
 			]);
+			const openBalance =
+				Number(agingBalance._sum.balance_due ?? 0) + Number(disputedBalance._sum.balance_due ?? 0);
 			// Avg income per client = total billed spread over the whole client book
 			const avgIncome = total > 0 ? Number(income._sum.total ?? 0) / total : 0;
 			if (grouping === "tax_exempt") {
@@ -3506,7 +4190,7 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				{ label: "Total",        value: total,                                     format: "number" },
 				{ label: "New",          value: added,                                     format: "number" },
 				{ label: "Active",       value: active,                                    format: "number" },
-				{ label: "Open Balance", value: Number(openBalance._sum.balance_due ?? 0), format: "currency" },
+				{ label: "Open Balance", value: openBalance,                                     format: "currency" },
 				{ label: "Avg. Income",   value: avgIncome,                                 format: "currency" },
 			];
 			break;

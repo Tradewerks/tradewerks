@@ -1,11 +1,12 @@
 ﻿import {
+	AlertTriangle,
 	Briefcase,
 	Calendar,
 	CheckCircle2,
 	Activity,
 	MapPin,
 	XCircle,
-	Phone,
+	Inbox,
 	FileText,
 	ReceiptText,
 	Repeat,
@@ -13,6 +14,8 @@
 } from "lucide-react";
 import type React from "react";
 import type { ActivityLog } from "../../types/logs";
+import { OUTCOME_LABELS } from "../disputes/outcomes";
+import type { DisputeResolution } from "../../types/disputes";
 
 export type FeedEntry = {
 	message: string;
@@ -40,6 +43,14 @@ const formatShortDate = (val: unknown, tz: string): string | null => {
 		minute: "2-digit",
 		timeZone: tz,
 	});
+};
+
+const disputedDocument = (log: ActivityLog): { kind: "Quote" | "Invoice"; num: string | undefined } => {
+	const isQuote = log.event_type.startsWith("quote.");
+	const num = (isQuote ? log.changes?._quote_number?.new : log.changes?._invoice_number?.new) as
+		| string
+		| undefined;
+	return { kind: isQuote ? "Quote" : "Invoice", num };
 };
 
 export const formatActivity = (log: ActivityLog, tz: string): FeedEntry | null => {
@@ -137,7 +148,7 @@ export const formatActivity = (log: ActivityLog, tz: string): FeedEntry | null =
 			return {
 				message: title ? `${base}: '${title}'` : base,
 				subtitle: clientName && title ? `${clientName} · ${title}` : clientName ?? null,
-				icon: Phone,
+				icon: Inbox,
 				color: "text-orange-400",
 				bg: "bg-orange-500/10",
 			};
@@ -146,9 +157,9 @@ export const formatActivity = (log: ActivityLog, tz: string): FeedEntry | null =
 			const clientName = changes?.client_name?.new as string | undefined;
 			const title = changes?.title?.new as string | undefined;
 			const subtitle = clientName && title ? `${clientName} · ${title}` : clientName ?? null;
-			if (newStatus === "Reviewing") return { message: "Request under review", subtitle, icon: Phone, color: "text-orange-400", bg: "bg-orange-500/10" };
-			if (newStatus === "Quoted") return { message: "Quote issued for request", subtitle, icon: Phone, color: "text-orange-400", bg: "bg-orange-500/10" };
-			if (newStatus === "ConvertedToJob") return { message: "Request converted to job", subtitle, icon: Phone, color: "text-orange-400", bg: "bg-orange-500/10" };
+			if (newStatus === "Reviewing") return { message: "Request under review", subtitle, icon: Inbox, color: "text-orange-400", bg: "bg-orange-500/10" };
+			if (newStatus === "Quoted") return { message: "Quote created for request", subtitle, icon: Inbox, color: "text-orange-400", bg: "bg-orange-500/10" };
+			if (newStatus === "ConvertedToJob") return { message: "Request converted to job", subtitle, icon: Inbox, color: "text-orange-400", bg: "bg-orange-500/10" };
 			if (newStatus === "Cancelled") return { message: "Request cancelled", subtitle, icon: XCircle, color: "text-error-text", bg: "bg-error/10" };
 			return null;
 		}
@@ -254,6 +265,29 @@ export const formatActivity = (log: ActivityLog, tz: string): FeedEntry | null =
 			if (newStatus === "Working") return { message: `${techName} started working`, subtitle: title ?? null, icon: Activity, color: "text-warning-text", bg: "bg-warning/10" };
 			return null;
 		}
+		case "quote.dispute_opened":
+		case "invoice.dispute_opened": {
+			const { kind, num } = disputedDocument(log);
+			return {
+				message: `${kind}${num ? ` ${num}` : ""} disputed`,
+				subtitle: null,
+				icon: AlertTriangle,
+				color: "text-warning-text",
+				bg: "bg-warning/10",
+			};
+		}
+		case "quote.dispute_resolved":
+		case "invoice.dispute_resolved": {
+			const { kind, num } = disputedDocument(log);
+			const outcome = changes?.dispute_resolution?.new as DisputeResolution | undefined;
+			return {
+				message: `Dispute on ${num ?? kind.toLowerCase()} resolved${outcome ? ` — ${OUTCOME_LABELS[outcome]}` : ""}`,
+				subtitle: null,
+				icon: CheckCircle2,
+				color: "text-text-secondary",
+				bg: "bg-surface",
+			};
+		}
 		default:
 			return null;
 	}
@@ -277,9 +311,13 @@ export const resolveRoute = (log: ActivityLog): string | null => {
 			return `/dispatch/requests/${id}`;
 		case "quote.created":
 		case "quote.updated":
+		case "quote.dispute_opened":
+		case "quote.dispute_resolved":
 			return `/dispatch/quotes/${id}`;
 		case "invoice.created":
 		case "invoice.updated":
+		case "invoice.dispute_opened":
+		case "invoice.dispute_resolved":
 			return `/dispatch/invoices/${id}`;
 		case "invoice_payment.created": {
 			const invoiceId = ch?.invoice_id?.new as string | undefined;

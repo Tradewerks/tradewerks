@@ -3,6 +3,7 @@ import { Coins } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import PageControls from "../../components/ui/PageControls";
 import PageHeader from "../../components/ui/PageHeader";
+import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import ColumnsButton from "../../components/ui/ColumnsButton";
 import StatCard from "../../components/ui/StatCard";
 import ExportExcelButton from "../../components/reports/ExportExcelButton";
@@ -127,6 +128,7 @@ export default function RevenueByLineItemTypePage() {
 							disabled={(summary?.totalRevenue ?? 0) === 0}
 						/>
 						<ColumnsButton columns={COLS} hidden={hidden} onToggle={toggle} onReset={reset} />
+						<RefreshReportsButton />
 					</>
 				}
 			/>

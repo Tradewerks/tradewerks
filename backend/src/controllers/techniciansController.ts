@@ -1,4 +1,5 @@
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
+import { coordsSchema } from "../lib/validate/shared.js";
 import type {
 	tech_break_reason,
 	technician_status,
@@ -16,6 +17,14 @@ import { randomBytes } from "crypto";
 import { sendEmailVerificationEmail } from "../services/emailService.js";
 import { getMfaEnabledUserIds, isMfaEnabled } from "../services/mfaService.js";
 import { db } from "../db.js";
+import { utcDayRange } from "../lib/dayRange.js";
+import { fetchRouteDistanceMiles, applyOdometerIncrement } from "../lib/vehicleMileage.js";
+import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
+import { recordDrive } from "../lib/visitDrive.js";
+import { assertSeatAvailable, OPEN_VISIT_STATUSES } from "../lib/entitlements/seats.js";
+import type { HttpError } from "../types/responses.js";
+import { setUserActive } from "../services/userActiveCache.js";
+import { getSocket } from "../services/socketService.js";
 
 const PAID_BREAK_REASONS = new Set<string>(["Rest", "EquipmentIssue"]);
 const VALID_BREAK_REASONS = new Set<string>([
@@ -33,6 +42,7 @@ const VALID_TECH_STATUSES = new Set<string>([
 	"Working",
 	"Paused",
 	"WrappingUp",
+	"HeadingBack",
 ]);
 
 function toBreakReason(v: string): tech_break_reason | undefined {
@@ -45,21 +55,44 @@ function toTechnicianStatus(v: string): technician_status | undefined {
 	return v as technician_status;
 }
 
-export const getAllTechnicians = async (organizationId: string) => {
-	const sdb = getScopedDb(organizationId);
-	const technicians = await sdb.technician.findMany({
+/*
+ * Omit sensitive fields from technician records returned
+ * Deliberately withheld: password, hourly_rate, password_reset_token, password_reset_token_expires_at, cost_rate
+ */
+const TECHNICIAN_SELECT = {
+	id: true,
+	organization_id: true,
+	name: true,
+	email: true,
+	phone: true,
+	title: true,
+	description: true,
+	status: true,
+	hire_date: true,
+	coords: true,
+	last_ping_at: true,
+	last_login: true,
+	deactivated_at: true,
+	theme: true,
+	organization_role_id: true,
+	current_vehicle_id: true,
+	current_vehicle: { select: { id: true, name: true, stored_at_coords: true } },
+	organization_role: { select: { id: true, name: true, permissions: true } },
+	visit_techs: {
 		include: {
-			organization_role: { select: { id: true, name: true, permissions: true } },
-			visit_techs: {
+			visit: {
 				include: {
-					visit: {
-						include: {
-							job: { include: { client: true } },
-						},
-					},
+					job: { include: { client: true } },
 				},
 			},
 		},
+	},
+} as const;
+
+export const getAllTechnicians = async (organizationId: string) => {
+	const sdb = getScopedDb(organizationId);
+	const technicians = await sdb.technician.findMany({
+		select: TECHNICIAN_SELECT,
 	});
 	const mfaEnabledIds = await getMfaEnabledUserIds(technicians.map((t) => t.id));
 	return technicians.map((t) => ({
@@ -73,18 +106,7 @@ export const getTechnicianById = async (id: string, organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
 	const technician = await sdb.technician.findFirst({
 		where: { id },
-		include: {
-			organization_role: { select: { id: true, name: true, permissions: true } },
-			visit_techs: {
-				include: {
-					visit: {
-						include: {
-							job: { include: { client: true } },
-						},
-					},
-				},
-			},
-		},
+		select: TECHNICIAN_SELECT,
 	});
 	if (!technician) return null;
 	const permissions: string[] = (technician.organization_role?.permissions as string[] | null) ?? [];
@@ -98,6 +120,8 @@ export const insertTechnician = async (
 ) => {
 	try {
 		const parsed = createTechnicianSchema.parse(data);
+		// all emails in db are set to lower case
+        parsed.email = parsed.email.toLowerCase();
 		const sdb = getScopedDb(organizationId);
 
 		const existing = (await db.technician.findFirst({ where: { email: parsed.email } })) ??
@@ -113,6 +137,7 @@ export const insertTechnician = async (
 		const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
 		const created = await sdb.$transaction(async (tx) => {
+			await assertSeatAvailable(tx, organizationId, "technicians");
 			const { password: _pw, ...parsedWithoutPassword } = parsed;
 			const technician = await tx.technician.create({
 				data: {
@@ -169,6 +194,7 @@ export const insertTechnician = async (
 
 		return { err: "", item: created };
 	} catch (e) {
+		if ((e as HttpError).statusCode) throw e;
 		if (e instanceof ZodError) {
 			return {
 				err: `Validation failed: ${e.issues.map((err) => err.message).join(", ")}`,
@@ -187,6 +213,8 @@ export const updateTechnician = async (
 ) => {
 	try {
 		const parsed = updateTechnicianSchema.parse(data);
+		// all emails in db are set to lower case
+		if (parsed.email) parsed.email = parsed.email.toLowerCase();
 		const sdb = getScopedDb(organizationId);
 
 		const existing = await sdb.technician.findFirst({ where: { id } });
@@ -320,53 +348,26 @@ export const checkAndClearWrappingUp = async (
 	}
 };
 
+// Live GPS ping: coords + last_ping_at only, no activity log (fires every ~15s while
+// on shift, plus a heartbeat while stationary)
 export const updateTechnicianLocation = async (
 	id: string,
 	data: unknown,
 	organizationId: string,
-	context?: UserContext,
 ) => {
 	try {
-		const parsed = updateTechnicianSchema.parse(data);
+		const { coords } = z.object({ coords: coordsSchema }).parse(data);
 		const sdb = getScopedDb(organizationId);
 
-		const existing = await sdb.technician.findFirst({ where: { id } });
-
+		const existing = await sdb.technician.findFirst({ where: { id }, select: { id: true } });
 		if (!existing) {
 			return { err: "Technician not found" };
 		}
 
-		const updated = await sdb.$transaction(async (tx) => {
-			const technician = await tx.technician.update({
-				where: { id },
-				data: parsed,
-			});
-
-			await logActivity({
-				event_type: "technician.updated",
-				action: "updated",
-				entity_type: "technician",
-				entity_id: id,
-				organization_id: organizationId,
-				actor_type: context?.techId
-					? "technician"
-					: context?.dispatcherId
-						? "dispatcher"
-						: "system",
-				actor_id: context?.techId || context?.dispatcherId,
-				changes: {
-					coords: {
-						old: existing.coords ?? null,
-						new: parsed.coords ?? null,
-					},
-				},
-				ip_address: context?.ipAddress,
-				user_agent: context?.userAgent,
-			});
-
-			return technician;
+		const updated = await sdb.technician.update({
+			where: { id },
+			data: { coords, last_ping_at: new Date() },
 		});
-
 		return { err: "", item: updated };
 	} catch (e) {
 		if (e instanceof ZodError) {
@@ -395,13 +396,13 @@ export const deleteTechnician = async (
 		const upcomingVisits = await sdb.job_visit_technician.count({
 			where: {
 				tech_id: id,
-				visit: { status: { in: ["Scheduled", "InProgress"] } },
+				visit: { status: { in: ["Scheduled", "Driving", "OnSite", "InProgress", "Paused", "Delayed"] } },
 			},
 		});
 
 		if (upcomingVisits > 0) {
 			return {
-				err: `Cannot delete technician with ${upcomingVisits} scheduled or in-progress visits`,
+				err: `Can't delete this technician: they're on ${upcomingVisits} open visit${upcomingVisits === 1 ? "" : "s"}. Reassign or finish those first.`,
 			};
 		}
 
@@ -450,6 +451,7 @@ export const startShift = async (techId: string, organizationId: string) => {
 		if (!tech) return { err: "Technician not found" };
 		if (tech.status !== "Offline")
 			return { err: "Technician is not Offline" };
+		if (await isWeekLocked(organizationId, techId)) return { err: TIMESHEET_LOCKED };
 
 		const updated = await sdb.$transaction(async (tx) => {
 			await tx.technician_shift.create({
@@ -481,7 +483,49 @@ export const startShift = async (techId: string, organizationId: string) => {
 	}
 };
 
-export const goOffline = async (techId: string, organizationId: string) => {
+// Return miles from today's last completed visit to the vehicle home (else fallback coords).
+const recordReturnMiles = async (
+	sdb: ReturnType<typeof getScopedDb>,
+	techId: string,
+	organizationId: string,
+	vehicleId: string | null,
+	fallback?: { lat: number; lon: number },
+) => {
+	const vehicle = vehicleId
+		? await sdb.vehicle.findFirst({ where: { id: vehicleId }, select: { stored_at_coords: true } })
+		: null;
+	const returnTo = (vehicle?.stored_at_coords as { lat: number; lon: number } | null) ?? fallback;
+	if (!returnTo) return;
+
+	const org = await sdb.organization.findFirst({ where: { id: organizationId }, select: { timezone: true } });
+	const { start, end } = utcDayRange(new Date(), 1, org?.timezone ?? "UTC");
+	const lastVisit = await sdb.job_visit.findFirst({
+		where: {
+			status: "Completed",
+			actual_end_at: { not: null },
+			scheduled_start_at: { gte: start, lt: end },
+			visit_techs: { some: { tech_id: techId } },
+		},
+		include: { job: true },
+		orderBy: { actual_end_at: "desc" },
+	});
+	if (!lastVisit || lastVisit.estimated_return_drive_miles != null) return;
+
+	const jobCoords = lastVisit.job.coords as { lat?: number; lon?: number; lng?: number } | null;
+	const jobLon = jobCoords?.lon ?? jobCoords?.lng;
+	const miles = await fetchRouteDistanceMiles(
+		jobCoords?.lat && jobLon ? { lat: jobCoords.lat, lon: jobLon } : null,
+		returnTo,
+	);
+	if (miles === null) return;
+	const claimed = await sdb.job_visit.updateMany({
+		where: { id: lastVisit.id, estimated_return_drive_miles: null },
+		data: { estimated_return_drive_miles: miles },
+	});
+	if (claimed.count) await applyOdometerIncrement(sdb, techId, miles);
+};
+
+export const goOffline = async (techId: string, organizationId: string, techCords?: { lat: number; lon: number }) => {
 	try {
 		const sdb = getScopedDb(organizationId);
 		const tech = await sdb.technician.findUnique({ where: { id: techId } });
@@ -492,6 +536,9 @@ export const goOffline = async (techId: string, organizationId: string) => {
 		});
 		if (openEntry)
 			return { err: "Cannot end shift while clocked into a visit" };
+
+		// no-op if Head back already claimed the last visit
+		await recordReturnMiles(sdb, techId, organizationId, tech.current_vehicle_id, techCords);
 
 		// Cancel any pending WrappingUp auto-transition before status changes
 		import("../services/wrappingUpTimer.js")
@@ -520,6 +567,9 @@ export const goOffline = async (techId: string, organizationId: string) => {
 					data: { ended_at: now, duration_hrs: durationHrs },
 				});
 			}
+
+			//doesn't record the Drive time unless the tech signs out when EnRoute
+			await recordDrive(tx, techId, now);
 
 			// Close open shift
 			const openShift = await tx.technician_shift.findFirst({
@@ -773,4 +823,144 @@ export const changeTechnicianPassword = async (
 		});
 	});
 	return { message: "Password updated successfully", err: ""};
+};
+
+export const returnFromJob = async(orgId: string, technicianId: string, context?: UserContext) => {
+	try {
+		const sdb = getScopedDb(orgId);
+		const technician = await sdb.technician.findFirst({
+			where: { id: technicianId, }
+		});
+		if (!technician) return { err: "Technician not found"};
+		const acceptedStatuses = ["WrappingUp", "Available"];
+		if (!acceptedStatuses.includes(technician.status)) return { err: "Technician must be available or wrapping up to return"};
+		const openShift = await sdb.technician_shift.findFirst({ where: { tech_id: technicianId, ended_at: null } });
+		if (!openShift) return { err: "Technician has no open shift" };
+
+		const result = await sdb.$transaction(async (tx) => {
+			await tx.visit_tech_drive.create({
+				data: {
+					tech_id: technicianId,
+					started_at: new Date()
+				}
+			});
+			const result =  await tx.technician.update({
+				where: { id: technicianId},
+				data: {
+					status: "HeadingBack"
+				}
+			});
+
+			await logActivity({
+				event_type: "technician.return",
+				action: "return",
+				entity_type: "technician",
+				entity_id: technicianId,
+				organization_id: orgId,
+				actor_type: context?.techId
+					? "technician"
+					: context?.dispatcherId
+					? "dispatcher"
+					: "system",
+				actor_id: context?.techId || context?.dispatcherId,
+				changes: {
+					status: { old: technician.status, new: result.status },
+				},
+				ip_address: context?.ipAddress,
+				user_agent: context?.userAgent,
+			})
+
+			return result;
+		});
+
+		// no fallback: tech is still at the job, so their coords would give ~0 miles
+		await recordReturnMiles(sdb, technicianId, orgId, technician.current_vehicle_id).catch((err) =>
+			log.error({ err }, "recordReturnMiles failed"),
+		);
+
+		return { item: result, err: ""};
+	} catch (err) {
+		log.error({ err }, "returnFromJob failed");
+		return { err: "Internal server error" };
+	}
+}
+
+export const markAvailable = async (technicianId: string, orgId: string, context?: UserContext) => {
+	const result = await updateTechnician(technicianId, { status: "Available" }, orgId, context);
+	if (!result.err) await recordDrive(getScopedDb(orgId), technicianId, new Date());
+	return result;
+};
+export const deactivateTechnician = async (id: string, organizationId: string, context?: UserContext) => {
+	const sdb = getScopedDb(organizationId);
+	const existing = await sdb.technician.findFirst({ where: { id } });
+	if (!existing) return { err: "Technician not found" };
+	if (existing.deactivated_at) return { err: `${existing.name} is already deactivated.` };
+
+	const open = await sdb.job_visit_technician.count({
+		where: { tech_id: id, visit: { status: { in: [...OPEN_VISIT_STATUSES] } } },
+	});
+	if (open > 0) {
+		return { err: `${existing.name} has ${open} open ${open === 1 ? "visit" : "visits"}. Complete or reassign them first.` };
+	}
+
+	const item = await sdb.$transaction(async (tx) => {
+		const updated = await tx.technician.update({
+			where: { id },
+			data: { deactivated_at: new Date(), status: "Offline", current_vehicle_id: null },
+			select: TECHNICIAN_SELECT,
+		});
+		await tx.jwt_refresh_token.deleteMany({ where: { userId: id } });
+		await logActivity({
+			event_type: "technician.deactivated",
+			action: "updated",
+			entity_type: "technician",
+			entity_id: id,
+			organization_id: organizationId,
+			actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+			actor_id: context?.techId || context?.dispatcherId,
+			changes: { deactivated_at: { old: null, new: updated.deactivated_at } },
+			ip_address: context?.ipAddress,
+			user_agent: context?.userAgent,
+		});
+		return updated;
+	});
+
+	setUserActive(id, false);
+	try {
+		getSocket().in(`tech:${id}`).disconnectSockets(true);
+	} catch (err) {
+		log.warn({ err, id }, "deactivated technician's socket not disconnected");
+	}
+	return { err: "", item };
+};
+
+export const reactivateTechnician = async (id: string, organizationId: string, context?: UserContext) => {
+	const sdb = getScopedDb(organizationId);
+	const existing = await sdb.technician.findFirst({ where: { id } });
+	if (!existing) return { err: "Technician not found" };
+	if (!existing.deactivated_at) return { err: `${existing.name} is already active.` };
+
+	const item = await sdb.$transaction(async (tx) => {
+		await assertSeatAvailable(tx, organizationId, "technicians");
+		const updated = await tx.technician.update({
+			where: { id },
+			data: { deactivated_at: null },
+			select: TECHNICIAN_SELECT,
+		});
+		await logActivity({
+			event_type: "technician.reactivated",
+			action: "updated",
+			entity_type: "technician",
+			entity_id: id,
+			organization_id: organizationId,
+			actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+			actor_id: context?.techId || context?.dispatcherId,
+			changes: { deactivated_at: { old: existing.deactivated_at, new: null } },
+			ip_address: context?.ipAddress,
+			user_agent: context?.userAgent,
+		});
+		return updated;
+	});
+	setUserActive(id, true);
+	return { err: "", item };
 };

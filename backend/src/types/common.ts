@@ -9,6 +9,7 @@ export type LineItemToCreate = {
 	sort_order?: number; // Optional - defaulted by context
 	tax_group_id?: string | null;
 	taxable?: boolean;
+	inventory_item_id?: string | null;
 };
 
 // For logging

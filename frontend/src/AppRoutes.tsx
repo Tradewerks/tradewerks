@@ -21,6 +21,10 @@ const TechnicianNotificationsPage = lazy(() => import("./pages/technician/Techni
 const TechnicianVehiclePage = lazy(() => import("./pages/technician/TechnicianVehiclePage"));
 const TechnicianMapPage = lazy(() => import("./pages/technician/TechnicianMapPage"));
 const TechnicianMileagePage = lazy(() => import("./pages/technician/TechnicianMileagePage"));
+const TechnicianPurchasesPage = lazy(() => import("./pages/technician/TechnicianPurchasesPage"));
+const TechnicianPurchaseDetailPage = lazy(
+	() => import("./pages/technician/TechnicianPurchaseDetailPage"),
+);
 const DashboardPage = lazy(() => import("./pages/dispatch/DashboardPage"));
 const JobsPage = lazy(() => import("./pages/dispatch/JobsPage"));
 const JobDetailPage = lazy(() => import("./pages/dispatch/JobDetailPage"));
@@ -33,8 +37,8 @@ const TechniciansPage = lazy(() => import("./pages/dispatch/TechniciansPage"));
 const TechnicianDetailsPage = lazy(() => import("./pages/dispatch/TechnicianDetailPage"));
 const MapPage = lazy(() => import("./pages/dispatch/MapPage"));
 const ReportingPage = lazy(() => import("./pages/dispatch/ReportingPage"));
+const KpiPage = lazy(() => import("./pages/dispatch/KpiPage"));
 const ReportBuilderPage = lazy(() => import("./pages/dispatch/ReportBuilderPage"));
-const KPIPage = lazy(() => import("./pages/dispatch/KPIPage"));
 const MileageReportPage = lazy(() => import("./pages/dispatch/MileageReportPage"));
 const TimesheetsReportPage = lazy(() => import("./pages/dispatch/TimesheetsReportPage"));
 const ReorderForecastPage = lazy(() => import("./pages/dispatch/ReorderForecastPage"));
@@ -46,8 +50,10 @@ const ClientDiscountsPage = lazy(() => import("./pages/dispatch/ClientDiscountsP
 const FieldAddedRevenuePage = lazy(() => import("./pages/dispatch/FieldAddedRevenuePage"));
 const RecurringRevenuePage = lazy(() => import("./pages/dispatch/RecurringRevenuePage"));
 const ProfitAndLossPage = lazy(() => import("./pages/dispatch/ProfitAndLossPage"));
+const QBReportPage = lazy(() => import("./pages/dispatch/QBReportPage"));
 const TaxLiabilityPage = lazy(() => import("./pages/dispatch/TaxLiabilityPage"));
 const PaymentsReportPage = lazy(() => import("./pages/dispatch/PaymentsReportPage"));
+const CogsReportPage = lazy(() => import("./pages/dispatch/CogsReportPage"));
 const QuoteFunnelPage = lazy(() => import("./pages/dispatch/QuoteFunnelPage"));
 const RevenueByLineItemTypePage = lazy(() => import("./pages/dispatch/RevenueByLineItemTypePage"));
 const RevenueByLineItemTypeDetailPage = lazy(() => import("./pages/dispatch/RevenueByLineItemTypeDetailPage"));
@@ -59,7 +65,13 @@ const AssignTechnicianPage = lazy(() => import("./pages/dispatch/AssignTechnicia
 const RequestsPage = lazy(() => import("./pages/dispatch/RequestsPage"));
 const RequestDetailsPage = lazy(() => import("./pages/dispatch/RequestDetailPage"));
 const InventoryPage = lazy(() => import("./pages/dispatch/InventoryPage"));
+const InventoryImportsPage = lazy(() => import("./pages/dispatch/InventoryImportsPage"));
+const InventoryImportPage = lazy(() => import("./pages/dispatch/InventoryImportPage"));
+const InventoryImportReviewPage = lazy(() => import("./pages/dispatch/InventoryImportReviewPage"));
 const InventoryItemDetailPage = lazy(() => import("./pages/dispatch/InventoryItemDetailPage"));
+const SuppliersPage = lazy(() => import("./pages/dispatch/SuppliersPage"));
+const InventoryReconcilePage = lazy(() => import("./pages/dispatch/InventoryReconcilePage"));
+const SupplierDetailPage = lazy(() => import("./pages/dispatch/SupplierDetailPage"));
 const LabelPrintPage = lazy(() => import("./components/inventory/labels/LabelPrintPage"));
 const SerialRedirectPage = lazy(() => import("./pages/dispatch/SerialRedirectPage"));
 const BatchDetailPage = lazy(() => import("./pages/dispatch/BatchDetailPage"));
@@ -67,17 +79,26 @@ const FullMapPage = lazy(() => import("./pages/dispatch/FullMapPage"));
 const InvoicesPage = lazy(() => import("./pages/dispatch/InvoicesPage"));
 const InvoiceDetailPage = lazy(() => import("./pages/dispatch/InvoiceDetailPage"));
 const AdminPage = lazy(() => import("./pages/dispatch/AdminPage"));
+const WelcomePage = lazy(() => import("./pages/dispatch/WelcomePage"));
 const FollowupsPage = lazy(() => import("./pages/dispatch/FollowupsPage"));
 const VehiclesPage = lazy(() => import("./pages/dispatch/VehiclesPage"));
 const VehicleStockPage = lazy(() => import("./pages/dispatch/VehicleStockPage"));
 const VerifyEmailPage = lazy(() => import("./pages/dispatch/VerifyEmailPage"));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
+const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
 const MyProfilePage = lazy(() => import("./pages/MyProfilePage"));
 const QBCallbackPage = lazy(() => import("./pages/QBCallbackPage"));
 const SSOCompletePage = lazy(() => import("./pages/SSOCompletePage"));
 const ProjectsPage = lazy(() => import("./pages/dispatch/ProjectsPage"));
 const ProjectDetailPage = lazy(() => import("./pages/dispatch/ProjectDetailPage"));
+const JobProfitabilityPage = lazy(() => import("./pages/dispatch/JobProfitabilityPage"));
+const PurchasePage = lazy(() => import("./pages/dispatch/PurchasePage"));
+const PurchaseDetailsPage = lazy(() => import("./pages/dispatch/PurchaseDetailsPage"));
+const DispatcherNotificationPage = lazy(() => import("./pages/dispatch/DispatcherNotificationPage"));
+const TimesheetPage = lazy(() => import("./pages/dispatch/Timesheet"));
+const TechnicianTimesheetPage = lazy(() => import("./pages/technician/TechnicianTimesheetPage"));
+const PlatformRoutes = lazy(() => import("./platform/PlatformRoutes"));
 
 function RequireAuth({ children }: { children: JSX.Element }) {
 	const { user, logout } = useAuthStore();
@@ -127,6 +148,7 @@ export default function AppRoutes() {
 			<Route path="/register" element={<RegisterPage />} />
 			<Route path="/verify-email" element={<VerifyEmailPage />} />
 			<Route path="/reset-password" element={<ResetPasswordPage />} />
+			<Route path="/accept-invite" element={<AcceptInvitePage />} />
 			<Route path="/quickbooks/callback" element={<QBCallbackPage />} />
 			<Route path="/auth/sso/complete" element={<SSOCompletePage />} />
 			<Route
@@ -164,6 +186,7 @@ export default function AppRoutes() {
 					element={<RequirePermission permission="manage_technicians"><AssignTechnicianPage /></RequirePermission>}
 				/>
 				<Route path="map" element={<MapPage />} />
+				<Route path="kpi" element={<RequirePermission permission="view_reports"><KpiPage /></RequirePermission>} />
 				<Route path="reporting" element={<RequirePermission permission="view_reports"><ReportingPage /></RequirePermission>} />
 				<Route path="reporting/builder" element={<RequirePermission permission="view_reports"><ReportBuilderPage /></RequirePermission>} />
 				<Route path="reporting/aged-receivables" element={<RequirePermission permission="view_reports"><AgedReceivablesPage /></RequirePermission>} />
@@ -172,8 +195,11 @@ export default function AppRoutes() {
 				<Route path="reporting/client-lifetime-value" element={<RequirePermission permission="view_reports"><ClientLifetimeValuePage /></RequirePermission>} />
 				<Route path="reporting/client-discounts" element={<RequirePermission permission="view_reports"><ClientDiscountsPage /></RequirePermission>} />
 				<Route path="reporting/profit-and-loss" element={<RequirePermission permission="view_reports"><ProfitAndLossPage /></RequirePermission>} />
+				<Route path="reporting/job-profitability" element={<RequirePermission permission="view_reports"><JobProfitabilityPage /></RequirePermission>} />
+				<Route path="reporting/qb/:reportType" element={<RequirePermission permission="view_reports"><QBReportPage /></RequirePermission>} />
 				<Route path="reporting/tax-liability" element={<RequirePermission permission="view_reports"><TaxLiabilityPage /></RequirePermission>} />
 				<Route path="reporting/payments" element={<RequirePermission permission="view_reports"><PaymentsReportPage /></RequirePermission>} />
+				<Route path="reporting/cogs" element={<RequirePermission permission="view_reports"><CogsReportPage /></RequirePermission>} />
 				<Route path="reporting/quote-funnel" element={<RequirePermission permission="view_reports"><QuoteFunnelPage /></RequirePermission>} />
 				<Route path="reporting/revenue-by-line-item-type" element={<RequirePermission permission="view_reports"><RevenueByLineItemTypePage /></RequirePermission>} />
 				<Route path="reporting/revenue-by-line-item-type/:itemType" element={<RequirePermission permission="view_reports"><RevenueByLineItemTypeDetailPage /></RequirePermission>} />
@@ -181,11 +207,25 @@ export default function AppRoutes() {
 				<Route path="reporting/technician-scorecard" element={<RequirePermission permission="view_reports"><TechnicianScorecardPage /></RequirePermission>} />
 				<Route path="reporting/field-added-revenue" element={<RequirePermission permission="view_reports"><FieldAddedRevenuePage /></RequirePermission>} />
 				<Route path="reporting/recurring-revenue" element={<RequirePermission permission="view_reports"><RecurringRevenuePage /></RequirePermission>} />
-				<Route path="kpi" element={<RequirePermission permission="view_reports"><KPIPage /></RequirePermission>} />
 				<Route path="mileage" element={<MileageReportPage />} />
 				<Route path="timesheets" element={<RequirePermission permission="view_reports"><TimesheetsReportPage /></RequirePermission>} />
 				<Route path="inventory/reorder-forecast" element={<RequirePermission permission="view_reports"><ReorderForecastPage /></RequirePermission>} />
 				<Route path="inventory" element={<RequirePermission permission="view_inventory"><InventoryPage /></RequirePermission>} />
+				<Route path="inventory/imports" element={<RequirePermission permission="view_inventory"><InventoryImportsPage /></RequirePermission>} />
+				<Route path="inventory/imports/new" element={<RequirePermission permission="manage_inventory"><InventoryImportPage /></RequirePermission>} />
+				<Route path="inventory/imports/:id" element={<RequirePermission permission="view_inventory"><InventoryImportReviewPage /></RequirePermission>} />
+				{/* Reading the vendor list is view_inventory (the capture typeahead needs it
+				    on every intake path); the page gates its own writes on manage_inventory. */}
+				<Route path="inventory/suppliers" element={<RequirePermission permission="view_inventory"><SuppliersPage /></RequirePermission>} />
+				{/* Every verb here rewrites catalog or historical billing rows, so
+				    it is manage_inventory rather than view_inventory. */}
+				<Route path="inventory/reconcile" element={<RequirePermission permission="manage_inventory"><InventoryReconcilePage /></RequirePermission>} />
+				{/* Reviewing is the control on field spend, so reading the queue is its
+				    own permission rather than view_inventory — the page gates the
+				    decisions and the grants tab separately. */}
+				<Route path="purchases" element={<RequireAnyPermission permissions={["view_field_purchases", "review_field_purchases", "view_purchases"]}><PurchasePage /></RequireAnyPermission>} />
+				<Route path="purchases/:purchaseId" element={<RequirePermission permission="view_purchases" ><PurchaseDetailsPage /></RequirePermission>} />
+				<Route path="inventory/suppliers/:supplierId" element={<RequirePermission permission="view_inventory"><SupplierDetailPage /></RequirePermission>} />
 				<Route path="inventory/items/:itemId" element={<RequirePermission permission="view_inventory"><InventoryItemDetailPage /></RequirePermission>} />
 				<Route path="inventory/labels/print" element={<RequirePermission permission="manage_inventory"><LabelPrintPage /></RequirePermission>} />
 				<Route path="inventory/items/:itemId/tracking" element={<RedirectToItemDetail />} />
@@ -202,9 +242,12 @@ export default function AppRoutes() {
 				<Route path="invoices/:invoiceId" element={<RequirePermission permission="view_invoices"><InvoiceDetailPage /></RequirePermission>} />
 				<Route path="profile" element={<RequireAuth><MyProfilePage /></RequireAuth>} />
 				<Route path="admin" element={<RequireAnyPermission permissions={["view_admin", "manage_organization", "manage_roles"]}><AdminPage /></RequireAnyPermission>} />
+				<Route path="welcome" element={<RequirePermission permission="manage_organization"><WelcomePage /></RequirePermission>} />
 				<Route path="followups" element={<RequirePermission permission="view_followups"><FollowupsPage /></RequirePermission>} />
 				<Route path="vehicles" element={<RequireAnyPermission permissions={["view_inventory", "manage_technicians"]}><VehiclesPage /></RequireAnyPermission>} />
 				<Route path="vehicles/:id/stock" element={<RequireAnyPermission permissions={["view_inventory", "manage_technicians"]}><VehicleStockPage /></RequireAnyPermission>} />
+				<Route path="notifications" element={<DispatcherNotificationPage />} />
+				<Route path="timesheet" element={<RequirePermission permission="view_timesheet"><TimesheetPage /></RequirePermission>} />
 			</Route>
 
 			<Route
@@ -232,8 +275,12 @@ export default function AppRoutes() {
 				<Route path="map" element={<TechnicianMapPage />} />
 				<Route path="profile" element={<MyProfilePage />} />
 				<Route path="mileage" element={<TechnicianMileagePage />} />
+				<Route path="purchases" element={<RequirePermission permission="request_field_purchase"><TechnicianPurchasesPage /></RequirePermission>} />
+				<Route path="purchases/:purchaseId" element={<RequirePermission permission="request_field_purchase"><TechnicianPurchaseDetailPage /></RequirePermission>} />
+				<Route path="timesheet" element={<TechnicianTimesheetPage />} />
 			</Route>
 
+				<Route path="/platform/*" element={<PlatformRoutes />} />
 				<Route path="*" element={<Navigate to="/login" replace />} />
 			</Routes>
 		</Suspense>

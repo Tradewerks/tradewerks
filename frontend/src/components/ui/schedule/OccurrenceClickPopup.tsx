@@ -1,18 +1,20 @@
-import { useRef } from "react";
-import { Clock, RotateCw } from "lucide-react";
+import { Repeat, RotateCw } from "lucide-react";
 import type { OccurrenceWithPlan } from "./dashboardCalendarUtils";
+import SchedulePopupShell, {
+	SNAPSHOT_BTN_PRIMARY,
+	SNAPSHOT_BTN_SECONDARY,
+	SNAPSHOT_CHIP,
+} from "./SchedulePopupShell";
 
 interface OccurrenceClickPopupProps {
 	occurrence: OccurrenceWithPlan;
-	/** Caller controls position (position, top, left/right, width, zIndex, etc.) */
+	/** Caller controls position; `position: "fixed"` renders at <body>. */
 	style: React.CSSProperties;
-	/** Optional — if provided the popup forwards the ref to its root element */
 	popupRef?: React.RefObject<HTMLDivElement | null>;
 	isGenerating?: boolean;
 	onClose: () => void;
 	onViewPlan: () => void;
 	onGenerate: () => void;
-	/** If provided, a clock icon button is shown to open the reschedule popup */
 	onRescheduleClick?: () => void;
 }
 
@@ -26,232 +28,62 @@ export default function OccurrenceClickPopup({
 	onGenerate,
 	onRescheduleClick,
 }: OccurrenceClickPopupProps) {
-	const innerRef = useRef<HTMLDivElement>(null);
-	const ref = (popupRef ?? innerRef) as React.RefObject<HTMLDivElement | null>;
-
-	const startLabel = new Date(occurrence.occurrence_start_at).toLocaleTimeString([], {
-		hour: "numeric",
-		minute: "2-digit",
-	});
-	const endLabel =
-		occurrence.finish_constraint === "when_done"
-			? "When Done"
-			: new Date(occurrence.occurrence_end_at).toLocaleTimeString([], {
-					hour: "numeric",
-					minute: "2-digit",
-				});
+	const { plan, job_obj: job } = occurrence;
+	const title = plan.name?.trim() || job?.name || "Recurring visit";
+	const subtitle = job?.name && job.name !== title ? job.name : null;
 
 	return (
-		<div
-			ref={ref}
-			style={{
-				zIndex: 1000,
-				backgroundColor: "var(--color-popup-bg)",
-				border: "1px solid var(--color-border)",
-				borderRadius: 8,
-				boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-				padding: "10px 12px",
-				fontFamily: "inherit",
-				width: 236,
-				...style,
+		<SchedulePopupShell
+			style={style}
+			popupRef={popupRef}
+			onClose={onClose}
+			chips={
+				<>
+					<span className={`${SNAPSHOT_CHIP} border-plan/30 bg-plan/15 text-plan-text`}>
+						<Repeat size={9} aria-hidden />
+						Recurring
+					</span>
+					<span className={`${SNAPSHOT_CHIP} border-border text-text-tertiary`}>
+						Planned
+					</span>
+				</>
+			}
+			priority={plan.priority}
+			title={title}
+			subtitle={subtitle}
+			timing={{
+				...occurrence,
+				start: occurrence.occurrence_start_at,
+				end: occurrence.occurrence_end_at,
 			}}
-		>
-			{/* Header */}
-			<div
-				style={{
-					display: "flex",
-					justifyContent: "space-between",
-					alignItems: "flex-start",
-					marginBottom: 4,
-				}}
-			>
-				<div style={{ flex: 1, minWidth: 0 }}>
-					<div
-						style={{
-							fontSize: 12,
-							fontWeight: 700,
-							color: "var(--color-sched-text-primary)",
-							lineHeight: 1.3,
-							marginBottom: 1,
-						}}
-					>
-						{occurrence.plan.name}
-					</div>
-					<div
-						style={{
-							fontSize: 10,
-							color: "var(--color-text-tertiary)",
-							whiteSpace: "nowrap",
-							overflow: "hidden",
-							textOverflow: "ellipsis",
-						}}
-					>
-						{occurrence.job_obj?.name}
-					</div>
-				</div>
-				<button
-					aria-label="Close"
-					onClick={onClose}
-					style={{
-						fontSize: 16,
-						color: "var(--color-text-faint)",
-						background: "none",
-						border: "none",
-						cursor: "pointer",
-						padding: "0 0 0 6px",
-						lineHeight: 1,
-						transition: "color 0.1s",
-					}}
-					onMouseEnter={(e) =>
-						((e.currentTarget as HTMLElement).style.color =
-							"var(--color-text-tertiary)")
-					}
-					onMouseLeave={(e) =>
-						((e.currentTarget as HTMLElement).style.color =
-							"var(--color-text-faint)")
-					}
-				>
-					×
-				</button>
-			</div>
-
-			{/* Badge */}
-			<span
-				style={{
-					display: "inline-block",
-					fontSize: 9,
-					fontWeight: 600,
-					padding: "1px 6px",
-					borderRadius: 10,
-					marginBottom: 6,
-					backgroundColor: "rgba(139,92,246,0.15)",
-					color: "var(--color-reviewing-text)",
-					textTransform: "uppercase",
-					letterSpacing: "0.04em",
-				}}
-			>
-				Planned
-			</span>
-
-			{/* Time */}
-			<div style={{ fontSize: 10, color: "var(--color-sched-text-secondary)", marginBottom: 10 }}>
-				{startLabel} – {endLabel}
-			</div>
-
-			{/* Action buttons */}
-			<div style={{ display: "flex", gap: 5 }}>
-				<button
-					onClick={onViewPlan}
-					style={{
-						flex: 1,
-						padding: "6px 0",
-						fontSize: 11,
-						fontWeight: 600,
-						color: "var(--color-reviewing-text)",
-						backgroundColor: "rgba(139,92,246,0.12)",
-						border: "1px solid rgba(139,92,246,0.25)",
-						borderRadius: 5,
-						cursor: "pointer",
-						fontFamily: "inherit",
-						transition: "background-color 0.1s",
-					}}
-					onMouseEnter={(e) =>
-						((
-							e.currentTarget as HTMLElement
-						).style.backgroundColor = "rgba(139,92,246,0.2)")
-					}
-					onMouseLeave={(e) =>
-						((
-							e.currentTarget as HTMLElement
-						).style.backgroundColor = "rgba(139,92,246,0.12)")
-					}
-				>
-					View Plan
-				</button>
-				<button
-					onClick={!isGenerating ? onGenerate : undefined}
-					disabled={isGenerating}
-					style={{
-						flex: 1,
-						padding: "6px 0",
-						fontSize: 11,
-						fontWeight: 600,
-						color: "#fff",
-						backgroundColor: "var(--color-primary)",
-						border: "none",
-						borderRadius: 5,
-						cursor: isGenerating ? "default" : "pointer",
-						fontFamily: "inherit",
-						opacity: isGenerating ? 0.55 : 1,
-						display: "inline-flex",
-						alignItems: "center",
-						justifyContent: "center",
-						gap: 5,
-						transition: "background-color 0.1s, opacity 0.1s",
-					}}
-					onMouseEnter={(e) => {
-						if (!isGenerating)
-							(
-								e.currentTarget as HTMLElement
-							).style.backgroundColor = "var(--color-primary-hover)";
-					}}
-					onMouseLeave={(e) => {
-						(
-							e.currentTarget as HTMLElement
-						).style.backgroundColor = "var(--color-primary)";
-					}}
-				>
-					{isGenerating ? (
-						<>
-							<RotateCw
-								size={11}
-								className="animate-spin"
-							/>{" "}
-							Generating…
-						</>
-					) : (
-						"Generate Visit"
-					)}
-				</button>
-				{onRescheduleClick && (
+			// Occurrences carry no crew; techs are picked when the visit is generated.
+			crew={{ content: "Assigned when generated", tone: "muted" }}
+			client={plan.client?.name ?? job?.client?.name}
+			address={plan.address || job?.address}
+			description={plan.description?.trim() || null}
+			actions={
+				<>
 					<button
-						onClick={onRescheduleClick}
-						title="Edit scheduled time"
-						style={{
-							display: "inline-flex",
-							alignItems: "center",
-							justifyContent: "center",
-							width: 28,
-							flexShrink: 0,
-							padding: 0,
-							color: "var(--color-text-muted)",
-							backgroundColor: "var(--color-surface)",
-							border: "1px solid var(--color-border)",
-							borderRadius: 5,
-							cursor: "pointer",
-							transition: "color 0.1s, background-color 0.1s",
-						}}
-						onMouseEnter={(e) => {
-							(
-								e.currentTarget as HTMLElement
-							).style.color = "var(--color-sched-text-secondary)";
-							(
-								e.currentTarget as HTMLElement
-							).style.backgroundColor = "var(--color-border)";
-						}}
-						onMouseLeave={(e) => {
-							(
-								e.currentTarget as HTMLElement
-							).style.color = "var(--color-text-muted)";
-							(
-								e.currentTarget as HTMLElement
-							).style.backgroundColor = "var(--color-surface)";
-						}}
+						type="button"
+						onClick={onGenerate}
+						disabled={isGenerating}
+						className={SNAPSHOT_BTN_PRIMARY}
 					>
-						<Clock size={12} />
+						{isGenerating ? (
+							<>
+								<RotateCw size={11} className="animate-spin" aria-hidden />
+								Generating…
+							</>
+						) : (
+							"Generate Visit"
+						)}
 					</button>
-				)}
-			</div>
-		</div>
+					<button type="button" onClick={onViewPlan} className={SNAPSHOT_BTN_SECONDARY}>
+						View Plan
+					</button>
+				</>
+			}
+			onRescheduleClick={onRescheduleClick}
+		/>
 	);
 }

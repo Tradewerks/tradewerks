@@ -1,4 +1,5 @@
 import z from "zod";
+import { dispositionFieldsSchema } from "./shared.js";
 
 export const ArrivalConstraintValues = [
 	"anytime",
@@ -24,6 +25,10 @@ const visitLineItemInputSchema = z.object({
 	sort_order: z.number().int().min(0).optional(),
 	tax_group_id: z.string().uuid().nullable().optional(),
 	taxable: z.boolean().optional(),
+	// Unlike quotes and jobs this link has teeth: it drives readiness and the
+	// completion deduction.
+	inventory_item_id: z.string().uuid().nullable().optional(),
+	...dispositionFieldsSchema,
 });
 
 export const createJobVisitSchema = z

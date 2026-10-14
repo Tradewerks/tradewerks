@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuthStore } from "../auth/authStore";
 import { useDispatcherByIdQuery, useUpdateDispatcherMutation } from "../hooks/useDispatchers";
 import { useTechnicianByIdQuery, useUpdateTechnicianMutation } from "../hooks/useTechnicians";
@@ -10,6 +11,7 @@ import PreferencesCard from "../components/profile/PreferencesCard";
 import PermissionsCard from "../components/profile/PermissionsCard";
 import MFACard from "../components/mfa/MFACard"
 import UserActivityCard from "../components/profile/UserActivityCard";
+import NotificationPreferenceCard from "../components/profile/NotificationPreferenceCard";
 
 type ProfileTab = "profile" | "security" | "preferences" | "permissions" | "activity";
 
@@ -38,8 +40,11 @@ export default function MyProfilePage() {
 	const updateDispatcherMutation = useUpdateDispatcherMutation();
 	const updateTechnicianMutation = useUpdateTechnicianMutation();
 
+	const location = useLocation();
 	const [activeTab, setActiveTab] = useState<ProfileTab>(() => {
-		const stored = sessionStorage.getItem(STORAGE_KEY) as ProfileTab | null;
+		// A link can pick the tab via router state, e.g. { tab: "preferences" }
+		const requested = (location.state as { tab?: ProfileTab } | null)?.tab;
+		const stored = requested ?? (sessionStorage.getItem(STORAGE_KEY) as ProfileTab | null);
 		if (stored && TABS.some((tab) => tab.id === stored)) return stored;
 		return "profile";
 	});
@@ -142,8 +147,9 @@ export default function MyProfilePage() {
 				</div>
 			)}
 			{activeTab === "preferences" && (
-				<div role="tabpanel" id="tabpanel-preferences" aria-labelledby="tab-preferences">
+				<div role="tabpanel" id="tabpanel-preferences" aria-labelledby="tab-preferences" className="space-y-6">
 					<PreferencesCard onThemeChange={handleThemeChange} />
+					{!isTech && <NotificationPreferenceCard />}
 				</div>
 			)}
 			{activeTab === "permissions" && (

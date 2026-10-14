@@ -1,14 +1,17 @@
 ﻿import { Outlet, useNavigate, useLocation, NavLink } from "react-router-dom";
 import { useAuthStore } from "../auth/authStore";
-import { useRef, useEffect, useState, useCallback } from "react";
-import { ClipboardList, ArrowLeft, House, Truck, Bell, AlertTriangle, Map, X, Gauge } from "lucide-react";
+import { useRef, useEffect, useCallback } from "react";
+import { ClipboardList, ArrowLeft, House, Truck, Bell, AlertTriangle, Map, Gauge, Clock } from "lucide-react";
 import { useTechnicianByIdQuery } from "../hooks/useTechnicians";
+import { pingLocation } from "../api/technicians";
 import { useNotificationsQuery } from "../hooks/useNotifications";
 import { useSocketQuerySync } from "../hooks/useSocketQuerySync";
 import type { TechnicianNotification } from "../types/notifications";
 import { usePermission } from "../hooks/usePermission";
 import TechnicianUserMenu from "../components/nav/TechnicianUserMenu";
 import ToastViewport from "../components/ui/ToastViewport";
+import { useToast } from "../components/ui/useToast";
+import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
 
 export default function TechnicianLayout() {
 	const { user } = useAuthStore();
@@ -18,23 +21,61 @@ export default function TechnicianLayout() {
 
 	useSocketQuerySync();
 
-	const [notifBanner, setNotifBanner] = useState<TechnicianNotification | null>(null);
-	const notifBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+	const toast = useToast();
 	const handleNewNotification = useCallback((notif: TechnicianNotification) => {
-		setNotifBanner(notif);
-		if (notifBannerTimerRef.current) clearTimeout(notifBannerTimerRef.current);
-		notifBannerTimerRef.current = setTimeout(() => setNotifBanner(null), 5000);
-	}, []);
-
-	useEffect(() => {
-		return () => { if (notifBannerTimerRef.current) clearTimeout(notifBannerTimerRef.current); };
-	}, []);
+		toast.info(
+			<>
+				<div className="font-semibold">{notif.title}</div>
+				{notif.body && <div className="text-xs text-text-muted mt-0.5">{notif.body}</div>}
+			</>,
+			{
+				durationMs: 20_000,
+				action: notif.action_url
+					? { label: "View", onClick: () => navigate(notif.action_url!) }
+					: undefined,
+			},
+		);
+	}, [toast, navigate]);
 
 	const { data: techProfile } = useTechnicianByIdQuery(user?.userId ?? null);
 	const { data: notifications = [] } = useNotificationsQuery(user?.userId ?? null, false, handleNewNotification);
 	const unreadCount = notifications.filter((n) => !n.read_at).length;
 	const noVehicle = techProfile && !techProfile.current_vehicle_id;
+
+	// Live location for the dispatch map while on shift: latest fix sent at most every 15s.
+	// A stationary tech produces no new fixes, so the last one is re-sent as a heartbeat
+	// once HEARTBEAT_MS passes — the dispatch "pulse" reads last_ping_at to tell live from gone.
+	const onShift = !!techProfile && techProfile.status !== "Offline";
+	useEffect(() => {
+		if (!onShift || !user?.userId || !("geolocation" in navigator)) return;
+		const techId = user.userId;
+		const HEARTBEAT_MS = 60_000;
+		type Coords = { lat: number; lon: number };
+		let latest: Coords | null = null;
+		let sent: Coords | null = null;
+		let sentAt = 0;
+		const flush = () => {
+			// no token = logging out / switching user; a 401 here would refresh the old session back in
+			if (!latest || !localStorage.getItem("accessToken")) return;
+			if (latest === sent && Date.now() - sentAt < HEARTBEAT_MS) return;
+			sent = latest;
+			sentAt = Date.now();
+			pingLocation(techId, latest).catch(() => {});
+		};
+		const watchId = navigator.geolocation.watchPosition(
+			(pos) => {
+				latest = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+				if (!sent) flush();
+			},
+			(err) => console.warn("Location tracking unavailable:", err.message),
+			{ enableHighAccuracy: true, maximumAge: 10_000 },
+		);
+		const interval = setInterval(flush, 15_000);
+		return () => {
+			navigator.geolocation.clearWatch(watchId);
+			clearInterval(interval);
+		};
+	}, [onShift, user?.userId]);
 
 	useEffect(() => {
 		navigationCount.current++;
@@ -83,6 +124,15 @@ export default function TechnicianLayout() {
 							<Gauge size={20} className="text-text-tertiary" />
 						</button>
 
+						<button
+							onClick={() => navigate("/technician/timesheet")}
+							className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
+							title="My Time"
+							aria-label="My Time"
+						>
+							<Clock size={20} className="text-text-tertiary" />
+						</button>
+
 						{/* Truck / vehicle icon */}
 						{usePermission("use_vehicles") && (
 							<button
@@ -106,7 +156,7 @@ export default function TechnicianLayout() {
 						{/* Bell / notifications icon */}
 						<button
 							onClick={() => navigate("/technician/notifications")}
-							className="relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
+							className="relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-raised transition-colors hover:cursor-pointer"
 							title="Notifications"
 						>
 							<Bell size={20} className="text-text-tertiary" />
@@ -121,33 +171,11 @@ export default function TechnicianLayout() {
 					</div>
 				</header>
 
-				{notifBanner && (
-					<div className="flex items-start gap-2.5 pl-3 pr-4 py-2.5 bg-base border-b border-border-subtle">
-						<div className="w-0.5 self-stretch bg-primary rounded-full shrink-0" />
-						<button
-							className="flex-1 min-w-0 text-left py-0.5"
-							onClick={() => {
-								if (notifBanner.action_url) navigate(notifBanner.action_url);
-								setNotifBanner(null);
-							}}
-						>
-							<p className="text-[13px] font-semibold text-text-primary leading-snug truncate">{notifBanner.title}</p>
-							{notifBanner.body && (
-								<p className="text-xs text-text-tertiary leading-snug mt-0.5 line-clamp-2">{notifBanner.body}</p>
-							)}
-						</button>
-						<button
-							onClick={() => setNotifBanner(null)}
-							aria-label="Dismiss notification"
-							className="shrink-0 text-text-muted hover:text-text-secondary transition-colors mt-0.5"
-						>
-							<X size={14} />
-						</button>
-					</div>
-				)}
-				<main className="flex-1 overflow-y-auto bg-canvas">
+				<main className="flex-1 overflow-y-auto overscroll-contain bg-canvas">
 					<div className="p-4 pb-20 md:px-6 md:pt-6 min-h-full">
-						<Outlet />
+						<ModuleRouteGuard home="/technician">
+							<Outlet />
+						</ModuleRouteGuard>
 					</div>
 				</main>
 			</div>

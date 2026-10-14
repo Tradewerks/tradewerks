@@ -67,9 +67,11 @@ export const renderConsentPage = (params: {
         <input type="email" name="email" required autocomplete="username" />
         <label>Password</label>
         <input type="password" name="password" required autocomplete="current-password" />
-        <div class="row">
-          <button class="deny"  type="submit" name="action" value="deny">Deny</button>
+        <!-- Allow comes first in the DOM because pressing Enter submits with the first
+             submit button; row-reverse keeps Deny visually on the left. -->
+        <div class="row" style="flex-direction:row-reverse">
           <button class="allow" type="submit" name="action" value="allow">Allow</button>
+          <button class="deny"  type="submit" name="action" value="deny">Deny</button>
         </div>
       </form>
     `);

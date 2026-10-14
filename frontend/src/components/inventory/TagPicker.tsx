@@ -1,21 +1,23 @@
 import { useRef, useState, useEffect } from "react";
-import { Tag, ChevronDown, X, Plus, Trash2 } from "lucide-react";
+import { Tag, ChevronDown, X, Plus, Pencil } from "lucide-react";
 import type { InventoryTag } from "../../types/inventory";
-import { useCreateInventoryTagMutation, useDeleteInventoryTagMutation } from "../../hooks/useInventory";
+import { useCreateInventoryTagMutation } from "../../hooks/useInventory";
 
 interface TagPickerProps {
 	tags: InventoryTag[];
 	selectedIds: string[];
 	onChange: (ids: string[]) => void;
+	/** Opens the full tag editor (rename + delete-with-confirm) — this picker
+	    only filters and creates, so both renaming and deleting live one level up. */
+	onManage: () => void;
 }
 
-export default function TagPicker({ tags, selectedIds, onChange }: TagPickerProps) {
+export default function TagPicker({ tags, selectedIds, onChange, onManage }: TagPickerProps) {
 	const [open, setOpen] = useState(false);
 	const [newLabel, setNewLabel] = useState("");
 	const ref = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const createMutation = useCreateInventoryTagMutation();
-	const deleteMutation = useDeleteInventoryTagMutation();
 
 	useEffect(() => {
 		const handler = (e: MouseEvent) => {
@@ -43,18 +45,6 @@ export default function TagPicker({ tags, selectedIds, onChange }: TagPickerProp
 			inputRef.current?.focus();
 		} catch {
 			// ignore duplicate/validation errors silently in picker
-		}
-	};
-
-	const handleDelete = async (e: React.MouseEvent, tagId: string) => {
-		e.stopPropagation();
-		try {
-			await deleteMutation.mutateAsync(tagId);
-			if (selectedIds.includes(tagId)) {
-				onChange(selectedIds.filter((id) => id !== tagId));
-			}
-		} catch {
-			// ignore
 		}
 	};
 
@@ -91,6 +81,25 @@ export default function TagPicker({ tags, selectedIds, onChange }: TagPickerProp
 
 			{open && (
 				<div className="absolute top-full mt-1 left-0 z-50 bg-surface border border-border rounded-lg shadow-xl flex flex-col min-w-[200px] w-max max-w-[280px]">
+					{/* Rename lives in the full editor, not here — this row is
+					    the one way from filtering into managing. */}
+					<div className="flex items-center justify-between px-3 py-1.5 border-b border-border-subtle">
+						<span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+							Filter by tag
+						</span>
+						<button
+							onClick={() => {
+								setOpen(false);
+								onManage();
+							}}
+							aria-label="Edit tags"
+							title="Edit tags"
+							className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-raised transition-colors"
+						>
+							<Pencil size={12} />
+						</button>
+					</div>
+
 					{/* Scrollable tag list */}
 					<div className="overflow-y-auto max-h-[200px] py-1">
 						{tags.length === 0 ? (
@@ -99,40 +108,32 @@ export default function TagPicker({ tags, selectedIds, onChange }: TagPickerProp
 							tags.map((tag) => {
 								const checked = selectedIds.includes(tag.id);
 								return (
-									<div key={tag.id} className="flex items-center group">
-										<button
-											onClick={() => toggle(tag.id)}
-											className="flex-1 flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-surface-raised transition-colors min-w-0"
+									<button
+										key={tag.id}
+										onClick={() => toggle(tag.id)}
+										className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-surface-raised transition-colors min-w-0"
+									>
+										<span
+											className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+												checked ? "bg-primary border-primary" : "border-border-strong"
+											}`}
 										>
-											<span
-												className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
-													checked ? "bg-primary border-primary" : "border-border-strong"
-												}`}
-											>
-												{checked && (
-													<svg viewBox="0 0 10 8" fill="none" className="w-2 h-2">
-														<path
-															d="M1 4l3 3 5-6"
-															stroke="white"
-															strokeWidth="1.5"
-															strokeLinecap="round"
-															strokeLinejoin="round"
-														/>
-													</svg>
-												)}
-											</span>
-											<span className={`truncate ${checked ? "text-text-primary font-medium" : "text-text-secondary"}`}>
-												{tag.label}
-											</span>
-										</button>
-										<button
-											onClick={(e) => handleDelete(e, tag.id)}
-											disabled={deleteMutation.isPending}
-											className="mr-1.5 p-1 rounded text-text-muted hover:text-error hover:bg-surface-raised opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-										>
-											<Trash2 size={12} />
-										</button>
-									</div>
+											{checked && (
+												<svg viewBox="0 0 10 8" fill="none" className="w-2 h-2">
+													<path
+														d="M1 4l3 3 5-6"
+														stroke="white"
+														strokeWidth="1.5"
+														strokeLinecap="round"
+														strokeLinejoin="round"
+													/>
+												</svg>
+											)}
+										</span>
+										<span className={`truncate ${checked ? "text-text-primary font-medium" : "text-text-secondary"}`}>
+											{tag.label}
+										</span>
+									</button>
 								);
 							})
 						)}

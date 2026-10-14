@@ -7,112 +7,82 @@ import { sendEmailVerificationEmail } from "../services/emailService.js";
 import { registerOrganizationSchema } from "../lib/validate/organizations.js";
 import { 
 	createOrgRoleSchema, 
-	updateOrgRoleSchema, 
-	assignOrgRoleSchema 
+	updateOrgRoleSchema,
+	assignOrgRoleSchema,
+	permissionsOutsideTier,
+	tierPermissionMessage,
 } from "../lib/validate/organizationRoles.js";
 import { db } from '../db.js';
 import { getScopedDb, UserContext } from "../lib/context.js";
-import { getAllPermissions } from "../lib/permissionCatalogs.js";
+import {
+	EMAIL_IN_USE,
+	loginEmailTaken,
+	provisionOrganization,
+	signupPlanVersionId,
+} from "../services/provisionOrganization.js";
+import { isUniqueViolation } from "../platform/errors.js";
+
+export { defaultDispatcherPermissions } from "../services/provisionOrganization.js";
 
 export const registerOrganization = async (data: unknown) => {
 	try {
 		const parsed = registerOrganizationSchema.parse(data);
+		// all emails in db are set to lower case
+		parsed.admin_email = parsed.admin_email.toLowerCase();
 		// DB since it has to compare with other orgs
-		const existing = await db.dispatcher.findUnique({
-			where: { email: parsed.admin_email },
-		});
+		if (await loginEmailTaken(parsed.admin_email)) return { err: EMAIL_IN_USE };
 
-		if (existing) {
-			return { err: "An account with this email already exists" };
-		}
-
+		const planVersionId = await signupPlanVersionId();
 		const hashedPassword = await bcrypt.hash(parsed.admin_password, 10);
 		const verificationToken = randomUUID();
 
-		const result = await db.$transaction(async (tx) => {
-			const org = await tx.organization.create({
-				data: {
-					name:     parsed.org_name,
-					email:    parsed.admin_email,
-					phone:    parsed.org_phone ?? parsed.admin_phone ?? null,
-					address:  parsed.org_address ?? null,
-					website:  parsed.org_website || null,
-					timezone: parsed.org_timezone ?? "America/Chicago",
-					tax_rate: parsed.org_tax_rate ?? 0,
+		const result = await db.$transaction((tx) =>
+			provisionOrganization(tx, {
+				org: {
+					name: parsed.org_name,
+					email: parsed.admin_email,
+					phone: parsed.org_phone ?? parsed.admin_phone ?? null,
+					address: parsed.org_address ?? null,
+					website: parsed.org_website || null,
+					timezone: parsed.org_timezone,
+					tax_rate: parsed.org_tax_rate,
 				},
-			});
-
-			// default organization roles — full access derived from catalog
-			await tx.organization_role.createMany({
-				data: [
-					{
-						organization_id: org.id,
-						name: "Default Dispatcher",
-						base_tier: "dispatcher",
-						// filters out administration permissions
-						permissions: getAllPermissions("dispatcher").filter((p) => {
-							return p !== "manage_roles" && 
-							p !== "view_admin"	&& 
-							p !== "manage_organization" &&
-							p !== "manage_dispatchers";
-						}), 
-						is_default: true,
-					},
-					{
-						organization_id: org.id,
-						name: "Default Technician",
-						base_tier: "technician",
-						permissions: getAllPermissions("technician"),
-						is_default: true,
-					},
-				],
-			});
-			// admin role with all permissions
-			const adminRole = await tx.organization_role.create({
-				data: {
-					organization_id: org.id,
-					name: "Administrator",
-					base_tier: "dispatcher",
-					permissions: getAllPermissions("dispatcher"),
-					is_default: false,
-				},
-			});
-
-			const admin = await tx.dispatcher.create({
-				data: {
-					organization_id: org.id,
+				admin: {
 					name: parsed.admin_name,
 					email: parsed.admin_email,
 					phone: parsed.admin_phone ?? null,
 					password: hashedPassword,
-					role: "admin",
-					title: "Administrator",
-					description: "",
-					email_verification_token: verificationToken,
-					last_login: new Date(),
-					organization_role_id: adminRole.id,
+					verificationToken,
 				},
-			});
+				businessType: parsed.business_type,
+				planVersionId,
+				source: "signup",
+			}),
+		);
 
-			return { org, admin };
-		});
-
-		sendEmailVerificationEmail(result.admin.email, verificationToken);
+		sendEmailVerificationEmail(result.adminEmail, verificationToken);
 
 		await logActivity({
 			event_type: "organization.created",
 			action: "created",
 			entity_type: "organization",
-			entity_id: result.org.id,
-			organization_id: result.org.id,
+			entity_id: result.orgId,
+			organization_id: result.orgId,
 			actor_type: "system",
 		});
 
-		const { org, admin } = result;
-		const { password: _pw, email_verification_token: _token, ...safeAdmin } = admin;
-
-		return { err: "", item: { org, admin: safeAdmin } };
+		return {
+			err: "",
+			item: {
+				org: { id: result.orgId, name: parsed.org_name },
+				admin: { id: result.adminId, name: parsed.admin_name, email: result.adminEmail },
+			},
+		};
 	} catch (e) {
+		// Status-carrying errors (paused signups, bad business type) go to the route as-is.
+		if (e && typeof e === "object" && "statusCode" in e) throw e;
+		// A parallel signup took the email between the check above and the insert.
+		if (isUniqueViolation(e)) return { err: EMAIL_IN_USE };
 		if (e instanceof ZodError) {
 			return {
 				err: `Validation failed: ${e.issues.map((i) => i.message).join(", ")}`,
@@ -254,6 +224,15 @@ export const updateOrgRole = async (
 		}
 		
 		const { name, base_tier, permissions, is_default } = updateOrgRoleSchema.parse(data);
+		// The update schema cannot see the stored tier, so the tier check that
+		// createOrgRoleSchema runs happens here.
+		if (permissions !== undefined || base_tier !== undefined) {
+			const tier = (base_tier ?? existing.base_tier) as "dispatcher" | "technician";
+			const outside = permissionsOutsideTier(tier, permissions ?? existing.permissions);
+			if (outside.length > 0) {
+				return { err: `Validation failed: ${tierPermissionMessage(tier, outside)}` };
+			}
+		}
 		if (name) {
 			const nameConflict = await sdb.organization_role.findFirst({
 				where: { name, organization_id: organizationId, NOT: { id } },
@@ -434,7 +413,7 @@ export const assignOrgRole = async (
 				event_type: "organization_role.assigned",
 				action: roleId ? "assigned" : "removed",
 				entity_type: "organization_role_assignment",
-				entity_id: `${userType}-${userId}`,
+				entity_id: userId,
 				organization_id: organizationId,
 				actor_type: context?.techId
 					? "technician"

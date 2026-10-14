@@ -33,19 +33,6 @@ vi.mock("../../../api/organizations", () => ({ getOrgRoleById }));
 
 import ChangeHistory from "../ChangeHistory";
 
-const ALL_CHIPS = [
-	"Created",
-	"Updated",
-	"Deleted",
-	"Assigned",
-	"Removed",
-	"Attached",
-	"Detached",
-	"Sent",
-	"Authorized",
-	"Other",
-];
-
 const mkLog = (i: number, o: Partial<ActivityLog> = {}): ActivityLog => ({
 	id: `log-${i}`,
 	event_type: "job.updated",
@@ -121,7 +108,9 @@ describe("ChangeHistory — L3 verb filter vs Show more", () => {
 		renderWith();
 		expect(screen.getByText("Show more")).toBeInTheDocument();
 
-		for (const label of ALL_CHIPS.filter((l) => l !== "Deleted")) fireEvent.click(chip(label));
+		// Every loaded row is an update, so it is the only chip shown.
+		expect(screen.queryByRole("button", { name: "Deleted" })).toBeNull();
+		fireEvent.click(chip("Updated"));
 
 		expect(screen.getByText("No changes match the selected filters.")).toBeInTheDocument();
 		expect(screen.getByText("Show more")).toBeInTheDocument();

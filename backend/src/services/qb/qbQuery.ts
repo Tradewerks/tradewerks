@@ -36,3 +36,12 @@ export async function qbQueryAll<T>(orgId: string, entity: string, where?: strin
 	}
 	return results;
 }
+
+/** Resolves an active QB account of the given AccountType, preferring one of the given AccountSubTypes if present. */
+export async function getAccountId(orgId: string, accountType: string, preferredSubtypes: string[] = []): Promise<string> {
+	const accounts = await qbQueryAll<any>(orgId, "Account", `AccountType = '${accountType}' AND Active = true`);
+	if (!accounts.length) throw new Error(`No active ${accountType} account found`);
+
+	const preferred = accounts.find((a: any) => preferredSubtypes.includes(a.AccountSubType));
+	return preferred ? (preferred.Id as string) : (accounts[0].Id as string);
+}

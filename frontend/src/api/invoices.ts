@@ -6,6 +6,7 @@ import type {
 	UpdateInvoiceInput,
 	InvoicePayment,
 	CreateInvoicePaymentInput,
+	RecordRefundInput,
 	InvoiceNote,
 	CreateInvoiceNoteInput,
 	UpdateInvoiceNoteInput,
@@ -130,6 +131,27 @@ export const deleteInvoicePayment = async (
 	}
 
 	return response.data.data || { id: paymentId };
+};
+
+/**
+ * Records a refund as a negative payment row. `amount` is sent positive — the
+ * sign is the backend's business. The refundable ceiling is enforced there and
+ * comes back as a 422 naming the amount actually paid.
+ */
+export const recordRefund = async (
+	invoiceId: string,
+	input: RecordRefundInput
+): Promise<InvoicePayment> => {
+	const response = await api.post<ApiResponse<InvoicePayment>>(
+		`/invoices/${invoiceId}/refunds`,
+		input
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to record refund");
+	}
+
+	return response.data.data!;
 };
 
 // ============================================================================

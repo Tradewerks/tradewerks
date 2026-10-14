@@ -9,6 +9,8 @@ import { useToast } from "../../ui/useToast";
 import SerialCaptureList from "./SerialCaptureList";
 import BatchCaptureFields, { type BatchCaptureValue } from "./BatchCaptureFields";
 import { isStorableStockQty } from "../stockQtyPrecision";
+import SupplierPicker from "../SupplierPicker";
+import type { SupplierCapture } from "../../../types/suppliers";
 
 interface ReceiveStockModalProps {
 	isOpen: boolean;
@@ -24,7 +26,6 @@ const emptyBatch: BatchCaptureValue = {
 	mode: "new",
 	batch_number: "",
 	expires_at: null,
-	supplier: "",
 };
 
 // Standalone "Receive Stock" modal — the post-creation counterpart to the
@@ -44,6 +45,7 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 	// Kept as a string, not a number: "" must stay distinguishable from 0 so a
 	// blank field records "cost unknown" rather than a free purchase.
 	const [unitCost, setUnitCost] = useState("");
+	const [supplier, setSupplier] = useState<SupplierCapture>({});
 	const [error, setError] = useState<string | null>(null);
 
 	const receiveMutation = useReceiveInventoryMutation(item.id);
@@ -59,6 +61,7 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 			setAutoSerial(false);
 			setBatchValue(emptyBatch);
 			setUnitCost("");
+			setSupplier({});
 			setError(null);
 		}
 	}, [isOpen, item.id]);
@@ -113,6 +116,8 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 			// Omitted when blank — the paid-cost history counts a receipt with no
 			// recorded cost as unknown rather than averaging in a zero.
 			...(parsedUnitCost != null ? { unit_cost: parsedUnitCost } : {}),
+			// Optional everywhere: an unattributed receipt is better than a blocked one.
+			...supplier,
 			...(item.is_serialized
 				? autoSerial
 					? { auto_serial: true }
@@ -125,7 +130,6 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 							batch: {
 								batch_number: batchValue.batch_number.trim(),
 								expires_at: batchValue.expires_at,
-								supplier: batchValue.supplier.trim() || undefined,
 							},
 						}
 				: {}),
@@ -233,6 +237,14 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 						<p className="text-xs text-text-muted mt-1">
 							What the supplier billed per unit on this receipt. Leave blank if
 							unknown — it's recorded as unknown, not as zero.
+						</p>
+					</div>
+
+					<div>
+						<SupplierPicker value={supplier} onChange={setSupplier} />
+						<p className="text-xs text-text-muted mt-1">
+							Who this stock was bought from. Drives the cost origin on the
+							item's price history.
 						</p>
 					</div>
 

@@ -1,9 +1,11 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, ChevronRight } from "lucide-react";
 import { useAllTechniciansQuery, useCreateTechnicianMutation } from "../../hooks/useTechnicians";
 import CreateTechnician from "../../components/technicians/CreateTechnician";
+import EditTechnician from "../../components/technicians/EditTechnician";
 import TechnicianCard from "../../components/technicians/TechnicianCard";
+import { TECH_COL_VISIBILITY, TECH_ROW_COLS } from "../../components/technicians/technicianRosterLayout";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import BoxSvg from "../../assets/icons/box.svg?react";
 import ErrSvg from "../../assets/icons/error.svg?react";
@@ -15,9 +17,16 @@ import StatusFilter from "../../components/ui/StatusFilter";
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
-import { TechnicianStatusColors, type TechnicianStatus } from "../../types/technicians";
+import {
+	TechnicianStatusColors,
+	TechnicianStatusDotColors,
+	TechnicianStatusLabels,
+	type Technician,
+	type TechnicianStatus,
+} from "../../types/technicians";
 
 type viewMode = "list" | "card";
+type GroupId = "active" | "available" | "break" | "offline" | "inactive";
 
 const technicianStatusOptions = [
 	{ value: "Available", label: "Available" },
@@ -26,9 +35,58 @@ const technicianStatusOptions = [
 	{ value: "OnSite", label: "On Site" },
 	{ value: "Paused", label: "Paused" },
 	{ value: "WrappingUp", label: "Wrapping Up" },
+	{ value: "HeadingBack", label: "Heading Back" },
 	{ value: "Break", label: "Break" },
 	{ value: "Offline", label: "Offline" },
 ];
+
+const STATUS_ORDER: TechnicianStatus[] = [
+	"Working",
+	"EnRoute",
+	"OnSite",
+	"Paused",
+	"WrappingUp",
+	"HeadingBack",
+	"Available",
+	"Break",
+	"Offline",
+];
+
+const GROUPS: { id: GroupId; label: string; statuses: TechnicianStatus[] }[] = [
+	{ id: "active", label: "On the job", statuses: ["Working", "EnRoute", "OnSite", "Paused", "WrappingUp", "HeadingBack"] },
+	{ id: "available", label: "Available", statuses: ["Available"] },
+	{ id: "break", label: "On break", statuses: ["Break"] },
+	{ id: "offline", label: "Offline", statuses: ["Offline"] },
+	{ id: "inactive", label: "Inactive", statuses: [] },
+];
+
+const STORAGE = {
+	view: "dispatch.technicians.view",
+	collapsed: "dispatch.technicians.collapsed",
+};
+
+function readStored<T>(key: string, fallback: T, isValid: (v: unknown) => v is T): T {
+	try {
+		const raw = localStorage.getItem(key);
+		if (raw === null) return fallback;
+		const parsed: unknown = JSON.parse(raw);
+		return isValid(parsed) ? parsed : fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+function writeStored(key: string, value: unknown) {
+	try {
+		localStorage.setItem(key, JSON.stringify(value));
+	} catch {
+		// Private mode / blocked storage — the preference just won't persist.
+	}
+}
+
+const isView = (v: unknown): v is viewMode => v === "list" || v === "card";
+const isGroupList = (v: unknown): v is GroupId[] =>
+	Array.isArray(v) && v.every((g) => GROUPS.some((group) => group.id === g));
 
 export default function TechniciansPage() {
 	const navigate = useNavigate();
@@ -41,101 +99,164 @@ export default function TechniciansPage() {
 	const { mutateAsync: createTechnician } = useCreateTechnicianMutation();
 	const [searchInput, setSearchInput] = useState("");
 	const [isModalOpen, setIsModalOpen] = useState(false);
-	const [viewMode, setViewMode] = useState<viewMode>("card");
-	const [perPage, setPerPage] = useState(12);
-	const [currentPage, setCurrentPage] = useState(1);
+	const [editing, setEditing] = useState<Technician | null>(null);
+	const [viewMode, setViewModeState] = useState<viewMode>(() =>
+		readStored(STORAGE.view, "list", isView)
+	);
+	const [collapsed, setCollapsed] = useState<GroupId[]>(() =>
+		readStored(STORAGE.collapsed, ["offline", "inactive"], isGroupList)
+	);
 
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
-	const termsKey = terms.join(" ");
 
 	const queryParams = new URLSearchParams(location.search);
 	const statusFilter = queryParams.getAll("status");
-	const statusKey = statusFilter.join(",");
-	const { removeTerm: removeStatus } = useMultiSearch("status");
+	const { addTerm: addStatus, removeTerm: removeStatus } = useMultiSearch("status");
 
 	// permissions
 	const MANAGE_TECHNICIANS = usePermission("manage_technicians");
 
-	useEffect(() => {
-		setCurrentPage(1);
-	}, [termsKey, searchInput, statusKey, perPage]);
+	const setViewMode = (v: viewMode) => {
+		setViewModeState(v);
+		writeStored(STORAGE.view, v);
+	};
+	const toggleGroup = (id: GroupId) => {
+		const next = collapsed.includes(id) ? collapsed.filter((g) => g !== id) : [...collapsed, id];
+		setCollapsed(next);
+		writeStored(STORAGE.collapsed, next);
+	};
+	const toggleStatus = (s: TechnicianStatus) => {
+		if (statusFilter.includes(s)) removeStatus(s);
+		else addStatus(s);
+	};
 
 	const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
+	const isFiltered = activeTerms.length > 0 || statusFilter.length > 0;
 
-	const filteredTechnicians =
-		technicians
-			?.filter((tech) => {
-				if (activeTerms.length > 0) {
-					const matches = activeTerms.every((term) => {
-						const lower = term.toLowerCase();
-						return (
-							tech.name.toLowerCase().includes(lower) ||
-							(tech.email
-								?.toLowerCase()
-								.includes(lower) ??
-								false) ||
-							(tech.phone
-								?.toLowerCase()
-								.includes(lower) ??
-								false) ||
-							(tech.title
-								?.toLowerCase()
-								.includes(lower) ??
-								false)
+	const statusKey = statusFilter.join(",");
+	const activeKey = JSON.stringify(activeTerms);
+	const filteredTechnicians = useMemo(
+		() =>
+			technicians
+				?.filter((tech) => {
+					if (activeTerms.length > 0) {
+						const matches = activeTerms.every((term) => {
+							const lower = term.toLowerCase();
+							return (
+								tech.name.toLowerCase().includes(lower) ||
+								(tech.email?.toLowerCase().includes(lower) ?? false) ||
+								(tech.phone?.toLowerCase().includes(lower) ?? false) ||
+								(tech.title?.toLowerCase().includes(lower) ?? false)
+							);
+						});
+						if (!matches) return false;
+					}
+					if (statusFilter.length > 0)
+						return statusFilter.some(
+							(s) => s.toLowerCase() === tech.status.toLowerCase()
 						);
-					});
-					if (!matches) return false;
-				}
-				if (statusFilter.length > 0)
-					return statusFilter.some(
-						(s) => s.toLowerCase() === tech.status.toLowerCase()
-					);
-				return true;
-			})
-			.sort((a, b) => {
-				const statusOrder: Record<string, number> = {
-					Available: 0,
-					Working: 1,
-					EnRoute: 2,
-					OnSite: 3,
-					Paused: 4,
-					WrappingUp: 5,
-					Break: 6,
-					Offline: 7,
-				};
-				return (statusOrder[a.status] ?? 8) - (statusOrder[b.status] ?? 8);
-			}) ?? [];
+					return true;
+				})
+				.sort((a, b) => {
+					const byStatus = STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status);
+					return byStatus !== 0 ? byStatus : a.name.localeCompare(b.name);
+				}) ?? [],
+		// Keyed on serialized filters: activeTerms/statusFilter are fresh arrays every render.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[technicians, activeKey, statusKey]
+	);
 
-	const totalPages = perPage === 0 ? 1 : Math.ceil(filteredTechnicians.length / perPage);
-	const pagedTechnicians =
-		perPage === 0
-			? filteredTechnicians
-			: filteredTechnicians.slice(
-					(currentPage - 1) * perPage,
-					currentPage * perPage
-				);
+	const groups = useMemo(
+		() =>
+			GROUPS.map((group) => ({
+				...group,
+				members: filteredTechnicians.filter((t) =>
+					group.id === "inactive"
+						? !!t.deactivated_at
+						: !t.deactivated_at && group.statuses.includes(t.status)
+				),
+			})).filter((group) => group.members.length > 0),
+		[filteredTechnicians]
+	);
 
-	const statusCounts =
-		technicians?.reduce(
-			(acc, t) => {
-				acc[t.status] = (acc[t.status] || 0) + 1;
-				return acc;
-			},
-			{} as Record<string, number>
-		) || {};
+	const statusCounts = useMemo(
+		() =>
+			(technicians ?? []).reduce(
+				(acc, t) => {
+					if (t.deactivated_at) return acc;
+					acc[t.status] = (acc[t.status] || 0) + 1;
+					return acc;
+				},
+				{} as Partial<Record<TechnicianStatus, number>>
+			),
+		[technicians]
+	);
+
+	const renderMembers = (members: Technician[]) =>
+		members.map((technician) => (
+			<TechnicianCard
+				key={technician.id}
+				technician={technician}
+				onClick={() => navigate(`/dispatch/technicians/${technician.id}`)}
+				onEdit={setEditing}
+				viewMode={viewMode}
+				rowStyle="roster"
+			/>
+		));
+
+	const groupHeader = (group: (typeof groups)[number], isCollapsed: boolean) => (
+		<button
+			type="button"
+			onClick={() => toggleGroup(group.id)}
+			aria-expanded={!isCollapsed}
+			aria-controls={`tech-group-${group.id}`}
+			className={`flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-tertiary transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary`}
+		>
+			<ChevronRight
+				size={14}
+				aria-hidden
+				className={`transition-transform duration-150 ease-out ${isCollapsed ? "" : "rotate-90"}`}
+			/>
+			{group.label}
+			<span className="font-medium tabular-nums text-text-muted">{group.members.length}</span>
+		</button>
+	);
 
 	return (
 		<div className="text-text-primary">
 			<PageHeader
 				title="Technicians"
 				subtitle={
-					<div className="flex flex-wrap gap-3 text-xs">
-						<span className="text-success-text">● Available: {statusCounts.Available || 0}</span>
-						<span className="text-reviewing-text">● Working: {statusCounts.Working || 0}</span>
-						<span className="text-info-text">● En Route: {statusCounts.EnRoute || 0}</span>
-						<span className="text-warning-text">● On Site: {statusCounts.OnSite || 0}</span>
-						<span className="text-orange-text">● Paused: {statusCounts.Paused || 0}</span>
-						<span className="text-text-tertiary">● Offline: {statusCounts.Offline || 0}</span>
+					<div
+						className="flex flex-wrap gap-1 text-xs"
+						role="group"
+						aria-label="Filter by status"
+					>
+						{technicianStatusOptions.map(({ value }) => {
+							const status = value as TechnicianStatus;
+							const count = statusCounts[status] ?? 0;
+							const pressed = statusFilter.includes(status);
+							return (
+								<button
+									key={status}
+									type="button"
+									onClick={() => toggleStatus(status)}
+									aria-pressed={pressed}
+									className={`items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+										pressed
+											? "bg-surface text-text-primary ring-1 ring-border-strong"
+											: "text-text-secondary"
+									} ${count === 0 && !pressed ? "hidden opacity-50 sm:flex" : "flex"}`}
+								>
+									<span
+										aria-hidden
+										className={`h-2 w-2 rounded-full ${TechnicianStatusDotColors[status]}`}
+									/>
+									{TechnicianStatusLabels[status]}
+									<span className="tabular-nums text-text-tertiary">{count}</span>
+								</button>
+							);
+						})}
 					</div>
 				}
 			>
@@ -220,197 +341,75 @@ export default function TechniciansPage() {
 			)}
 
 			{/* Empty State */}
-			{!isFetchLoading && !fetchError && filteredTechnicians?.length === 0 && (
+			{!isFetchLoading && !fetchError && filteredTechnicians.length === 0 && (
 				<div className="w-full h-[400px] flex flex-col justify-center items-center">
 					<BoxSvg className="w-15 h-15 mb-1" />
 					<h1 className="text-center text-xl mt-1">
-						{activeTerms.length > 0
-							? "No technicians found."
-							: "No technicians yet."}
+						{isFiltered ? "No technicians found." : "No technicians yet."}
 					</h1>
-					{activeTerms.length > 0 && (
+					{isFiltered && (
 						<p className="text-center text-text-muted mt-2">
-							Try adjusting your search terms
+							Try adjusting your search or status filters
 						</p>
 					)}
 				</div>
 			)}
 
-			{/* Technician Cards Grid */}
-			{!isFetchLoading && !fetchError && filteredTechnicians.length > 0 && (
-				<>
-					<div
-						className={
-							viewMode === "card"
-								? "grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(288px,1fr))]"
-								: "flex flex-col gap-4"
-						}
-					>
-						{pagedTechnicians.map((technician) => (
-							<TechnicianCard
-								key={technician.id}
-								technician={technician}
-								onClick={() =>
-									navigate(
-										`/dispatch/technicians/${technician.id}`
-									)
-								}
-								viewMode={viewMode}
-							/>
-						))}
-					</div>
-
-					{/* Pagination footer */}
-					<div className="flex flex-wrap items-center justify-between gap-4 mt-5 pt-4 border-t border-border-subtle">
-						<div className="flex items-center gap-4">
-							<span className="text-sm text-text-tertiary">
-								{perPage === 0
-									? `Showing all ${filteredTechnicians.length}`
-									: `Showing ${(currentPage - 1) * perPage + 1}–${Math.min(currentPage * perPage, filteredTechnicians.length)} of ${filteredTechnicians.length}`}
-							</span>
-							<div className="flex items-center gap-1 bg-surface border border-border rounded-md p-1">
-								{[12, 24, 48].map((n) => (
-									<button
-										key={n}
-										onClick={() =>
-											setPerPage(
-												n
-											)
-										}
-										className={`px-3 py-1.5 rounded text-sm font-medium cursor-pointer transition-colors ${
-											perPage ===
-											n
-												? "bg-border text-text-primary"
-												: "text-text-tertiary hover:text-text-primary"
-										}`}
-									>
-										{n}
-									</button>
-								))}
-								<button
-									onClick={() =>
-										setPerPage(0)
-									}
-									className={`px-3 py-1.5 rounded text-sm font-medium cursor-pointer transition-colors ${
-										perPage === 0
-											? "bg-border text-text-primary"
-											: "text-text-tertiary hover:text-text-primary"
-									}`}
-								>
-									All
-								</button>
-							</div>
+			{/* Roster */}
+			{!isFetchLoading && !fetchError && filteredTechnicians.length > 0 && viewMode === "list" && (
+				// No overflow-hidden here: it would clip the row action menus.
+				<div className="mb-6 rounded-lg border border-border bg-base">
+					{/* -top-6 cancels the layout scroller's md:pt-6, which otherwise leaves a gap rows show through. */}
+					<div className="sticky -top-6 z-10 hidden rounded-t-lg border-b border-border bg-surface md:block">
+						<div
+							className={`${TECH_ROW_COLS} px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary`}
+						>
+							<span>Technician</span>
+							<span className={TECH_COL_VISIBILITY.status}>Status</span>
+							<span className={TECH_COL_VISIBILITY.vehicle}>Vehicle</span>
+							<span className={TECH_COL_VISIBILITY.now}>Now</span>
+							<span className={TECH_COL_VISIBILITY.today}>Visits today</span>
+							<span className={TECH_COL_VISIBILITY.contact}>Contact</span>
+							<span className={TECH_COL_VISIBILITY.lastLogin}>Last login</span>
+							<span className="sr-only">Actions</span>
 						</div>
-
-						{perPage !== 0 && totalPages > 1 && (
-							<div className="flex items-center gap-1.5">
-								<button
-									onClick={() =>
-										setCurrentPage(
-											(p) =>
-												Math.max(
-													1,
-													p -
-														1
-												)
-										)
-									}
-									disabled={currentPage === 1}
-									className="p-2 rounded-md bg-surface border border-border text-text-tertiary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-								>
-									<ChevronLeft size={16} />
-								</button>
-								{Array.from(
-									{ length: totalPages },
-									(_, i) => i + 1
-								)
-									.filter(
-										(p) =>
-											p === 1 ||
-											p ===
-												totalPages ||
-											Math.abs(
-												p -
-													currentPage
-											) <= 1
-									)
-									.reduce<(number | "...")[]>(
-										(
-											acc,
-											p,
-											i,
-											arr
-										) => {
-											if (
-												i >
-													0 &&
-												p -
-													(arr[
-														i -
-															1
-													] as number) >
-													1
-											)
-												acc.push(
-													"..."
-												);
-											acc.push(p);
-											return acc;
-										},
-										[]
-									)
-									.map((p, i) =>
-										p === "..." ? (
-											<span
-												key={`ellipsis-${i}`}
-												className="px-1.5 text-text-muted text-sm"
-											>
-												…
-											</span>
-										) : (
-											<button
-												key={
-													p
-												}
-												onClick={() =>
-													setCurrentPage(
-														p as number
-													)
-												}
-												className={`min-w-[36px] px-2.5 py-1.5 rounded-md text-sm border transition-colors ${
-													currentPage ===
-													p
-														? "bg-primary border-primary text-black font-semibold"
-														: "bg-surface border-border text-text-tertiary hover:text-text-primary"
-												}`}
-											>
-												{p}
-											</button>
-										)
-									)}
-								<button
-									onClick={() =>
-										setCurrentPage(
-											(p) =>
-												Math.min(
-													totalPages,
-													p +
-														1
-												)
-										)
-									}
-									disabled={
-										currentPage ===
-										totalPages
-									}
-									className="p-2 rounded-md bg-surface border border-border text-text-tertiary hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-								>
-									<ChevronRight size={16} />
-								</button>
-							</div>
-						)}
 					</div>
-				</>
+					{groups.map((group) => {
+						const isCollapsed = collapsed.includes(group.id);
+						return (
+							<section
+								key={group.id}
+								aria-label={group.label}
+								className="border-b border-border-subtle last:border-b-0"
+							>
+								{groupHeader(group, isCollapsed)}
+								{!isCollapsed && (
+									<div id={`tech-group-${group.id}`} className="border-t border-border-subtle">
+										{renderMembers(group.members)}
+									</div>
+								)}
+							</section>
+						);
+					})}
+				</div>
+			)}
+
+			{!isFetchLoading && !fetchError && filteredTechnicians.length > 0 && viewMode === "card" && (
+				// One continuous grid, already status-sorted: per-group rows strand a lone card
+				// per status and leave most of the width empty. Each card's pill carries status.
+				<div className="mb-6 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]">
+					{renderMembers(filteredTechnicians)}
+				</div>
+			)}
+
+			{/* Keyed so the modal's form state initialises from the tech being edited. */}
+			{editing && (
+				<EditTechnician
+					key={editing.id}
+					isOpen
+					onClose={() => setEditing(null)}
+					technician={editing}
+				/>
 			)}
 			<CreateTechnician
 				isModalOpen={isModalOpen}

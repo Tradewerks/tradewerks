@@ -16,11 +16,13 @@ import type { GeocodeResult } from "../../types/location";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
+import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
 	type TemplateSearchClient,
 } from "../ui/forms/TemplateSearch";
+import { errorMessage } from "../../util/util";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 interface CreateRequestProps {
@@ -54,6 +56,7 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 	const [showAdditional, setShowAdditional] = useState(false);
 	const [isLoading, setIsLoading] = useState(false);
 	const [errors, setErrors] = useState<ZodError | null>(null);
+	const [submitError, setSubmitError] = useState<string | null>(null);
 
 	const [sourceMode, setSourceMode] = useState<SourceType | null>(null);
 	const [sourceClientFilter, setSourceClientFilter] = useState("");
@@ -83,6 +86,7 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 		setEstimatedValue("");
 		setShowAdditional(false);
 		setErrors(null);
+		setSubmitError(null);
 		setSourceMode(null);
 		setSourceClientFilter("");
 		setCurrentDraftId(null);
@@ -277,9 +281,10 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 		}
 
 		setErrors(null);
+		setSubmitError(null);
 		setIsLoading(true);
 		try {
-			const requestId = await createRequest(newRequest);
+			const requestId = await createRequest(parseResult.data);
 			if (currentDraftId) {
 				await deleteDraftMutation
 					.mutateAsync(currentDraftId)
@@ -290,6 +295,9 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 			navigate(`/dispatch/requests/${requestId}`);
 		} catch (error) {
 			console.error("Failed to create request:", error);
+			setSubmitError(
+				errorMessage(error, "Failed to create request. Please try again.")
+			);
 		} finally {
 			setIsLoading(false);
 		}
@@ -667,7 +675,10 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 				createDraftMutation.isPending || updateDraftMutation.isPending
 			}
 		>
-			{formContent}
+			<>
+				<FormErrorBanner message={submitError} className="mb-2" />
+				{formContent}
+			</>
 		</FormWizardContainer>
 	);
 };
