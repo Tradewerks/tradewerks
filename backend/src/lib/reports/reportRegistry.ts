@@ -28,7 +28,8 @@ import {
 	getProjectsReportPage,
 	getCogsByItemReport,
 	getCogsByJobReport,
-	getJobProfitabilityReport
+	getJobProfitabilityReport,
+	NO_MATERIALS
 } from "../../controllers/reportsController.js";
 import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
@@ -764,13 +765,43 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 	},
 	"job-profitability": {
 		load: async (orgId, q) => {
-			const { rows, truncated } = await getJobProfitabilityReport(q.startDate, q.endDate, orgId);
-			return { rows, summary: { truncated } };
+			const { rows, ...summary } = await getJobProfitabilityReport(q.startDate, q.endDate, orgId);
+			// Absorption figures are org-wide and window-scoped, so they come from
+			// load, not filteredSummary — which only ever sees the filtered rows.
+			return { rows, summary };
 		},
-		filteredSummary: (rows) => ({
-			totalProfit: round2(rows.reduce((s, r) => s + num(r.profit), 0)),
-			jobCount: rows.length,
-		}),
+		filteredSummary: (rows) => {
+			const totalRevenue = round2(rows.reduce((s, r) => s + num(r.revenue), 0));
+			const totalCogs = round2(rows.reduce((s, r) => s + num(r.cogs), 0));
+			const totalLabor = round2(rows.reduce((s, r) => s + num(r.laborCost), 0));
+			const totalTravel = round2(rows.reduce((s, r) => s + num(r.travelCost), 0));
+			const totalOverhead = round2(rows.reduce((s, r) => s + num(r.overheadCost), 0));
+			return {
+				// Derived, not summed from the profit column: num("-") is 0, so an
+				// uncosted row used to contribute full revenue and no cost, and the
+				// tiles came out short by exactly that row's revenue. Deriving makes
+				// them reconcile however many cells read "-"; the gap counts below are
+				// what tell the reader the total is a floor.
+				totalProfit: round2(totalRevenue - totalCogs),
+				jobCount: rows.length,
+				totalRevenue,
+				totalCogs,
+				totalLabor,
+				totalTravel,
+				totalOverhead,
+				totalNetProfit: round2(totalRevenue - totalCogs - totalLabor - totalTravel - totalOverhead),
+				// A job that consumed nothing is fully costed at 0 — not a gap.
+				jobsMissingCostData: rows.filter(
+					(r) => r.costCoverage !== "Full" && r.costCoverage !== NO_MATERIALS,
+				).length,
+				// Tracked separately from jobsMissingCostData, which means materials
+				// only — summarizeCostSource is shared with the cogs-by-job report and
+				// widening it would move that report's numbers too.
+				jobsMissingLaborCost: rows.filter((r) => r.laborCost === "-").length,
+				jobsMissingOverheadCost: rows.filter((r) => r.overheadCost === "-").length,
+				jobsMissingTravelCost: rows.filter((r) => r.travelCost === "-").length,
+			};
+		},
 		// Rows key on jobId, so the default "every key but id" fallback makes job
 		// UUIDs searchable and a search for "500" match a revenue figure. This is
 		// not new policy — it makes the in-memory path obey the same "only text

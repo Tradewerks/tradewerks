@@ -8,7 +8,13 @@ import {
 } from "../lib/reports/recurringRevenue.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { centsToDollars, dollarsToCents, type TaxSnapshot } from "../services/taxEngine.js";
-import { getStockStatus, unitBasis, type UnitBasis } from "../lib/inventory.js";
+import {
+	getStockStatus,
+	unitBasis,
+	type UnitBasis,
+	CONSUMPTION_MOVEMENT_PREDICATE,
+	CONSUMPTION_SIGNED_QTY,
+} from "../lib/inventory.js";
 import {
 	buildSqlParts,
 	type ColumnDef,
@@ -20,7 +26,11 @@ import { round2 } from "../lib/reports/numbers.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { log } from "../services/appLogger.js";
 import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
-import { computeConsumptionCosts, ConsumptionCostRow } from "../lib/reports/costing.js";
+import {
+	computeConsumptionCosts,
+	computeJobDirectCosts,
+	ConsumptionCostRow,
+} from "../lib/reports/costing.js";
 import { buildShiftSegments } from "./timesheetController.js";
 
 // Upper bound on rows pulled into memory for the in-JS report aggregations
@@ -1158,7 +1168,11 @@ const buildReorderForecast = async (
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND sm.reason IN ('parts_used', 'direct_consumption')
+						-- Evidence only, so no reversals: this is not the shared predicate.
+						AND (
+							sm.reason IN ('parts_used', 'direct_consumption')
+							OR (sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed')
+						)
 				)                                   AS "firstConsumedAt",
 				-- vehicle_stock_item has no org column of its own; scope through vehicle.
 				COALESCE((
@@ -1168,22 +1182,14 @@ const buildReorderForecast = async (
 					WHERE vsi.inventory_item_id = ii.id
 						AND v.organization_id = ${organizationId}
 				), 0)::float                        AS "vehicleQty",
-				-- Net of reversals (from_location_type = 'consumed' cancels demand that
-				-- never happened) — same netting getBatchImpact uses. updatePartsUsedQty
-				-- is the current writer of these; keep this in lockstep if new reversal
-				-- paths are added.
+				-- Net of reversals (lib/inventory.ts CONSUMPTION_*), same as the item page.
 				COALESCE((
-					SELECT SUM(
-						CASE WHEN sm.reason = 'reversal' THEN -sm.qty ELSE sm.qty END
-					)
+					SELECT SUM(${CONSUMPTION_SIGNED_QTY})
 					FROM stock_movement sm
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND (
-							sm.reason IN ('parts_used', 'direct_consumption')
-							OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
-						)
+						AND ${CONSUMPTION_MOVEMENT_PREDICATE}
 				), 0)::float                        AS "qtyConsumed",
 				-- Stamped units behind that sum (same reason set + window) — the
 				-- item's own unit column says nothing about what the ledger used.
@@ -1193,10 +1199,7 @@ const buildReorderForecast = async (
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND (
-							sm.reason IN ('parts_used', 'direct_consumption')
-							OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
-						)
+						AND ${CONSUMPTION_MOVEMENT_PREDICATE}
 				)                                   AS "consumedUnits"
 			FROM inventory_item ii
 			WHERE ii.organization_id = ${organizationId}
@@ -1346,6 +1349,7 @@ const inventoryUsageByItem = async (
 			OR: [
 				{ reason: { in: ["parts_used", "direct_consumption"] } },
 				{ reason: "reversal", from_location_type: "consumed" },
+				{ reason: "supplier_purchase", to_location_type: "consumed" },
 			],
 			...(from && to ? { created_at: { gte: from, lte: to } } : {}),
 			...(itemIds ? { inventory_item_id: { in: itemIds } } : {}),
@@ -3359,8 +3363,9 @@ const summarizeCostSource = (events: ConsumptionCostRow[]) => {
 	const pricedTotal = round2(priced.reduce((s, e) => s + e.totalCost, 0));
 	const totalCogs = priced.length === 0 ? null : pricedTotal;
 	const hasNoData = events.some(e=> e.costSource === "no_cost_data");
-	const allWac = events.every(e => e.costSource === "wac");
-	const costCoverage = allWac ? "Full"
+	// "actual" is the price actually paid, so it is exact like wac, not a fallback.
+	const allExact = events.every(e => e.costSource === "wac" || e.costSource === "actual");
+	const costCoverage = allExact ? "Full"
 		: !hasNoData ? "Estimated"
 		: priced.length > 0 ? "Partial"
 		: "No Cost Data";
@@ -3825,10 +3830,20 @@ const JOB_BILLING_SELECT = {
 	client: { select: { name: true } },
 } as const;
 
+// Coverage for a job that consumed nothing — distinct from "No Cost Data",
+// which means material was consumed and could not be priced.
+export const NO_MATERIALS = "No Materials";
 
-/* 
-*	 missng labor cost
-*/
+// Share of an invoice's pre-discount subtotal that survives the discount.
+// Clamped to [0,1]: a discount over subtotal would otherwise flip revenue negative.
+export const discountNetFactor = (subtotal: unknown, discountAmount: unknown) => {
+	const base = Number(subtotal ?? 0);
+	const discount = Number(discountAmount ?? 0);
+	if (!(base > 0) || !(discount > 0)) return 1;
+	return Math.max(0, 1 - discount / base);
+};
+
+
 export const getJobProfitabilityReport = async (
 	startDate: string | undefined,
 	endDate: string | undefined,
@@ -3837,11 +3852,17 @@ export const getJobProfitabilityReport = async (
 	const sdb = getScopedDb(orgId);
 	const dateFilter = buildDateFilter(startDate, endDate);
 
-	// COGS is job-lifetime on purpose: the period selects which jobs were billed,
-	// then each is costed over its whole life. Its own truncation flag comes from
-	// the 10k consumption-event cap in costing.ts and must be forwarded — dropping
-	// it understates COGS and therefore OVERSTATES profit.
 	const jobCogs = await getCogsByJobReport(undefined, undefined, orgId);
+	const directCosts = await computeJobDirectCosts(orgId);
+	// The only org-config read in this file. Decimal columns, so Number() by hand —
+	// num() returns 0 for a Decimal and would price every mile and hour at nothing.
+	const orgCfg = await sdb.organization.findFirst({
+		where: { id: orgId },
+		select: { cost_per_mile: true, monthly_overhead: true, overhead_rate_per_hour: true },
+	});
+	const perMile = Number(orgCfg?.cost_per_mile ?? 0);
+	const overheadRate =
+		orgCfg?.overhead_rate_per_hour == null ? null : Number(orgCfg.overhead_rate_per_hour);
 	const invoices = await sdb.invoice.findMany({
 		where: {
 			status: { notIn: ["Draft", "Void"] },
@@ -3849,6 +3870,14 @@ export const getJobProfitabilityReport = async (
 				OR: [{ issue_date: dateFilter }, { issue_date: null, created_at: dateFilter }],
 			}),
 		},
+		// Unordered, the cap returns an arbitrary set and the same query can report
+		// different revenue twice. Newest first, so a truncated run drops the
+		// oldest invoices; id breaks ties, which issue_date alone does not.
+		orderBy: [
+			{ issue_date: { sort: "desc", nulls: "last" } },
+			{ created_at: "desc" },
+			{ id: "asc" },
+		],
 		take: REPORT_ROW_CAP,
 		include: {
 			jobs: {
@@ -3874,27 +3903,59 @@ export const getJobProfitabilityReport = async (
 
 	type BilledJobMeta = (typeof invoices)[number]["jobs"][number]["job"];
 	const jobRevenue = new Map<string, { revenue: number; job: BilledJobMeta }>();
-	const addRevenue = (jobId: string, amount: unknown, job: BilledJobMeta) => {
+	const addRevenue = (jobId: string, amount: number, job: BilledJobMeta) => {
 		const prev = jobRevenue.get(jobId);
 		jobRevenue.set(jobId, {
-			revenue: (prev?.revenue ?? 0) + Number(amount ?? 0),
+			revenue: (prev?.revenue ?? 0) + amount,
 			job: prev?.job ?? job,
 		});
 	};
 
 	for (const i of invoices) {
-		for (const j of i.jobs) addRevenue(j.job_id, j.billed_amount, j.job);
-		for (const v of i.visits) addRevenue(v.visit.job_id, v.billed_amount, v.visit.job);
+		// billed_amount sums line items, which never carry the invoice-level
+		// discount — scale it down or the discount lands in gross profit.
+		const net = discountNetFactor(i.subtotal, i.discount_amount);
+		for (const j of i.jobs) addRevenue(j.job_id, Number(j.billed_amount ?? 0) * net, j.job);
+		for (const v of i.visits)
+			addRevenue(v.visit.job_id, Number(v.billed_amount ?? 0) * net, v.visit.job);
 	}
 
 	// Net margin
-	
+	const directByJob = new Map(directCosts.map((d) => [d.jobId, d]));
 
 	const rows = [...jobRevenue.entries()]
 		.map(([jobId, { revenue, job }]) => {
-			const cogs = round2(Number(cogsByJob.get(jobId)?.totalCogs ?? 0));
-			const profit = round2(revenue - cogs);
-			const margin = revenue > 0 ? round2((profit / revenue) * 100) : null;
+			// A null totalCogs means events exist but none could be priced — unknown.
+			// No events at all means nothing was consumed, which is a real 0.
+			const cogRow = cogsByJob.get(jobId);
+			const cogs = cogRow && cogRow.totalCogs == null ? "-" : round2(Number(cogRow?.totalCogs ?? 0));
+			const profit = cogs === "-" ? "-" : round2(revenue - cogs);
+			const margin = revenue > 0 && profit !== "-" ? round2((profit / revenue) * 100) : null;
+
+			const direct = directByJob.get(jobId);
+			const hours = direct?.hours ?? 0;
+			// Partial rating dashes too: one unrated tech on a two-tech job yields an
+			// understated figure that reads as exact, which is worse than admitting it.
+			const laborCost = direct && direct.unratedHours > 0 ? "-" : round2(direct?.laborCost ?? 0);
+			// cost_per_mile is NOT nullable, so there is no "rate unknown" here. Zero
+			// miles on a job that had visits means nobody recorded the drive, not that
+			// nobody drove — but only say so when the rate would have cost something.
+			const travelCost =
+				perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0
+					? "-"
+					: round2((direct?.miles ?? 0) * perMile);
+			// No rate set is unknown overhead, not free overhead — unless no hours were
+			// worked, where zero is the honest answer either way.
+			const overheadCost =
+				overheadRate == null ? (hours > 0 ? "-" : 0) : round2(hours * overheadRate);
+
+			const netKnown = cogs !== "-" && laborCost !== "-" && travelCost !== "-" && overheadCost !== "-";
+			const netProfit = netKnown
+				? round2(revenue - cogs - laborCost - travelCost - overheadCost)
+				: "-";
+			const netMargin =
+				revenue > 0 && netProfit !== "-" ? round2((netProfit / revenue) * 100) : null;
+
 			return {
 				jobId,
 				jobNumber: job.job_number,
@@ -3902,18 +3963,65 @@ export const getJobProfitabilityReport = async (
 				clientName: job.client?.name ?? null,
 				revenue: round2(revenue),
 				cogs,
+				// Anything but Full means the COGS beside it is soft, so profit is too.
+				costCoverage: cogRow?.costCoverage ?? NO_MATERIALS,
+				// profit/margin stay GROSS: the Gross view and its tile mean gross, and
+				// the net figures ride alongside as their own keys.
 				profit,
 				margin,
+				laborHours: round2(hours),
+				laborCost,
+				travelCost,
+				overheadCost,
+				netProfit,
+				netMargin,
 			};
 		})
 		.sort((a, b) => b.revenue - a.revenue);
+
+	// Absorption variance is org-wide and window-scoped, so it cannot be derived
+	// from the rows: it needs hours from jobs with no invoiced revenue in the
+	// window too. groupBy/aggregate is the right tool here — getScopedDb hooks it
+	// and applies the two-hop visit->job->org filter for free.
+	const windowHours = Number(
+		(
+			await sdb.visit_tech_time_entry.aggregate({
+				_sum: { hours_worked: true },
+				...(Object.keys(dateFilter).length && { where: { clocked_in_at: dateFilter } }),
+			})
+		)._sum.hours_worked ?? 0,
+	);
+	const overheadAbsorbed = overheadRate == null ? null : round2(windowHours * overheadRate);
+	// A monthly pool spread over "all time" means nothing, so no window means no
+	// variance — a null beats a confident wrong number.
+	// shortcut: a partial month counts as a whole one, so the pool overstates on
+	// ragged ranges; upgrade to day-proration if anyone reads it closely.
+	// UTC, not local: getMonth() on "2026-03-01T00:00:00Z" reads February west of
+	// Greenwich, which silently doubles the pool on a single-month range.
+	const monthsSpanned =
+		startDate && endDate
+			? (new Date(endDate).getUTCFullYear() - new Date(startDate).getUTCFullYear()) * 12 +
+				(new Date(endDate).getUTCMonth() - new Date(startDate).getUTCMonth()) +
+				1
+			: null;
+	const overheadPool =
+		monthsSpanned == null ? null : round2(Number(orgCfg?.monthly_overhead ?? 0) * monthsSpanned);
+	const absorptionVariance =
+		overheadPool == null || overheadAbsorbed == null ? null : round2(overheadPool - overheadAbsorbed);
 
 	// Three independent caps can each make these figures incomplete, and all three
 	// warrant the same warning: consumption events (understates COGS -> overstates
 	// profit), invoices scanned (understates revenue), and report rows (drops jobs).
 	const rowsTruncated = rows.length > REPORT_ROW_CAP;
 	const truncated = rowsTruncated || jobCogs.truncated || invoices.length >= REPORT_ROW_CAP;
-	return { rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows, truncated };
+	return {
+		rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows,
+		truncated,
+		overheadPool,
+		overheadAbsorbed,
+		absorptionVariance,
+		overheadRateSet: overheadRate != null,
+	};
 }
 
 // =========================================================================================================

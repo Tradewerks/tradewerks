@@ -5,6 +5,8 @@ import {
 	useUploadOrgLogo,
 	useDeleteOrgLogo,
 	useUpdateOrgSettings,
+	useOrgCosting,
+	useUpdateOrgCosting,
 } from "../../hooks/useOrg";
 import type {
 	OrgSettings,
@@ -695,11 +697,141 @@ function Toggle({ checked, onChange, label }: ToggleProps) {
 
 // ── Settings page shell ───────────────────────────────────────────────────────
 
+// Own state and own submit, deliberately not folded into OrgSettingsSection:
+// that form posts a fixed full payload on every save, so a numeric field sitting
+// in it as "" would 400 every organization save, not just this one.
+function CostingSettingsSection() {
+	const { data: costing, isLoading } = useOrgCosting();
+	const updateMutation = useUpdateOrgCosting();
+
+	const [overhead, setOverhead] = useState("");
+	const [perMile, setPerMile] = useState("");
+	const [rate, setRate] = useState("");
+	const [error, setError] = useState<string | null>(null);
+	const [saved, setSaved] = useState(false);
+
+	useEffect(() => {
+		if (!costing) return;
+		setOverhead(costing.monthly_overhead ?? "");
+		setPerMile(costing.cost_per_mile ?? "");
+		setRate(costing.overhead_rate_per_hour ?? "");
+	}, [costing]);
+
+	const handleSave = async () => {
+		const parsedOverhead = Number(overhead);
+		const parsedPerMile = Number(perMile);
+		if (
+			overhead.trim() === "" ||
+			perMile.trim() === "" ||
+			Number.isNaN(parsedOverhead) ||
+			Number.isNaN(parsedPerMile) ||
+			parsedOverhead < 0 ||
+			parsedPerMile < 0
+		) {
+			setError("Monthly overhead and cost per mile must be numbers of 0 or more");
+			return;
+		}
+		// Blank is legal here and means "not set" — the report dashes overhead rather
+		// than pricing it at 0.
+		const parsedRate = rate.trim() === "" ? null : Number(rate);
+		if (parsedRate !== null && (Number.isNaN(parsedRate) || parsedRate < 0)) {
+			setError("Overhead rate must be a number of 0 or more, or blank");
+			return;
+		}
+		setError(null);
+		try {
+			await updateMutation.mutateAsync({
+				monthly_overhead: parsedOverhead,
+				cost_per_mile: parsedPerMile,
+				overhead_rate_per_hour: parsedRate,
+			});
+			setSaved(true);
+			setTimeout(() => setSaved(false), 2000);
+		} catch {
+			setError("Could not save costing settings");
+		}
+	};
+
+	if (isLoading) return <Loader2 className="h-4 w-4 animate-spin text-text-muted" />;
+
+	return (
+		<div className="space-y-4">
+			<div>
+				<label className="mb-1 block text-xs font-medium text-text-tertiary">
+					Monthly overhead
+				</label>
+				<input
+					type="number"
+					step="any"
+					min="0"
+					value={overhead}
+					onChange={(e) => setOverhead(e.target.value)}
+					className={inputBase}
+					disabled={updateMutation.isPending}
+				/>
+				<p className="mt-1 text-xs text-text-muted">
+					Fixed monthly costs — rent, insurance, software. Used to measure how
+					much of the month the jobs actually absorbed.
+				</p>
+			</div>
+			<div>
+				<label className="mb-1 block text-xs font-medium text-text-tertiary">
+					Cost per mile
+				</label>
+				<input
+					type="number"
+					step="any"
+					min="0"
+					value={perMile}
+					onChange={(e) => setPerMile(e.target.value)}
+					className={inputBase}
+					disabled={updateMutation.isPending}
+				/>
+				<p className="mt-1 text-xs text-text-muted">
+					Fuel, maintenance, and depreciation per mile driven.
+				</p>
+			</div>
+			<div>
+				<label className="mb-1 block text-xs font-medium text-text-tertiary">
+					Overhead rate per hour
+				</label>
+				<input
+					type="number"
+					step="any"
+					min="0"
+					value={rate}
+					onChange={(e) => setRate(e.target.value)}
+					className={inputBase}
+					disabled={updateMutation.isPending}
+					placeholder="Not set"
+				/>
+				<p className="mt-1 text-xs text-text-muted">
+					Charged per hour worked on a job. Leave blank to leave overhead out of
+					the profitability report — zero would price it as free.
+				</p>
+			</div>
+			{error && <p className="text-xs text-error-text">{error}</p>}
+			{saved && <p className="text-xs text-success-text">Saved</p>}
+			<button
+				type="button"
+				onClick={handleSave}
+				disabled={updateMutation.isPending}
+				className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-text disabled:opacity-50"
+			>
+				{updateMutation.isPending ? "Saving..." : "Save"}
+			</button>
+		</div>
+	);
+}
+
 export default function SettingsSection() {
 	const [showTaxInactive, setShowTaxInactive] = useState(false);
 
 	const MANAGE_ORG = usePermission("manage_organization");
 	const MANAGE_TAX = usePermission("manage_taxes");
+	// GET /org/costing is gated on view_reports, PATCH on manage_organization —
+	// both are needed for the section to load and save.
+	const VIEW_REPORTS = usePermission("view_reports");
 
 	return (
 		<div className="max-w-6xl">
@@ -728,6 +860,14 @@ export default function SettingsSection() {
 						}
 					>
 						<TaxSettingsSection showInactive={showTaxInactive} />
+					</SettingRow>
+				)}
+				{MANAGE_ORG && VIEW_REPORTS && (
+					<SettingRow
+						title="Costing"
+						description="Overhead and mileage rates used by the profitability report."
+					>
+						<CostingSettingsSection />
 					</SettingRow>
 				)}
 			</div>
