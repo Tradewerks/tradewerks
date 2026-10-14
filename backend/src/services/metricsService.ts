@@ -76,6 +76,32 @@ export const assistantApprovals = meter.createCounter("hvac_assistant_approvals"
 	description: "Human decisions on gated tool calls",
 });
 
+// ── Inventory import drafts ────────────────────────────────────────────────
+export const inventoryImportEvents = meter.createCounter("hvac_inventory_import_events", {
+	description: "Inventory import lifecycle events",
+});
+
+export const inventoryImportDuration = meter.createHistogram("hvac_inventory_import_duration", {
+	description: "Time from upload to ready or commit",
+	unit: "s",
+});
+
+export const inventoryImportMappingDecisions = meter.createCounter("hvac_inventory_import_mapping_decisions", {
+	description: "Accepted versus user-edited import mappings",
+});
+
+export const inventoryImportDuplicatesPrevented = meter.createCounter("hvac_inventory_import_duplicates_prevented", {
+	description: "Within-import, existing-item, and identical-file duplicates surfaced for review",
+});
+
+export const inventoryImportConflicts = meter.createCounter("hvac_inventory_import_conflicts", {
+	description: "Commit and undo conflicts",
+});
+
+export const inventoryPostImportEdits = meter.createCounter("hvac_inventory_post_import_edits", {
+	description: "Inventory item edits within seven days of a committed import",
+});
+
 export const httpMetricsMiddleware = (req: Request, res: Response, next: NextFunction) => {
 	const start = performance.now();
 	res.on("finish", () => {

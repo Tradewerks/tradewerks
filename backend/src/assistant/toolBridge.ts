@@ -2,9 +2,9 @@
  * Adapter between the agent registry and OpenAI's function-calling format.
  *
  * This is the whole reason Phase 1 built a transport-agnostic registry: the
- * assistant does not define tools, it renders the ones that already exist. When
- * Phase 4 adds the MCP server it renders the same list a different way, and
- * neither can drift from the other.
+ * assistant does not define tools, it renders the ones that already exist. The
+ * MCP server renders the same list a different way, and neither can drift from
+ * the other.
  */
 
 import type OpenAI from "openai";
@@ -12,28 +12,33 @@ import { describeTools } from "../agent/registry.js";
 import type { AgentContext, AgentPolicy } from "../agent/types.js";
 
 /**
- * The catalog in OpenAI's shape, filtered to what this caller may actually call.
+ * The catalog in the Responses API's shape, filtered to what this caller may
+ * actually call.
  *
- * `strict` is deliberately not enabled. Strict mode requires every property to
- * be listed in `required` and `additionalProperties: false` throughout, which
- * the Zod-derived schemas do not satisfy — most tool parameters are genuinely
- * optional. Loosening the schemas to satisfy strict mode would mean advertising
- * a contract the server does not enforce, which is the wrong trade: the server
- * re-validates every call with Zod regardless, so a malformed call fails with a
- * structured error the model can correct rather than silently succeeding.
+ * Flat — `name` and `parameters` on the tool itself — where Chat Completions
+ * nested them under `function`. That is the only difference; the schemas come
+ * from the same registry either way.
+ *
+ * `strict` is deliberately false rather than omitted. Strict mode requires every
+ * property to be listed in `required` and `additionalProperties: false`
+ * throughout, which the Zod-derived schemas do not satisfy — most tool
+ * parameters are genuinely optional. Loosening the schemas to satisfy strict
+ * mode would mean advertising a contract the server does not enforce, which is
+ * the wrong trade: the server re-validates every call with Zod regardless, so a
+ * malformed call fails with a structured error the model can correct rather
+ * than silently succeeding.
  */
-export function toolsForOpenAI(ctx: AgentContext, policy: AgentPolicy): OpenAI.Chat.Completions.ChatCompletionTool[] {
+export function toolsForOpenAI(ctx: AgentContext, policy: AgentPolicy): OpenAI.Responses.FunctionTool[] {
 	return describeTools({
 		permissions: ctx.permissions,
 		allowWrites: policy.allowWrites,
 		allowDestructive: policy.allowDestructive,
 	}).map((tool) => ({
 		type: "function" as const,
-		function: {
-			name: tool.name,
-			description: tool.description,
-			parameters: tool.inputSchema as Record<string, unknown>,
-		},
+		name: tool.name,
+		description: tool.description,
+		parameters: tool.inputSchema as Record<string, unknown>,
+		strict: false,
 	}));
 }
 

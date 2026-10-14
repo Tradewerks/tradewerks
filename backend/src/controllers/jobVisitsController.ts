@@ -17,7 +17,7 @@ import { deductInventoryForVisit } from "./inventoryController.js";
 import { onVisitScheduled, onVisitRescheduled, onVisitCancelled } from "../services/followupTriggers.js";
 import { fireLowStockAlerts } from "../services/lowStockAlerts.js";
 import { createNotification, notifyDispatchers } from "./notificationsController.js";
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import { buildRecurringPlanInvoicePayload } from "../services/invoiceGenerator.js";
 import { createInvoiceRecord } from "../services/invoiceService.js";
 import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
@@ -573,7 +573,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 		});
 
 		if (created) {
-			getSocket().emit("job_visit:created", { visitId: created.id, organizationId: organization_id });
+			emitToOrg(organization_id, "job_visit:created", { visitId: created.id, organizationId: organization_id });
 			// Best-effort: schedule client reminders from any active visit_scheduled sequences.
 			onVisitScheduled(created.id, organization_id);
 		}
@@ -1054,7 +1054,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 							}),
 						),
 					);
-					getSocket().emit("job_visit:updated", { visitId: null, organizationId });
+					emitToOrg(organizationId, "job_visit:updated", { visitId: null, organizationId });
 				}
 			}
 		}
@@ -1087,14 +1087,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			parsed.status !== undefined &&
 			existingVisit.status !== updated.status
 		) {
-			const io = getSocket();
-			io.emit(
+			emitToOrg(organizationId,
 				"job_visit:status_changed",
 				buildVisitStatusPayload(updated as any, existingVisit.status, true, context),
 			);
 		}
 		if (updated && Object.keys(changes).length > 0) {
-			getSocket().emit("job_visit:updated", { visitId: updated.id, organizationId });
+			emitToOrg(organizationId, "job_visit:updated", { visitId: updated.id, organizationId });
 		}
 		// Best-effort: keep visit reminders in sync with reschedules / cancellations.
 		if (parsed.status === "Cancelled" && existingVisit.status !== "Cancelled") {
@@ -1240,7 +1239,7 @@ export const assignTechniciansToVisit = async (
 					actionUrl:    `/technician/visits/${visitId}`,
 				}, organizationId);
 			}
-			getSocket().emit("job_visit:updated", { visitId: updated.id, organizationId });
+			emitToOrg(organizationId, "job_visit:updated", { visitId: updated.id, organizationId });
 		}
 
 		return { err: "", item: updated };
@@ -1438,7 +1437,7 @@ export const applyVisitTransition = async (
 									data: { status: techGlobalStatus },
 								}),
 							]);
-							getSocket().emit(
+							emitToOrg(organizationId,
 								"job_visit:status_changed",
 								buildSecondaryEventPayload(currentVisit, techVisitStatus, context),
 							);
@@ -1457,8 +1456,7 @@ export const applyVisitTransition = async (
 					},
 				});
 				if (action === "drive" && existingVisit.status === "Driving" && currentVisit) {
-					const io = getSocket();
-					io.emit(
+					emitToOrg(organizationId,
 						"job_visit:status_changed",
 						buildVisitStatusPayload(currentVisit as any, existingVisit.status, false, context),
 					);
@@ -1786,7 +1784,7 @@ export const applyVisitTransition = async (
 		});
 
 		if (updated) {
-			getSocket().emit(
+			emitToOrg(organizationId,
 				"job_visit:status_changed",
 				buildVisitStatusPayload(updated, existingVisit.status, true, context),
 			);
@@ -2009,8 +2007,7 @@ export const cancelJobVisit = async (
 		}
 
 		if (updated) {
-			const io = getSocket();
-			io.emit(
+			emitToOrg(organizationId,
 				"job_visit:status_changed",
 				buildVisitStatusPayload(updated as any, existingVisit.status, true, context),
 			);
@@ -2086,7 +2083,7 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 			}
 		});
 
-		getSocket().emit("job_visit:deleted", { visitId: id, organizationId });
+		emitToOrg(organizationId, "job_visit:deleted", { visitId: id, organizationId });
 		return { err: "", message: "Job visit deleted successfully" };
 	} catch (e) {
 		log.error({ err: e }, "Failed to delete job visit");

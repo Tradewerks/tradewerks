@@ -1,0 +1,4 @@
+Product Name,Location,Quantity,Unit,Cost,Unit Price,SKU,External ID,Source Namespace,Category
+Pleated Filter 20x20,A-01,6,each,7.25,13.25,FIL-2020,ACME-001,legacy-erp,Filters
+Thermostat Pro,D-01,3,each,76.25,129.99,TSTAT-PRO,ACME-004,legacy-erp,Controls
+New Return Grille 24x24,G-07,5,each,18.00,36.00,GRILLE-2424,ACME-009,legacy-erp,Air Distribution

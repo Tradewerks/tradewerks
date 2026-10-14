@@ -118,6 +118,46 @@ enum inventory_item_origin {
   import             // spreadsheet import or a QuickBooks item pull
 }
 
+enum inventory_import_status {
+  uploaded
+  processing
+  ready_for_review
+  committing
+  committed
+  undoing
+  undone
+  failed
+  cancelled
+}
+
+enum inventory_import_source_type {
+  spreadsheet
+  csv
+  pdf
+  invoice_image
+  product_photo
+}
+
+enum inventory_import_extraction_status {
+  pending
+  processing
+  extracted
+  failed
+  unsupported
+}
+
+enum inventory_import_candidate_action {
+  create
+  update
+  skip
+  conflict
+}
+
+enum inventory_import_change_action {
+  created
+  updated
+}
+
 // Under-limit purchases skip pending_preauth entirely: draft -> pending_review.
 enum field_purchase_status {
   draft
@@ -424,6 +464,11 @@ model organization {
   dispatchers           dispatcher[]
   inventory_items       inventory_item[]
   inventory_tags        inventory_tag[]
+  inventory_imports     inventory_import[]
+  inventory_import_sources inventory_import_source[]
+  inventory_import_candidates inventory_import_candidate[]
+  inventory_import_changes inventory_import_change[]
+  inventory_variant_groups inventory_variant_group[]
   vehicles              vehicle[]
   logs                  log[]
   vehicle_readiness     vehicle_readiness[]
@@ -1520,6 +1565,9 @@ model inventory_item {
   approved_by         dispatcher? @relation("DispatcherApprovedItems", fields: [approved_by_id], references: [id], onDelete: SetNull)
   image_keys          String[] @default([])
   alt_ids             String[] @default([])
+  variant_group_id    String?
+  variant_group       inventory_variant_group? @relation(fields: [variant_group_id], references: [id], onDelete: SetNull)
+  variant_attributes  Json?
 
   image_urls           String[]  @default([])
   alert_emails_enabled Boolean   @default(false)
@@ -1549,6 +1597,8 @@ model inventory_item {
   stock_batches    stock_batch[]
   field_purchase_lines field_purchase_line[]
   purchase_lines purchase_line[]
+  import_candidates inventory_import_candidate[]
+  import_changes    inventory_import_change[]
 
   @@unique([organization_id, sku])
   @@unique([organization_id, barcode])
@@ -1556,7 +1606,165 @@ model inventory_item {
   @@index([barcode])
   @@index([is_active])
   @@index([organization_id])
+  @@index([variant_group_id])
   @@index([created_at])
+}
+
+// Persistent, review-first inventory import. Source documents and candidate
+// proposals are inert until commitInventoryImport applies them transactionally.
+model inventory_import {
+  id              String                  @id @default(uuid())
+  organization_id String
+  organization    organization            @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  created_by_id   String?
+  created_by      dispatcher?             @relation("InventoryImportCreator", fields: [created_by_id], references: [id], onDelete: SetNull)
+  status          inventory_import_status @default(uploaded)
+  revision        Int                     @default(1)
+
+  total_count          Int @default(0)
+  create_count         Int @default(0)
+  update_count         Int @default(0)
+  skip_count           Int @default(0)
+  conflict_count       Int @default(0)
+  low_confidence_count Int @default(0)
+
+  error_code       String?
+  error_message    String? @db.Text
+  retryable        Boolean @default(false)
+  attempt_count    Int     @default(0)
+  claim_token      String?
+  lease_expires_at DateTime?
+
+  financial_approved_by_id String?
+  financial_approved_by    dispatcher? @relation("InventoryImportFinancialApprover", fields: [financial_approved_by_id], references: [id], onDelete: SetNull)
+  financial_approved_at    DateTime?
+
+  created_at            DateTime  @default(now())
+  processing_started_at DateTime?
+  ready_at              DateTime?
+  committed_at          DateTime?
+  undo_expires_at       DateTime?
+  undone_at             DateTime?
+  updated_at            DateTime  @updatedAt
+
+  sources    inventory_import_source[]
+  candidates inventory_import_candidate[]
+  changes    inventory_import_change[]
+
+  @@index([organization_id, status])
+  @@index([status, lease_expires_at])
+  @@index([created_at])
+}
+
+model inventory_import_source {
+  id                String @id @default(uuid())
+  organization_id   String
+  organization      organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  import_id          String
+  import_record      inventory_import @relation(fields: [import_id], references: [id], onDelete: Cascade)
+  original_filename String
+  mime_type          String
+  size_bytes         Int
+  sha256             String
+  storage_url        String
+  storage_key        String
+  source_type        inventory_import_source_type
+  extraction_status inventory_import_extraction_status @default(pending)
+  extraction_metadata Json @default("{}")
+  error_message       String? @db.Text
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  candidates inventory_import_candidate[]
+
+  @@index([organization_id, sha256])
+  @@index([import_id, extraction_status])
+  @@index([sha256])
+}
+
+model inventory_import_candidate {
+  id              String @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  import_id        String
+  import_record    inventory_import @relation(fields: [import_id], references: [id], onDelete: Cascade)
+  source_id        String
+  source           inventory_import_source @relation(fields: [source_id], references: [id], onDelete: Cascade)
+
+  sheet_name  String?
+  row_number  Int?
+  page_number Int?
+  image_index Int?
+  ocr_bounds  Json?
+
+  raw_values          Json
+  normalized_proposal Json
+  field_confidence    Json @default("{}")
+  field_evidence      Json @default("{}")
+  matching_evidence   Json @default("{}")
+
+  proposed_action inventory_import_candidate_action
+  existing_item_id String?
+  existing_item    inventory_item? @relation(fields: [existing_item_id], references: [id], onDelete: SetNull)
+  existing_quantity_at_review Decimal? @db.Decimal(10, 2)
+  duplicate_group String?
+  variant_group_suggestion Json?
+  validation_issues Json @default("[]")
+  user_overrides    Json @default("{}")
+  selected          Boolean @default(true)
+  revision          Int @default(1)
+  low_confidence    Boolean @default(false)
+  financial_fields  String[] @default([])
+  requires_financial_approval Boolean @default(false)
+  financial_approved_by_id String?
+  financial_approved_by    dispatcher? @relation("InventoryImportCandidateApprover", fields: [financial_approved_by_id], references: [id], onDelete: SetNull)
+  financial_approved_at DateTime?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  changes inventory_import_change[]
+
+  @@index([organization_id, import_id])
+  @@index([import_id, proposed_action])
+  @@index([existing_item_id])
+  @@index([duplicate_group])
+}
+
+model inventory_import_change {
+  id              String @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  import_id        String
+  import_record    inventory_import @relation(fields: [import_id], references: [id], onDelete: Cascade)
+  candidate_id     String?
+  candidate        inventory_import_candidate? @relation(fields: [candidate_id], references: [id], onDelete: SetNull)
+  inventory_item_id String
+  inventory_item    inventory_item @relation(fields: [inventory_item_id], references: [id])
+  action            inventory_import_change_action
+  before_snapshot   Json?
+  after_snapshot    Json
+  created_mapping_ids String[] @default([])
+  stock_movement_ids  String[] @default([])
+  created_variant_group_id String?
+  created_at DateTime @default(now())
+
+  @@index([organization_id, import_id])
+  @@index([inventory_item_id])
+  @@index([candidate_id])
+}
+
+model inventory_variant_group {
+  id              String @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  display_name    String
+  attributes      Json?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  items inventory_item[]
+
+  @@index([organization_id, display_name])
 }
 
 // Terminal state of the reconcile queue. Name-scoped, matching the backfill
@@ -2808,6 +3016,9 @@ model dispatcher {
   preauthorized_field_purchases field_purchase[]       @relation("PreauthorizedFieldPurchases")
   reviewed_field_purchases      field_purchase[]       @relation("ReviewedFieldPurchases")
   second_signed_field_purchases field_purchase[]       @relation("SecondSignedFieldPurchases")
+  created_inventory_imports inventory_import[] @relation("InventoryImportCreator")
+  approved_inventory_imports inventory_import[] @relation("InventoryImportFinancialApprover")
+  approved_inventory_import_candidates inventory_import_candidate[] @relation("InventoryImportCandidateApprover")
 
   opened_disputes   document_dispute[] @relation("DisputeOpener")
   resolved_disputes document_dispute[] @relation("DisputeResolver")
@@ -3513,6 +3724,13 @@ model assistant_message {
   finish_reason String?
   input_tokens  Int?
   output_tokens Int?
+
+  /// The slice of input_tokens served from the prompt cache, and the slice of
+  /// output_tokens spent on reasoning. Both are required to price a turn:
+  /// cached input bills at roughly a tenth of the input rate, and reasoning
+  /// tokens bill at the full output rate despite never reaching the user.
+  cached_input_tokens Int?
+  reasoning_tokens    Int?
 
   created_at DateTime @default(now())
 

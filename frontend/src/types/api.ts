@@ -17,5 +17,7 @@ export interface ApiResponse<T> {
 		// Rows matching the query, ignoring the page cap — what "showing 50 of 412"
 		// needs and `count` cannot answer.
 		total?: number;
+		page?: number;
+		pageSize?: number;
 	};
 }

@@ -7,6 +7,7 @@ import InventoryImportExport from "../InventoryImportExport";
 const mockImport = vi.fn();
 const mockDownloadTemplate = vi.fn();
 const mockExportLowStock = vi.fn();
+const draftWorkflowEnabled = import.meta.env.VITE_INVENTORY_AI_IMPORT_ENABLED === "true";
 
 vi.mock("../../../api/inventory", () => ({
 	importInventory: (...args: unknown[]) => mockImport(...args),
@@ -39,12 +40,12 @@ describe("rendering", () => {
 		expect(screen.queryByText("Import / Export")).not.toBeInTheDocument();
 	});
 
-	it("shows the drop zone hint text", () => {
+	it.skipIf(draftWorkflowEnabled)("shows the drop zone hint text", () => {
 		renderOpen();
 		expect(screen.getByText(/drop a file here/i)).toBeInTheDocument();
 	});
 
-	it("shows accepted file format hint", () => {
+	it.skipIf(draftWorkflowEnabled)("shows accepted file format hint", () => {
 		renderOpen();
 		expect(screen.getByText(".xlsx, .xls, .csv")).toBeInTheDocument();
 	});
@@ -59,16 +60,44 @@ describe("rendering", () => {
 		expect(screen.getByText(/export low stock list/i)).toBeInTheDocument();
 	});
 
-	it("import button is disabled when no file is selected", () => {
+	it.skipIf(draftWorkflowEnabled)("import button is disabled when no file is selected", () => {
 		renderOpen();
 		expect(screen.getByRole("button", { name: /import items/i })).toBeDisabled();
+	});
+});
+
+describe.runIf(draftWorkflowEnabled)("reviewed import workflow", () => {
+	it("explains that stock changes wait for review and approval", () => {
+		renderOpen();
+		expect(screen.getByText(/persistent drafts/i)).toBeInTheDocument();
+		expect(screen.getByText(/approval before stock changes/i)).toBeInTheDocument();
+	});
+
+	it("offers the reviewed import and history destinations", () => {
+		renderOpen();
+		expect(screen.getByRole("button", { name: "Start reviewed import" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "View import history" })).toBeInTheDocument();
+	});
+
+	it("does not expose the retired direct-write file picker", () => {
+		renderOpen();
+		expect(document.querySelector('input[type="file"]')).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Import Items" })).not.toBeInTheDocument();
+		expect(mockImport).not.toHaveBeenCalled();
+	});
+
+	it("closes the modal when the reviewed import is opened", async () => {
+		const onClose = vi.fn();
+		render(<InventoryImportExport isOpen={true} onClose={onClose} />);
+		await userEvent.click(screen.getByRole("button", { name: "Start reviewed import" }));
+		expect(onClose).toHaveBeenCalledOnce();
 	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // File selection
 // ─────────────────────────────────────────────────────────────────────────────
-describe("file selection", () => {
+describe.skipIf(draftWorkflowEnabled)("file selection", () => {
 	it("shows the filename after a valid file is selected", async () => {
 		renderOpen();
 		const input = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -130,7 +159,7 @@ describe("file selection", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Import flow
 // ─────────────────────────────────────────────────────────────────────────────
-describe("import flow", () => {
+describe.skipIf(draftWorkflowEnabled)("import flow", () => {
 	async function selectAndImport(result: {
 		imported: number;
 		skipped: { row: number; reason: string }[];

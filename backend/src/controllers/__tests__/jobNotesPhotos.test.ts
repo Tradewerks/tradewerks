@@ -17,7 +17,7 @@ vi.mock("../notificationsController.js", () => ({
 	createNotification: vi.fn(),
 	notifyDispatchers: vi.fn().mockResolvedValue([]),
 }));
-vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ emit: vi.fn() })) }));
+vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ emit: vi.fn() })), emitToOrg: vi.fn() }));
 
 import { db } from "../../db.js";
 import { deleteFile } from "../../services/wasabiService.js";

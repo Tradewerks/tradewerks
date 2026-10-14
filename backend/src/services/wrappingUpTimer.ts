@@ -1,5 +1,5 @@
 import { checkAndClearWrappingUp } from "../controllers/techniciansController.js";
-import { getSocket } from "./socketService.js";
+import { emitToOrg } from "./socketService.js";
 import { log } from "./appLogger.js";
 import { db } from "../db.js";
 
@@ -33,8 +33,8 @@ async function clearWrappingUpNow(techId: string, orgId: string) {
 	try {
 		const updated = await checkAndClearWrappingUp(techId, orgId);
 		if (updated) {
-			getSocket().emit("technician-update", updated);
-			getSocket().emit("technician:status_changed", {
+			emitToOrg(orgId, "technician-update", updated);
+			emitToOrg(orgId, "technician:status_changed", {
 				techId: updated.id,
 				techName: updated.name,
 				newStatus: "Available",

@@ -1,0 +1,120 @@
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap");
+/* The landing page ships its own Tailwind build, scanned from the landing files
+   only, so it neither pulls in the app's theme and global font rules nor bloats
+   with the app's utilities. The app's index.css excludes these files in turn. */
+@import "tailwindcss" source(none);
+@source "./";
+@source "../../pages/LandingPage.tsx";
+/* The dispatch preview renders the app's real map markers. */
+@source "../ui/maps/MarkerFactory.tsx";
+@source inline("bg-success bg-reviewing bg-sky-500 bg-warning bg-orange bg-teal-400 bg-amber-400 bg-neutral");
+
+@theme {
+	--font-sans: "Instrument Sans", system-ui, sans-serif;
+	--font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+	/* Paper and ink */
+	--color-paper: #f7f6f2;
+	--color-paper-2: #edebe4;
+	--color-rail: #fbfaf7;
+	--color-line: #e1dfd8;
+	--color-line-soft: #eceae4;
+	--color-dot: #d6d5d0;
+	--color-ink: #171b1d;
+	--color-ink-2: #3c4340;
+	--color-ink-3: #565c58;
+	--color-ink-4: #6a706c;
+	--color-ink-5: #707571;
+
+	/* Brand green, and the lime that marks the one button that moves a visit */
+	--color-brand: #1f6f4a;
+	--color-brand-hover: #18583b;
+	--color-brand-deep: #175539;
+	--color-brand-tint: #e7f0ea;
+	--color-brand-line: #c9ddd0;
+	--color-brand-soft: #d6e8de;
+	--color-eyebrow: #3f6e56;
+	--color-lime: #c8e24a;
+	--color-lime-hover: #bcd73c;
+	--color-lime-ink: #1a2005;
+	--color-highlight: #fafceb;
+
+	/* Status */
+	--color-amber-tint: #f6efda;
+	--color-amber-line: #e6d9b0;
+	--color-amber-dot: #8a6500;
+	--color-amber-ink: #6b4e00;
+	--color-red-tint: #f9e7e4;
+	--color-red-ink: #8c1d18;
+
+	/* Dark technician section */
+	--color-night: #141613;
+	--color-night-2: #1d201d;
+	--color-night-line: #2e322f;
+	--color-night-ink: #efeee9;
+	--color-night-ink-2: #c7c6c1;
+	--color-night-ink-3: #b7bab5;
+	--color-night-ink-4: #979c96;
+	--color-night-accent: #5fb489;
+	--color-warn-tint: #2a2312;
+	--color-warn-line: #4a3c18;
+	--color-warn: #dbbb63;
+
+	/* Assistant blue */
+	--color-sky: #eef3f8;
+	--color-sky-hover: #f4f7fa;
+	--color-sky-line: #cfdcea;
+	--color-sky-ink: #1f2a33;
+	--color-sky-2: #2a5580;
+	--color-sky-3: #1f4468;
+	--color-sky-4: #4a6680;
+	--color-sky-btn: #2f5d8c;
+	--color-sky-btn-hover: #264d75;
+
+	/* App tokens the real map markers use (light theme, styles/theme.css) */
+	--color-primary: #3b82f6;
+	--color-orange: #ea580c;
+	--color-canvas: #e6eaf0;
+	--color-text-primary: #0f172a;
+	--color-success: #059669;
+	--color-warning: #d97706;
+	--color-reviewing: #7c3aed;
+	--color-neutral: #64748b;
+}
+
+/* bg-base and border-border would collide with the landing's own names as
+   theme tokens, so the marker label gets them scoped to the map instead. */
+.landing-map .bg-base {
+	background-color: #ffffff;
+}
+.landing-map .border-border {
+	border-color: #d0d6df;
+}
+
+html {
+	background-color: var(--color-paper);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	html {
+		scroll-behavior: smooth;
+	}
+}
+
+body {
+	-webkit-font-smoothing: antialiased;
+}
+
+/* A new feed row slides in; reduced motion just shows it. */
+@media (prefers-reduced-motion: no-preference) {
+	.landing-feed-in {
+		animation: landing-feed-in 520ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+}
+
+@keyframes landing-feed-in {
+	from {
+		transform: translateY(-6px);
+		opacity: 0;
+	}
+}

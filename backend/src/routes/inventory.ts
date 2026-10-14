@@ -754,6 +754,14 @@ router.post(
 router.post(
     "/import",
     requirePermission("manage_inventory"),
+	(req, res, next) => {
+		if (["1", "true", "yes", "on"].includes((process.env.INVENTORY_AI_IMPORT_ENABLED ?? "").toLowerCase())) {
+			return res
+				.status(410)
+				.json(createErrorResponse(ErrorCodes.BAD_REQUEST, "Direct inventory imports have been retired. Use /inventory/imports for review and approval."));
+		}
+		next();
+	},
     spreadsheetUpload.single("file"),
     async (req, res, next) => {
         try {

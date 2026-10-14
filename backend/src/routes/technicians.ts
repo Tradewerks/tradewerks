@@ -27,7 +27,7 @@ import {
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
 import { getJobVisitsByTechId } from '../controllers/jobVisitsController.js';
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import { setTechnicianVehicle } from "../controllers/vehiclesController.js";
 import { 
     requirePermission,
@@ -110,8 +110,8 @@ router.post("/:id/ping", requirePermissionOrSelf("manage_technicians"), async (r
         // Lazy WrappingUp auto-transition: clear to Available if timer has passed
         const cleared = await checkAndClearWrappingUp(id, orgId);
         if (cleared) {
-            getSocket().emit("technician-update", cleared);
-            getSocket().emit("technician:status_changed", {
+            emitToOrg(orgId, "technician-update", cleared);
+            emitToOrg(orgId, "technician:status_changed", {
                 techId: cleared.id,
                 techName: cleared.name,
                 newStatus: "Available",
@@ -133,9 +133,7 @@ router.post("/:id/ping", requirePermissionOrSelf("manage_technicians"), async (r
                     ),
                 );
         }
-
-        const io = getSocket();
-        io.emit("technician-update", result.item);
+        emitToOrg(orgId, "technician-update", result.item);
         res.json(createSuccessResponse(result.item));
     } catch (err) {
         next(err);
@@ -352,8 +350,8 @@ router.post("/:id/available", async (req, res, next) => {
 			}
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: result.item!.status,
@@ -383,8 +381,8 @@ router.post("/:id/offline", async (req, res, next) => {
 			const status = result.err.includes("clocked into") ? 409 : 400;
 			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "Offline",
@@ -411,8 +409,8 @@ router.post("/:id/break", async (req, res, next) => {
 			const status = result.err.includes("clocked into") ? 409 : 400;
 			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "Break",
@@ -438,8 +436,8 @@ router.post("/:id/done", async (req, res, next) => {
 		if (result.err) {
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "Available",
@@ -464,8 +462,8 @@ router.post("/:id/head-back", async (req, res, next) => {
 		if (result.err) {
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
-		getSocket().emit("technician-update", result.item);
-		getSocket().emit("technician:status_changed", {
+		emitToOrg(orgId, "technician-update", result.item);
+		emitToOrg(orgId, "technician:status_changed", {
 			techId: result.item!.id,
 			techName: result.item!.name,
 			newStatus: "HeadingBack",

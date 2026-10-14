@@ -33,6 +33,14 @@ const call = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("toTranscript", () => {
+	/** Responses items are a flat list, so a call is found by its call_id, not its position. */
+	const outputFor = (transcript: ReturnType<typeof toTranscript>, callId: string) =>
+		transcript.find((item) => "type" in item && item.type === "function_call_output" && item.call_id === callId) as {
+			output: string;
+		};
+	const typesOf = (transcript: ReturnType<typeof toTranscript>) =>
+		transcript.map((item) => ("type" in item ? item.type : `message:${(item as { role: string }).role}`));
+
 	it("replays a plain exchange", () => {
 		expect(
 			toTranscript([
@@ -46,38 +54,42 @@ describe("toTranscript", () => {
 	});
 
 	it("pairs each tool result back to the call that asked for it", () => {
-		// The API rejects a transcript where a tool message has no matching
-		// tool_call_id, which is why the provider's id is stored rather than
-		// regenerated on replay.
+		// A function_call_output whose call_id matches no preceding function_call
+		// is rejected outright, which is why the provider's id is stored rather
+		// than regenerated on replay.
 		const transcript = toTranscript([
 			message({ role: "assistant", content: "", tool_calls: [call()] as never }),
 		]);
 
 		expect(transcript).toEqual([
+			{ type: "function_call", call_id: "call_1", name: "get_record", arguments: '{"id":"x"}' },
 			{
-				role: "assistant",
-				content: null,
-				tool_calls: [
-					{ id: "call_1", type: "function", function: { name: "get_record", arguments: '{"id":"x"}' } },
-				],
+				type: "function_call_output",
+				call_id: "call_1",
+				output: JSON.stringify({ ok: true, data: { name: "Acme" } }),
 			},
-			{ role: "tool", tool_call_id: "call_1", content: JSON.stringify({ ok: true, data: { name: "Acme" } }) },
 		]);
 	});
 
-	it("sends null, not an empty string, for a tool-only assistant turn", () => {
-		const [assistant] = toTranscript([message({ role: "assistant", content: "", tool_calls: [call()] as never })]);
-		expect(assistant).toMatchObject({ content: null });
+	it("omits the message entirely for a tool-only assistant turn", () => {
+		// Chat Completions needed a null-content assistant message to hang the
+		// tool calls off. Responses items stand alone, so an empty one is just noise.
+		expect(typesOf(toTranscript([message({ role: "assistant", content: "", tool_calls: [call()] as never })]))).toEqual(
+			["function_call", "function_call_output"],
+		);
 	});
 
-	it("keeps text that accompanied a tool call", () => {
-		const [assistant] = toTranscript([
+	it("keeps text that accompanied a tool call, ahead of the call", () => {
+		const transcript = toTranscript([
 			message({ role: "assistant", content: "Let me look.", tool_calls: [call()] as never }),
 		]);
-		expect(assistant).toMatchObject({ content: "Let me look." });
+		expect(transcript[0]).toEqual({ role: "assistant", content: "Let me look." });
+		expect(typesOf(transcript)).toEqual(["message:assistant", "function_call", "function_call_output"]);
 	});
 
-	it("emits one tool message per call, in order", () => {
+	it("emits every call before any result, each paired by id", () => {
+		// The API rejects a batch where an output interleaves ahead of a later
+		// call in the same turn.
 		const transcript = toTranscript([
 			message({
 				role: "assistant",
@@ -85,8 +97,13 @@ describe("toTranscript", () => {
 				tool_calls: [call({ provider_call_id: "a" }), call({ provider_call_id: "b" })] as never,
 			}),
 		]);
-		expect(transcript.map((m) => m.role)).toEqual(["assistant", "tool", "tool"]);
-		expect(transcript.slice(1).map((m) => (m as { tool_call_id: string }).tool_call_id)).toEqual(["a", "b"]);
+		expect(typesOf(transcript)).toEqual([
+			"function_call",
+			"function_call",
+			"function_call_output",
+			"function_call_output",
+		]);
+		expect(transcript.map((i) => (i as { call_id: string }).call_id)).toEqual(["a", "b", "a", "b"]);
 	});
 
 	it("drops an empty assistant turn that carries nothing", () => {
@@ -94,22 +111,22 @@ describe("toTranscript", () => {
 	});
 
 	it("substitutes a marker when a call has no recorded result", () => {
-		// Rather than emitting `null`, which the API rejects for a tool message.
+		// Rather than emitting `null`, which the API rejects for an output item.
 		const transcript = toTranscript([
 			message({ role: "assistant", content: "", tool_calls: [call({ result: null })] as never }),
 		]);
-		expect(JSON.parse((transcript[1] as { content: string }).content)).toMatchObject({ ok: false });
+		expect(JSON.parse(outputFor(transcript, "call_1").output)).toMatchObject({ ok: false });
 	});
 
 	describe("calls awaiting or refused a decision", () => {
-		// Every tool_call needs a matching tool message or the API rejects the whole
+		// Every function_call needs a matching output or the API rejects the whole
 		// request — so an undecided call still gets one, saying plainly that it did
 		// not run.
 		it("tells the model an undecided call has NOT run", () => {
 			const transcript = toTranscript([
 				message({ role: "assistant", content: "", tool_calls: [call({ status: "pending_approval", result: null })] as never }),
 			]);
-			const body = JSON.parse((transcript[1] as { content: string }).content);
+			const body = JSON.parse(outputFor(transcript, "call_1").output);
 			expect(body).toMatchObject({ ok: false, error: { code: "APPROVAL_PENDING" } });
 			expect(body.error.message).toMatch(/not run/i);
 			expect(body.error.message).toMatch(/do not report it as done/i);
@@ -119,7 +136,7 @@ describe("toTranscript", () => {
 			const transcript = toTranscript([
 				message({ role: "assistant", content: "", tool_calls: [call({ status: "rejected", result: null })] as never }),
 			]);
-			const body = JSON.parse((transcript[1] as { content: string }).content);
+			const body = JSON.parse(outputFor(transcript, "call_1").output);
 			expect(body.error.code).toBe("REJECTED");
 			expect(body.error.message).toMatch(/do not retry/i);
 		});
@@ -128,10 +145,10 @@ describe("toTranscript", () => {
 			const transcript = toTranscript([
 				message({ role: "assistant", content: "", tool_calls: [call({ status: "expired", result: null })] as never }),
 			]);
-			expect(JSON.parse((transcript[1] as { content: string }).content).error.code).toBe("EXPIRED");
+			expect(JSON.parse(outputFor(transcript, "call_1").output).error.code).toBe("EXPIRED");
 		});
 
-		it("still emits one tool message per undecided call", () => {
+		it("still emits one output per undecided call", () => {
 			const transcript = toTranscript([
 				message({
 					role: "assistant",
@@ -142,7 +159,12 @@ describe("toTranscript", () => {
 					] as never,
 				}),
 			]);
-			expect(transcript.map((m) => m.role)).toEqual(["assistant", "tool", "tool"]);
+			expect(typesOf(transcript)).toEqual([
+				"function_call",
+				"function_call",
+				"function_call_output",
+				"function_call_output",
+			]);
 		});
 	});
 
@@ -154,7 +176,16 @@ describe("toTranscript", () => {
 				tool_calls: [call({ status: "error", result: { ok: false, error: { code: "NOT_FOUND" } } })] as never,
 			}),
 		]);
-		expect((transcript[1] as { content: string }).content).toContain("NOT_FOUND");
+		expect(outputFor(transcript, "call_1").output).toContain("NOT_FOUND");
+	});
+
+	it("carries no reasoning items", () => {
+		// Reasoning lives inside a single turn, in memory in the loop. Nothing
+		// encrypted is persisted, so nothing encrypted can be replayed from here.
+		const transcript = toTranscript([
+			message({ role: "assistant", content: "thinking done", tool_calls: [call()] as never }),
+		]);
+		expect(transcript.some((item) => "type" in item && item.type === "reasoning")).toBe(false);
 	});
 });
 

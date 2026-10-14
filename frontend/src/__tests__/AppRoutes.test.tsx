@@ -145,8 +145,11 @@ const ROUTES: RouteCase[] = [
 		page: "ProfitAndLossPage",
 		perm: "view_reports",
 	},
+	{ path: "reporting/job-profitability", url: "/dispatch/reporting/job-profitability", page: "JobProfitabilityPage", perm: "view_reports" },
+	{ path: "reporting/qb/:reportType", url: "/dispatch/reporting/qb/profit-and-loss", page: "QBReportPage", perm: "view_reports" },
 	{ path: "reporting/tax-liability", url: "/dispatch/reporting/tax-liability", page: "TaxLiabilityPage", perm: "view_reports" },
 	{ path: "reporting/payments", url: "/dispatch/reporting/payments", page: "PaymentsReportPage", perm: "view_reports" },
+	{ path: "reporting/cogs", url: "/dispatch/reporting/cogs", page: "CogsReportPage", perm: "view_reports" },
 	{ path: "reporting/quote-funnel", url: "/dispatch/reporting/quote-funnel", page: "QuoteFunnelPage", perm: "view_reports" },
 	{
 		path: "reporting/revenue-by-line-item-type",
@@ -184,7 +187,6 @@ const ROUTES: RouteCase[] = [
 		page: "RecurringRevenuePage",
 		perm: "view_reports",
 	},
-	{ path: "kpi", url: "/dispatch/kpi", page: "KPIPage", perm: "view_reports" },
 	{ path: "mileage", url: "/dispatch/mileage", page: "MileageReportPage" },
 	{ path: "timesheets", url: "/dispatch/timesheets", page: "TimesheetsReportPage", perm: "view_reports" },
 	{
@@ -194,6 +196,9 @@ const ROUTES: RouteCase[] = [
 		perm: "view_reports",
 	},
 	{ path: "inventory", url: "/dispatch/inventory", page: "InventoryPage", perm: "view_inventory" },
+	{ path: "inventory/imports", url: "/dispatch/inventory/imports", page: "InventoryImportsPage", perm: "view_inventory" },
+	{ path: "inventory/imports/new", url: "/dispatch/inventory/imports/new", page: "InventoryImportPage", perm: "manage_inventory" },
+	{ path: "inventory/imports/:id", url: "/dispatch/inventory/imports/import-1", page: "InventoryImportReviewPage", perm: "view_inventory" },
 	{
 		// Every verb on this page rewrites catalog or historical billing rows.
 		path: "inventory/reconcile",

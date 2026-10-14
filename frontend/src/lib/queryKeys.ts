@@ -91,6 +91,16 @@ export const qk = {
 		serialHistory: (serialId: string) => [...inventoryRoot, "serial-history", serialId] as const,
 		reconciliation: () => [...inventoryRoot, "reconciliation"] as const,
 	},
+	inventoryImports: {
+		all: ["inventory-imports"] as const,
+		list: (opts?: Record<string, unknown>) => opts
+			? (["inventory-imports", "list", opts] as const)
+			: (["inventory-imports", "list"] as const),
+		detail: (id: string) => ["inventory-imports", "detail", id] as const,
+		candidates: (id: string, filters?: Record<string, unknown>) => filters
+			? (["inventory-imports", "detail", id, "candidates", filters] as const)
+			: (["inventory-imports", "detail", id, "candidates"] as const),
+	},
 	vehicles: {
 		all: ["vehicles"] as const,
 		list: (status?: string) =>

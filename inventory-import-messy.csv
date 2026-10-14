@@ -1,0 +1,10 @@
+Product Name,Description,Bin,Qty On Hand,UOM,Standard Cost,Sale Price,SKU,UPC,Category,Reorder Point,Tags,External ID,Source Namespace,Serialized,Serial Numbers,Batch Tracked,Lot Number,Unused Notes
+ Pleated Filter 20x20 ,MERV 8 filter, A-01 , 10 ,EA,$7.00,12.99, fil-2020 ,0 12345 67890 5, filters ,2,hvac; filter,ACME-001,legacy-erp,No,,No,,clean row with extra whitespace
+PLEATED FILTER 20X20,Duplicate SKU with different stock,B-99,12,each,7.50,$13.49,FIL-2020,,Filters,3,"filter,duplicate",ACME-001-DUP,legacy-erp,false,,false,,should create a duplicate conflict
+Capacitor 45/5 MFD,Dual run capacitor,,4,EA,8.999,18.00,CAP-455,008800112233,Electrical,2,electrical,ACME-002,legacy-erp,No,,No,,missing location and over-precise cost
+Recovery Cylinder,Used recovery tank,C-03,-2,each,52.00,89.00,REC-CYL-30,,Tools,1,recovery,ACME-003,legacy-erp,No,,No,,negative quantity
+Thermostat Pro,Wi-Fi thermostat,D-01,2,each,76.25,129.99,TSTAT-PRO,009900112244,Controls,1,controls;serialized,ACME-004,legacy-erp,Yes,TH-1001;TH-1002,No,,valid serialized stock
+R-410A Refrigerant,Virgin refrigerant,REF-01,25.5,lb,9.10,14.75,R410A-BULK,,Refrigerant,8,refrigerant,ACME-005,legacy-erp,No,,Yes,LOT-R410A-0926,valid batch-tracked stock
+Blue Condensate Pump,120V pump,P-02,twelve,each,31.00,59.00,PUMP-BLUE,001100229988,Pumps,2,pump,ACME-006,legacy-erp,No,,No,,invalid spelled-out quantity
+,Unnamed mystery part,M-01,3,each,1.25,3.50,MYSTERY-001,,Misc,1,needs-review,ACME-007,legacy-erp,No,,No,,missing required name
+Pleated Filter 16x20,MERV 8 filter,A-02,8,each,5.50,10.99,FIL-1620,001234567896,Filters,2,hvac;filter,ACME-008,legacy-erp,No,,No,,variant candidate

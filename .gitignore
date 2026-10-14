@@ -12,3 +12,6 @@ docs/superpowers/
 .claude
 
 .env
+
+# Codex local config (contains API tokens)
+.codex/

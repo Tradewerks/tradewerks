@@ -1,18 +1,48 @@
 /**
  * Assistant configuration.
  *
- * The provider is OpenAI, reached through the Chat Completions API rather than
- * the Responses API. Two reasons: Chat Completions is supported by every OpenAI
- * model and by the OpenAI-compatible endpoints people actually run (Azure,
- * self-hosted gateways), and its streaming shape is stable, so the loop in
- * `loop.ts` does not have to track a newer event vocabulary.
+ * The provider is OpenAI, reached through the Responses API. Chat Completions
+ * was the original choice and is no longer viable: the GPT-5.6 family rejects a
+ * request that carries function tools together with any `reasoning_effort`
+ * above `none`, and it defaults to `medium`, so the call fails even when the
+ * parameter is never sent. Responses is also where reasoning items can be
+ * carried across a tool call, which is exactly what this loop does.
  *
  * The model is an environment variable with no clever default-picking: naming a
  * model in code that the account cannot access fails at the worst moment, in
  * front of a user mid-sentence. Set OPENAI_MODEL deliberately.
  */
 
-export const ASSISTANT_MODEL = process.env.OPENAI_MODEL || "gpt-5";
+import type { ReasoningEffort } from "openai/resources/shared";
+
+/**
+ * Default is Luna, the cheap tier of the GPT-5.6 family.
+ *
+ * This workload is short-context — a ~6k fixed prefix, capped lists, and at most
+ * MAX_TOOL_ITERATIONS round trips — so Luna's one hard limitation, long-context
+ * recall collapsing past ~256k tokens, is out of reach here. Escalate to
+ * gpt-5.6-terra if the decline rate on approvals or the iteration_limit rate
+ * says the reasoning is not enough; both are already exported as metrics.
+ */
+export const ASSISTANT_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * How hard the model thinks before it answers or calls a tool.
+ *
+ * "low" is the default because most turns here are a lookup and a sentence, and
+ * reasoning tokens bill at the output rate. Raise it for an organization whose
+ * dispatchers ask multi-step questions; an unrecognised value falls back rather
+ * than failing the request, since a typo in an env var should not take the
+ * assistant offline.
+ */
+export const REASONING_EFFORT: ReasoningEffort = (() => {
+	const configured = process.env.ASSISTANT_REASONING_EFFORT;
+	return (REASONING_EFFORTS as readonly string[]).includes(configured ?? "")
+		? (configured as ReasoningEffort)
+		: "low";
+})();
 
 /** Hard ceiling on model→tool→model round trips inside one user turn. */
 export const MAX_TOOL_ITERATIONS = Number(process.env.ASSISTANT_MAX_ITERATIONS) || 6;
@@ -20,8 +50,18 @@ export const MAX_TOOL_ITERATIONS = Number(process.env.ASSISTANT_MAX_ITERATIONS) 
 /** Turns of history replayed to the model. Older turns are dropped from the tail. */
 export const HISTORY_WINDOW = Number(process.env.ASSISTANT_HISTORY_WINDOW) || 40;
 
-/** Upper bound on a single completion. */
-export const MAX_COMPLETION_TOKENS = Number(process.env.ASSISTANT_MAX_COMPLETION_TOKENS) || 2000;
+/**
+ * Upper bound on a single response.
+ *
+ * This counts reasoning tokens as well as visible ones, so it cannot be sized
+ * against the answer alone: a turn that spends the whole budget thinking
+ * returns no text at all. The old 2000 was set for a non-reasoning model and is
+ * too tight for one that thinks first — hence 8000, and hence the explicit
+ * truncation handling in `loop.ts`, which reports the ceiling rather than
+ * emitting a blank reply.
+ */
+export const MAX_OUTPUT_TOKENS =
+	Number(process.env.ASSISTANT_MAX_OUTPUT_TOKENS || process.env.ASSISTANT_MAX_COMPLETION_TOKENS) || 8000;
 
 /**
  * Concurrent streams one user may hold open.

@@ -3,7 +3,7 @@ import { getScopedDb, type UserContext } from "../lib/context.js";
 import { fillCoords } from "../lib/geocode.js";
 import { db } from "../db.js";
 import { Prisma } from "../../generated/prisma/client.js";
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import {
 	createJobSchema,
 	updateJobSchema,
@@ -1110,7 +1110,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		});
 
 		if (updated) {
-			getSocket().emit("job:updated", { jobId: id, organizationId });
+			emitToOrg(organizationId, "job:updated", { jobId: id, organizationId });
 		}
 		return { err: "", item: updated };
 	} catch (e) {

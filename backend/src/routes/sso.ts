@@ -52,7 +52,7 @@ router.get("/start", requireSsoEnabled, async (req, res) => {
             .status(400)
             .json(createErrorResponse(ErrorCodes.INVALID_INPUT, "Missing provider"));
     }
-    //if (!config) return res.redirect(`${FRONTEND_URL}/login?sso=error`);
+    //if (!config) return res.redirect(`${FRONTEND_URL}/app/login?sso=error`);
 
     const { url, state, nonce, codeVerifier } = await buildAuthorizationUrl(provider);
 
@@ -70,9 +70,9 @@ router.get("/callback", requireSsoEnabled, async (req, res) => {
     res.clearCookie("sso_state");
     const ssoState = raw ? JSON.parse(raw) : null;
     if (!ssoState || req.query.state !== ssoState.state) {
-        return res.redirect(`${FRONTEND_URL}/login?sso=error`);
+        return res.redirect(`${FRONTEND_URL}/app/login?sso=error`);
     }
-    //if (!config) return res.redirect(`${FRONTEND_URL}/login?sso=error`);
+    //if (!config) return res.redirect(`${FRONTEND_URL}/app/login?sso=error`);
 
     let email: string;
     try {
@@ -82,18 +82,18 @@ router.get("/callback", requireSsoEnabled, async (req, res) => {
             ssoState
         )) as { email: string });
     } catch (error) {
-        return res.redirect(`${FRONTEND_URL}/login?sso=error`);
+        return res.redirect(`${FRONTEND_URL}/app/login?sso=error`);
     }
 
     const sdb = getScopedDb(ssoState.orgId);
     const user =
         (await sdb.technician.findFirst({ where: { email } })) ??
         (await sdb.dispatcher.findFirst({ where: { email } }));
-    if (!user) return res.redirect(`${FRONTEND_URL}/login?sso=error`);
+    if (!user) return res.redirect(`${FRONTEND_URL}/app/login?sso=error`);
 
     const role = "role" in user ? user.role : "technician";
     const code = await mintHandoffCode(user.id, role);
-    return res.redirect(`${FRONTEND_URL}/auth/sso/complete?code=${code}`);
+    return res.redirect(`${FRONTEND_URL}/app/auth/sso/complete?code=${code}`);
 });
 
 router.post("/exchange", requireSsoEnabled, async (req, res) => {

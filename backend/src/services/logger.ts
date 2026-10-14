@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { getSocket } from "./socketService.js";
 import { redactFeedRow } from "../controllers/logsController.js";
 import { FEED_EVENT_SET } from "../lib/activityFeedEvents.js";
+import { inventoryPostImportEdits } from "./metricsService.js";
 
 // ============================================================================
 // UNIFIED ACTIVITY LOGGING
@@ -91,6 +92,36 @@ export const logActivity = async (params: LogActivityParams) => {
 				getSocket().to(`org:${created.organization_id}`).emit("activity-event", redactFeedRow(created));
 			} catch {
 				// socket not yet initialized — skip emission
+			}
+		}
+
+		if (
+			["1", "true", "yes", "on"].includes((process.env.INVENTORY_AI_IMPORT_ENABLED ?? "").toLowerCase()) &&
+			params.entity_type === "inventory_item" &&
+			params.organization_id &&
+			!params.event_type.startsWith("inventory_item.import_")
+		) {
+			try {
+				const recentImport = await db.inventory_import_change.findFirst({
+					where: {
+						organization_id: params.organization_id,
+						inventory_item_id: params.entity_id,
+						import_record: {
+							status: "committed",
+							committed_at: { gte: new Date(Date.now() - 7 * 24 * 60 * 60_000) },
+						},
+					},
+					select: { action: true },
+					orderBy: { created_at: "desc" },
+				});
+				if (recentImport) {
+					inventoryPostImportEdits.add(1, {
+						event: params.event_type,
+						import_action: recentImport.action,
+					});
+				}
+			} catch {
+				// Metrics must never make an already-written audit event fail.
 			}
 		}
 	} catch (error) {

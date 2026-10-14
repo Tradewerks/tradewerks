@@ -173,6 +173,8 @@ interface DynamicMapProps {
 	 * moves the map or asks for a view.
 	 */
 	autoFit?: "once" | "untilInteraction";
+	/** False renders a fixed view: no pan, zoom or rotate (the landing page's preview). */
+	interactive?: boolean;
 }
 
 const MIN_ANIM_MS = 1500;
@@ -193,6 +195,7 @@ const DynamicMap = ({
 	showRoutes = false,
 	viewRequest = null,
 	autoFit = "once",
+	interactive = true,
 }: DynamicMapProps) => {
 	const mapRef = useRef<mapboxgl.Map | null>(null);
 	const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -245,13 +248,17 @@ const DynamicMap = ({
 					? { bounds: initialBounds, fitBoundsOptions: INITIAL_FIT_OPTIONS }
 					: { center: FALLBACK_CENTER, zoom: FALLBACK_ZOOM }),
 				style: "mapbox://styles/mapbox/standard",
+				pitch: 15,
 				minZoom: 5,
 				maxZoom: 22,
 				failIfMajorPerformanceCaveat: false,
+				interactive,
 				config: {
 					basemap: {
-						lightPreset: "dusk",
+						lightPreset: "day",
 						showPointOfInterestLabels: false,
+						show3dObjects: true,
+						show3dBuildings: true,
 					},
 				},
 			});

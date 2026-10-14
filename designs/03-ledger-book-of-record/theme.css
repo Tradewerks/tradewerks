@@ -1,0 +1,419 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SYSTEM 03 · LEDGER — "The book of record"
+ * For the owner and the back office. Dense tabular figures, printable
+ * documents, and a serif voice that makes an estimate read like a contract.
+ * In dark mode it becomes ink on slate, not a glowing spreadsheet.
+ * Type: Newsreader (headings, figures) / Public Sans (chrome, tables)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+	/* ── Backgrounds / Surfaces ──────────────────────────────────────────── */
+	--color-canvas:         #EFEDE7;   /* the desk */
+	--color-base:           #FBFAF8;   /* stock — the page */
+	--color-surface:        #F7F5F1;
+	--color-surface-raised: #F1EFEA;   /* band */
+	--color-surface-inset:  #E8E5DE;
+
+	/* ── Text ────────────────────────────────────────────────────────────── */
+	--color-text-primary:    #16202B;   /* ink */
+	--color-text-secondary:  #3E4854;
+	--color-text-tertiary:   #4C5764;
+	--color-text-muted:      #6B7480;
+	--color-text-faint:      #7E8794;
+	--color-text-inverse:    #FBFAF8;
+	--color-text-link:       #1B4B8F;
+	--color-text-on-surface: #3E4854;
+
+	/* ── Primary — ink. The document signs in black. ─────────────────────── */
+	--color-primary:           #16202B;
+	--color-primary-hover:     #243444;
+	--color-primary-active:    #0C1620;
+	--color-primary-bg:        rgba(22, 32, 43, 0.07);
+	--color-primary-bg-subtle: rgba(22, 32, 43, 0.04);
+	--color-primary-bg-dim:    rgba(22, 32, 43, 0.025);
+	--color-primary-border:    rgba(22, 32, 43, 0.16);
+	--color-primary-text:      #16202B;
+	--color-on-primary:        #FBFAF8;
+	--color-primary-disabled:  #8B94A0;
+
+	/* ── Borders — hairline rules ────────────────────────────────────────── */
+	--color-border-subtle: #EDEBE5;
+	--color-border:        #E2E0DA;
+	--color-border-strong: #C7C4BB;
+	--color-border-card:   #E2E0DA;
+	--color-border-input:  #C7C4BB;
+
+	/* ── Overlay ─────────────────────────────────────────────────────────── */
+	--color-overlay: rgba(20, 24, 28, 0.60);
+
+	/* ── Confirm / Payment / QuickBooks ──────────────────────────────────── */
+	--color-confirm:       #2E6B4F;
+	--color-confirm-hover: #245740;
+	--color-payment:       #A8532B;   /* copper — waiting on a human */
+	--color-payment-hover: #8C4322;
+	--color-quickbooks:       #2E6B4F;
+	--color-quickbooks-hover: #245740;
+
+	/* ── Status: success — "Paid" ────────────────────────────────────────── */
+	--color-success:             #2E6B4F;
+	--color-success-text:        #215741;
+	--color-success-bg:          rgba(46, 107, 79, 0.07);
+	--color-success-border:      #BFD6C8;
+	--color-success-bright-text: #215741;
+
+	/* ── Status: error — "30+ days" ──────────────────────────────────────── */
+	--color-error:        #92211F;
+	--color-error-strong: #7A1B19;
+	--color-error-text:   #92211F;
+	--color-error-bg:     rgba(146, 33, 31, 0.07);
+	--color-error-border: #E7C4C5;
+
+	/* ── Status: warning — copper marks anything awaiting a human ────────── */
+	--color-warning:        #A8532B;
+	--color-warning-text:   #8C5233;
+	--color-warning-bg:     rgba(168, 83, 43, 0.07);
+	--color-warning-border: #E4CBBB;
+	--color-on-warning:     #FBFAF8;
+
+	/* ── Status: info — blue is only ever a link or a system note ────────── */
+	--color-info:        #1B4B8F;
+	--color-info-text:   #1B4B8F;
+	--color-info-bg:     rgba(27, 75, 143, 0.07);
+	--color-info-border: #C4D3E6;
+
+	/* ── Status: reviewing ───────────────────────────────────────────────── */
+	--color-reviewing:        #57407A;
+	--color-reviewing-text:   #4A3568;
+	--color-reviewing-bg:     rgba(87, 64, 122, 0.07);
+	--color-reviewing-border: #D2C8E0;
+
+	/* ── Status: rejected ────────────────────────────────────────────────── */
+	--color-rejected:        #92211F;
+	--color-rejected-text:   #7A1B19;
+	--color-rejected-bg:     rgba(146, 33, 31, 0.07);
+	--color-rejected-border: #E7C4C5;
+
+	/* ── Status: neutral / orange ────────────────────────────────────────── */
+	--color-neutral: #6B7480;
+	--color-orange:        #A8532B;
+	--color-orange-text:   #8C5233;
+	--color-orange-bg:     rgba(168, 83, 43, 0.07);
+	--color-orange-border: #E4CBBB;
+
+	/* ── Priority ────────────────────────────────────────────────────────── */
+	--color-priority-emergency: #92211F;
+	--color-priority-urgent:    #A8532B;
+	--color-priority-high:      #8C5233;
+	--color-priority-medium:    #6B7480;
+	--color-priority-low:       #2E6B4F;
+	--color-priority-default:   #6B7480;
+
+	/* ── Visit status ────────────────────────────────────────────────────── */
+	--color-visit-scheduled:  #6B7480;
+	--color-visit-driving:    #1B4B8F;
+	--color-visit-onsite:     #A8532B;
+	--color-visit-inprogress: #1B4B8F;
+	--color-visit-paused:     #8C5233;
+	--color-visit-delayed:    #A8532B;
+	--color-visit-completed:  #2E6B4F;
+	--color-visit-cancelled:  #92211F;
+
+	--color-visit-driving-text:   #1B4B8F;
+	--color-visit-completed-dark: #215741;
+	--color-visit-delayed-text:   #8C5233;
+	--color-visit-paused-text:    #8C5233;
+
+	/* ── Schedule card surfaces ──────────────────────────────────────────── */
+	--color-card-bg:           #F1EFEA;
+	--color-occurrence-bg:     #F0ECF4;
+	--color-popup-bg:          #FBFAF8;
+	--color-occurrence-border: rgba(87, 64, 122, 0.24);
+
+	/* ── Schedule text ───────────────────────────────────────────────────── */
+	--color-sched-text-primary:      #16202B;
+	--color-sched-text-secondary:    #3E4854;
+	--color-sched-text-muted:        rgba(22, 32, 43, 0.55);
+	--color-sched-text-client:       rgba(22, 32, 43, 0.62);
+	--color-sched-text-time:         rgba(22, 32, 43, 0.74);
+	--color-sched-text-faint:        #6B7480;
+	--color-sched-visit-title:       #16202B;
+	--color-sched-occurrence-title:  #4A3568;
+	--color-sched-occurrence-badge:  #57407A;
+	--color-sched-today-bg:          #E8EEF6;
+	--color-sched-status-badge-bg:   rgba(27, 75, 143, 0.08);
+	--color-sched-status-badge-text: #1B4B8F;
+	--color-sched-open-ended-dash:   rgba(22, 32, 43, 0.22);
+
+	/* ── Calendar ────────────────────────────────────────────────────────── */
+	--color-cal-month-day: #3E4854;
+
+	/* ── Charts — a printed report, not a dashboard ──────────────────────── */
+	--color-chart-primary:  #1B4B8F;
+	--color-chart-success:  #2E6B4F;
+	--color-chart-warning:  #A8532B;
+	--color-chart-info:     #4E7BB0;
+	--color-chart-error:    #92211F;
+	--color-chart-fallback: #E2E0DA;
+	--color-chart-axis:     #6B7480;
+	--color-chart-hole-bg:  #FBFAF8;
+
+	/* ── Tech palette — plate-printed, muted ─────────────────────────────── */
+	--color-tech-1:          #1B4B8F;
+	--color-tech-2:          #A8532B;
+	--color-tech-3:          #2E6B4F;
+	--color-tech-4:          #57407A;
+	--color-tech-5:          #92211F;
+	--color-tech-6:          #2E6B76;
+	--color-tech-7:          #7A6A2E;
+	--color-tech-8:          #6B4A3A;
+	--color-tech-9:          #99A2AC;
+	--color-tech-unassigned: #6B7480;
+
+	--color-sched-tech-1:  #1B4B8F;
+	--color-sched-tech-2:  #2E6B4F;
+	--color-sched-tech-3:  #A8532B;
+	--color-sched-tech-4:  #57407A;
+	--color-sched-tech-5:  #92211F;
+	--color-sched-tech-6:  #2E6B76;
+	--color-sched-tech-7:  #7A6A2E;
+	--color-sched-tech-8:  #8A3D63;
+	--color-sched-tech-9:  #4A6B2E;
+	--color-sched-tech-10: #3A5F7A;
+	--color-sched-tech-11: #4A3568;
+	--color-sched-tech-12: #6B4A3A;
+
+	/* ── Mapbox ──────────────────────────────────────────────────────────── */
+	--color-mapbox-bg:       #FBFAF8;
+	--color-mapbox-bg-hover: #F1EFEA;
+	--color-mapbox-border:   #E2E0DA;
+
+	/* ── Gradient / special ──────────────────────────────────────────────── */
+	--color-gradient-tech-teal:      #2E6B76;
+	--color-gradient-tech-teal-text: #1F4E57;
+	--color-dispatcher-avatar-to:    #57407A;
+
+	/* ── Recurring Plan ──────────────────────────────────────────────────── */
+	--color-plan:       #57407A;
+	--color-plan-hover: #4A3568;
+	--color-plan-text:  #4A3568;
+
+	/* ── Lifecycle actions ───────────────────────────────────────────────── */
+	--color-action-drive:       #1B4B8F;
+	--color-action-drive-hover: #163C73;
+	--color-action-pause:       #A8532B;
+	--color-action-pause-hover: #8C4322;
+
+	--color-test: #EFEDE7;
+
+	/* ── Geometry — the document has corners, not curves. ────────────────── */
+	--radius-xs:  2px;
+	--radius-sm:  2px;
+	--radius-md:  3px;
+	--radius-lg:  4px;
+	--radius-xl:  4px;
+	--radius-2xl: 6px;
+	--radius-3xl: 8px;
+}
+
+/* ── Dark · ink on slate ────────────────────────────────────────────────── */
+[data-theme="dark"] {
+	--color-canvas:         #0F1216;
+	--color-base:           #14181C;
+	--color-surface:        #171C21;
+	--color-surface-raised: #222933;
+	--color-surface-inset:  #0C0F12;
+
+	--color-text-primary:    #F2F1EE;
+	--color-text-secondary:  #C8CDD3;
+	--color-text-tertiary:   #B3BAC2;
+	--color-text-muted:      #99A2AC;
+	--color-text-faint:      #858E99;
+	--color-text-inverse:    #16202B;
+	--color-text-link:       #8DB1DE;
+	--color-text-on-surface: #C8CDD3;
+
+	/* Primary inverts — the page becomes the mark. */
+	--color-primary:           #F2F1EE;
+	--color-primary-hover:     #FFFFFF;
+	--color-primary-active:    #DAD9D6;
+	--color-primary-bg:        rgba(242, 241, 238, 0.12);
+	--color-primary-bg-subtle: rgba(242, 241, 238, 0.07);
+	--color-primary-bg-dim:    rgba(242, 241, 238, 0.04);
+	--color-primary-border:    rgba(242, 241, 238, 0.22);
+	--color-primary-text:      #F2F1EE;
+	--color-primary-disabled:  #5C646E;
+	--color-on-primary:        #16202B;
+
+	--color-border-subtle: #262D34;
+	--color-border:        #2C333A;
+	--color-border-strong: #3B434B;
+	--color-border-card:   #2C333A;
+	--color-border-input:  #3B434B;
+
+	--color-overlay: rgba(8, 10, 13, 0.78);
+
+	--color-confirm:       #77C29B;
+	--color-confirm-hover: #5FB088;
+	--color-payment:       #D6906A;
+	--color-payment-hover: #C47C55;
+	--color-quickbooks:       #77C29B;
+	--color-quickbooks-hover: #5FB088;
+
+	--color-success:             #77C29B;
+	--color-success-text:        #77C29B;
+	--color-success-bg:          rgba(119, 194, 155, 0.10);
+	--color-success-border:      #2A4438;
+	--color-success-bright-text: #77C29B;
+
+	--color-error:        #E4837C;
+	--color-error-strong: #E4837C;
+	--color-error-text:   #E4837C;
+	--color-error-bg:     rgba(228, 131, 124, 0.10);
+	--color-error-border: #4A2A2A;
+
+	--color-warning:        #D6906A;
+	--color-warning-text:   #D6906A;
+	--color-warning-bg:     rgba(214, 144, 106, 0.10);
+	--color-warning-border: #4A3427;
+	--color-on-warning:     #1B1108;
+
+	--color-info:        #8DB1DE;
+	--color-info-text:   #8DB1DE;
+	--color-info-bg:     rgba(141, 177, 222, 0.10);
+	--color-info-border: #2A3A4E;
+
+	--color-reviewing:        #AE9AD4;
+	--color-reviewing-text:   #AE9AD4;
+	--color-reviewing-bg:     rgba(174, 154, 212, 0.10);
+	--color-reviewing-border: #342C46;
+
+	--color-rejected:        #E4837C;
+	--color-rejected-text:   #E4837C;
+	--color-rejected-bg:     rgba(228, 131, 124, 0.10);
+	--color-rejected-border: #4A2A2A;
+
+	--color-neutral: #99A2AC;
+	--color-orange:        #D6906A;
+	--color-orange-text:   #D6906A;
+	--color-orange-bg:     rgba(214, 144, 106, 0.10);
+	--color-orange-border: #4A3427;
+
+	--color-priority-emergency: #E4837C;
+	--color-priority-urgent:    #D6906A;
+	--color-priority-high:      #D6906A;
+	--color-priority-medium:    #99A2AC;
+	--color-priority-low:       #77C29B;
+	--color-priority-default:   #99A2AC;
+
+	--color-visit-scheduled:  #99A2AC;
+	--color-visit-driving:    #8DB1DE;
+	--color-visit-onsite:     #D6906A;
+	--color-visit-inprogress: #8DB1DE;
+	--color-visit-paused:     #D6906A;
+	--color-visit-delayed:    #D6906A;
+	--color-visit-completed:  #77C29B;
+	--color-visit-cancelled:  #E4837C;
+
+	--color-visit-driving-text:   #8DB1DE;
+	--color-visit-completed-dark: #77C29B;
+	--color-visit-delayed-text:   #D6906A;
+	--color-visit-paused-text:    #D6906A;
+
+	--color-card-bg:           #1B2026;
+	--color-occurrence-bg:     #1E1A26;
+	--color-popup-bg:          #14181C;
+	--color-occurrence-border: rgba(174, 154, 212, 0.28);
+
+	--color-sched-text-primary:      #F2F1EE;
+	--color-sched-text-secondary:    #C8CDD3;
+	--color-sched-text-muted:        rgba(242, 241, 238, 0.55);
+	--color-sched-text-client:       rgba(242, 241, 238, 0.62);
+	--color-sched-text-time:         rgba(242, 241, 238, 0.74);
+	--color-sched-text-faint:        #858E99;
+	--color-sched-visit-title:       #F2F1EE;
+	--color-sched-occurrence-title:  #AE9AD4;
+	--color-sched-today-bg:          #17222E;
+	--color-sched-status-badge-bg:   rgba(141, 177, 222, 0.12);
+	--color-sched-status-badge-text: #8DB1DE;
+	--color-sched-open-ended-dash:   rgba(242, 241, 238, 0.32);
+
+	--color-cal-month-day: #C8CDD3;
+
+	--color-chart-primary:  #8DB1DE;
+	--color-chart-success:  #77C29B;
+	--color-chart-warning:  #D6906A;
+	--color-chart-info:     #A5C1E5;
+	--color-chart-error:    #E4837C;
+	--color-chart-fallback: #2C333A;
+	--color-chart-axis:     #99A2AC;
+	--color-chart-hole-bg:  #14181C;
+
+	--color-mapbox-bg:       #14181C;
+	--color-mapbox-bg-hover: #222933;
+	--color-mapbox-border:   #2C333A;
+
+	--color-gradient-tech-teal:      #6FC0C9;
+	--color-gradient-tech-teal-text: #6FC0C9;
+	--color-dispatcher-avatar-to:    #AE9AD4;
+
+	--color-plan:       #AE9AD4;
+	--color-plan-hover: #9A83C7;
+	--color-plan-text:  #AE9AD4;
+
+	--color-action-drive:       #8DB1DE;
+	--color-action-drive-hover: #A5C1E5;
+	--color-action-pause:       #D6906A;
+	--color-action-pause-hover: #C47C55;
+
+	--anim-surface-flash: rgba(34, 41, 51, 0.45);
+}
+
+[data-palette="warm"],
+[data-palette="neutral"] {
+	--color-canvas:         #EFEDE7;
+	--color-base:           #FBFAF8;
+	--color-surface:        #F7F5F1;
+	--color-surface-raised: #F1EFEA;
+	--color-surface-inset:  #E8E5DE;
+	--color-border-subtle:  #EDEBE5;
+	--color-border:         #E2E0DA;
+	--color-border-strong:  #C7C4BB;
+	--color-border-card:    #E2E0DA;
+	--color-border-input:   #C7C4BB;
+	--color-mapbox-bg:      #FBFAF8;
+	--color-mapbox-bg-hover:#F1EFEA;
+	--color-chart-fallback: #E2E0DA;
+	--color-chart-hole-bg:  #FBFAF8;
+}
+
+/* Bare `rounded` is a fixed utility in Tailwind v4 — override explicitly. */
+.rounded { border-radius: 3px; }
+
+/* ── Every figure is tabular. ────────────────────────────────────────────── */
+html, body, table, input, .tabular-nums {
+	font-variant-numeric: tabular-nums;
+}
+
+/* ── Serif carries headings, figures, and anything a customer signs.
+ * Public Sans runs the chrome and the tables. ───────────────────────────── */
+h1, h2, h3, h4,
+.text-2xl, .text-3xl, .text-4xl, .text-5xl {
+	font-family: "Newsreader", Georgia, serif;
+	font-weight: 500;
+	letter-spacing: -0.015em;
+}
+
+/* Column headings keep the small-caps register of a printed ledger. */
+table th {
+	font-size: 0.6875rem;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--color-text-muted);
+}
+
+/* Rules stay hairline; the document has no drop shadow. */
+.shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl {
+	box-shadow: none !important;
+	border: 1px solid var(--color-border);
+}

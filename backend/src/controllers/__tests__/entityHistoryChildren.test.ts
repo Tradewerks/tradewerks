@@ -89,11 +89,13 @@ describe("getEntityHistory — deleted children via parent breadcrumb (review P2
 
 	it("project group matches deleted jobs that were attached to the project", async () => {
 		fake.job.findMany.mockResolvedValue([]);
+		fake.project_note.findMany.mockResolvedValue([]);
 		await getEntityHistory("org-1", "project", "proj-1", 20);
 		const where = fake.log.findMany.mock.calls.at(-1)![0].where;
-		expect(clausesWith(where, ["entity_type", "changes"])).toEqual([
+		expect(clausesWith(where, ["entity_type", "changes"])).toEqual(expect.arrayContaining([
 			{ entity_type: "job", changes: { path: ["_parent_id", "new"], equals: "proj-1" } },
-		]);
+			{ entity_type: "project_note", changes: { path: ["_parent_id", "new"], equals: "proj-1" } },
+		]));
 	});
 
 	it("recurring_plan group matches deleted notes/occurrences through the breadcrumb", async () => {

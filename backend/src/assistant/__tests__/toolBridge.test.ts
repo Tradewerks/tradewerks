@@ -28,18 +28,26 @@ const ctxWith = (...permissions: string[]): AgentContext => ({
 });
 
 describe("toolsForOpenAI", () => {
-	it("renders the registry in OpenAI's function shape", () => {
+	it("renders the registry in the Responses API's flat function shape", () => {
 		const tools = toolsForOpenAI(ctxWith("view_jobs"), READ_ONLY_POLICY);
 		expect(tools.length).toBeGreaterThan(0);
 		for (const tool of tools) {
 			expect(tool.type).toBe("function");
-			expect(typeof tool.function.name).toBe("string");
-			expect(tool.function.parameters).toMatchObject({ type: "object" });
+			expect(typeof tool.name).toBe("string");
+			expect(tool.parameters).toMatchObject({ type: "object" });
+		}
+	});
+
+	it("leaves strict mode off", () => {
+		// The Zod-derived schemas do not satisfy strict mode's requirements, and
+		// loosening them would advertise a contract the server does not enforce.
+		for (const tool of toolsForOpenAI(ctxWith("view_jobs"), READ_ONLY_POLICY)) {
+			expect(tool.strict).toBe(false);
 		}
 	});
 
 	it("advertises only what the caller may call", () => {
-		const names = toolsForOpenAI(ctxWith("view_inventory"), READ_ONLY_POLICY).map((t) => t.function.name);
+		const names = toolsForOpenAI(ctxWith("view_inventory"), READ_ONLY_POLICY).map((t) => t.name);
 		expect(names).toContain("get_inventory_levels");
 		expect(names).not.toContain("run_report");
 	});
@@ -50,7 +58,7 @@ describe("toolsForOpenAI", () => {
 
 	it("hides write tools under the read-only policy", () => {
 		const names = toolsForOpenAI(ctxWith("view_jobs", "edit_jobs", "create_jobs"), READ_ONLY_POLICY).map(
-			(t) => t.function.name,
+			(t) => t.name,
 		);
 		expect(names).toContain("get_schedule");
 		expect(names).not.toContain("reschedule_visit");
@@ -59,7 +67,7 @@ describe("toolsForOpenAI", () => {
 
 	it("advertises write tools under a write policy", () => {
 		const names = toolsForOpenAI(ctxWith("view_jobs", "edit_jobs", "create_quotes"), WRITE_POLICY).map(
-			(t) => t.function.name,
+			(t) => t.name,
 		);
 		expect(names).toContain("reschedule_visit");
 		expect(names).toContain("propose_draft");

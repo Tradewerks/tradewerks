@@ -9,7 +9,7 @@ import { parentBreadcrumb } from "./logsController.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
 import { createNotification, notifyDispatchers } from "./notificationsController.js";
-import { getSocket } from "../services/socketService.js";
+import { emitToOrg } from "../services/socketService.js";
 import { signImageUrl, deleteFile } from "../services/wasabiService.js";
 
 type NoteLike = { photos?: { photo_url: string }[] | null } | null | undefined;
@@ -231,7 +231,7 @@ export const insertJobNote = async (
 			}, organizationId).catch(() => {});
 		}
 
-		getSocket().emit("job_note:created", { organizationId });
+		emitToOrg(organizationId, "job_note:created", { organizationId });
 		return { err: "", item: signed };
 	} catch (e) {
 		if (e instanceof ZodError) {

@@ -6,6 +6,7 @@
 import { ENTITLEMENTS_STALE_EVENT } from "../lib/permissionAccess";
 import axios from "axios";
 import { useAuthStore } from "../auth/authStore";
+import { APP_BASE } from "../config";
 const BASE_URL: string = import.meta.env.VITE_BACKEND_URL;
 const refreshClient = axios.create({
 	baseURL: BASE_URL,
@@ -109,7 +110,7 @@ api.interceptors.response.use((response) => response, async (error) => {
 		processQueue(err, null);
 		localStorage.removeItem("accessToken");
 		delete api.defaults.headers.common["Authorization"];
-		window.location.href = "/login";
+		window.location.href = `${APP_BASE}/login`;
 		isRefreshing = false;
 		return Promise.reject(err);
 	}

@@ -43,6 +43,11 @@ const ORG_SCOPED_MODELS = new Set([
 	"form_draft",
 	"inventory_item",
 	"inventory_tag",
+	"inventory_import",
+	"inventory_import_source",
+	"inventory_import_candidate",
+	"inventory_import_change",
+	"inventory_variant_group",
 	"technician",
 	"dispatcher",
 	"invoice",
@@ -245,4 +250,3 @@ export function getScopedDb(organizationId: string) {
 		},
 	});
 }
-

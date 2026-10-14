@@ -20,7 +20,7 @@ type Credentials = { email: string; password: string };
 // name/role picker any more. The app stores the session in localStorage, so a
 // successful login is observable as the post-login redirect.
 async function submitLogin(page: Page, { email, password }: Credentials) {
-	await page.goto("/login");
+	await page.goto("/app/login");
 	await expect(page.locator('button[type="submit"]')).toBeVisible();
 	await page.fill('input[placeholder="Email"]', email);
 	await page.fill('input[placeholder="Password"]', password);

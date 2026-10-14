@@ -48,6 +48,7 @@ vi.mock("../../services/followupTriggers.js", () => ({
 
 vi.mock("../../services/socketService.js", () => ({
 	getSocket: vi.fn().mockReturnValue(null),
+	emitToOrg: vi.fn(),
 }));
 
 vi.mock("../notificationsController.js", () => ({

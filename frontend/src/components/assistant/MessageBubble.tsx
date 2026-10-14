@@ -1,14 +1,14 @@
 import { TriangleAlert } from "lucide-react";
 import type { UiMessage } from "../../types/assistant";
 import ApprovalCard from "./ApprovalCard";
+import Markdown from "./Markdown";
 import ToolCallCard from "./ToolCallCard";
 
 /**
  * One turn in the thread.
  *
- * Assistant text is rendered as plain text with paragraph breaks preserved, not
- * as markdown — a half-supported markdown renderer that mangles a job number is
- * worse than no markdown at all. Revisit when the content calls for it.
+ * Assistant text is markdown (see Markdown.tsx); what the user typed is not —
+ * their own message should come back to them exactly as they wrote it.
  */
 export default function MessageBubble({
 	message,
@@ -52,9 +52,7 @@ export default function MessageBubble({
 				</div>
 			)}
 
-			{message.content && (
-				<div className="text-sm text-text-primary whitespace-pre-wrap break-words">{message.content}</div>
-			)}
+			{message.content && <Markdown>{message.content}</Markdown>}
 
 			{message.streaming && !message.content && message.toolCalls.length === 0 && (
 				<div className="flex items-center gap-1.5 text-sm text-text-muted" role="status">

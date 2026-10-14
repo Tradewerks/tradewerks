@@ -153,6 +153,15 @@ export async function appendAssistantMessage(
 		finishReason: string | null;
 		inputTokens: number | null;
 		outputTokens: number | null;
+		/**
+		 * The slice of `inputTokens` that was served from the prompt cache, and the
+		 * slice of `outputTokens` the model spent thinking. Both are needed to turn
+		 * a token count into money: cached input bills at a tenth of the rate, and
+		 * reasoning tokens bill at the full output rate while never reaching the
+		 * user. Without them the per-org cost query overstates spend severalfold.
+		 */
+		cachedInputTokens: number | null;
+		reasoningTokens: number | null;
 		toolCalls: PersistedToolCall[];
 	},
 ) {
@@ -166,6 +175,8 @@ export async function appendAssistantMessage(
 			finish_reason: message.finishReason,
 			input_tokens: message.inputTokens,
 			output_tokens: message.outputTokens,
+			cached_input_tokens: message.cachedInputTokens,
+			reasoning_tokens: message.reasoningTokens,
 			tool_calls: {
 				create: message.toolCalls.map((call) => ({
 					provider_call_id: call.provider_call_id,
@@ -255,16 +266,21 @@ function resultForTranscript(call: StoredToolCall): unknown {
 
 
 /**
- * Rebuild the OpenAI transcript from stored rows.
+ * Rebuild the model transcript from stored rows.
  *
- * An assistant turn that called tools has to be replayed as the assistant
- * message *plus* one `tool` message per call, each pairing back to the call it
- * answered via `provider_call_id`. Dropping or reordering those makes the API
- * reject the request outright, which is why the provider's call id is stored
- * rather than regenerated.
+ * The Responses API takes a flat list of items rather than messages with nested
+ * tool calls: an assistant turn that called tools replays as its text (if it had
+ * any), then one `function_call` item per call, then one `function_call_output`
+ * per result. Each output pairs back to its call via `call_id`, which is what
+ * `provider_call_id` holds — a `function_call_output` whose `call_id` matches no
+ * preceding `function_call` is a hard error, and that is why the provider's id
+ * is stored rather than regenerated on replay.
+ *
+ * Reasoning items are deliberately absent. They live only inside a single turn,
+ * carried in memory by the loop; nothing encrypted is persisted here.
  */
-export function toTranscript(messages: StoredMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
-	const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+export function toTranscript(messages: StoredMessage[]): OpenAI.Responses.ResponseInputItem[] {
+	const out: OpenAI.Responses.ResponseInputItem[] = [];
 
 	for (const message of messages) {
 		if (message.role === "user") {
@@ -273,29 +289,26 @@ export function toTranscript(messages: StoredMessage[]): OpenAI.Chat.Completions
 		}
 
 		const calls = message.tool_calls ?? [];
-		if (!calls.length) {
-			// An assistant turn with neither text nor tool calls carries nothing the
-			// model needs; replaying it just wastes context.
-			if (message.content.trim()) out.push({ role: "assistant", content: message.content });
-			continue;
-		}
 
-		out.push({
-			role: "assistant",
-			// The API wants null, not "", when a turn was tool calls only.
-			content: message.content || null,
-			tool_calls: calls.map((call) => ({
-				id: call.provider_call_id,
-				type: "function" as const,
-				function: { name: call.tool_name, arguments: JSON.stringify(call.input ?? {}) },
-			})),
-		});
+		// An assistant turn with neither text nor tool calls carries nothing the
+		// model needs; replaying it just wastes context.
+		if (message.content.trim()) out.push({ role: "assistant", content: message.content });
+		if (!calls.length) continue;
 
 		for (const call of calls) {
 			out.push({
-				role: "tool",
-				tool_call_id: call.provider_call_id,
-				content: JSON.stringify(resultForTranscript(call)),
+				type: "function_call",
+				call_id: call.provider_call_id,
+				name: call.tool_name,
+				arguments: JSON.stringify(call.input ?? {}),
+			});
+		}
+
+		for (const call of calls) {
+			out.push({
+				type: "function_call_output",
+				call_id: call.provider_call_id,
+				output: JSON.stringify(resultForTranscript(call)),
 			});
 		}
 	}

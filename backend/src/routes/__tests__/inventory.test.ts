@@ -160,6 +160,26 @@ async function runAny(method: "get" | "post", path: string, req: Request) {
 const EACH = { units: ["each"], unit: "each", mixed: false };
 const MIXED = { units: ["box", "each"], unit: null, mixed: true };
 
+describe("inventory routes — legacy import retirement", () => {
+	it("returns 410 before multipart processing when the reviewed workflow is enabled", async () => {
+		const previous = process.env.INVENTORY_AI_IMPORT_ENABLED;
+		process.env.INVENTORY_AI_IMPORT_ENABLED = "true";
+		try {
+			const res = await runAny("post", "/import", makeReq({
+				user: { organization_id: "org-1", role: "dispatcher", permissions: ["manage_inventory"] },
+			}));
+			expect(res.status).toHaveBeenCalledWith(410);
+			expect(res.json.mock.calls[0][0]).toMatchObject({
+				success: false,
+				error: { message: expect.stringContaining("/inventory/imports") },
+			});
+		} finally {
+			if (previous === undefined) delete process.env.INVENTORY_AI_IMPORT_ENABLED;
+			else process.env.INVENTORY_AI_IMPORT_ENABLED = previous;
+		}
+	});
+});
+
 describe("inventory routes — History tab payloads", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();

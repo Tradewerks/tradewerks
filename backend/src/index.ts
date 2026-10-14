@@ -15,6 +15,7 @@ import { startMaintenanceReminderInterval } from "./services/vehicleMaintenanceS
 import { startLateArrivalInterval } from "./services/lateArrivalScheduler.js";
 import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
+import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
 import multer from "multer";
 import {
 	login,
@@ -46,6 +47,7 @@ import disputesRouter from "./routes/disputes.js";
 import draftsRouter from "./routes/drafts.js";
 import emailRouter from "./routes/email.js";
 import inventoryRouter from "./routes/inventory.js";
+import inventoryImportsRouter from "./routes/inventoryImports.js";
 import invoicesRouter from "./routes/invoices.js";
 import jobsRouter from "./routes/jobs.js";
 import jobVisitsRouter from "./routes/jobVisits.js";
@@ -315,6 +317,7 @@ startFollowupSchedulerInterval();
 startMaintenanceReminderInterval();
 startLateArrivalInterval();
 startTrialSchedulerInterval();
+startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>
 	log.error(e, "Failed to rearm WrappingUp timers"),
 );
@@ -524,15 +527,15 @@ app.post("/refresh-token", async (req, res, next) => {
 app.get("/integrations/quickbooks/callback", async (req, res, next) => {
 	// QuickBooks temporarily disabled (see quickbooksService.QB_ENABLED).
 	if (!QB_ENABLED)
-		return res.redirect(`${process.env.FRONTEND_URL}/quickbooks/callback?qb=error`);
+		return res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=error`);
 	try {
 		const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
 		const realmId = req.query.realmId as string;
 		const state = req.query.state as string;
 		await handleCallback(fullUrl, state, realmId);
-		res.redirect(`${process.env.FRONTEND_URL}/quickbooks/callback?qb=connected`);
+		res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=connected`);
 	} catch (err) {
-		res.redirect(`${process.env.FRONTEND_URL}/quickbooks/callback?qb=error`);
+		res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=error`);
 	}
 });
 app.post("/integrations/quickbooks/webhook", (req, res) => {
@@ -630,6 +633,8 @@ app.use("/email", verifyToken, emailRouter);
 // ============================================
 // INVENTORY
 // ============================================
+// Deliberately mounted before the main inventory router and its /:id routes.
+app.use("/inventory/imports", verifyToken, requireModule("inventory"), inventoryImportsRouter);
 app.use("/inventory", verifyToken, requireModule("inventory"), inventoryRouter);
 
 // ============================================

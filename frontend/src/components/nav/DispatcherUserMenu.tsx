@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../auth/authStore";
-import { queryClient } from "../../main";
+import { queryClient } from "../../lib/queryClient";
+import { APP_BASE } from "../../config";
 import { LogOut, UserRound, Sun, Moon, Monitor, Palette, ChevronDown, Check, Users, UserRoundPlus, Loader2 } from "lucide-react";
 import { useOrgSettings } from "../../hooks/useOrg";
 import { useThemeStore } from "../../stores/themeStore";
@@ -161,7 +162,7 @@ export default function DispatcherUserMenu() {
 											logoutBeacon();
 											localStorage.removeItem("accessToken");
 											useAuthStore.persist.clearStorage();
-											window.location.replace(`/login?email=${encodeURIComponent(account.email)}`);
+											window.location.replace(`${APP_BASE}/login?email=${encodeURIComponent(account.email)}`);
 										}}
 										className="w-full flex items-center gap-2 pl-4 pr-3 py-1.5 text-sm rounded-md text-text-primary hover:text-text-primary hover:bg-surface transition-colors"
 									>

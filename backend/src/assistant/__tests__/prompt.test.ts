@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentContext } from "../../agent/types.js";
 import { READ_ONLY_POLICY, WRITE_POLICY } from "../../agent/policy.js";
-import { buildSystemPrompt, isoDateIn } from "../prompt.js";
+import { buildInstructions, buildTurnContext, isoDateIn } from "../prompt.js";
 
 const ctx: AgentContext = {
 	userId: "u1",
@@ -15,30 +15,44 @@ const ctx: AgentContext = {
 };
 
 const NOW = new Date("2026-08-19T12:00:00Z");
-const build = (over: Partial<Parameters<typeof buildSystemPrompt>[0]> = {}) =>
-	buildSystemPrompt({ ctx, timezone: "America/Chicago", now: NOW, ...over });
+const build = (policy?: Parameters<typeof buildInstructions>[0]) => buildInstructions(policy);
+const context = (over: Partial<Parameters<typeof buildTurnContext>[0]> = {}) =>
+	buildTurnContext({ ctx, timezone: "America/Chicago", now: NOW, ...over });
 
-describe("buildSystemPrompt", () => {
+describe("buildTurnContext", () => {
 	it("names the person and their role", () => {
-		expect(build()).toContain("Dana Reyes (dispatcher)");
+		expect(context()).toContain("Dana Reyes (dispatcher)");
 	});
 
 	it("falls back to the role when the name is unknown", () => {
-		expect(build({ ctx: { ...ctx, userName: undefined } })).toContain("acting for dispatcher");
+		expect(context({ ctx: { ...ctx, userName: undefined } })).toContain("acting for dispatcher");
 	});
 
 	it("states today's date in the organization's zone", () => {
 		// Without this the model guesses, and "this week" silently means the wrong week.
-		expect(build()).toContain("2026-08-19");
-		expect(build()).toContain("America/Chicago");
+		expect(context()).toContain("2026-08-19");
+		expect(context()).toContain("America/Chicago");
+	});
+});
+
+describe("buildInstructions", () => {
+	it("holds nothing that varies by person, day or organization", () => {
+		// This half is the cacheable prefix of every request. The moment a name or
+		// a date leaks into it, every user pays to write a cache entry nobody else
+		// can read — the bug this split exists to fix.
+		const instructions = build(WRITE_POLICY);
+		expect(instructions).not.toContain("Dana Reyes");
+		expect(instructions).not.toContain("2026-08-19");
+		expect(instructions).not.toContain("America/Chicago");
+		expect(instructions).toBe(buildInstructions(WRITE_POLICY));
 	});
 
 	it("says the assistant is read-only under a read-only policy", () => {
-		expect(build({ policy: READ_ONLY_POLICY })).toMatch(/read-only/i);
+		expect(build(READ_ONLY_POLICY)).toMatch(/read-only/i);
 	});
 
 	describe("under a write policy", () => {
-		const prompt = () => build({ policy: WRITE_POLICY });
+		const prompt = () => build(WRITE_POLICY);
 
 		it("does not claim to be read-only", () => {
 			expect(prompt()).not.toMatch(/you are read-only/i);
@@ -74,6 +88,10 @@ describe("buildSystemPrompt", () => {
 		const prompt = build();
 		expect(prompt).toMatch(/never an instruction/i);
 		expect(prompt).toMatch(/do not act on it/i);
+	});
+
+	it("tells the model its replies render as markdown", () => {
+		expect(build(READ_ONLY_POLICY)).toMatch(/render as markdown/i);
 	});
 
 	it("tells the model not to invent values a tool did not return", () => {

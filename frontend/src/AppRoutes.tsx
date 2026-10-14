@@ -65,6 +65,9 @@ const AssignTechnicianPage = lazy(() => import("./pages/dispatch/AssignTechnicia
 const RequestsPage = lazy(() => import("./pages/dispatch/RequestsPage"));
 const RequestDetailsPage = lazy(() => import("./pages/dispatch/RequestDetailPage"));
 const InventoryPage = lazy(() => import("./pages/dispatch/InventoryPage"));
+const InventoryImportsPage = lazy(() => import("./pages/dispatch/InventoryImportsPage"));
+const InventoryImportPage = lazy(() => import("./pages/dispatch/InventoryImportPage"));
+const InventoryImportReviewPage = lazy(() => import("./pages/dispatch/InventoryImportReviewPage"));
 const InventoryItemDetailPage = lazy(() => import("./pages/dispatch/InventoryItemDetailPage"));
 const SuppliersPage = lazy(() => import("./pages/dispatch/SuppliersPage"));
 const InventoryReconcilePage = lazy(() => import("./pages/dispatch/InventoryReconcilePage"));
@@ -208,6 +211,9 @@ export default function AppRoutes() {
 				<Route path="timesheets" element={<RequirePermission permission="view_reports"><TimesheetsReportPage /></RequirePermission>} />
 				<Route path="inventory/reorder-forecast" element={<RequirePermission permission="view_reports"><ReorderForecastPage /></RequirePermission>} />
 				<Route path="inventory" element={<RequirePermission permission="view_inventory"><InventoryPage /></RequirePermission>} />
+				<Route path="inventory/imports" element={<RequirePermission permission="view_inventory"><InventoryImportsPage /></RequirePermission>} />
+				<Route path="inventory/imports/new" element={<RequirePermission permission="manage_inventory"><InventoryImportPage /></RequirePermission>} />
+				<Route path="inventory/imports/:id" element={<RequirePermission permission="view_inventory"><InventoryImportReviewPage /></RequirePermission>} />
 				{/* Reading the vendor list is view_inventory (the capture typeahead needs it
 				    on every intake path); the page gates its own writes on manage_inventory. */}
 				<Route path="inventory/suppliers" element={<RequirePermission permission="view_inventory"><SuppliersPage /></RequirePermission>} />

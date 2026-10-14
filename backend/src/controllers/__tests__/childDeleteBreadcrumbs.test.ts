@@ -9,7 +9,7 @@ vi.mock("../../services/logger.js", () => ({
 	logActivity: vi.fn(async () => undefined),
 	buildChanges: vi.fn(() => ({})),
 }));
-vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ emit: vi.fn() })) }));
+vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ emit: vi.fn() })), emitToOrg: vi.fn() }));
 vi.mock("../../services/quickbooksService.js", () => ({
 	isQBConnected: vi.fn(async () => false),
 	getOrgRealmId: vi.fn(async () => null),

@@ -20,7 +20,7 @@ export async function sendLowStockAlert(item: AlertableItem): Promise<void> {
 			// Decimal objects render as their object form, not "12.5", in the email template.
 			current_quantity: Number(item.quantity),
 			threshold: item.low_stock_threshold === null ? null : Number(item.low_stock_threshold),
-			inventory_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/dispatch/inventory`,
+			inventory_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/app/dispatch/inventory`,
 		});
 	} catch (e) {
 		console.error("Failed to send low stock alert email:", e);
