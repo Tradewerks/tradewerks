@@ -199,6 +199,7 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 const costingSelect = {
 	monthly_overhead: true,
 	cost_per_mile: true,
+	overhead_rate_per_hour: true,
 } as const;
 
 router.get("/costing", requirePermission("view_reports"), async (req, res, next) => {
@@ -235,6 +236,9 @@ router.patch("/costing", requirePermission("manage_organization"), async (req, r
 			.object({
 				monthly_overhead: z.coerce.number().min(0).optional(),
 				cost_per_mile: z.coerce.number().min(0).optional(),
+				// Nullable unlike the other two: 0 prices overhead as free, null means
+				// "not set" and dashes the column. Send null to clear — "" coerces to 0.
+				overhead_rate_per_hour: z.coerce.number().min(0).nullable().optional(),
 			})
 			.refine((d) => Object.values(d).some((v) => v !== undefined), {
 				message: "At least one field must be provided",

@@ -44,11 +44,14 @@ export interface OrgSettingsUpdate {
 export interface OrgCosting {
 	monthly_overhead: string;
 	cost_per_mile: string;
+	// Null means "not set", which dashes the overhead column rather than pricing it at 0.
+	overhead_rate_per_hour: string | null;
 }
 
 export interface OrgCostingUpdate {
 	monthly_overhead?: number;
 	cost_per_mile?: number;
+	overhead_rate_per_hour?: number | null;
 }
 
 export const getOrgCosting = async (): Promise<OrgCosting> => {

@@ -706,6 +706,7 @@ function CostingSettingsSection() {
 
 	const [overhead, setOverhead] = useState("");
 	const [perMile, setPerMile] = useState("");
+	const [rate, setRate] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [saved, setSaved] = useState(false);
 
@@ -713,6 +714,7 @@ function CostingSettingsSection() {
 		if (!costing) return;
 		setOverhead(costing.monthly_overhead ?? "");
 		setPerMile(costing.cost_per_mile ?? "");
+		setRate(costing.overhead_rate_per_hour ?? "");
 	}, [costing]);
 
 	const handleSave = async () => {
@@ -726,7 +728,14 @@ function CostingSettingsSection() {
 			parsedOverhead < 0 ||
 			parsedPerMile < 0
 		) {
-			setError("Both values must be numbers of 0 or more");
+			setError("Monthly overhead and cost per mile must be numbers of 0 or more");
+			return;
+		}
+		// Blank is legal here and means "not set" — the report dashes overhead rather
+		// than pricing it at 0.
+		const parsedRate = rate.trim() === "" ? null : Number(rate);
+		if (parsedRate !== null && (Number.isNaN(parsedRate) || parsedRate < 0)) {
+			setError("Overhead rate must be a number of 0 or more, or blank");
 			return;
 		}
 		setError(null);
@@ -734,6 +743,7 @@ function CostingSettingsSection() {
 			await updateMutation.mutateAsync({
 				monthly_overhead: parsedOverhead,
 				cost_per_mile: parsedPerMile,
+				overhead_rate_per_hour: parsedRate,
 			});
 			setSaved(true);
 			setTimeout(() => setSaved(false), 2000);
@@ -760,8 +770,8 @@ function CostingSettingsSection() {
 					disabled={updateMutation.isPending}
 				/>
 				<p className="mt-1 text-xs text-text-muted">
-					Fixed monthly costs — rent, insurance, software. Spread across jobs by
-					share of hours worked.
+					Fixed monthly costs — rent, insurance, software. Used to measure how
+					much of the month the jobs actually absorbed.
 				</p>
 			</div>
 			<div>
@@ -779,6 +789,25 @@ function CostingSettingsSection() {
 				/>
 				<p className="mt-1 text-xs text-text-muted">
 					Fuel, maintenance, and depreciation per mile driven.
+				</p>
+			</div>
+			<div>
+				<label className="mb-1 block text-xs font-medium text-text-tertiary">
+					Overhead rate per hour
+				</label>
+				<input
+					type="number"
+					step="any"
+					min="0"
+					value={rate}
+					onChange={(e) => setRate(e.target.value)}
+					className={inputBase}
+					disabled={updateMutation.isPending}
+					placeholder="Not set"
+				/>
+				<p className="mt-1 text-xs text-text-muted">
+					Charged per hour worked on a job. Leave blank to leave overhead out of
+					the profitability report — zero would price it as free.
 				</p>
 			</div>
 			{error && <p className="text-xs text-error-text">{error}</p>}

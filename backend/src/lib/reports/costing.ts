@@ -1,7 +1,7 @@
 import { getScopedDb } from "../context.js";
 import { CONSUMPTION_MOVEMENT_PREDICATE, CONSUMPTION_SIGNED_QTY } from "../inventory.js";
 
-export type CostSource = "wac" | "fallback_current_cost" | "fallback_mixed_unit" | "no_cost_data";
+export type CostSource = "actual" | "wac" | "fallback_current_cost" | "fallback_mixed_unit" | "no_cost_data";
 
 export interface ConsumptionCostRow {
 	movementId: string;
@@ -49,6 +49,7 @@ export async function computeConsumptionCosts(
 				sm.created_at AS "consumedAt",
 				sm.reason AS "reason",
 				sm.unit AS "unit",
+				sm.unit_cost AS "rowUnitCost",
 				(${CONSUMPTION_SIGNED_QTY})::float AS "qtyConsumed"
 			FROM stock_movement sm
 			JOIN job_visit jv ON jv.id = sm.visit_id
@@ -76,6 +77,9 @@ export async function computeConsumptionCosts(
 			WHERE sm.organization_id = ${orgId}
 				AND sm.reason IN ('receive', 'supplier_purchase')
 				AND sm.unit_cost IS NOT NULL
+				-- A field purchase consumed on the job never entered stock: counting
+				-- it as a receipt spreads its (usually premium) price across WAC.
+				AND sm.to_location_type <> 'consumed'
 			WINDOW w AS (
 				PARTITION BY sm.inventory_item_id
 				ORDER BY sm.created_at, sm.id
@@ -91,6 +95,7 @@ export async function computeConsumptionCosts(
 			WHERE sm.organization_id = ${orgId}
 				AND sm.reason IN ('receive', 'supplier_purchase')
 				AND sm.unit_cost IS NOT NULL
+				AND sm.to_location_type <> 'consumed'
 			GROUP BY sm.inventory_item_id
 		),
 		priced AS (
@@ -122,12 +127,16 @@ export async function computeConsumptionCosts(
 				"movementId", "visitId", "jobId", "clientId", "inventoryItemId",
 				"consumedAt", "reason", "unit", "qtyConsumed",
 				CASE
+					WHEN "rowUnitCost" IS NOT NULL THEN "rowUnitCost"
 					WHEN wac_value IS NOT NULL THEN wac_value
 					ELSE COALESCE(item_current_cost, 0)
 				END::float AS "unitCostBasis",
+				-- The row's own unit_cost is what was actually paid, so it beats any
+				-- average. Only field purchases carry one; parts_used never sets it.
 				-- No current cost outranks the mixed-unit fallback: the basis is 0
 				-- either way, and calling that a price makes it count as costed.
 				CASE
+					WHEN "rowUnitCost" IS NOT NULL THEN 'actual'
 					WHEN wac_value IS NOT NULL THEN 'wac'
 					WHEN item_current_cost IS NULL THEN 'no_cost_data'
 					WHEN distinct_units > 1 THEN 'fallback_mixed_unit'
@@ -146,4 +155,72 @@ export async function computeConsumptionCosts(
 	// overstates profit. Flipped back to chronological for callers.
 	const truncated = rows.length > ROW_CAP;
 	return { rows: (truncated ? rows.slice(0, ROW_CAP) : rows).reverse(), truncated };
+}
+
+export interface JobDirectCostRow {
+	jobId: string;
+	hours: number;
+	laborCost: number;
+	/** Hours worked by a technician with no cost_rate — the job's labor is unknowable, not cheap. */
+	unratedHours: number;
+	miles: number;
+	/** Visits attached to the job at all, so "no miles" can be told from "no visits". */
+	visitCount: number;
+}
+
+/**
+ * Per-job labor hours, labor cost and driven miles — the direct inputs to net
+ * profit, beside the material costs above.
+ *
+ * Job-LIFETIME, with no date filter, deliberately: it sits next to
+ * `getCogsByJobReport(undefined, undefined, orgId)` and the two must share a
+ * convention or the columns cannot be compared on one row.
+ *
+ * Raw SQL bypasses `getScopedDb` entirely, so both CTEs are scoped by hand
+ * through `job.organization_id` — the same discipline as the query above.
+ * Every aggregate is cast `::float`: a Prisma Decimal arrives as a string and
+ * `num()` silently turns those into 0, which yields a correct-looking table
+ * over a zeroed summary.
+ */
+export async function computeJobDirectCosts(orgId: string): Promise<JobDirectCostRow[]> {
+	const sdb = getScopedDb(orgId);
+
+	return sdb.$queryRaw<JobDirectCostRow[]>`
+		WITH labor AS (
+			SELECT
+				jv.job_id AS "jobId",
+				SUM(COALESCE(e.hours_worked, 0))::float AS "hours",
+				SUM(COALESCE(e.hours_worked, 0) * COALESCE(t.cost_rate, 0))::float AS "laborCost",
+				SUM(CASE WHEN t.cost_rate IS NULL THEN COALESCE(e.hours_worked, 0) ELSE 0 END)::float
+					AS "unratedHours"
+			FROM visit_tech_time_entry e
+			JOIN job_visit jv ON jv.id = e.visit_id
+			JOIN job j        ON j.id = jv.job_id
+			JOIN technician t ON t.id = e.tech_id
+			WHERE j.organization_id = ${orgId}
+			GROUP BY jv.job_id
+		),
+		travel AS (
+			SELECT
+				jv.job_id AS "jobId",
+				SUM(COALESCE(jv.estimated_drive_miles, 0)
+					+ COALESCE(jv.estimated_return_drive_miles, 0))::float AS "miles",
+				COUNT(*)::int AS "visitCount"
+			FROM job_visit jv
+			JOIN job j ON j.id = jv.job_id
+			WHERE j.organization_id = ${orgId}
+			GROUP BY jv.job_id
+		)
+		-- FULL OUTER: a job can have visits with no time entries, or (via a
+		-- force-closed entry) entries on a visit that was since deleted.
+		SELECT
+			COALESCE(l."jobId", v."jobId")  AS "jobId",
+			COALESCE(l."hours", 0)          AS "hours",
+			COALESCE(l."laborCost", 0)      AS "laborCost",
+			COALESCE(l."unratedHours", 0)   AS "unratedHours",
+			COALESCE(v."miles", 0)          AS "miles",
+			COALESCE(v."visitCount", 0)     AS "visitCount"
+		FROM labor l
+		FULL OUTER JOIN travel v ON v."jobId" = l."jobId"
+	`;
 }

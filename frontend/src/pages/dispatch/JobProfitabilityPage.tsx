@@ -87,10 +87,13 @@ interface JobProfitabilityRow {
 	costCoverage: string | null;
 	profit: number | null;
 	margin: number | null;
-	// Net mode only 
+	// Net mode only
 	laborCost?: number | null;
 	travelCost?: number | null;
 	overheadCost?: number | null;
+	laborHours?: number | null;
+	netProfit?: number | null;
+	netMargin?: number | null;
 }
 
 interface ProfitSummary {
@@ -100,6 +103,19 @@ interface ProfitSummary {
 	totalCogs?: number;
 	jobsMissingCostData?: number;
 	truncated?: boolean;
+	// Net only
+	totalLabor?: number;
+	totalTravel?: number;
+	totalOverhead?: number;
+	totalNetProfit?: number;
+	jobsMissingLaborCost?: number;
+	jobsMissingTravelCost?: number;
+	jobsMissingOverheadCost?: number;
+	// Org-wide and window-scoped, so these come from load, not the filtered rows.
+	overheadPool?: number | null;
+	overheadAbsorbed?: number | null;
+	absorptionVariance?: number | null;
+	overheadRateSet?: boolean;
 }
 
 const currencyOrDash = (v: unknown) => (typeof v === "number" ? formatCurrency(v) : "—");
@@ -150,25 +166,71 @@ export default function JobProfitabilityPage() {
 		setSearchParams(params, { replace: true });
 	};
 
-	const stats = useMemo(
-		() => [
-			{
-				label: "Total Profit",
-				value: currencyOrDash(summary.totalProfit),
-				hint: "Revenue less consumed material cost, labor is not costed",
-			},
-			{ label: "Jobs", value: String(summary.jobCount ?? 0) },
+	const stats = useMemo(() => {
+		const jobs = summary.jobCount ?? 0;
+		const floorHint = (missing: number | undefined, clean: string) =>
+			missing ? `${missing} of ${jobs} jobs unknown — this total is a floor` : clean;
+
+		const common = [
+			{ label: "Jobs", value: String(jobs) },
 			{ label: "Revenue", value: currencyOrDash(summary.totalRevenue) },
 			{
-				label: "Material COGS",
+				label: view === "Gross" ? "Material COGS" : "Materials",
 				value: currencyOrDash(summary.totalCogs),
-				hint: summary.jobsMissingCostData
-					? `${summary.jobsMissingCostData} of ${summary.jobCount ?? 0} jobs are not fully costed — this total is a floor`
-					: "Every costed job priced from receipt history",
+				hint: floorHint(
+					summary.jobsMissingCostData,
+					"Every costed job priced from receipt history",
+				),
 			},
-		],
-		[summary],
-	);
+		];
+
+		if (view === "Gross") {
+			return [
+				{
+					label: "Total Profit",
+					value: currencyOrDash(summary.totalProfit),
+					hint: "Revenue less consumed material cost, labor is not costed",
+				},
+				...common,
+			];
+		}
+
+		return [
+			{
+				label: "Net Profit",
+				value: currencyOrDash(summary.totalNetProfit),
+				// Costs are job-lifetime while revenue is windowed, so a narrow range
+				// can show a loss that is only an artefact of the window.
+				hint: "Revenue less all costs — costs cover each job's whole life, not just this period",
+			},
+			...common,
+			{
+				label: "Labor",
+				value: currencyOrDash(summary.totalLabor),
+				hint: floorHint(summary.jobsMissingLaborCost, "Every technician has a cost rate"),
+			},
+			{
+				label: "Travel",
+				value: currencyOrDash(summary.totalTravel),
+				hint: floorHint(summary.jobsMissingTravelCost, "Mileage recorded on every job"),
+			},
+			{
+				label: "Overhead",
+				value: currencyOrDash(summary.totalOverhead),
+				hint: summary.overheadRateSet
+					? floorHint(summary.jobsMissingOverheadCost, "Charged per hour worked")
+					: "No overhead rate set — add one in Admin → Settings → Costing",
+			},
+			{
+				label: "Absorption Variance",
+				value: currencyOrDash(summary.absorptionVariance),
+				hint:
+					summary.absorptionVariance == null
+						? "Pick a date range to compare absorbed overhead against the monthly pool"
+						: `${currencyOrDash(summary.overheadAbsorbed)} absorbed of ${currencyOrDash(summary.overheadPool)}`,
+			},
+		];
+	}, [summary, view]);
 
 	const { cols, headerLabels, columnAlign } = VIEW_CONFIG[view];
 
@@ -202,9 +264,10 @@ export default function JobProfitabilityPage() {
                     laborCost: currencyOrDash(r.laborCost),
                     travelCost: currencyOrDash(r.travelCost),
                     overheadCost: currencyOrDash(r.overheadCost),
-                    profit: currencyOrDash(r.profit),
-                    margin: percentOrDash(r.margin),
-                    _netRaw: r.profit,
+                    // Net view shows NET profit; r.profit is gross and stays in the
+                    // Gross branch above.
+                    profit: currencyOrDash(r.netProfit),
+                    margin: percentOrDash(r.netMargin),
                 })),
 		[rows, view],
 	);
@@ -256,7 +319,8 @@ export default function JobProfitabilityPage() {
 				</div>
 			)}
 
-			<div className="grid grid-cols-4 gap-3 mb-4">
+			{/* Gross has 4 tiles, Net has 7 — wrap rather than squeeze them onto one row. */}
+			<div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
 				{stats.map((card) => (
 					<StatCard key={card.label} {...card} />
 				))}
