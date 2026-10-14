@@ -26,7 +26,7 @@ import {
 } from "../../types/technicians";
 
 type viewMode = "list" | "card";
-type GroupId = "active" | "available" | "break" | "offline";
+type GroupId = "active" | "available" | "break" | "offline" | "inactive";
 
 const technicianStatusOptions = [
 	{ value: "Available", label: "Available" },
@@ -57,6 +57,7 @@ const GROUPS: { id: GroupId; label: string; statuses: TechnicianStatus[] }[] = [
 	{ id: "available", label: "Available", statuses: ["Available"] },
 	{ id: "break", label: "On break", statuses: ["Break"] },
 	{ id: "offline", label: "Offline", statuses: ["Offline"] },
+	{ id: "inactive", label: "Inactive", statuses: [] },
 ];
 
 const STORAGE = {
@@ -103,7 +104,7 @@ export default function TechniciansPage() {
 		readStored(STORAGE.view, "list", isView)
 	);
 	const [collapsed, setCollapsed] = useState<GroupId[]>(() =>
-		readStored(STORAGE.collapsed, ["offline"], isGroupList)
+		readStored(STORAGE.collapsed, ["offline", "inactive"], isGroupList)
 	);
 
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
@@ -169,7 +170,11 @@ export default function TechniciansPage() {
 		() =>
 			GROUPS.map((group) => ({
 				...group,
-				members: filteredTechnicians.filter((t) => group.statuses.includes(t.status)),
+				members: filteredTechnicians.filter((t) =>
+					group.id === "inactive"
+						? !!t.deactivated_at
+						: !t.deactivated_at && group.statuses.includes(t.status)
+				),
 			})).filter((group) => group.members.length > 0),
 		[filteredTechnicians]
 	);
@@ -178,6 +183,7 @@ export default function TechniciansPage() {
 		() =>
 			(technicians ?? []).reduce(
 				(acc, t) => {
+					if (t.deactivated_at) return acc;
 					acc[t.status] = (acc[t.status] || 0) + 1;
 					return acc;
 				},

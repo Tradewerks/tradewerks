@@ -4,6 +4,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import TechnicianDetailsPage from "../../../pages/dispatch/TechnicianDetailPage";
+import TechnicianCard from "../TechnicianCard";
+import type { Technician } from "../../../types/technicians";
 
 const query = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const perms = vi.hoisted(() => ({ current: {} as Record<string, boolean> }));
@@ -26,6 +28,8 @@ const TECH = {
 vi.mock("../../../hooks/useTechnicians", () => ({
 	useTechnicianByIdQuery: () => query.current,
 	useDeleteTechnicianMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useDeactivateTechnicianMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useReactivateTechnicianMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock("../../../hooks/useMfa", () => ({
 	useResetMfaMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -166,5 +170,53 @@ describe("TechnicianDetailsPage", () => {
 		perms.current = { view_field_purchases: false };
 		renderPage("/dispatch/technicians/t1?tab=activity");
 		expect(screen.getByText("Needs the View Field Purchases permission.")).toBeTruthy();
+	});
+});
+
+describe("inactive technician (build plan 2)", () => {
+	it("shows the Inactive banner", () => {
+		query.current = {
+			data: { ...TECH, deactivated_at: "2026-10-06T12:00:00Z" },
+			isLoading: false,
+			error: null,
+			refetch: vi.fn(),
+		};
+		renderPage();
+		expect(screen.getByText("Inactive — this technician can't sign in or be scheduled.")).toBeInTheDocument();
+	});
+
+	it("offers no Assign Visits link and says why", () => {
+		query.current = {
+			data: { ...TECH, deactivated_at: "2026-10-06T12:00:00Z" },
+			isLoading: false,
+			error: null,
+			refetch: vi.fn(),
+		};
+		renderPage();
+		expect(screen.queryByRole("link", { name: /Assign Visits/ })).toBeNull();
+		const button = screen.getByRole("button", { name: /Assign Visits/ });
+		expect(button).toHaveAttribute("aria-disabled", "true");
+		expect(button).toHaveAccessibleDescription("Inactive technicians can't be scheduled.");
+	});
+});
+
+describe("TechnicianCard inactive state (build plan 2 follow-up)", () => {
+	const renderCard = (over: Partial<Technician>, viewMode: "card" | "list") =>
+		render(
+			<MemoryRouter>
+				<TechnicianCard technician={{ ...TECH, status: "Offline", ...over } as unknown as Technician} viewMode={viewMode} />
+			</MemoryRouter>
+		);
+
+	it.each(["card", "list"] as const)("%s view: inactive shows the badge and no Assign Visits", (viewMode) => {
+		renderCard({ deactivated_at: "2026-10-06T12:00:00Z" }, viewMode);
+		expect(screen.getByText("Inactive")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Assign visits to/ })).toBeNull();
+	});
+
+	it.each(["card", "list"] as const)("%s view: active shows Assign Visits and no badge", (viewMode) => {
+		renderCard({ deactivated_at: null }, viewMode);
+		expect(screen.queryByText("Inactive")).toBeNull();
+		expect(screen.getByRole("button", { name: /Assign visits to/ })).toBeInTheDocument();
 	});
 });

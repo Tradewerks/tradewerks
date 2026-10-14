@@ -1,3 +1,4 @@
+import { isModuleOn } from "./entitlementService.js";
 import * as notificationsController from "../controllers/notificationsController.js";
 import { db } from "../db.js";
 import { classifyReminder, type MaintenanceReminderStatus } from "../lib/validate/vehicleMaintenanceStatus.js";
@@ -27,7 +28,10 @@ export function startMaintenanceReminderInterval(): void {
             const dueReminders: { reminder: typeof openReminders[number]; status: MaintenanceReminderStatus }[] = [];
             for (const reminder of openReminders) {
                 const status = classifyReminder(reminder, reminder.vehicle.current_odometer_mi);
-                if (status === "overdue" || status === "duesoon") {
+                if (
+                    (status === "overdue" || status === "duesoon") &&
+                    (await isModuleOn(reminder.organization_id, "fleet"))
+                ) {
                     dueReminders.push({ reminder, status });
                 }
             }

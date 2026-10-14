@@ -1,3 +1,4 @@
+import { isModuleOn } from "./entitlementService.js";
 import { db } from "../db.js";
 import { getScopedDb } from "../lib/context.js";
 import { buildRecurringPlanInvoicePayload } from "./invoiceGenerator.js";
@@ -32,6 +33,7 @@ export async function runScheduledInvoiceGeneration(): Promise<void> {
 		if (!schedule.recurring_plan?.organization_id) continue;
 
 		const orgId = schedule.recurring_plan.organization_id;
+		if (!(await isModuleOn(orgId, "recurring_plans"))) continue;
 		const sdb = getScopedDb(orgId);
 
 		try {

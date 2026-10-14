@@ -37,6 +37,15 @@ const { rootDb, scoped, sendMock, brandMock, templateMock } = vi.hoisted(() => {
 	};
 });
 
+// Module gating is not under test here: every module reads as on.
+vi.mock("../entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
+
+const { lastReenabledAt } = vi.hoisted(() => ({ lastReenabledAt: vi.fn() }));
+vi.mock("../moduleWindowService.js", () => ({ lastReenabledAt }));
+
 vi.mock("../../db.js", () => ({ db: rootDb }));
 vi.mock("../../lib/context.js", () => ({ getScopedDb: () => scoped }));
 vi.mock("../emailService.js", () => ({ sendRenderedTracked: sendMock }));
@@ -86,6 +95,7 @@ beforeEach(() => {
 	scoped.followup_send.findFirst.mockResolvedValue(null);
 	scoped.client.findFirst.mockResolvedValue({ name: "Acme" });
 	sendMock.mockResolvedValue({ messageId: "pm-1" });
+	lastReenabledAt.mockResolvedValue(null);
 	templateMock.mockResolvedValue({
 		subject: "Hi {{client_name}}",
 		html: "<p>Hi {{client_name}}</p>",
@@ -252,6 +262,41 @@ describe("runDueFollowups", () => {
 		expect(tx.followup_send.create).toHaveBeenCalledWith(
 			expect.objectContaining({ data: expect.objectContaining({ status: "skipped", error: "reminder_window_passed" }) }),
 		);
+	});
+
+	it("skips a step that fell due while Followups was off, and does not send it", async () => {
+		rootDb.followup_enrollment.findMany.mockResolvedValue([
+			baseEnrollment({ next_send_at: new Date("2026-03-01T10:00:00Z") }),
+		]);
+		scoped.followup_sequence.findFirst.mockResolvedValue(sequence([step(1), step(2)]));
+		lastReenabledAt.mockResolvedValue(new Date("2026-03-05T00:00:00Z"));
+
+		await runDueFollowups();
+
+		expect(lastReenabledAt).toHaveBeenCalledWith("org1", "followups");
+		expect(sendMock).not.toHaveBeenCalled();
+		expect(tx.followup_send.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ status: "skipped", error: "module_was_off" }),
+			}),
+		);
+		// The next step is timed from now, so the same re-enable cannot skip it again.
+		const advanced = tx.followup_enrollment.update.mock.calls[0][0].data;
+		expect(advanced.next_send_at.getTime()).toBeGreaterThan(
+			new Date("2026-03-05T00:00:00Z").getTime(),
+		);
+	});
+
+	it("sends a step that fell due after Followups came back on", async () => {
+		rootDb.followup_enrollment.findMany.mockResolvedValue([
+			baseEnrollment({ next_send_at: new Date("2026-03-05T00:05:00Z") }),
+		]);
+		scoped.followup_sequence.findFirst.mockResolvedValue(sequence([step(1)]));
+		lastReenabledAt.mockResolvedValue(new Date("2026-03-05T00:00:00Z"));
+
+		await runDueFollowups();
+
+		expect(sendMock).toHaveBeenCalledTimes(1);
 	});
 
 });

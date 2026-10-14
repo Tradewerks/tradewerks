@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { Plus, X } from "lucide-react";
 import Card from "../ui/Card";
+import { HEADER_BTN_PRIMARY } from "../ui/headerActions";
 import AdaptableTable from "../AdaptableTable";
 import { usePermission } from "../../hooks/usePermission";
 import { JobStatusColors, JobStatusLabels, type JobStatus } from "../../types/jobs";
@@ -55,10 +56,10 @@ export default function AttachedJobsCard({ jobs, onAttach, onDetach, className }
 			headerAction={
 				EDIT_PROJECTS && (
 					<button
-						className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						className={HEADER_BTN_PRIMARY}
 						onClick={onAttach}
 					>
-						<Plus size={16} />
+						<Plus size={13} />
 						Attach Job
 					</button>
 				)

@@ -25,10 +25,12 @@ import {
 } from "../../hooks/useRecurringPlans";
 import { useGenerateInvoiceMutation } from "../../hooks/useInvoices";
 import Card from "../../components/ui/Card";
+import { HEADER_BTN_ICON, HEADER_META } from "../../components/ui/headerActions";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import RecurringPlanNoteManager from "../../components/recurringPlans/RecurringPlanNoteManager";
 import EditRecurringPlan from "../../components/recurringPlans/EditRecurringPlan";
+import SkippedDatesCard from "../../components/recurringPlans/SkippedDatesCard";
 import BalancedOverviewGrid from "../../components/detail/BalancedOverviewGrid";
 import DetailHeader, { type DetailMenuGroup } from "../../components/detail/DetailHeader";
 import DetailTabs, { type DetailTabDef } from "../../components/detail/DetailTabs";
@@ -647,8 +649,8 @@ export default function RecurringPlanDetailPage() {
 			title="Upcoming Occurrences"
 			headerAction={
 				upcomingOccurrences.length > 0 && (
-					<div className="flex items-center gap-2">
-						<span className="text-sm text-text-tertiary">
+					<div className="flex items-center gap-1">
+						<span className={`${HEADER_META} mr-1`}>
 							{upcomingPage * ITEMS_PER_PAGE + 1}-
 							{Math.min(
 								(upcomingPage + 1) * ITEMS_PER_PAGE,
@@ -666,7 +668,7 @@ export default function RecurringPlanDetailPage() {
 								)
 							}
 							disabled={!upcomingHasPrev}
-							className="p-1 hover:bg-surface rounded-md transition-colors duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronLeft size={16} />
 						</button>
@@ -675,7 +677,7 @@ export default function RecurringPlanDetailPage() {
 								setUpcomingPage(upcomingPage + 1)
 							}
 							disabled={!upcomingHasNext}
-							className="p-1 hover:bg-surface rounded-md transition-colors duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronRight size={16} />
 						</button>
@@ -807,8 +809,8 @@ export default function RecurringPlanDetailPage() {
 			title="Service History"
 			headerAction={
 				serviceHistory.length > 0 && (
-					<div className="flex items-center gap-2">
-						<span className="text-sm text-text-tertiary">
+					<div className="flex items-center gap-1">
+						<span className={`${HEADER_META} mr-1`}>
 							{pastPage * ITEMS_PER_PAGE + 1}-
 							{Math.min(
 								(pastPage + 1) * ITEMS_PER_PAGE,
@@ -823,14 +825,14 @@ export default function RecurringPlanDetailPage() {
 								)
 							}
 							disabled={!pastHasPrev}
-							className="p-1 hover:bg-surface rounded-md transition-colors duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronLeft size={16} />
 						</button>
 						<button
 							onClick={() => setPastPage(pastPage + 1)}
 							disabled={!pastHasNext}
-							className="p-1 hover:bg-surface rounded-md transition-colors duration-150 ease-out disabled:opacity-50 disabled:cursor-not-allowed"
+							className={HEADER_BTN_ICON}
 						>
 							<ChevronRight size={16} />
 						</button>
@@ -1017,16 +1019,16 @@ export default function RecurringPlanDetailPage() {
 					role="tabpanel"
 					id="tabpanel-schedule"
 					aria-labelledby="tab-schedule"
-					className="mt-6"
+					className="mt-6 space-y-4"
 				>
 					<h2 className="sr-only">Schedule</h2>
-					{/* The existing two-column occurrences / service-history pair,
-					    moved unchanged. items-start so the shorter column ends at its
-					    own height rather than stretching into a half-empty card. */}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+					{/* Stretched: both cards are h-full, so the shorter one carries
+					    its slack inside its border and the pair ends on one line. */}
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 						{upcomingOccurrencesCard}
 						{serviceHistoryCard}
 					</div>
+					<SkippedDatesCard jobId={jobContainerId || undefined} />
 				</div>
 			)}
 

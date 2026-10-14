@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { MoreHorizontal, Trash2, UserCheck, UserX } from "lucide-react";
 import type { Technician } from "../../types/technicians";
 import { usePermission } from "../../hooks/usePermission";
-import { useDeleteTechnicianMutation } from "../../hooks/useTechnicians";
+import {
+	useDeleteTechnicianMutation,
+	useDeactivateTechnicianMutation,
+	useReactivateTechnicianMutation,
+} from "../../hooks/useTechnicians";
 import { useResetMfaMutation } from "../../hooks/useMfa";
 import { requestPasswordResetCall } from "../../api/authenticate";
 import { useToast } from "../ui/useToast";
+import { errorMessage } from "../../util/util";
 
 // Scheduled counts here (unlike "current activity") — deleting a tech would orphan future work.
 const BLOCKS_DELETE = ["Scheduled", "Driving", "OnSite", "InProgress", "Paused", "Delayed"];
 
-type ConfirmKey = "password" | "mfa" | "delete" | null;
+type ConfirmKey = "password" | "mfa" | "deactivate" | "delete" | null;
 
 interface TechnicianActionsMenuProps {
 	technician: Technician;
@@ -52,9 +57,15 @@ export default function TechnicianActionsMenu({
 	const { mutateAsync: deleteTechnician, isPending: isDeleting } = useDeleteTechnicianMutation();
 	const { mutateAsync: resetMfa, isPending: isResettingMfa } = useResetMfaMutation();
 
-	const canDelete = !(technician.visit_techs ?? []).some((vt) =>
+	const { mutateAsync: deactivateTechnician, isPending: isDeactivating } =
+		useDeactivateTechnicianMutation();
+	const { mutateAsync: reactivateTechnician, isPending: isReactivating } =
+		useReactivateTechnicianMutation();
+
+	const openVisits = (technician.visit_techs ?? []).filter((vt) =>
 		BLOCKS_DELETE.includes(vt.visit.status)
-	);
+	).length;
+	const canDelete = openVisits === 0;
 
 	useEffect(() => {
 		if (!open) return;
@@ -121,6 +132,30 @@ export default function TechnicianActionsMenu({
 		}
 	};
 
+	const handleDeactivate = async () => {
+		if (confirm !== "deactivate") return setConfirm("deactivate");
+		try {
+			await deactivateTechnician(technician.id);
+			toast.success(
+				`${displayName} deactivated. Signed out within 30 seconds and removed from scheduling; history is kept.`
+			);
+			close();
+		} catch (error) {
+			setConfirm(null);
+			toast.error(errorMessage(error, "Couldn't deactivate"));
+		}
+	};
+
+	const handleReactivate = async () => {
+		try {
+			await reactivateTechnician(technician.id);
+			toast.success(`${displayName} reactivated.`);
+			close();
+		} catch (error) {
+			toast.error(errorMessage(error, "Couldn't reactivate"));
+		}
+	};
+
 	const handleDelete = async () => {
 		if (confirm !== "delete") return setConfirm("delete");
 		try {
@@ -170,7 +205,7 @@ export default function TechnicianActionsMenu({
 							Open Profile
 						</button>
 					)}
-					{MANAGE_TECHNICIANS && assignInMenuBelowSm && (
+					{MANAGE_TECHNICIANS && assignInMenuBelowSm && !technician.deactivated_at && (
 						<button
 							type="button"
 							className={`${ITEM_DEFAULT} sm:hidden`}
@@ -246,6 +281,37 @@ export default function TechnicianActionsMenu({
 										: confirm === "mfa"
 											? "Click again to reset"
 											: "Reset MFA"}
+								</button>
+							)}
+							{technician.deactivated_at ? (
+								<button
+									type="button"
+									disabled={isReactivating}
+									className={ITEM_DEFAULT}
+									onClick={handleReactivate}
+								>
+									<UserCheck size={15} />
+									{isReactivating ? "Reactivating…" : "Reactivate"}
+								</button>
+							) : (
+								<button
+									type="button"
+									disabled={!canDelete || isDeactivating}
+									title={
+										canDelete
+											? undefined
+											: `${displayName} has ${openVisits} open ${openVisits === 1 ? "visit" : "visits"}. Complete or reassign them first.`
+									}
+									onMouseLeave={clearConfirm("deactivate")}
+									className={confirm === "deactivate" ? ITEM_CONFIRM : ITEM_DEFAULT}
+									onClick={handleDeactivate}
+								>
+									<UserX size={15} />
+									{isDeactivating
+										? "Deactivating…"
+										: confirm === "deactivate"
+											? "Press again: signs out, removes from scheduling"
+											: "Deactivate"}
 								</button>
 							)}
 							{canDelete && (

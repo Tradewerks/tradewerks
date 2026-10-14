@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import QuickBooksSection from "../quickbooks/QuickBooksSection";
 import ZapierSection from "../zapier/ZapierSection";
+import QuickBooksUnsyncedCard from "./QuickBooksUnsyncedCard";
 import { usePermission } from "../../hooks/usePermission";
 import { useQBStatusQuery } from "../../hooks/useQuickbooks";
 import { QUICKBOOKS_ENABLED } from "../../config/features";
@@ -121,6 +122,7 @@ export default function IntegrationSection() {
 			{/* Selected Integration Render */}
 			<div className="mt-5 pt-5 border-t border-border-subtle">
 				<h2 className="text-lg font-semibold text-text-primary pb-3">{active?.label}</h2>
+				{active?.id === "quickbooks" && <QuickBooksUnsyncedCard connected={qbConnected} />}
 				{active?.render()}
 			</div>
 		</>

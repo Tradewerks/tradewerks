@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from "express";
 import {
 	ErrorCodes,
@@ -695,6 +696,7 @@ router.get(
 
 router.get(
 	"/:quoteId/disputes",
+	requireModule("disputes"),
 	requirePermission("view_quotes"),
 	async (req, res, next) => {
 		try {
@@ -714,6 +716,7 @@ router.get(
 // resolve_disputes alone say nothing about whether this caller may see that.
 router.post(
 	"/:quoteId/disputes",
+	requireModule("disputes"),
 	requirePermission("view_quotes"),
 	requirePermission("open_disputes"),
 	async (req, res, next) => {
@@ -733,6 +736,7 @@ router.post(
 
 router.post(
 	"/:quoteId/disputes/:disputeId/resolve",
+	requireModule("disputes"),
 	requirePermission("view_quotes"),
 	requirePermission("resolve_disputes"),
 	async (req, res, next) => {

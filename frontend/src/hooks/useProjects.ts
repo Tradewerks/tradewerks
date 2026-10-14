@@ -1,4 +1,5 @@
-import { useQuery, useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { getClientProjects } from "../api/clients";
 import type { CreateProjectInput, UpdateProjectInput, ProjectNote, CreateProjectNoteInput, UpdateProjectNoteInput } from "../types/project";
 import {
@@ -15,6 +16,8 @@ import {
     deleteProjectNote,
     uploadProjectNotePhoto,
 } from "../api/project";
+
+const useQuery = moduleQuery("projects");
 
 // Queries
 

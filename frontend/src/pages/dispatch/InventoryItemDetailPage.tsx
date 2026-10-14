@@ -935,11 +935,13 @@ export default function InventoryItemDetailPage() {
 					    down. The charts still line up at rest because their at-rest
 					    bodies share one fixed height (CHART_BODY_H), and both lists
 					    stay at half width — narrow-content rows that stretched a 1fr
-					    middle column into dead space at full width.
+					    middle column into dead space at full width. The columns
+					    stretch and each list fills what is left of its column, so
+					    the two still end on one line.
 
 					    Stacked order on narrow screens follows the columns:
 					    stock chart → stock ledger → consumption chart → usage. */}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 						<div className="flex flex-col gap-6">
 							<StockLevelChart
 								itemId={item.id}
@@ -948,10 +950,12 @@ export default function InventoryItemDetailPage() {
 								createdAfter={historyCreatedAfter}
 								xDomain={historyXDomain}
 							/>
-							<StockMovementList
-								itemId={item.id}
-								createdAfter={historyCreatedAfter}
-							/>
+							<div className="flex-1 grid">
+								<StockMovementList
+									itemId={item.id}
+									createdAfter={historyCreatedAfter}
+								/>
+							</div>
 						</div>
 						<div className="flex flex-col gap-6">
 							<ConsumptionTrendChart
@@ -961,7 +965,9 @@ export default function InventoryItemDetailPage() {
 								range={consumptionRange}
 								xDomain={historyXDomain}
 							/>
-							<UsageReport itemId={item.id} createdAfter={historyCreatedAfter} />
+							<div className="flex-1 grid">
+								<UsageReport itemId={item.id} createdAfter={historyCreatedAfter} />
+							</div>
 						</div>
 					</div>
 				</div>

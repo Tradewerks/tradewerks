@@ -54,6 +54,19 @@ export const ErrorCodes = {
 	// Separate from EMAIL_SEND_FAILED so a typo does not send them to an
 	// administrator.
 	EMAIL_RECIPIENT_REJECTED: 'EMAIL_RECIPIENT_REJECTED',
+	// Module gating. Separate from FORBIDDEN because the fix is not a role
+	// change: MODULE_DISABLED is the org's own switch, MODULE_NOT_IN_PLAN is the plan.
+	MODULE_DISABLED: 'MODULE_DISABLED',
+	MODULE_NOT_IN_PLAN: 'MODULE_NOT_IN_PLAN',
+	ENTITLEMENTS_UNAVAILABLE: 'ENTITLEMENTS_UNAVAILABLE',
+	// Caps. Separate codes because the fix is a subscription change (or freeing
+	// a seat), not a retry or a role change.
+	SEAT_LIMIT_REACHED: 'SEAT_LIMIT_REACHED',
+	QUOTA_EXCEEDED: 'QUOTA_EXCEEDED',
+	REQUEST_OPEN: 'REQUEST_OPEN',
+	REQUEST_CLOSED: 'REQUEST_CLOSED',
+	// Its own code so the register page shows "paused" rather than a generic failure.
+	SIGNUPS_PAUSED: 'SIGNUPS_PAUSED',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

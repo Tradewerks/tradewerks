@@ -1293,14 +1293,17 @@ function CaptureProvenance({ purchase }: { purchase: FieldPurchase }) {
 
 /**
  * `skipped` is a success — no provider is configured, so the technician typed the
- * lines — and saying so stops it from reading as a failed extraction.
+ * lines — and saying so stops it from reading as a failed extraction. A skip that
+ * carries an error is the monthly scan limit, the only skip with a reason.
  */
-function OcrBanner({ purchase }: { purchase: FieldPurchase }) {
+export function OcrBanner({ purchase }: { purchase: FieldPurchase }) {
 	if (purchase.ocr_status === "not_run") return null;
 
 	const body =
 		purchase.ocr_status === "skipped"
-			? "Lines typed in by the technician — no receipt reader is configured."
+			? purchase.ocr_error
+				? "Lines typed in by the technician — this month's receipt scans were used up."
+				: "Lines typed in by the technician — no receipt reader is configured."
 			: purchase.ocr_status === "pending"
 				? "Reading the receipt…"
 				: purchase.ocr_status === "failed"

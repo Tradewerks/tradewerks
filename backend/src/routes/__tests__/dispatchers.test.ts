@@ -27,6 +27,23 @@ vi.mock("../../services/logger.js", () => ({
 	buildChanges: vi.fn(() => ({})),
 }));
 
+const { entitlementLimits } = vi.hoisted(() => ({
+	entitlementLimits: {} as Record<string, number | null>,
+}));
+vi.mock("../../services/entitlementService.js", () => ({
+	getEntitlements: vi.fn(async () => ({ limits: entitlementLimits })),
+	isModuleOn: vi.fn(async () => true),
+}));
+vi.mock("../../services/socketService.js", () => ({
+	getSocket: vi.fn(() => ({
+		emit: vi.fn(),
+		to: vi.fn().mockReturnThis(),
+		in: vi.fn(() => ({ disconnectSockets: vi.fn() })),
+	})),
+	emitToOrg: vi.fn(),
+	emitInventoryUpdated: vi.fn(),
+}));
+
 import dispatchersRouter from "../dispatchers.js";
 import { db } from "../../db.js";
 import { callRoute, type FakeDb } from "./harness.js";
@@ -144,5 +161,65 @@ describe("GET /dispatchers/:id/changes — limit validation + access (review P2-
 			params: { id: "disp-1" },
 		});
 		expect(r.status).toBe(403);
+	});
+});
+
+describe("dispatcher seats and deactivation (build plan 2)", () => {
+	const admin = { uid: "disp-admin", role: "admin", organization_id: "org-1", permissions: null };
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		for (const k of Object.keys(entitlementLimits)) delete entitlementLimits[k];
+	});
+
+	it("POST / refuses at the dispatcher cap with the singular noun at 1", async () => {
+		entitlementLimits.dispatchers = 1;
+		fake.technician.findFirst.mockResolvedValue(null);
+		fake.dispatcher.findFirst.mockResolvedValue(null);
+		fake.dispatcher.count.mockResolvedValue(1);
+		await expect(
+			callRoute(dispatchersRouter, "post", "/", {
+				user: admin,
+				body: { name: "D", email: "d2@example.com", title: "Dispatcher", description: "" },
+			}),
+		).rejects.toMatchObject({
+			statusCode: 409,
+			code: "SEAT_LIMIT_REACHED",
+			message: "Your subscription includes 1 dispatcher. Deactivate one or upgrade to add more.",
+		});
+	});
+
+	it("cannot deactivate yourself", async () => {
+		fake.dispatcher.findFirst.mockResolvedValue({ id: "disp-admin", name: "Ada", role: "admin", deactivated_at: null });
+		const r = await callRoute(dispatchersRouter, "post", "/:id/deactivate", {
+			user: admin,
+			params: { id: "disp-admin" },
+		});
+		expect(r.status).toBe(400);
+		expect(r.body.error.message).toBe("You can't deactivate your own account.");
+	});
+
+	it("cannot deactivate the last active admin", async () => {
+		fake.dispatcher.findFirst.mockResolvedValue({ id: "disp-2", name: "Bo", role: "admin", deactivated_at: null });
+		fake.dispatcher.count.mockResolvedValue(1);
+		const r = await callRoute(dispatchersRouter, "post", "/:id/deactivate", {
+			user: admin,
+			params: { id: "disp-2" },
+		});
+		expect(r.status).toBe(400);
+		expect(r.body.error.message).toBe("Bo is the only active admin. Make someone else an admin first.");
+	});
+
+	it("deactivates another dispatcher and revokes their refresh tokens", async () => {
+		fake.dispatcher.findFirst.mockResolvedValue({ id: "disp-3", name: "Cy", role: "dispatcher", deactivated_at: null });
+		fake.dispatcher.update.mockResolvedValue({ id: "disp-3", deactivated_at: new Date() });
+		fake.jwt_refresh_token.deleteMany.mockResolvedValue({ count: 0 });
+		const r = await callRoute(dispatchersRouter, "post", "/:id/deactivate", {
+			user: admin,
+			params: { id: "disp-3" },
+		});
+		expect(r.status).toBe(200);
+		expect(fake.dispatcher.update.mock.calls[0][0].data).toEqual({ deactivated_at: expect.any(Date) });
+		expect(fake.jwt_refresh_token.deleteMany).toHaveBeenCalledWith({ where: { userId: "disp-3" } });
 	});
 });

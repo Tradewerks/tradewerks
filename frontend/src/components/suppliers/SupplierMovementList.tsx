@@ -7,6 +7,8 @@ import { formatCurrency, formatDateTime } from "../../util/util";
 import { unitLabel } from "../../lib/units";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import EmptyState from "../ui/EmptyState";
+import Card from "../ui/Card";
+import { HEADER_META } from "../ui/headerActions";
 
 function locationLabel(m: SupplierMovement): string {
 	if (m.to_vehicle) return m.to_vehicle.name;
@@ -28,7 +30,7 @@ function MovementRow({ m }: { m: SupplierMovement }) {
 	const qty = Number(m.qty);
 	const unitCost = m.unit_cost != null ? Number(m.unit_cost) : null;
 	return (
-		<li className="flex items-start gap-2.5 px-3 py-2.5 border-t border-border-subtle first:border-t-0">
+		<li className="flex items-start gap-2.5 px-4 py-2.5 border-t border-border-subtle first:border-t-0">
 			<div className="shrink-0 mt-0.5 flex items-center justify-center h-6 w-6 rounded-full bg-surface text-text-secondary">
 				<Icon size={13} />
 			</div>
@@ -88,14 +90,11 @@ export default function SupplierMovementList({ supplierId }: { supplierId: strin
 	const isFirstLoad = isLoading && rows.length === 0;
 
 	return (
-		<div className="bg-base border border-border-subtle rounded-lg overflow-hidden flex flex-col">
-			<div className="px-3 py-3 border-b border-border-subtle flex items-center justify-between gap-2">
-				<div className="flex items-center gap-2">
-					<History size={14} className="text-text-muted" />
-					<h3 className="text-sm font-semibold text-text-primary">Purchase History</h3>
-				</div>
-				<span className="text-[11px] text-text-faint">Every item bought from this vendor</span>
-			</div>
+		<Card
+			title="Purchase History"
+			flush
+			headerAction={<span className={HEADER_META}>Every item bought from this vendor</span>}
+		>
 
 			{isFirstLoad && (
 				<div className="flex justify-center py-12">
@@ -120,7 +119,7 @@ export default function SupplierMovementList({ supplierId }: { supplierId: strin
 			)}
 
 			{hasNextPage && (
-				<div className="px-3 py-3 flex justify-center border-t border-border-subtle">
+				<div className="px-4 py-3 flex justify-center border-t border-border-subtle">
 					<button
 						type="button"
 						onClick={() => fetchNextPage()}
@@ -131,6 +130,6 @@ export default function SupplierMovementList({ supplierId }: { supplierId: strin
 					</button>
 				</div>
 			)}
-		</div>
+		</Card>
 	);
 }

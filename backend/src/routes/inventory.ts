@@ -1,3 +1,4 @@
+import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router, type Response } from 'express';
 import {
     ErrorCodes,
@@ -378,7 +379,7 @@ router.get("/:itemId/tracking-summary", requireAnyPermission("view_inventory", "
 
 // Per-vehicle qty breakdown for the Overview tab's "on vehicles" drill-in —
 // same 2nd-segment reasoning and read permission as tracking-summary above.
-router.get("/:itemId/vehicle-stock", requireAnyPermission("view_inventory", "manage_inventory"), async (req, res, next) => {
+router.get("/:itemId/vehicle-stock", requireModule("vehicle_stock"), requireAnyPermission("view_inventory", "manage_inventory"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const itemId = req.params.itemId as string;

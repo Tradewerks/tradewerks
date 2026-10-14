@@ -13,12 +13,17 @@ export const SECRET_FIELD_OMIT = {
 		password_reset_token: true,
 		password_reset_token_expires_at: true,
 		email_verification_token: true,
+		invite_token_hash: true,
 	},
 	technician: {
 		password: true,
 		password_reset_token: true,
 		password_reset_token_expires_at: true,
 		hourly_rate: true,
+	},
+	platform_staff: {
+		password: true,
+		invite_token_hash: true,
 	},
 } as const;
 
@@ -40,7 +45,7 @@ if (process.env.NODE_ENV !== "production") {
 
 // Narrow Tx types — loose enough to accept both Prisma.TransactionClient and
 // the extended client returned by getScopedDb's $transaction callback.
-// Advisory lock constants: 1=quote, 2=job, 3=invoice, 4=project (two-int overload,
+// Advisory lock constants: 1=quote, 2=job, 3=invoice, 4=project, 5=purchase, 6=dispatcher seats, 7=technician seats (two-int overload,
 // separate PG lock space from any single-bigint locks; no cross-entity collision possible).
 
 type QuoteNumberTx = {

@@ -12,6 +12,9 @@ import {
 	type TaxGroupConfig,
 	type LineItemTaxInput,
 } from "../src/services/taxEngine.js";
+import { provisionOrganization } from "../src/services/provisionOrganization.js";
+import { hashInviteToken } from "../src/lib/inviteToken.js";
+import { DAY_MS } from "../src/lib/dayRange.js";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const db = new PrismaClient({ adapter });
@@ -82,6 +85,12 @@ function padTo(
 }
 
 async function main() {
+	// The seed creates demo accounts with known passwords and dev-only tiers.
+	if (process.env.NODE_ENV === "production") {
+		console.error("Refusing to seed: NODE_ENV is production.");
+		process.exit(1);
+	}
+
 	console.log("Seeding database...");
 
 	// ============================================================================
@@ -124,6 +133,54 @@ async function main() {
 			// purchase. Set below John Smith's 750 per-transaction ceiling so a single
 			// purchase can be under his own limit and still need a second signer.
 			field_purchase_second_signoff_threshold: 500.0,
+		},
+	});
+
+	// Dev-only tier fixtures. Production gets only the Legacy tier, from the
+	// migration; real tier contents are undecided.
+	const OPTIONAL_MODULES = [
+		"quotes", "recurring_plans", "projects", "inventory", "fleet", "vehicle_stock",
+		"purchasing", "field_purchases", "followups", "disputes",
+	];
+	const PRO_MODULES = [...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto", "ai_assistant"];
+	await db.plan.createMany({
+		data: [
+			{ key: "starter", label: "Starter", assignable: true, is_signup_default: true },
+			{ key: "pro", label: "Pro", assignable: true, is_signup_default: false },
+			{ key: "enterprise", label: "Enterprise", assignable: true, is_signup_default: false },
+		],
+	});
+	await db.plan_version.createMany({
+		data: [
+			{
+				id: "pv_starter_1", plan_key: "starter", version: 1, note: "seed",
+				modules: OPTIONAL_MODULES,
+				limits: { dispatchers: 3, technicians: 5, tax_lookups_month: 0, ai_calls_month: 0, receipt_scans_month: 0 },
+			},
+			{
+				id: "pv_pro_1", plan_key: "pro", version: 1, note: "seed",
+				modules: PRO_MODULES,
+				limits: { dispatchers: 10, technicians: 25, tax_lookups_month: 2000, ai_calls_month: 500, receipt_scans_month: 300 },
+			},
+			{
+				id: "pv_enterprise_1", plan_key: "enterprise", version: 1, note: "seed",
+				modules: [...PRO_MODULES, "security_plus"],
+				limits: { dispatchers: null, technicians: null, tax_lookups_month: 20000, ai_calls_month: 5000, receipt_scans_month: 3000 },
+			},
+		],
+	});
+	await db.org_entitlement.create({
+		data: {
+			organization_id: org.id,
+			plan_version_id: "pv_legacy_1",
+			plan_source: "migration",
+			template_key: "hvac",
+			modules_reviewed_at: new Date(),
+			module_choices: {
+				quotes: true, recurring_plans: true, projects: true, inventory: true,
+				fleet: true, vehicle_stock: true, purchasing: true, field_purchases: true,
+				disputes: true, followups: true,
+			},
 		},
 	});
 
@@ -7453,9 +7510,56 @@ async function main() {
 		],
 	});
 
+	// ============================================================================
+	// Build plan 4 fixtures: a staff-created org whose admin has a pending invite, and an
+	// org whose trial ends in ~2 days so the scheduler sends the 3-day warning on first run.
+	// Provisioned the way production creates orgs, so the fixtures follow any change to it.
+	// ============================================================================
+	const SEED_INVITE_TOKEN = "seed-invite-plumbing-0000000000000000000";
+	const unusablePassword = await bcryptjs.hash(crypto.randomBytes(32).toString("hex"), 10);
+	await db.$transaction((tx) =>
+		provisionOrganization(tx, {
+			org: { name: "Bluepipe Plumbing (seed)", email: "owner@bluepipe.test" },
+			admin: {
+				name: "Bea Owner",
+				email: "owner@bluepipe.test",
+				password: unusablePassword,
+				invite: {
+					hash: hashInviteToken(SEED_INVITE_TOKEN),
+					expires: new Date(Date.now() + 7 * DAY_MS),
+				},
+			},
+			businessType: "plumbing",
+			planVersionId: "pv_pro_1",
+			source: "operator",
+		}),
+	);
+
+	const greenleaf = await db.$transaction((tx) =>
+		provisionOrganization(tx, {
+			org: { name: "Greenleaf Landscaping (seed)", email: "owner@greenleaf.test" },
+			admin: { name: "Gus Green", email: "owner@greenleaf.test", password: dispatcherPassword },
+			businessType: "landscaping",
+			planVersionId: "pv_starter_1",
+			trial: { planVersionId: "pv_enterprise_1", endsAt: new Date(Date.now() + 2 * DAY_MS) },
+			source: "operator",
+		}),
+	);
+	// Past the welcome step and verified, so the trial pass starts on the dashboard.
+	await db.org_entitlement.update({
+		where: { organization_id: greenleaf.orgId },
+		data: { modules_reviewed_at: new Date() },
+	});
+	await db.dispatcher.update({
+		where: { id: greenleaf.adminId },
+		data: { email_verified_at: new Date() },
+	});
+
 	console.log("Seeded successfully:");
 	console.log(`  Organization:      ${org.name}`);
 	console.log(`  Dispatcher:        ${dispatcher.email} / password123`);
+	console.log(`  Seed invite link:  http://localhost:5173/accept-invite?token=${SEED_INVITE_TOKEN}`);
+	console.log(`  Trial fixture:     owner@greenleaf.test / password123`);
 	console.log(
 		`  Technicians:       ${tech1.email}, ${tech2.email}, ${tech3.email} / password123`,
 	);

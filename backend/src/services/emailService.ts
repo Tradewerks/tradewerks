@@ -11,6 +11,7 @@ import { translateSendError } from "./emailErrors.js";
 import { generateQuotePdf, generateInvoicePdf } from "../lib/pdf/pdfService.js";
 import { getQuoteById } from "../controllers/quotesController.js";
 import { getInvoiceById } from "../controllers/invoicesController.js";
+import { SUBSCRIPTION_PATH } from "../lib/entitlements/registry.js";
 
 // ============================================================================
 // EMAIL TEMPORARILY DISABLED — pending Postmark sender approval.
@@ -624,5 +625,136 @@ export const sendPasswordResetEmail = async (
 			ErrorCodes.SERVER_ERROR,
 			"Error sending password reset email",
 		);
+	}
+};
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+export const sendStaffInviteEmail = async (
+	to: string,
+	name: string,
+	inviteUrl: string,
+	inviterName: string,
+) => {
+	if (EMAIL_DISABLED) {
+		// The invite URL is a credential: never log it. Staff copy it from the back office.
+		log.info({ to }, "[EMAIL DISABLED] Skipping staff invite email.");
+		return;
+	}
+	try {
+		const htmlContent = `
+			<!DOCTYPE html>
+			<html>
+				<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+					<div style="max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 32px;">
+						<h2 style="color: #1a1a1a; margin-bottom: 8px;">TradeWerks back office</h2>
+						<p style="color: #555; margin-bottom: 24px;">
+							Hi ${escapeHtml(name)}, ${escapeHtml(inviterName)} invited you to the TradeWerks back office.
+							The link below works once and expires in 48 hours.
+						</p>
+						<a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: white; background-color: #2563eb; border-radius: 8px; text-decoration: none;">
+							Accept invite
+						</a>
+					</div>
+				</body>
+			</html>
+		`;
+		await client.sendEmail({
+			From: POSTMARK_FROM_EMAIL,
+			To: to,
+			Subject: "Your TradeWerks back office invite",
+			HtmlBody: htmlContent,
+			TextBody: `${inviterName} invited you to the TradeWerks back office. Accept within 48 hours: ${inviteUrl}`,
+			MessageStream: "outbound",
+		});
+	} catch (error) {
+		log.error({ err: error }, "Failed to send staff invite email");
+	}
+};
+
+export const sendOrgAdminInviteEmail = async (
+	to: string,
+	company: string,
+	inviteUrl: string,
+	expires: Date,
+	timeZone: string,
+) => {
+	if (EMAIL_DISABLED) {
+		// The URL is a credential: never log it. Staff can copy it from the back office.
+		log.info({ to }, "[EMAIL DISABLED] Skipping org admin invite email.");
+		return;
+	}
+	const until = expires.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
+	try {
+		await client.sendEmail({
+			From: POSTMARK_FROM_EMAIL,
+			To: to,
+			Subject: `TradeWerks set up ${company} for you`,
+			HtmlBody: `
+			<!DOCTYPE html>
+			<html>
+				<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+					<div style="max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 32px;">
+						<h2 style="color: #1a1a1a; margin-bottom: 8px;">${escapeHtml(company)} is ready</h2>
+						<p style="color: #555; margin-bottom: 24px;">
+							TradeWerks set up your account. Set a password to sign in.
+							The link works once and expires on ${until}.
+						</p>
+						<a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: white; background-color: #2563eb; border-radius: 8px; text-decoration: none;">
+							Set your password
+						</a>
+					</div>
+				</body>
+			</html>`,
+			TextBody: `TradeWerks set up ${company} for you. Set your password (link expires ${until}): ${inviteUrl}`,
+			MessageStream: "outbound",
+		});
+	} catch (error) {
+		log.error({ err: error }, "Failed to send org admin invite email");
+	}
+};
+
+// Every active staff member hears about invites, disables and MFA resets, so a hijacked account cannot entrench quietly.
+export const sendStaffSecurityNotice = async (to: string[], subject: string, text: string) => {
+	if (EMAIL_DISABLED) {
+		log.info({ count: to.length, subject }, "[EMAIL DISABLED] Skipping staff security notice.");
+		return;
+	}
+	for (const addr of to) {
+		try {
+			await client.sendEmail({
+				From: POSTMARK_FROM_EMAIL,
+				To: addr,
+				Subject: subject,
+				HtmlBody: `<p style="font-family: Arial, sans-serif;">${escapeHtml(text)}</p>`,
+				TextBody: text,
+				MessageStream: "outbound",
+			});
+		} catch (error) {
+			log.error({ err: error }, "Failed to send staff security notice");
+		}
+	}
+};
+
+export const sendTrialEndingEmail = async (to: string[], subject: string, text: string) => {
+	if (EMAIL_DISABLED) {
+		log.info({ count: to.length, subject }, "[EMAIL DISABLED] Skipping trial ending email.");
+		return;
+	}
+	const base = process.env.FRONTEND_URL ?? "http://localhost:5173";
+	const link = `${base}${SUBSCRIPTION_PATH}`;
+	for (const addr of to) {
+		try {
+			await client.sendEmail({
+				From: POSTMARK_FROM_EMAIL,
+				To: addr,
+				Subject: subject,
+				HtmlBody: `<p style="font-family: Arial, sans-serif;">${escapeHtml(text)}</p><p style="font-family: Arial, sans-serif;"><a href="${link}">Review your subscription</a></p>`,
+				TextBody: `${text}\n\nReview your subscription: ${link}`,
+				MessageStream: "outbound",
+			});
+		} catch (error) {
+			log.error({ err: error }, "Failed to send trial ending email");
+		}
 	}
 };

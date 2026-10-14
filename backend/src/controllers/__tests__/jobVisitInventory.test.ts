@@ -10,6 +10,12 @@ import { deductInventoryForVisit } from "../inventoryController.js";
 import { recordMovements } from "../../services/stockMovements.js";
 import type { Request } from "express";
 
+// Module gating is not under test here: every module reads as on.
+vi.mock("../../services/entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
+
 vi.mock("../../db.js", () => {
 	const $extends = vi.fn();
 	const mockDb = {

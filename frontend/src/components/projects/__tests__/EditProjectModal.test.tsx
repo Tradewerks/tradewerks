@@ -12,7 +12,7 @@ vi.mock("../../../hooks/useClients", () => ({
 }));
 
 vi.mock("../../../hooks/useDispatchers", () => ({
-	useAllDispatchersQuery: () => ({ data: [{ id: DISPATCHER_ID, name: "Dana Dispatcher" }] }),
+	useActiveDispatchersQuery: () => ({ data: [{ id: DISPATCHER_ID, name: "Dana Dispatcher" }] }),
 }));
 
 function makeProject(overrides: Partial<Project> = {}): Project {

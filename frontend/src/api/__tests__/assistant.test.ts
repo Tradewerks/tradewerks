@@ -159,6 +159,27 @@ describe("streamAssistantTurn", () => {
 			).rejects.toThrow(/already have a reply in flight/i);
 		});
 
+		it("shows the server's monthly-limit sentence on QUOTA_EXCEEDED", async () => {
+			vi.stubGlobal(
+				"fetch",
+				makeFetchMock([
+					new Response(
+						JSON.stringify({
+							error: {
+								code: "QUOTA_EXCEEDED",
+								message: "Monthly AI assistant limit reached. It resets on the 1st (UTC).",
+							},
+						}),
+						{ status: 429 },
+					),
+				]),
+			);
+
+			await expect(
+				streamAssistantTurn({ message: "hi", onEvent: () => {}, signal: new AbortController().signal }),
+			).rejects.toThrow("Monthly AI assistant limit reached. It resets on the 1st (UTC).");
+		});
+
 		it("throws an AssistantStreamError carrying the status", async () => {
 			vi.stubGlobal("fetch", makeFetchMock([new Response("x", { status: 500 })]));
 

@@ -14,6 +14,7 @@
  * filter here.
  */
 
+import { ENTITY_MODULE, namesWithModuleOn } from "../lib/entitlements/ownership.js";
 import { getScopedDb } from "../lib/context.js";
 
 export const SEARCHABLE_TYPES = [
@@ -245,7 +246,7 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 
 	technician: async (db, q, take) => {
 		const rows = await db.technician.findMany({
-			where: { OR: [{ name: like(q) }, { email: like(q) }, { title: like(q) }] },
+			where: { deactivated_at: null, OR: [{ name: like(q) }, { email: like(q) }, { title: like(q) }] },
 			select: { id: true, name: true, email: true, title: true, status: true },
 			orderBy: { name: "asc" },
 			take,
@@ -351,8 +352,13 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
  */
 export async function searchRecords(organizationId: string, options: SearchOptions): Promise<SearchOutcome> {
 	const query = options.query.trim();
-	const types = (options.types?.length ? options.types : SEARCHABLE_TYPES).filter(
-		(t): t is SearchEntityType => t in SEARCHERS,
+	// Filtered here, not in the route, so the assistant's search tool is covered too.
+	const types = await namesWithModuleOn(
+		organizationId,
+		(options.types?.length ? options.types : SEARCHABLE_TYPES).filter(
+			(t): t is SearchEntityType => t in SEARCHERS,
+		),
+		ENTITY_MODULE,
 	);
 	const limit = Math.min(Math.max(options.limit ?? DEFAULT_SEARCH_LIMIT, 1), MAX_SEARCH_LIMIT);
 

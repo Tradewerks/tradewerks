@@ -121,6 +121,12 @@ export default function TechnicianCard({
 	const vehicleName = technician.current_vehicle?.name ?? null;
 	const subtitle = [technician.title, technician.organization_role?.name].filter(Boolean).join(" · ");
 	const openable = VIEW_TECHNICIANS && !!onClick;
+	const inactive = !!technician.deactivated_at;
+	const inactiveBadge = inactive && (
+		<span className="rounded-full border border-border px-2 py-0.5 text-xs font-medium text-text-tertiary">
+			Inactive
+		</span>
+	);
 
 	// Only the row/card itself — Enter on a nested link or button already acts on its own.
 	const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -142,7 +148,7 @@ export default function TechnicianCard({
 			}
 		: {};
 
-	const assignButton = MANAGE_TECHNICIANS && (
+	const assignButton = MANAGE_TECHNICIANS && !inactive && (
 		<button
 			type="button"
 			onClick={(e) => {
@@ -191,7 +197,7 @@ export default function TechnicianCard({
 						{/* Below sm the status column is hidden, so status rides on this line. */}
 						<p className={`truncate text-xs text-text-tertiary ${subtitle ? "" : "sm:hidden"}`}>
 							<span className="sm:hidden">
-								{TechnicianStatusLabels[technician.status]}
+								{inactive ? "Inactive" : TechnicianStatusLabels[technician.status]}
 								{subtitle && " · "}
 							</span>
 							{subtitle}
@@ -202,6 +208,7 @@ export default function TechnicianCard({
 				<div className={`items-center gap-1.5 ${TECH_COL_VISIBILITY.status}`}>
 					<StatusPill technician={technician} />
 					<MfaMark enabled={technician.mfaEnabled} />
+					{inactiveBadge}
 				</div>
 
 				<div
@@ -249,7 +256,10 @@ export default function TechnicianCard({
 					<p className="truncate text-sm font-semibold text-text-primary">{displayName}</p>
 					{subtitle && <p className="truncate text-xs text-text-tertiary">{subtitle}</p>}
 				</div>
-				<StatusPill technician={technician} />
+				<div className="flex shrink-0 flex-col items-end gap-1">
+					<StatusPill technician={technician} />
+					{inactiveBadge}
+				</div>
 			</div>
 
 			<NowBox activity={activity} />

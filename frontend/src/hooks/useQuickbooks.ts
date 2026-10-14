@@ -37,12 +37,17 @@ import {
     pushPurchaseToQB,
     pushFieldPurchaseToQB,
     pushTimesheetToQB,
+    getQBUnsynced,
+    syncQBUnsynced,
 } from "../api/quickbooks";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { useEffect, useState } from "react";
 import type { ImportQBItemResult, QBProfitAndLossQuery, QBReportQuery, QBReportTypeId } from "../types/quickbooks";
 import type { Supplier } from "../types/suppliers";
 import { invalidate, qk } from "../lib/queryKeys";
+
+const useQuery = moduleQuery("quickbooks");
 
 type QBInvoiceEmailVars = {
   invoiceId: string;
@@ -492,4 +497,15 @@ export const useQBClientSyncMutation = () => {
             queryClient.invalidateQueries({ queryKey: ["qbMappedCustomers"]});
         }
     })
+};
+
+export const useQBUnsyncedQuery = (enabled: boolean) =>
+	useQuery({ queryKey: ["qbUnsynced"], queryFn: getQBUnsynced, enabled, staleTime: 30_000 });
+
+export const useQBSyncNowMutation = () => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: syncQBUnsynced,
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ["qbUnsynced"] }),
+	});
 };

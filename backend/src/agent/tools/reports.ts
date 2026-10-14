@@ -13,6 +13,7 @@
  * are a sample, clearly labelled as one.
  */
 
+import { REPORT_MODULE, ownerModuleOn } from "../../lib/entitlements/ownership.js";
 import { z } from "zod";
 import { getReportDefinition, REPORT_DEFINITIONS } from "../../lib/reports/reportRegistry.js";
 import { defineTool } from "../registry.js";
@@ -85,6 +86,14 @@ export const runReport = defineTool({
 		const definition = getReportDefinition(input.report);
 		if (!definition) {
 			throw new AgentToolError(AgentErrorCodes.NOT_FOUND, `No report named "${input.report}"`);
+		}
+		// `view_reports` is a core permission, so the context's permission filter
+		// cannot tell a quotes or inventory report from a core one.
+		if (!(await ownerModuleOn(ctx.organizationId, input.report, REPORT_MODULE))) {
+			throw new AgentToolError(
+				AgentErrorCodes.NOT_FOUND,
+				`The "${input.report}" report is not available for this organization`,
+			);
 		}
 
 		const { rows, summary } = await definition.load(ctx.organizationId, {

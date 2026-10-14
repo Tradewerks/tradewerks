@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 
-export function useMultiSearch(paramKey: string) {
+export function useMultiSearch(paramKey: string, { replace = false }: { replace?: boolean } = {}) {
 	const [searchParams, setSearchParams] = useSearchParams();
 	const [duplicateTerm, setDuplicateTerm] = useState<string | null>(null);
 	const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -28,10 +28,10 @@ export function useMultiSearch(paramKey: string) {
 				const next = new URLSearchParams(prev);
 				next.append(paramKey, trimmed);
 				return next;
-			});
+			}, { replace });
 			return true;
 		},
-		[paramKey, terms, setSearchParams]
+		[paramKey, terms, setSearchParams, replace]
 	);
 
 	const removeTerm = useCallback(
@@ -42,9 +42,9 @@ export function useMultiSearch(paramKey: string) {
 				next.delete(paramKey);
 				remaining.forEach((t) => next.append(paramKey, t));
 				return next;
-			});
+			}, { replace });
 		},
-		[paramKey, setSearchParams]
+		[paramKey, setSearchParams, replace]
 	);
 
 	const clearAll = useCallback(() => {
@@ -52,8 +52,8 @@ export function useMultiSearch(paramKey: string) {
 			const next = new URLSearchParams(prev);
 			next.delete(paramKey);
 			return next;
-		});
-	}, [paramKey, setSearchParams]);
+		}, { replace });
+	}, [paramKey, setSearchParams, replace]);
 
 	return { terms, addTerm, removeTerm, clearAll, duplicateTerm };
 }

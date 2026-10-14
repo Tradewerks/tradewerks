@@ -967,9 +967,10 @@ export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
 			});
 		},
 		async list(db, f) {
-			const where: Prisma.technicianWhereInput = compact({
-				status: f.status as Prisma.technicianWhereInput["status"],
-			});
+			const where: Prisma.technicianWhereInput = {
+				...compact({ status: f.status as Prisma.technicianWhereInput["status"] }),
+				deactivated_at: null,
+			};
 			const [rows, total] = await Promise.all([
 				db.technician.findMany({
 					where,

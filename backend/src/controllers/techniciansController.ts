@@ -21,6 +21,10 @@ import { utcDayRange } from "../lib/dayRange.js";
 import { fetchRouteDistanceMiles, applyOdometerIncrement } from "../lib/vehicleMileage.js";
 import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
 import { recordDrive } from "../lib/visitDrive.js";
+import { assertSeatAvailable, OPEN_VISIT_STATUSES } from "../lib/entitlements/seats.js";
+import type { HttpError } from "../types/responses.js";
+import { setUserActive } from "../services/userActiveCache.js";
+import { getSocket } from "../services/socketService.js";
 
 const PAID_BREAK_REASONS = new Set<string>(["Rest", "EquipmentIssue"]);
 const VALID_BREAK_REASONS = new Set<string>([
@@ -68,6 +72,7 @@ const TECHNICIAN_SELECT = {
 	coords: true,
 	last_ping_at: true,
 	last_login: true,
+	deactivated_at: true,
 	theme: true,
 	organization_role_id: true,
 	current_vehicle_id: true,
@@ -132,6 +137,7 @@ export const insertTechnician = async (
 		const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
 		const created = await sdb.$transaction(async (tx) => {
+			await assertSeatAvailable(tx, organizationId, "technicians");
 			const { password: _pw, ...parsedWithoutPassword } = parsed;
 			const technician = await tx.technician.create({
 				data: {
@@ -188,6 +194,7 @@ export const insertTechnician = async (
 
 		return { err: "", item: created };
 	} catch (e) {
+		if ((e as HttpError).statusCode) throw e;
 		if (e instanceof ZodError) {
 			return {
 				err: `Validation failed: ${e.issues.map((err) => err.message).join(", ")}`,
@@ -882,4 +889,78 @@ export const markAvailable = async (technicianId: string, orgId: string, context
 	const result = await updateTechnician(technicianId, { status: "Available" }, orgId, context);
 	if (!result.err) await recordDrive(getScopedDb(orgId), technicianId, new Date());
 	return result;
+};
+export const deactivateTechnician = async (id: string, organizationId: string, context?: UserContext) => {
+	const sdb = getScopedDb(organizationId);
+	const existing = await sdb.technician.findFirst({ where: { id } });
+	if (!existing) return { err: "Technician not found" };
+	if (existing.deactivated_at) return { err: `${existing.name} is already deactivated.` };
+
+	const open = await sdb.job_visit_technician.count({
+		where: { tech_id: id, visit: { status: { in: [...OPEN_VISIT_STATUSES] } } },
+	});
+	if (open > 0) {
+		return { err: `${existing.name} has ${open} open ${open === 1 ? "visit" : "visits"}. Complete or reassign them first.` };
+	}
+
+	const item = await sdb.$transaction(async (tx) => {
+		const updated = await tx.technician.update({
+			where: { id },
+			data: { deactivated_at: new Date(), status: "Offline", current_vehicle_id: null },
+			select: TECHNICIAN_SELECT,
+		});
+		await tx.jwt_refresh_token.deleteMany({ where: { userId: id } });
+		await logActivity({
+			event_type: "technician.deactivated",
+			action: "updated",
+			entity_type: "technician",
+			entity_id: id,
+			organization_id: organizationId,
+			actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+			actor_id: context?.techId || context?.dispatcherId,
+			changes: { deactivated_at: { old: null, new: updated.deactivated_at } },
+			ip_address: context?.ipAddress,
+			user_agent: context?.userAgent,
+		});
+		return updated;
+	});
+
+	setUserActive(id, false);
+	try {
+		getSocket().in(`tech:${id}`).disconnectSockets(true);
+	} catch (err) {
+		log.warn({ err, id }, "deactivated technician's socket not disconnected");
+	}
+	return { err: "", item };
+};
+
+export const reactivateTechnician = async (id: string, organizationId: string, context?: UserContext) => {
+	const sdb = getScopedDb(organizationId);
+	const existing = await sdb.technician.findFirst({ where: { id } });
+	if (!existing) return { err: "Technician not found" };
+	if (!existing.deactivated_at) return { err: `${existing.name} is already active.` };
+
+	const item = await sdb.$transaction(async (tx) => {
+		await assertSeatAvailable(tx, organizationId, "technicians");
+		const updated = await tx.technician.update({
+			where: { id },
+			data: { deactivated_at: null },
+			select: TECHNICIAN_SELECT,
+		});
+		await logActivity({
+			event_type: "technician.reactivated",
+			action: "updated",
+			entity_type: "technician",
+			entity_id: id,
+			organization_id: organizationId,
+			actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+			actor_id: context?.techId || context?.dispatcherId,
+			changes: { deactivated_at: { old: existing.deactivated_at, new: null } },
+			ip_address: context?.ipAddress,
+			user_agent: context?.userAgent,
+		});
+		return updated;
+	});
+	setUserActive(id, true);
+	return { err: "", item };
 };

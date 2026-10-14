@@ -15,7 +15,7 @@ import {
 	useUpdateJobVisitMutation,
 	useAssignTechniciansToVisitMutation,
 } from "../../hooks/useJobs";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 import {
@@ -74,7 +74,15 @@ const parseHHMMToDate = (hhmm: string | null | undefined, baseDate: Date): Date 
 export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clientExempt }: EditJobVisitProps) {
 	const updateVisit = useUpdateJobVisitMutation();
 	const assignTechs = useAssignTechniciansToVisitMutation();
-	const { data: technicians } = useAllTechniciansQuery();
+	const { data: activeTechnicians } = useActiveTechniciansQuery();
+	// A deactivated technician already on this visit stays listed so the visit can be re-saved.
+	const technicians = useMemo(() => {
+		const active = activeTechnicians ?? [];
+		const assigned = visit.visit_techs
+			.map((vt) => vt.tech)
+			.filter((t) => !active.some((a) => a.id === t.id));
+		return [...active, ...assigned];
+	}, [activeTechnicians, visit.visit_techs]);
 
 	const isLoading = updateVisit.isPending || assignTechs.isPending;
 

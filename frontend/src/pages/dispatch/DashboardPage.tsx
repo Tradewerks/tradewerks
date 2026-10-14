@@ -22,7 +22,7 @@ import WeekStrip from "../../components/ui/schedule/WeekStrip";
 import { useAuthStore } from "../../auth/authStore";
 import { FALLBACK_TIMEZONE } from "../../util/util";
 import { useAllJobsQuery } from "../../hooks/useJobs";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useAllRequestsQuery } from "../../hooks/useRequests";
 import { useAllQuotesQuery } from "../../hooks/useQuotes";
 import { useAllRecurringPlansQuery } from "../../hooks/useRecurringPlans";
@@ -114,7 +114,7 @@ export default function DashboardPage() {
 	const { data: requests = [] } = useAllRequestsQuery();
 	const { data: quotes = [] } = useAllQuotesQuery();
 	const { data: recurringPlans = [] } = useAllRecurringPlansQuery();
-	const { data: allTechnicians = [], error: techsError } = useAllTechniciansQuery();
+	const { data: allTechnicians = [], error: techsError } = useActiveTechniciansQuery();
 
 	const saveDashboardLayout = async (id: string, newLayout: Layout) => {
 		try {

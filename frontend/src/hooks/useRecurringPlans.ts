@@ -1,10 +1,5 @@
-import {
-	useMutation,
-	useQuery,
-	useQueryClient,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import type {
 	RecurringPlan,
 	CreateRecurringPlanInput,
@@ -23,6 +18,8 @@ import type {
 } from "../types/recurringPlans";
 import * as recurringPlanApi from "../api/recurringPlans";
 import type { Job } from "../types/jobs";
+
+const useQuery = moduleQuery("recurring_plans");
 
 // ============================================
 // RECURRING PLAN QUERIES
@@ -507,3 +504,11 @@ export const useDeleteRecurringPlanNoteMutation = (): UseMutationResult<
 		},
 	});
 };
+
+export const useSkippedDatesQuery = (jobId: string | undefined) =>
+	useQuery({
+		queryKey: ["recurringPlans", "skippedDates", jobId],
+		queryFn: () => recurringPlanApi.getSkippedDates(jobId as string),
+		enabled: !!jobId,
+		staleTime: 5 * 60_000,
+	});

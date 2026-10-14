@@ -40,6 +40,12 @@ import { logActivity, buildChanges } from "../../services/logger.js";
 import { sendEmail } from "../../services/emailService.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 
+// Module gating is not under test here: every module reads as on.
+vi.mock("../../services/entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
+
 vi.mock("../../db.js", () => {
 	const $extends = vi.fn();
 	const mockDb = {

@@ -11,6 +11,8 @@ import type {
 	UpdateDispatcherInput,
 } from "../types/dispatchers";
 import * as dispatcherApi from "../api/dispatchers";
+import { activeOnly } from "../lib/permissionAccess";
+import { ENTITLEMENTS_QUERY_KEY } from "./useEntitlements";
 
 export const useAllDispatchersQuery = (): UseQueryResult<Dispatcher[], Error> => {
 	return useQuery({
@@ -120,3 +122,27 @@ export const useDeleteDispatcherMutation = (): UseMutationResult<
 		},
 	});
 };
+
+export const useActiveDispatchersQuery = (): UseQueryResult<Dispatcher[], Error> =>
+	useQuery({
+		queryKey: ["dispatchers"],
+		queryFn: dispatcherApi.getAllDispatchers,
+		select: activeOnly,
+	});
+
+const useDispatcherStatusMutation = (fn: (id: string) => Promise<Dispatcher>) => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: fn,
+		onSuccess: async (_, id) => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ["dispatchers"] }),
+				queryClient.invalidateQueries({ queryKey: ["dispatchers", id] }),
+				queryClient.invalidateQueries({ queryKey: ENTITLEMENTS_QUERY_KEY }),
+			]);
+		},
+	});
+};
+
+export const useDeactivateDispatcherMutation = () => useDispatcherStatusMutation(dispatcherApi.deactivateDispatcher);
+export const useReactivateDispatcherMutation = () => useDispatcherStatusMutation(dispatcherApi.reactivateDispatcher);

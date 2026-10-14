@@ -50,6 +50,7 @@ import DetailStatRow from "../../components/detail/DetailStatRow";
 import DocumentLineage, { HEADER_PILL } from "../../components/documents/DocumentLineage";
 import { useDetailTab } from "../../components/detail/useDetailTab";
 import Card from "../../components/ui/Card";
+import { HEADER_BTN_BASE, HEADER_BTN_SECONDARY } from "../../components/ui/headerActions";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import InvoiceNoteManager from "../../components/invoices/InvoiceNoteManager";
 import InvoiceOriginCard from "../../components/invoices/InvoiceOriginCard";
@@ -832,7 +833,7 @@ export default function InvoiceDetailPage() {
 								onClick={
 									recordPaymentAction.onSelect
 								}
-								className="flex items-center gap-1.5 px-3 py-1.5 bg-payment hover:bg-payment-hover text-white rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+								className={`${HEADER_BTN_BASE} cursor-pointer bg-payment text-white hover:enabled:bg-payment-hover disabled:cursor-not-allowed disabled:opacity-40`}
 							>
 								<Plus size={13} />
 								Record
@@ -846,7 +847,7 @@ export default function InvoiceDetailPage() {
 								}
 								disabled={refundAction.disabled}
 								onClick={refundAction.onSelect}
-								className="flex items-center gap-1.5 px-3 py-1.5 bg-surface hover:enabled:bg-surface-raised border border-border text-text-secondary rounded-md text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+								className={HEADER_BTN_SECONDARY}
 							>
 								<RotateCcw size={13} />
 								Refund

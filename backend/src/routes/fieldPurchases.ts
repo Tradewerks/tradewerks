@@ -27,6 +27,7 @@ import {
 	secondSignoff,
 	createRefund,
 	settleRefund,
+	SCANS_USED_UP,
 } from "../controllers/fieldPurchasesController.js";
 import { requirePermission, requireAnyPermission } from "../lib/requirePermissions.js";
 
@@ -38,6 +39,9 @@ const router = Router();
 // caller's authority. A refusal about the row's state is a 400 and must not be
 // worded to match them.
 function sendControllerErr(res: Response, err: string) {
+	// Same status and code as the AI meter, so a client can tell "used up" from a bad request.
+	if (err === SCANS_USED_UP)
+		return res.status(429).json(createErrorResponse(ErrorCodes.QUOTA_EXCEEDED, err));
 	const notFound = err.includes("not found");
 	const forbidden =
 		err.startsWith("You can only") || err.startsWith("You cannot") || err.startsWith("Only a");

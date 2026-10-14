@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { getScopedDb } from "./context.js";
 
 interface MapboxDirectionsResponse {
@@ -47,9 +48,14 @@ export async function fetchRouteDistanceMiles(
 export async function applyOdometerIncrement(sdb: ReturnType<typeof getScopedDb>, techId: string, miles: number) {
     const tech = await sdb.technician.findFirst({
         where: { id: techId },
-        select: { current_vehicle_id: true },
+        select: { current_vehicle_id: true, organization_id: true },
     });
-    if (tech?.current_vehicle_id) {
+    // The odometer is Fleet data; drive miles on the visit are core and already saved.
+    if (
+        tech?.current_vehicle_id &&
+        tech.organization_id &&
+        (await isModuleOn(tech.organization_id, "fleet"))
+    ) {
         await sdb.vehicle.update({
             where: { id: tech.current_vehicle_id },
             data: {

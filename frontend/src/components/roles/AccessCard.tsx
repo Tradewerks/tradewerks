@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Card from "../ui/Card";
+import { HEADER_BTN_PRIMARY, HEADER_BTN_SECONDARY } from "../ui/headerActions";
 import AdaptableTable from "../AdaptableTable";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import { PERMISSION_CATALOGS, type PermissionCatalogTier } from "../../lib/permissionCatalogs";
@@ -197,7 +198,7 @@ const AccessCard = ({ user, tier, readOnly = false }: AccessCardProps) => {
 									type="button"
 									onClick={() => setEditing(false)}
 									disabled={saving}
-									className="px-2.5 py-1 rounded-md text-xs font-semibold text-text-secondary border border-border-subtle hover:bg-surface-raised hover:text-text-primary transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+									className={HEADER_BTN_SECONDARY}
 								>
 									Cancel
 								</button>
@@ -206,7 +207,7 @@ const AccessCard = ({ user, tier, readOnly = false }: AccessCardProps) => {
 									disabled={!dirty || saving}
 									title={!dirty ? "No changes to save" : undefined}
 									onClick={handleRoleUpdate}
-									className="px-2.5 py-1 rounded-md text-xs font-semibold text-on-primary bg-primary border border-primary hover:bg-primary-hover transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-primary"
+									className={HEADER_BTN_PRIMARY}
 								>
 									{saving ? "Saving..." : "Save changes"}
 								</button>
@@ -215,7 +216,7 @@ const AccessCard = ({ user, tier, readOnly = false }: AccessCardProps) => {
 							<button
 								type="button"
 								onClick={() => setEditing(true)}
-								className="px-2.5 py-1 rounded-md text-xs font-semibold text-text-primary border border-border-subtle bg-surface hover:bg-surface-raised transition-colors cursor-pointer"
+								className={HEADER_BTN_SECONDARY}
 							>
 								Edit access
 							</button>

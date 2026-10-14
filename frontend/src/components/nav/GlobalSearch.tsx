@@ -18,7 +18,7 @@ import { useAllRequestsQuery } from "../../hooks/useRequests";
 import { useAllQuotesQuery } from "../../hooks/useQuotes";
 import { useAllJobsQuery, useAllJobVisitsQuery } from "../../hooks/useJobs";
 import { useAllRecurringPlansQuery } from "../../hooks/useRecurringPlans";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ export default function GlobalSearch() {
 	const { data: jobs, isLoading: loadingJobs } = useAllJobsQuery();
 	const { data: visits, isLoading: loadingVisits } = useAllJobVisitsQuery();
 	const { data: plans, isLoading: loadingPlans } = useAllRecurringPlansQuery();
-	const { data: technicians, isLoading: loadingTechnicians } = useAllTechniciansQuery();
+	const { data: technicians, isLoading: loadingTechnicians } = useActiveTechniciansQuery();
 
 	const isLoading =
 		loadingClients ||

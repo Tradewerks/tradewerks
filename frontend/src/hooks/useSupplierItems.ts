@@ -1,10 +1,5 @@
-import {
-	useMutation,
-	useQuery,
-	useQueryClient,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { qk } from "../lib/queryKeys";
 import * as supplierItemsApi from "../api/supplierItems";
 import type {
@@ -13,6 +8,8 @@ import type {
 	UpsertSupplierItemInput,
 } from "../api/supplierItems";
 import type { SupplierItem } from "../types/supplierItems";
+
+const useQuery = moduleQuery("inventory");
 
 export const useSupplierItems = (
 	params: ListSupplierItemsParams = {},

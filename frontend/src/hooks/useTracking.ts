@@ -1,10 +1,5 @@
-import {
-	useMutation,
-	useQuery,
-	useQueryClient,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 
 import type { InventoryItem } from "../types/inventory";
 import type {
@@ -27,6 +22,8 @@ import type {
 } from "../types/tracking";
 import * as trackingApi from "../api/tracking";
 import { qk, invalidate } from "../lib/queryKeys";
+
+const useQuery = moduleQuery("inventory");
 
 export const useResolveCodeMutation = (): UseMutationResult<ResolveCodeResult, Error, string> => {
 	return useMutation({

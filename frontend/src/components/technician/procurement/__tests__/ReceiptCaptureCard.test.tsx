@@ -93,3 +93,22 @@ describe("rotation across a replaced photo", () => {
 		).toContain("rotate(0deg)");
 	});
 });
+
+describe("when the month's receipt scans are used up", () => {
+	const usedUp = "This month's receipt scans are used up. Enter the lines by hand; scanning resumes on the 1st (UTC).";
+
+	it("says why the receipt was not read", () => {
+		render(
+			<ReceiptCaptureCard
+				purchase={{ ...withPhoto, ocr_error: usedUp } as FieldPurchase}
+				editable
+			/>
+		);
+		expect(screen.getByRole("status")).toHaveTextContent(usedUp);
+	});
+
+	it("says nothing for a plain skip (no reader configured)", () => {
+		render(<ReceiptCaptureCard purchase={{ ...withPhoto, ocr_error: null } as FieldPurchase} editable />);
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+	});
+});

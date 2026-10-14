@@ -1,3 +1,4 @@
+import { isModuleOn } from "../entitlementService.js";
 import crypto from "crypto";
 import { db } from "../../db.js";
 import { isQBConnected } from "../quickbooksService.js";
@@ -29,6 +30,7 @@ async function processQBNotifications(body: any) {
             });
             continue;
         }
+        if (!(await isModuleOn(org.id, "quickbooks"))) continue;
         if (!(await isQBConnected(org.id))) {
             await logExternalSync({ 
                 provider: "quickbooks",

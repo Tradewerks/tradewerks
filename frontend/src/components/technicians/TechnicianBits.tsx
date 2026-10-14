@@ -1,5 +1,5 @@
 import { ShieldCheck } from "lucide-react";
-import type { Technician } from "../../types/technicians";
+import type { Technician, TechnicianStatus } from "../../types/technicians";
 import {
 	TechnicianStatusColors,
 	TechnicianStatusDotColors,
@@ -12,9 +12,12 @@ import type { TechnicianActivity } from "./technicianActivity";
 export function Avatar({
 	technician,
 	size,
+	showStatus = true,
 }: {
-	technician: Technician;
+	technician: { name: string; status?: TechnicianStatus };
 	size: "sm" | "md" | "lg" | "xl";
+	// Account views (Admin → Users) show who, not live state.
+	showStatus?: boolean;
 }) {
 	const box =
 		size === "sm"
@@ -33,10 +36,12 @@ export function Avatar({
 			>
 				{initials(technician.name)}
 			</div>
-			<span
-				aria-hidden
-				className={`absolute -bottom-0.5 -right-0.5 ${dot} rounded-full border-2 border-base ${TechnicianStatusDotColors[technician.status]}`}
-			/>
+			{showStatus && technician.status && (
+				<span
+					aria-hidden
+					className={`absolute -bottom-0.5 -right-0.5 ${dot} rounded-full border-2 border-base ${TechnicianStatusDotColors[technician.status]}`}
+				/>
+			)}
 		</div>
 	);
 }

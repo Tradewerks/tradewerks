@@ -66,8 +66,10 @@ const ROUTES: RouteCase[] = [
 	{ path: "/register", url: "/register", page: "RegisterPage" },
 	{ path: "/verify-email", url: "/verify-email", page: "VerifyEmailPage" },
 	{ path: "/reset-password", url: "/reset-password", page: "ResetPasswordPage" },
+	{ path: "/accept-invite", url: "/accept-invite", page: "AcceptInvitePage" },
 	{ path: "/quickbooks/callback", url: "/quickbooks/callback", page: "QBCallbackPage" },
 	{ path: "/auth/sso/complete", url: "/auth/sso/complete", page: "SSOCompletePage" },
+	{ path: "/platform/*", url: "/platform/login", page: "PlatformRoutes" },
 	// dispatch shell
 	{ path: "/dispatch/*", url: "/dispatch", page: "DispatchLayout" },
 	{ path: null, url: "/dispatch", page: "DashboardPage" },
@@ -222,6 +224,7 @@ const ROUTES: RouteCase[] = [
 	{ path: "invoices/:invoiceId", url: "/dispatch/invoices/i1", page: "InvoiceDetailPage", perm: "view_invoices" },
 	{ path: "profile", url: "/dispatch/profile", page: "MyProfilePage" },
 	{ path: "admin", url: "/dispatch/admin", page: "AdminPage", perm: ["view_admin", "manage_organization", "manage_roles"] },
+	{ path: "welcome", url: "/dispatch/welcome", page: "WelcomePage", perm: "manage_organization" },
 	{ path: "followups", url: "/dispatch/followups", page: "FollowupsPage", perm: "view_followups" },
 	{ path: "vehicles", url: "/dispatch/vehicles", page: "VehiclesPage", perm: ["view_inventory", "manage_technicians"] },
 	{

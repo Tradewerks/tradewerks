@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
-import PageHeader from "../ui/PageHeader";
 import StatCard from "../ui/StatCard";
 import FieldPurchaseGrantsPanel from "../inventory/FieldPurchaseGrantsPanel";
 import QueueHeader from "../fieldPurchases/QueueHeader";
@@ -142,8 +141,6 @@ export default function FieldPurchasesSection() {
 
 	return (
 		<div className="flex flex-col gap-3 pb-4">
-			<PageHeader title="Field Purchases" />
-
 			{/* Every card prints "—" without this, which is also what they print while
 			    loading and next to what zero looks like. The strip is how a dispatcher
 			    decides whether today is under control, so it must not fail quietly. */}

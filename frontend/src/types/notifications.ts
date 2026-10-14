@@ -39,6 +39,10 @@ export type DispatcherNotificationType =
 	| "invoice_paid"
 	| "quote_accepted"
 	| "quote_declined"
+	| "usage_limit_warning"
+	| "subscription_changed"
+	| "upgrade_request_resolved"
+	| "trial_ending"
 	| "timesheet_issue_reported"
 
 export interface DispatcherNotification {
@@ -53,7 +57,7 @@ export interface DispatcherNotification {
 }
 
 // Display order of the preference groups
-export const DISPATCHER_NOTIFICATION_GROUPS = ["Jobs", "Timesheets", "Purchases", "Vehicles & inventory", "Sales & billing"] as const;
+export const DISPATCHER_NOTIFICATION_GROUPS = ["Jobs", "Timesheets", "Purchases", "Vehicles & inventory", "Sales & billing", "Subscription"] as const;
 
 export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	type: DispatcherNotificationType;
@@ -80,4 +84,8 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "followup_email_opened", group: "Sales & billing", permission: "view_followups", label: "Follow-up opens", description: "A client opened a follow-up email" },
 	{ type: "invoice_paid", group: "Sales & billing", permission: "view_invoices", label: "Invoice payments", description: "A payment was recorded on an invoice" },
 	{ type: "dispute_opened", group: "Sales & billing", permission: "resolve_disputes", label: "Disputes", description: "A dispute was opened on a document" },
+	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },
+	{ type: "subscription_changed", group: "Subscription", permission: "manage_organization", label: "Subscription changes", description: "TradeWerks changed your subscription, modules or limits" },
+	{ type: "upgrade_request_resolved", group: "Subscription", permission: "manage_organization", label: "Subscription requests", description: "TradeWerks approved or declined your request" },
+	{ type: "trial_ending", group: "Subscription", permission: "manage_organization", label: "Trial ending", description: "3 days before your trial ends, and on its last day" },
 ];

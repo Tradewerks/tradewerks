@@ -1,7 +1,7 @@
 ﻿import { Outlet, useNavigate, useLocation, NavLink } from "react-router-dom";
 import { useAuthStore } from "../auth/authStore";
 import { useRef, useEffect, useCallback } from "react";
-import { ClipboardList, ArrowLeft, House, Truck, Bell, AlertTriangle, Map, Gauge } from "lucide-react";
+import { ClipboardList, ArrowLeft, House, Truck, Bell, AlertTriangle, Map, Gauge, Clock } from "lucide-react";
 import { useTechnicianByIdQuery } from "../hooks/useTechnicians";
 import { pingLocation } from "../api/technicians";
 import { useNotificationsQuery } from "../hooks/useNotifications";
@@ -11,6 +11,7 @@ import { usePermission } from "../hooks/usePermission";
 import TechnicianUserMenu from "../components/nav/TechnicianUserMenu";
 import ToastViewport from "../components/ui/ToastViewport";
 import { useToast } from "../components/ui/useToast";
+import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
 
 export default function TechnicianLayout() {
 	const { user } = useAuthStore();
@@ -123,6 +124,15 @@ export default function TechnicianLayout() {
 							<Gauge size={20} className="text-text-tertiary" />
 						</button>
 
+						<button
+							onClick={() => navigate("/technician/timesheet")}
+							className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
+							title="My Time"
+							aria-label="My Time"
+						>
+							<Clock size={20} className="text-text-tertiary" />
+						</button>
+
 						{/* Truck / vehicle icon */}
 						{usePermission("use_vehicles") && (
 							<button
@@ -163,7 +173,9 @@ export default function TechnicianLayout() {
 
 				<main className="flex-1 overflow-y-auto overscroll-contain bg-canvas">
 					<div className="p-4 pb-20 md:px-6 md:pt-6 min-h-full">
-						<Outlet />
+						<ModuleRouteGuard home="/technician">
+							<Outlet />
+						</ModuleRouteGuard>
 					</div>
 				</main>
 			</div>

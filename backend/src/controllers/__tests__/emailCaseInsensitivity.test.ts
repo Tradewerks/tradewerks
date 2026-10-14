@@ -163,6 +163,8 @@ describe("updateTechnician — email is lowercased before comparison, dup-check,
 describe("registerOrganization — admin_email is lowercased before the dup-check and the admin account is created", () => {
 	it("lowercases admin_email before checking for an existing account and before creating the dispatcher row", async () => {
 		fake.dispatcher.findUnique.mockResolvedValue(null);
+		fake.plan_version.findFirst.mockResolvedValue({ id: "pv_x" });
+		fake.org_entitlement.create.mockResolvedValue({});
 		fake.organization.create.mockResolvedValue({ id: "org-1", name: "Acme" });
 		fake.organization_role.createMany.mockResolvedValue({ count: 2 });
 		fake.organization_role.create.mockResolvedValue({ id: "role-1" });
@@ -176,10 +178,13 @@ describe("registerOrganization — admin_email is lowercased before the dup-chec
 			admin_name: "Jane",
 			admin_email: "Jane@Example.COM",
 			admin_password: "password123",
+			business_type: "general",
 		});
 
 		expect(result.err).toBe("");
-		expect(fake.dispatcher.findUnique).toHaveBeenCalledWith({ where: { email: "jane@example.com" } });
+		expect(fake.dispatcher.findUnique).toHaveBeenCalledWith(
+			expect.objectContaining({ where: { email: "jane@example.com" } }),
+		);
 		expect(fake.dispatcher.create.mock.calls[0][0].data.email).toBe("jane@example.com");
 		expect((result.item as { admin: { email: string } }).admin.email).toBe("jane@example.com");
 		expect(vi.mocked(sendEmailVerificationEmail)).toHaveBeenCalledWith("jane@example.com", expect.any(String));
@@ -193,6 +198,7 @@ describe("registerOrganization — admin_email is lowercased before the dup-chec
 			admin_name: "Jane",
 			admin_email: "JANE@EXAMPLE.COM",
 			admin_password: "password123",
+			business_type: "general",
 		});
 
 		expect(result).toEqual({ err: "An account with this email already exists" });

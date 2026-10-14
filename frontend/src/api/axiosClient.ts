@@ -3,6 +3,7 @@
  *	Centralizing api variable so headers stay consistent
  */
 
+import { ENTITLEMENTS_STALE_EVENT } from "../lib/permissionAccess";
 import axios from "axios";
 import { useAuthStore } from "../auth/authStore";
 const BASE_URL: string = import.meta.env.VITE_BACKEND_URL;
@@ -50,6 +51,16 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use((response) => response, async (error) => {
 	const originalRequest = error.config;
 	const url = originalRequest?.url ?? "";
+	// The UI offered something its module no longer allows; an event rather than a
+	// queryClient import, which would pull main.tsx into this module.
+	const code = error.response?.data?.error?.code;
+	if (code === "MODULE_DISABLED" || code === "MODULE_NOT_IN_PLAN") {
+		window.dispatchEvent(
+			new CustomEvent(ENTITLEMENTS_STALE_EVENT, {
+				detail: { code, method: originalRequest?.method },
+			}),
+		);
+	}
 	if (error.response?.status !== 401 || originalRequest._retry || AUTH_PATHS.some((path) => url.includes(path))) {
 		return Promise.reject(error);
 	}

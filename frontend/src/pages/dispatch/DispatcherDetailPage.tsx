@@ -1,11 +1,11 @@
-import { useDeleteDispatcherMutation, useDispatcherByIdQuery, } from "../../hooks/useDispatchers";
+import { useDeleteDispatcherMutation, useDispatcherByIdQuery, useReactivateDispatcherMutation } from "../../hooks/useDispatchers";
 import EditDispatcher from "../../components/dispatchers/EditDispatcher";
 import { useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
 import { usePermission } from "../../hooks/usePermission";
 import { useAuthStore } from "../../auth/authStore";
-import { FALLBACK_TIMEZONE } from "../../util/util";
-import { Mail, Phone, Clock, ShieldCheck, MoreVertical, Trash2, Edit, RotateCcw, KeyRound, FileText, FileCheck, Receipt, RefreshCw, FolderKanban } from "lucide-react";
+import { FALLBACK_TIMEZONE, errorMessage } from "../../util/util";
+import { Mail, Phone, Clock, ShieldCheck, MoreVertical, Trash2, Edit, RotateCcw, KeyRound, FileText, FileCheck, Receipt, RefreshCw, FolderKanban, UserCheck } from "lucide-react";
 import { requestPasswordResetCall } from "../../api/authenticate";
 import { useResetMfaMutation } from "../../hooks/useMfa";
 import { useToast } from "../../components/ui/useToast";
@@ -21,6 +21,7 @@ const DispatcherDetailPage = () => {
 	const navigate = useNavigate();
 	const [editOpen, setEditOpen] = useState(false);
 	const deleteDispatcher = useDeleteDispatcherMutation();
+	const reactivateDispatcher = useReactivateDispatcherMutation();
 	const { mutateAsync: resetMFA, isPending: isResettingMFA } = useResetMfaMutation();
 	const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
 	const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -60,6 +61,17 @@ const DispatcherDetailPage = () => {
 		} catch (error) {
 			// we already left the page, so a console line would go unseen
 			toast.error(error instanceof Error ? error.message : "Failed to delete dispatcher");
+		}
+	};
+
+	const handleReactivate = async () => {
+		if (!EDIT_DISPATCHER || !dispatcher) return;
+		try {
+			await reactivateDispatcher.mutateAsync(dispatcher.id);
+			setIsOptionsMenuOpen(false);
+			toast.success(`${dispatcher.name} reactivated.`);
+		} catch (error) {
+			toast.error(errorMessage(error, "Couldn't reactivate"));
 		}
 	};
 
@@ -287,6 +299,16 @@ const DispatcherDetailPage = () => {
 										{EDIT_DISPATCHER && (
 											<>
 											<div className="my-1 border-t border-border-subtle" />
+											{dispatcher.deactivated_at && (
+												<button
+													onClick={handleReactivate}
+													disabled={reactivateDispatcher.isPending}
+													className="w-full px-4 py-2 text-left text-sm hover:enabled:bg-surface transition-colors flex items-center gap-2 text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
+												>
+													<UserCheck size={14} />
+													{reactivateDispatcher.isPending ? "Reactivating…" : "Reactivate"}
+												</button>
+											)}
 											<button
 												onClick={
 													handleDelete
@@ -321,6 +343,12 @@ const DispatcherDetailPage = () => {
 					</div>
 				</div>
 
+				{dispatcher.deactivated_at && (
+					<div role="status" className="rounded border border-border bg-surface-inset px-3 py-2 text-sm text-text-secondary">
+						Inactive — this user can&apos;t sign in.
+					</div>
+				)}
+
 				{/* Stat Row */}
 				<div>
 					
@@ -345,8 +373,10 @@ const DispatcherDetailPage = () => {
 				</div>
 
 				{/* Info + Change History */}
-				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-					<div className="space-y-6">
+				{/* Stretched; Security absorbs the slack so the left stack ends
+				    level with Change History. */}
+				<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+					<div className="flex flex-col gap-6">
 					<Card title="Information">
 						<div className="space-y-4">
 							{[
@@ -383,7 +413,7 @@ const DispatcherDetailPage = () => {
 						</div>
 					</Card>
 
-					<Card title="Security">
+					<Card title="Security" className="flex-1">
 						<div className="space-y-4">
 							{securityRows.map(({ icon: Icon, label, value, ok, hint }) => (
 								<div key={label} className="flex items-center gap-3">

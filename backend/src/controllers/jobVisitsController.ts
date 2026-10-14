@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { ZodError } from "zod";
 import { Prisma } from "../../generated/prisma/client.js";
 import type { tech_visit_status, technician_status, pause_reason_type } from "../../generated/prisma/client.js";
@@ -408,7 +409,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 
 		if (parsed.tech_ids && parsed.tech_ids.length > 0) {
 			const existingTechs = await sdb.technician.findMany({
-				where: { id: { in: parsed.tech_ids } },
+				where: { id: { in: parsed.tech_ids }, deactivated_at: null },
 				select: { id: true },
 			});
 			const existingIds = new Set(existingTechs.map((t) => t.id));
@@ -417,7 +418,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 			);
 			if (missing.length > 0) {
 				return {
-					err: `Technicians not found: ${missing.join(", ")}`,
+					err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 				};
 			}
 		}
@@ -948,7 +949,8 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		if (
 			parsed.status === "Completed" &&
 			existingVisit.status !== "Completed" &&
-			existingVisit.job.recurring_plan_id
+			existingVisit.job.recurring_plan_id &&
+			(await isModuleOn(organizationId, "recurring_plans"))
 		) {
 			const planId = existingVisit.job.recurring_plan_id;
 			const schedule = await sdb.invoice_schedule.findFirst({
@@ -1143,17 +1145,24 @@ export const assignTechniciansToVisit = async (
 			return { err: `Can't remove every technician while the visit is ${visit.status}. Assign someone else first.` };
 		}
 
-		const existingTechs = await sdb.technician.findMany({
-			where: { id: { in: techIds } },
-			select: { id: true, name: true },
+		const currentlyAssigned = await sdb.job_visit_technician.findMany({
+			where: { visit_id: visitId },
+			select: { tech_id: true },
 		});
+		const keep = new Set(currentlyAssigned.map((r) => r.tech_id));
+		const existingTechs = (
+			await sdb.technician.findMany({
+				where: { id: { in: techIds } },
+				select: { id: true, name: true, deactivated_at: true },
+			})
+		).filter((t) => t.deactivated_at === null || keep.has(t.id));
 
 		const existingIds = new Set(existingTechs.map((t) => t.id));
 		const missing = techIds.filter((id) => !existingIds.has(id));
 
 		if (missing.length > 0) {
 			return {
-				err: `Technicians not found: ${missing.join(", ")}`,
+				err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 			};
 		}
 

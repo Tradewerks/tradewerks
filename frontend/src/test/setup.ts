@@ -72,3 +72,13 @@ afterEach(() => {
 		`Unmocked network call(s) during this test — mock the hook or api module:\n  ${calls.join("\n  ")}`,
 	);
 });
+
+// Module gating is opt-in per test: by default entitlements read as "not loaded",
+// which the permission hooks treat as permissive, so no test needs a QueryClient
+// or a network mock just because a component checks a permission.
+vi.mock("../hooks/useEntitlements", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useEntitlements")>()),
+	useEntitlements: () => ({ data: undefined, isLoading: false }),
+	useModule: () => "on",
+	useModuleOn: () => true,
+}));

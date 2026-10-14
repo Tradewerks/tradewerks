@@ -36,6 +36,9 @@ import { useOrgSettings } from "../hooks/useOrg";
 import { useSocketQuerySync } from "../hooks/useSocketQuerySync";
 import { useDispatcherNotificationsQuery } from "../hooks/useNotifications";
 import type { DispatcherNotification } from "../types/notifications";
+import { useEntitlements, useModule } from "../hooks/useEntitlements";
+import { shouldShowWelcome } from "../lib/welcomeDraft";
+import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
 
 export default function DispatchLayout() {
 	const navigate = useNavigate();
@@ -67,18 +70,31 @@ export default function DispatchLayout() {
 	const { data: notifications = [] } = useDispatcherNotificationsQuery(user?.userId ?? null, false, handleNewNotification);
 	const unreadCount = notifications.filter((n) => !n.read_at).length;
 
+	// A view permission still passes while its module is switched off (records stay
+	// readable), so the menu needs the module state as well.
+	const quotesOn = useModule("quotes") === "on";
+	const inventoryOn = useModule("inventory") === "on";
+	const fleetOn = useModule("fleet") === "on";
+	const fieldPurchasesOn = useModule("field_purchases") === "on";
+	const purchasingOn = useModule("purchasing") === "on";
+	const followupsOn = useModule("followups") === "on";
+	const projectsOn = useModule("projects") === "on";
+	const advancedReportingOn = useModule("advanced_reporting") === "on";
 	const canViewRequests = usePermission("view_requests");
-	const canViewQuotes = usePermission("view_quotes");
+	const canViewQuotes = usePermission("view_quotes") && quotesOn;
 	const canViewJobs = usePermission("view_jobs");
 	const canViewInvoices = usePermission("view_invoices");
 	const canViewClients = usePermission("view_clients");
-	const canViewInventory = usePermission("view_inventory");
-	const canViewVehicles = useAnyPermission(["view_vehicles", "manage_vehicles"]);
-	const canViewPurchases = useAnyPermission([
-		"view_field_purchases",
-		"review_field_purchases",
-		"view_purchases"
-	]);
+	const canViewInventory = usePermission("view_inventory") && inventoryOn;
+	const canViewVehicles =
+		useAnyPermission(["view_vehicles", "manage_vehicles"]) && fleetOn;
+	// One page serves both modules: it is listed while either is on.
+	const canViewFieldPurchases =
+		useAnyPermission(["view_field_purchases", "review_field_purchases"]) &&
+		fieldPurchasesOn;
+	const canViewPurchaseOrders =
+		usePermission("view_purchases") && purchasingOn;
+	const canViewPurchases = canViewFieldPurchases || canViewPurchaseOrders;
 	const canViewTechnicians = usePermission("view_technicians");
 	const canViewReports = usePermission("view_reports");
 	const canViewTimesheet = usePermission("view_timesheet");
@@ -87,8 +103,22 @@ export default function DispatchLayout() {
 		"manage_organization",
 		"manage_roles",
 	]);
-	const canViewFollowups = usePermission("view_followups");
-	const canViewProjects = usePermission("view_projects");
+	const canViewFollowups = usePermission("view_followups") && followupsOn;
+	const canViewProjects = usePermission("view_projects") && projectsOn;
+	const { data: entitlements, fromServer: entitlementsFresh } = useEntitlements();
+	const canManageOrg = usePermission("manage_organization");
+	const welcomeChecked = useRef(false);
+	// Once per load, on the first server payload: the stored snapshot shown after a failed
+	// fetch can be stale, and must not use up the check.
+	useEffect(() => {
+		if (welcomeChecked.current || !entitlements || !entitlementsFresh) return;
+		welcomeChecked.current = true;
+		if (shouldShowWelcome(entitlements, canManageOrg) && location.pathname !== "/dispatch/welcome")
+			navigate("/dispatch/welcome", {
+				replace: true,
+				state: { from: location.pathname + location.search + location.hash },
+			});
+	}, [entitlements, entitlementsFresh, canManageOrg, location, navigate]);
 
 	useSocketQuerySync();
 
@@ -286,7 +316,7 @@ export default function DispatchLayout() {
 							icon={<Map size={ICON_SIZE} />}
 							label="Map"
 						/>
-						{canViewReports && (
+						{canViewReports && advancedReportingOn && (
 							<SideNavItem
 								expanded={expanded}
 								to="/dispatch/kpi"
@@ -396,7 +426,9 @@ export default function DispatchLayout() {
 
 				<main className="flex-1 overflow-hidden bg-canvas">
 					<div className="pt-4 px-4 md:pt-6 md:px-6 h-full overflow-y-auto">
-						<Outlet />
+						<ModuleRouteGuard home="/dispatch">
+							<Outlet />
+						</ModuleRouteGuard>
 					</div>
 				</main>
 			</div>

@@ -148,6 +148,12 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 							check each one against the paper.
 						</p>
 					)}
+				{hasReceipt && purchase.ocr_status === "skipped" && purchase.ocr_error && (
+					<p className="mb-3 flex items-start gap-1.5 text-xs text-text-secondary">
+						<ScanLine aria-hidden size={12} className="mt-0.5 shrink-0" />
+						{purchase.ocr_error}
+					</p>
+				)}
 				{hasReceipt && readFailed && editable && (
 					<div className="mb-3 flex items-center justify-between gap-2 rounded-md bg-warning-bg px-2.5 py-2">
 						<p className="text-xs text-warning-text">

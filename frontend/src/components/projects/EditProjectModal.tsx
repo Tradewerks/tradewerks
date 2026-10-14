@@ -1,5 +1,5 @@
 import { useAllClientsQuery } from "../../hooks/useClients";
-import { useAllDispatchersQuery } from "../../hooks/useDispatchers";
+import { useActiveDispatchersQuery } from "../../hooks/useDispatchers";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { errorMessage } from "../../util/util";
@@ -53,7 +53,7 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
     const { data: clients } = useAllClientsQuery();
     const clientList = useMemo(() => (clients ?? []), [clients]);
 
-    const { data: dispatchers } = useAllDispatchersQuery();
+    const { data: dispatchers } = useActiveDispatchersQuery();
     const dispatcherList = useMemo(() => (dispatchers ?? []), [dispatchers]);
 
     const isFormValid = useMemo(

@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { ZodError } from "zod";
 import { db, generatePurchaseNumber } from "../db.js";
 import { getScopedDb, getUserContext, type UserContext } from "../lib/context.js";
@@ -135,6 +136,8 @@ async function applyRecieveStockEffect(
 
 	const intake = toReceive.filter((l) => l.inventory_item_id);
 	if (intake.length === 0) return warnings;
+	// With Vehicle Stock off the truck is not a stock location, so intake lands in the warehouse.
+	const vehicleStockOn = await isModuleOn(orgId, "vehicle_stock");
 
 	await recordMovements(
 		tx,
@@ -144,8 +147,9 @@ async function applyRecieveStockEffect(
 			inventory_item_id: l.inventory_item_id!,
 			qty: Number(l.quantity),
 			from_location_type: "external" as const,
-			to_location_type: l.disposition_vehicle_id ? ("vehicle" as const) : ("warehouse" as const),
-			to_vehicle_id: l.disposition_vehicle_id ?? undefined,
+			to_location_type:
+				vehicleStockOn && l.disposition_vehicle_id ? ("vehicle" as const) : ("warehouse" as const),
+			to_vehicle_id: vehicleStockOn ? (l.disposition_vehicle_id ?? undefined) : undefined,
 			// The same physical event as a tech buying at a counter, which this reason already names.
 			reason: "supplier_purchase" as const,
 			unit_cost: Number(l.unit_price),

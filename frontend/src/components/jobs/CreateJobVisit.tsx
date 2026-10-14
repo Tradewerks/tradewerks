@@ -11,7 +11,7 @@ import {
 	type BaseLineItem,
 	type LineItemDisposition,
 } from "../../types/common";
-import { useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useAllJobVisitsQuery } from "../../hooks/useJobs";
 import { useAllClientsQuery } from "../../hooks/useClients";
 import {
@@ -102,7 +102,7 @@ const CreateJobVisit = ({
 	const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
-	const { data: technicians } = useAllTechniciansQuery();
+	const { data: technicians } = useActiveTechniciansQuery();
 	const { data: allVisits = [] } = useAllJobVisitsQuery();
 	const { data: clients } = useAllClientsQuery();
 	const { data: drafts = [] } = useDraftsByTypeQuery("job_visit", jobId);

@@ -1,7 +1,10 @@
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import type { Vehicle, CreateVehicleInput, UpdateVehicleInput, VehicleReadiness, VehicleMaintenanceRecord, CreateMaintenanceRecordInput, UpdateMaintenanceRecordInput, MaintenanceSourceLine, VehicleMaintenanceReminder, CreateMaintenanceReminderInput, UpdateMaintenanceReminderInput } from "../types/vehicles";
 import * as vehiclesApi from "../api/vehicles";
 import { qk, invalidate } from "../lib/queryKeys";
+
+const useQuery = moduleQuery("fleet");
 
 // ── Vehicle queries ────────────────────────────────────────────────────────────
 

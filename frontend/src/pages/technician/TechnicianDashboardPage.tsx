@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn, MapPin } from "lucide-react";
+import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn, MapPin, Clock } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useJobVisitsByTechIdQuery, useCreateJobNoteMutation } from "../../hooks/useJobs";
 import { 
@@ -290,6 +290,13 @@ export default function TechnicianDashboardPage() {
 						{errorMessage(goAvailableMutation.error, "Couldn't start your shift — try again.").replace(/^TIMESHEET_LOCKED: /, "")}
 					</p>
 				)}
+				<button
+					onClick={() => navigate("/technician/timesheet")}
+					className="flex items-center gap-1.5 min-h-[44px] px-3 text-sm text-text-secondary hover:text-text-primary transition-colors"
+				>
+					<Clock size={15} />
+					View my hours
+				</button>
 			</TechPage>
 		);
 	}

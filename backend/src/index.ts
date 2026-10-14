@@ -13,6 +13,7 @@ import { startInvoiceSchedulerInterval } from "./services/invoiceScheduler.js";
 import { startFollowupSchedulerInterval } from "./services/followupScheduler.js";
 import { startMaintenanceReminderInterval } from "./services/vehicleMaintenanceScheduler.js";
 import { startLateArrivalInterval } from "./services/lateArrivalScheduler.js";
+import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import multer from "multer";
 import {
@@ -67,6 +68,8 @@ import organizationRolesRouter from "./routes/organizationRoles.js";
 import quickbooksRouter from "./routes/quickbooks.js";
 import oauthRouter from "./routes/oauth.js";
 import mfaRouter from "./routes/mfa.js";
+import platformRouter from "./routes/platform/index.js";
+import { platformProxyWarning, trustProxySetting } from "./platform/staffToken.js";
 import ssoRouter from "./routes/sso.js"
 import followupsRouter from "./routes/followups.js";
 import projectsRouter from "./routes/projects.js";
@@ -82,6 +85,13 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 import { handleCallback, QB_ENABLED } from "./services/quickbooksService.js";
 import { handleQBWebhook } from "./services/qb/qbWebhook.js"
 import { handlePostmarkWebhook } from "./services/postmarkWebhook.js";
+import { isUserActive } from "./services/userActiveCache.js";
+import { assertRegistry } from "./lib/entitlements/registry.js";
+import { assertBusinessTypes } from "./lib/entitlements/businessTypes.js";
+import { requireModule } from "./lib/entitlements/requireModule.js";
+import { registerEntitlementBlockers } from "./lib/entitlements/blockers.js";
+import orgEntitlementsRouter from "./routes/orgEntitlements.js";
+import moduleNoticesRouter from "./routes/moduleNotices.js";
 
 const errorHandler = (
 	err: any,
@@ -170,7 +180,7 @@ const notFoundHandler = (req: Request, res: Response) => {
 	);
 };
 
-const verifyToken = (req: Request, res: Response, next: NextFunction) => {
+const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
 	if (req.method === "OPTIONS") return next();
 
 	const token = req.headers.authorization?.split(" ")[1];
@@ -195,6 +205,11 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 						"Invalid or expired token",
 					),
 				);
+		}
+		if (!(await isUserActive(decoded.uid, decoded.role))) {
+			return res
+				.status(401)
+				.json(createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid or expired token"));
 		}
 		req.user = { ...decoded, permissions: decoded.permissions ?? null };
 		next();
@@ -244,6 +259,14 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 // ============================================
 
 const app = express();
+const trustProxy = trustProxySetting(process.env.TRUST_PROXY);
+if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
+const proxyWarning = platformProxyWarning(process.env);
+if (proxyWarning) log.warn(proxyWarning);
+
+assertRegistry();
+assertBusinessTypes();
+registerEntitlementBlockers();
 
 app.use(
 	express.json({
@@ -254,7 +277,8 @@ app.use(
 		},
 	}),
 );
-app.use(pinoHttp({ logger: log }));
+// Bearer tokens (staff tokens act on every org) must not reach stdout or Loki.
+app.use(pinoHttp({ logger: log, redact: ["req.headers.authorization", "req.headers.cookie"] }));
 app.use(httpMetricsMiddleware);
 
 // Expose Prometheus metrics at /metrics
@@ -290,17 +314,19 @@ startInvoiceSchedulerInterval();
 startFollowupSchedulerInterval();
 startMaintenanceReminderInterval();
 startLateArrivalInterval();
+startTrialSchedulerInterval();
 rearmWrappingUpTimers().catch((e) =>
 	log.error(e, "Failed to rearm WrappingUp timers"),
 );
 
 // Reject sockets without a valid JWT; room membership must come from verified
 // claims, never from client-supplied handshake query params.
-io.use((socket, next) => {
+io.use(async (socket, next) => {
 	const token = socket.handshake.auth?.["token"] as string | undefined;
 	if (!token) return next(new Error("Unauthorized"));
 	try {
 		const claims = verifyAccessToken(token);
+		if (!(await isUserActive(claims.uid, claims.role))) return next(new Error("Unauthorized"));
 		socket.data.orgId = claims.organization_id ?? undefined;
 		socket.data.techId = claims.role === "technician" ? claims.uid : undefined;
 		socket.data.dispatcherId =
@@ -525,6 +551,7 @@ app.use("/oauth", oauthRouter);
 // MFA (public mount — the router applies its own per-route auth guards)
 // ================================================================================
 app.use("/mfa", mfaRouter);
+app.use("/platform", platformRouter);
 
 // ================================================================================
 // SSO 
@@ -554,7 +581,7 @@ app.use("/requests", verifyToken, requestsRouter);
 // ============================================
 // QUOTE ROUTES
 // ============================================
-app.use("/quotes", verifyToken, quotesRouter);
+app.use("/quotes", verifyToken, requireModule("quotes"), quotesRouter);
 
 // ============================================
 // JOBS
@@ -569,18 +596,18 @@ app.use("/job-visits", verifyToken, jobVisitsRouter);
 // ============================================
 // RECURRING PLANS
 // ============================================
-app.use("/recurring-plans", verifyToken, recurringPlansRouter);
+app.use("/recurring-plans", verifyToken, requireModule("recurring_plans"), recurringPlansRouter);
 
 // ============================================
 // OCCURRENCE ROUTES
 // ============================================
-app.use("/occurrences", verifyToken, occurrencesRouter);
+app.use("/occurrences", verifyToken, requireModule("recurring_plans"), occurrencesRouter);
 
 // ============================================
 // INVOICE ROUTES
 // ============================================
 app.use("/invoices", verifyToken, invoicesRouter);
-app.use("/disputes", verifyToken, disputesRouter);
+app.use("/disputes", verifyToken, requireModule("disputes"), disputesRouter);
 
 // ============================================
 // TECHNICIANS
@@ -603,17 +630,30 @@ app.use("/email", verifyToken, emailRouter);
 // ============================================
 // INVENTORY
 // ============================================
-app.use("/inventory", verifyToken, inventoryRouter);
+app.use("/inventory", verifyToken, requireModule("inventory"), inventoryRouter);
 
 // ============================================
 // SUPPLIERS (vendor origin for purchased stock)
 // ============================================
-app.use("/suppliers", verifyToken, suppliersRouter);
-app.use("/supplier-items", verifyToken, supplierItemsRouter);
-app.use("/field-purchases", verifyToken, fieldPurchasesRouter);
-app.use("/purchases", verifyToken, purchasesRouter);
+app.use("/suppliers", verifyToken, requireModule("inventory"), suppliersRouter);
+app.use("/supplier-items", verifyToken, requireModule("inventory"), supplierItemsRouter);
+app.use(
+	"/field-purchases",
+	verifyToken,
+	requireModule("field_purchases", undefined, { readOnlyPaths: [/^\/limit-check$/] }),
+	fieldPurchasesRouter,
+);
+app.use("/purchases", verifyToken, requireModule("purchasing"), purchasesRouter);
 
 // ── Org settings ─────────────────────────────────────────────────────────────
+// Above /org on purpose: that router would otherwise take the path.
+app.use(
+	"/org/entitlements/notices",
+	verifyToken,
+	requireModule("inventory", "read"),
+	moduleNoticesRouter,
+);
+app.use("/org/entitlements", verifyToken, orgEntitlementsRouter);
 app.use("/org", verifyToken, orgRouter);
 
 // ============================================
@@ -624,7 +664,14 @@ app.use("/reports", verifyToken, reportsRouter);
 // ============================================
 // VEHICLES
 // ============================================
-app.use("/vehicles", verifyToken, vehiclesRouter);
+app.use(
+	"/vehicles",
+	verifyToken,
+	requireModule("fleet", undefined, {
+		readOnlyPaths: [/^\/[^/]+\/maintenance\/purchase-lines$/],
+	}),
+	vehiclesRouter,
+);
 
 // ============================================
 // TAX RATES & GROUPS
@@ -634,22 +681,22 @@ app.use("/tax", verifyToken, taxRouter);
 // ============================================
 // QUICKBOOKS
 // ============================================
-app.use("/integrations/quickbooks", verifyToken, quickbooksRouter);
+app.use("/integrations/quickbooks", verifyToken, requireModule("quickbooks"), quickbooksRouter);
 
 // ============================================
 // AUTOMATED FOLLOWUPS
 // ============================================
-app.use("/followups", verifyToken, followupsRouter);
+app.use("/followups", verifyToken, requireModule("followups"), followupsRouter);
 
 // ============================================
 // PROJECTS
 // ============================================
-app.use("/projects", verifyToken, projectsRouter);
+app.use("/projects", verifyToken, requireModule("projects"), projectsRouter);
 
 // ============================================
 // AI ASSISTANT
 // ============================================
-app.use("/assistant", verifyToken, assistantRouter);
+app.use("/assistant", verifyToken, requireModule("ai_assistant"), assistantRouter);
 
 // ============================================
 // CROSS-ENTITY SEARCH

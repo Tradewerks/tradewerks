@@ -1,3 +1,4 @@
+import { getEntitlements } from "../services/entitlementService.js";
 import { z, ZodError } from "zod";
 import { db } from "../db.js";
 import bcrypt from "bcryptjs";
@@ -70,6 +71,9 @@ export const login = async (res: Response, email: string, password: string) => {
 				"Invalid credentials",
 			);
 		}
+		if (user.deactivated_at) {
+			return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid credentials");
+		}
 		// if dispatcher, use role from db (admin or dispatch)
 		const effectiveRole = "role" in user ? user.role : "technician";
 
@@ -110,7 +114,14 @@ export const login = async (res: Response, email: string, password: string) => {
 				where: { id: user.organization_id },
 				select: { mfa_required: true },
 			});
-			if (org?.mfa_required) {
+			// Enforced two-step login belongs to Security+; without it the flag is inert.
+			// A failed lookup keeps enforcing: an outage must not relax a login control.
+			const securityPlusOff =
+				!!org?.mfa_required &&
+				(await getEntitlements(user.organization_id)
+					.then((e) => e.modules.security_plus !== "on")
+					.catch(() => false));
+			if (org?.mfa_required && !securityPlusOff) {
 				return {
 					data: {
 						challenge: "enroll",
@@ -183,8 +194,8 @@ export const issueAuthTokens = async (
 							id: userId,
 						},
 					});
-		if (!user) {
-			return createErrorResponse(ErrorCodes.NOT_FOUND, "User not found");
+		if (!user || user.deactivated_at) {
+			return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid credentials");
 		}
 
 		// if last login is null, force password reset and generate reset token
@@ -342,7 +353,7 @@ export const requestPasswordReset = async (email: string, role: string) => {
 				? await db.technician.findUnique({ where: { email } })
 				: await db.dispatcher.findUnique({ where: { email } });
 
-		if (!user) {
+		if (!user || user.deactivated_at) {
 			// for security, don't reveal if email exists or not
 			return { err: "" };
 		}
@@ -485,7 +496,11 @@ export const resetPassword = async (
 			if (role === "technician") {
 				await tx.technician.update({ where: { password_reset_token: parsed.token }, data });
 			} else {
-				await tx.dispatcher.update({ where: { password_reset_token: parsed.token }, data });
+				await tx.dispatcher.update({
+					where: { password_reset_token: parsed.token },
+					// A reset proves the inbox; the old invite link must not overwrite this password later.
+					data: { ...data, invite_token_hash: null, invite_expires_at: null },
+				});
 			}
 		});
 		await logActivity({

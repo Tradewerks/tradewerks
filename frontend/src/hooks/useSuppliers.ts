@@ -1,14 +1,5 @@
-import {
-	useInfiniteQuery,
-	useMutation,
-	useQuery,
-	useQueryClient,
-	keepPreviousData,
-	type InfiniteData,
-	type UseInfiniteQueryResult,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient, keepPreviousData, type InfiniteData, type UseInfiniteQueryResult, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import { qk } from "../lib/queryKeys";
 import * as suppliersApi from "../api/suppliers";
 import type {
@@ -23,6 +14,8 @@ import type {
 	SupplierMergeResult,
 	SupplierMovementsPage,
 } from "../types/suppliers";
+
+const useQuery = moduleQuery("inventory");
 
 export const useSuppliers = (
 	params: ListSuppliersParams = {},

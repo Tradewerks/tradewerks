@@ -17,7 +17,6 @@ import DateRangeFilter from "../ui/DateRangeFilter";
 import FilterChips, { type FilterChip } from "../ui/FilterChips";
 import { resolveDateRange, type DateRangeValue } from "../../util/dateRangeUtils";
 import { compareString, withDir, type SortDir } from "../../util/sortUtil";
-import PageHeader from "../ui/PageHeader";
 import { usePermission } from "../../hooks/usePermission";
 import { useNavigate } from "react-router-dom";
 import CreatePurchaseModal from "./CreatePurchaseModal";
@@ -101,7 +100,7 @@ export default function PurchaseSection() {
 	}, [search, statuses, purchaseSort, dateRange]);
 
 	const { data, isLoading, isError } = useGetPurchasesQuery(purchaseParams);
-	const { mutateAsync: createPurchaseOrder, isPending: isCreating } = useCreatePurchaseMutation();
+	const { mutateAsync: createPurchaseOrder } = useCreatePurchaseMutation();
 
 	const handleSortChange = (col: string) => {
 		if (
@@ -167,25 +166,11 @@ export default function PurchaseSection() {
 
 	return (
 		<div>
-            <PageHeader
-				// left blank, real title is from purchasePage
-                title=""
-            >
-                {MANAGE_PURCHASES && (
-					<button
-						className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-						onClick={() => setIsCreatePurchaseModelOpen(true)}
-					>
-						<Plus size={16} />
-						New Purchase
-					</button>
-				)}
-            </PageHeader>
 			<PageControls
 				className="mb-4"
 				left={
 					<SearchBar
-						placeholder="Search purchases..."
+						placeholder="Search orders..."
 						value={search}
 						onChange={setSearch}
 					/>
@@ -230,7 +215,18 @@ export default function PurchaseSection() {
 						</div>
 					</div>
 				}
-				right={null}
+				right={
+					MANAGE_PURCHASES && (
+						<button
+							type="button"
+							className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+							onClick={() => setIsCreatePurchaseModelOpen(true)}
+						>
+							<Plus size={16} />
+							New order
+						</button>
+					)
+				}
 			/>
 
 			<FilterChips

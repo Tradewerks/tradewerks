@@ -5,6 +5,8 @@
  * seven-day window covers seven of them.
  */
 
+export const DAY_MS = 86_400_000;
+
 /** The local calendar date in `timezone` at the instant `at`. Month is 0-based. */
 function localParts(at: Date, timezone?: string): { year: number; month: number; day: number } {
 	if (!timezone || timezone === "UTC") {

@@ -43,6 +43,7 @@ import { FOCUS_RING, money } from "../../components/fieldPurchases/fieldPurchase
 import { partsSummary, refundLedger } from "../../components/technician/procurement/refundParts";
 import { errorMessage, toLocalInputValue } from "../../util/util";
 import TechPage from "../../components/technician/TechPage";
+import { useModule } from "../../hooks/useEntitlements";
 import {
 	pendingRefundsLine,
 	refundStateLabel,
@@ -163,7 +164,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 	// profile is the one answer the server will also accept.
 	const { user } = useAuthStore();
 	const { data: techProfile } = useTechnicianByIdQuery(user?.userId ?? null);
-	const myVehicle = techProfile?.current_vehicle
+	// With Vehicle Stock off the truck is not a stock location; the server would
+	// land the parts in the warehouse anyway, so the form does not offer it.
+	const vehicleStockOn = useModule("vehicle_stock") === "on";
+	const myVehicle = vehicleStockOn && techProfile?.current_vehicle
 		? { id: techProfile.current_vehicle.id, name: techProfile.current_vehicle.name }
 		: null;
 	const submit = useSubmitFieldPurchase();

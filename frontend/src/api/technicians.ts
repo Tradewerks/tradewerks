@@ -131,3 +131,19 @@ export const changeTechnicianPassword = async (id: string, data: { current_passw
 		throw new Error(message);
 	}
 };
+
+export const deactivateTechnician = async (id: string): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${id}/deactivate`);
+	if (!response.data.success || !response.data.data) {
+		throw new Error(response.data.error?.message || "Failed to deactivate technician");
+	}
+	return response.data.data;
+};
+
+export const reactivateTechnician = async (id: string): Promise<Technician> => {
+	const response = await api.post<ApiResponse<Technician>>(`/technicians/${id}/reactivate`);
+	if (!response.data.success || !response.data.data) {
+		throw new Error(response.data.error?.message || "Failed to reactivate technician");
+	}
+	return response.data.data;
+};

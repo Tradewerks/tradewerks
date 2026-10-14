@@ -10,6 +10,12 @@ const { sdb } = vi.hoisted(() => ({
 	},
 }));
 
+// Module gating is not under test here: every module reads as on.
+vi.mock("../entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
+
 vi.mock("../../lib/context.js", () => ({ getScopedDb: vi.fn(() => sdb) }));
 vi.mock("../../db.js", () => ({ db: {} }));
 vi.mock("../quickbooksService.js", () => ({

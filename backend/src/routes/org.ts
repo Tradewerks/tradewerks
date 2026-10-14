@@ -1,3 +1,4 @@
+import { isModuleOn } from "../services/entitlementService.js";
 import { Router } from "express";
 import { imageUpload } from "../lib/upload.js";
 import {
@@ -17,6 +18,8 @@ import {
 import { z } from "zod";
 import { coordsSchema as orgCoordsSchema } from "../lib/validate/shared.js";
 import { Prisma } from "../../generated/prisma/client.js";
+import { logActivity, buildChanges } from "../services/logger.js";
+import { getUserContext } from "../lib/context.js";
 
 const router = Router();
 
@@ -38,11 +41,26 @@ const orgSelect = {
 	measurement_system: true,
 	mfa_required: true,
 	brand_color: true,
-	followups_enabled: true,
 	// null disables the control entirely - see the second sign-off routing in
 	// fieldPurchasesController.
 	field_purchase_second_signoff_threshold: true,
 } as const;
+
+// Everything PATCH can write. mfa_required is logged like the rest; the read
+// side (logsController SENSITIVE_CHANGE_KEY) keeps it out of every view.
+const AUDITED_FIELDS = [
+	"name",
+	"phone",
+	"address",
+	"coords",
+	"email",
+	"website",
+	"restock_mode",
+	"measurement_system",
+	"mfa_required",
+	"brand_color",
+	"field_purchase_second_signoff_threshold",
+] as const;
 
 async function withSignedLogo<T extends { logo_url: string | null }>(
 	org: T,
@@ -105,7 +123,6 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 			measurement_system: z.enum(["imperial", "metric"]).optional(),
 			mfa_required: z.boolean().optional(),
 			brand_color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a hex color like #1e3a5f").nullable().optional(),
-			followups_enabled: z.boolean().optional(),
 			field_purchase_second_signoff_threshold: z
 				.number()
 				.nonnegative()
@@ -123,6 +140,29 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 						parsed.error.issues[0].message,
 					),
 				);
+		if (parsed.data.mfa_required === true && !(await isModuleOn(orgId, "security_plus"))) {
+			return res
+				.status(403)
+				.json(
+					createErrorResponse(
+						ErrorCodes.MODULE_NOT_IN_PLAN,
+						"Required two-step login needs Security+, which is not included in your plan",
+					),
+				);
+		}
+		const existing = await db.organization.findUnique({
+			where: { id: orgId },
+			select: orgSelect,
+		});
+		if (!existing)
+			return res
+				.status(404)
+				.json(
+					createErrorResponse(
+						ErrorCodes.NOT_FOUND,
+						"Organization not found",
+					),
+				);
 		const { coords, ...rest } = parsed.data;
 		const org = await db.organization.update({
 			where: { id: orgId },
@@ -134,6 +174,22 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 			},
 			select: orgSelect,
 		});
+		const changes = buildChanges(existing, parsed.data, AUDITED_FIELDS);
+		if (Object.keys(changes).length > 0) {
+			const context = getUserContext(req);
+			await logActivity({
+				event_type: "organization.settings_updated",
+				action: "updated",
+				entity_type: "organization",
+				entity_id: orgId,
+				organization_id: orgId,
+				actor_type: "dispatcher",
+				actor_id: context.dispatcherId ?? null,
+				changes,
+				ip_address: context.ipAddress,
+				user_agent: context.userAgent,
+			});
+		}
 		res.json(createSuccessResponse(await withSignedLogo(org)));
 	} catch (err) {
 		next(err);

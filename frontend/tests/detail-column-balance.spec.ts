@@ -254,8 +254,8 @@ test.describe("detail page column balance", () => {
 				`${jobPath}?tab=visits`,
 				/^\/dispatch\/jobs\/[^/]+\/visits\/[^/]+$/,
 				2,
-				// Visit cards are buttons, not table rows.
-				"#tabpanel-visits button"
+				// Visit cards are links, not table rows.
+				"#tabpanel-visits a[href*=\"/visits/\"]"
 			);
 			for (const path of visits) targets.push({ page: "job-visit", path });
 			if (targets.some((t) => t.page === "job-visit")) break;

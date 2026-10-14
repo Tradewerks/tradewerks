@@ -1,10 +1,5 @@
-import {
-	useMutation,
-	useQuery,
-	useQueryClient,
-	type UseMutationResult,
-	type UseQueryResult,
-} from "@tanstack/react-query";
+import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import { moduleQuery } from "./moduleQuery";
 import type {
 	FollowupSequence,
 	CreateSequenceInput,
@@ -14,6 +9,8 @@ import type {
 } from "../types/followups";
 import * as followupsApi from "../api/followups";
 import type { EnrollmentFilters } from "../api/followups";
+
+const useQuery = moduleQuery("followups");
 
 // ============================================================================
 // SEQUENCE QUERIES & MUTATIONS
