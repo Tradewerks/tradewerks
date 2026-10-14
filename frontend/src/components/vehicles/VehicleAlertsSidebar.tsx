@@ -36,7 +36,7 @@ export default function VehicleAlertsSidebar() {
 	const { data: conflicts = [] } = useVehicleStockConflictsQuery();
 	const { data: alerts = [] } = useMaintenanceAlertsQuery();
 
-	const { outCount, lowCount } = conflicts.reduce(
+	const { outCount } = conflicts.reduce(
 		(acc, c) => ({
 			outCount: acc.outCount + (c.severity === "out" ? 1 : 0),
 			lowCount: acc.lowCount + (c.severity === "low" ? 1 : 0),

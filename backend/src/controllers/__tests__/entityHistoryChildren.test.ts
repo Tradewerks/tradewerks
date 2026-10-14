@@ -48,7 +48,14 @@ describe("getEntityHistory — deleted children via parent breadcrumb (review P2
 		expect(all).toEqual(expect.arrayContaining([{ entity_type: "job_visit" }, { entity_id: { in: ["visit-1"] } }]));
 		// deleted children matched through the breadcrumb, one clause per child type
 		const breadcrumbClauses = clausesWith(where, ["entity_type", "changes"]);
-		expect(breadcrumbClauses.map((c) => c.entity_type).sort()).toEqual(["job_line_item", "job_note", "job_visit"]);
+		// quote/request are the job's lineage; their clause matches nothing but is harmless
+		expect(breadcrumbClauses.map((c) => c.entity_type).sort()).toEqual([
+			"job_line_item",
+			"job_note",
+			"job_visit",
+			"quote",
+			"request",
+		]);
 		for (const c of breadcrumbClauses) {
 			expect(c.changes).toEqual({ path: ["_parent_id", "new"], equals: "job-1" });
 		}

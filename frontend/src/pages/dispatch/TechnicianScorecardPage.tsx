@@ -6,7 +6,6 @@ import SearchBar from "../../components/ui/SearchBar";
 import FilterChips from "../../components/ui/FilterChips";
 import PageControls from "../../components/ui/PageControls";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
-import PageHeader from "../../components/ui/PageHeader";
 import RefreshReportsButton from "../../components/reports/RefreshReportButton";
 import ColumnsButton from "../../components/ui/ColumnsButton";
 import Dropdown from "../../components/ui/Dropdown";

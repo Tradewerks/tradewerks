@@ -96,7 +96,8 @@ describe("getProjectsReport", () => {
 		expect(row.variance).toBe(-250);
 	});
 
-	it("reports null (not 0) totals/variance when no job has an actual total yet", async () => {
+	// Since bd9239e a project with jobs reports 0 (not null) actuals, matching the SQL page query
+	it("reports 0 actual and full negative variance when no job has an actual total yet", async () => {
 		mockDb.project.findMany.mockResolvedValue([
 			project({
 				_count: { jobs: 2 },
@@ -108,8 +109,8 @@ describe("getProjectsReport", () => {
 		]);
 		const [row] = await getProjectsReport(undefined, undefined, ORG);
 		expect(row.estimatedTotal).toBe(700);
-		expect(row.actualTotal).toBeNull();
-		expect(row.variance).toBeNull();
+		expect(row.actualTotal).toBe(0);
+		expect(row.variance).toBe(-700);
 	});
 
 	it("reports null totals/variance for a project with no jobs", async () => {

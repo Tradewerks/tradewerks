@@ -112,6 +112,7 @@ const ROUTES: RouteCase[] = [
 		perm: "manage_technicians",
 	},
 	{ path: "map", url: "/dispatch/map", page: "MapPage" },
+	{ path: "kpi", url: "/dispatch/kpi", page: "KpiPage", perm: "view_reports" },
 	{ path: "reporting", url: "/dispatch/reporting", page: "ReportingPage", perm: "view_reports" },
 	{ path: "reporting/builder", url: "/dispatch/reporting/builder", page: "ReportBuilderPage", perm: "view_reports" },
 	{
@@ -189,6 +190,7 @@ const ROUTES: RouteCase[] = [
 	},
 	{ path: "mileage", url: "/dispatch/mileage", page: "MileageReportPage" },
 	{ path: "timesheets", url: "/dispatch/timesheets", page: "TimesheetsReportPage", perm: "view_reports" },
+	{ path: "timesheet", url: "/dispatch/timesheet", page: "Timesheet", perm: "view_timesheet" },
 	{
 		path: "inventory/reorder-forecast",
 		url: "/dispatch/inventory/reorder-forecast",
@@ -250,6 +252,7 @@ const ROUTES: RouteCase[] = [
 	{ path: "map", url: "/technician/map", page: "TechnicianMapPage" },
 	{ path: "profile", url: "/technician/profile", page: "MyProfilePage" },
 	{ path: "mileage", url: "/technician/mileage", page: "TechnicianMileagePage" },
+	{ path: "timesheet", url: "/technician/timesheet", page: "TechnicianTimesheetPage" },
 	{
 		path: "purchases",
 		url: "/technician/purchases",

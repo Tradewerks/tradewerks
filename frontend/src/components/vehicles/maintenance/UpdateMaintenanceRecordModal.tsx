@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Receipt, X } from "lucide-react";
 import { CATEGORY_TILES, TINT_CLASSES } from "./categoryTiles";
 import { FormWizardContainer } from "../../ui/forms/FormWizardContainer";
 import FilterableSelect, { type FilterableOption } from "../../ui/forms/FilterableSelect";
@@ -8,11 +7,10 @@ import {
   UpdateMaintenanceRecordSchema,
   MAINTENANCE_CATEGORY_LABELS,
   type MaintenanceCategory,
-  type MaintenanceSourceLine,
   type UpdateMaintenanceRecordInput,
   type VehicleMaintenanceRecord,
 } from "../../../types/vehicles";
-import { addMonths, formatDateOnly, formatCurrency } from "../../../util/util";
+import { formatCurrency } from "../../../util/util";
 import { useToast } from "../../ui/useToast";
 import { useSuppliers } from "../../../hooks/useSuppliers";
 import { normalizeSupplierName } from "../../../lib/suppliers";
@@ -61,8 +59,8 @@ export default function UpdateMaintenanceRecordModal ({
     const [maintenanceNotes, setMaintenanceNotes] = useState<string>(record.notes ?? "");
     const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
     const [supplierCreateSeed, setSupplierCreateSeed] = useState("");
-    const [supplier, setSupplier] = useState<SupplierCapture>({});
-    const [supplierQuery, setSupplierQuery] = useState("");
+    const [, setSupplier] = useState<SupplierCapture>({});
+    const [, setSupplierQuery] = useState("");
     const [purchaseAttached, setPurchaseAttached] = useState<string>("");
     const [purchaseQuery, setPurchaseQuery] = useState<string>("");
     const [isCreatePurchaseModalOpen, setIsCreatePurchaseModalOpen] = useState(false);

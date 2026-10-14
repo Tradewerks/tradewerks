@@ -97,6 +97,7 @@ describe("GET /clients/:clientId/changes — limit validation (review P2-11)", (
 		});
 		expect(r.status).toBe(200);
 		expect(r.body.meta).toMatchObject({ count: 0, hasMore: false, total: 0 });
-		expect(fake.log.findMany.mock.calls[0][0].take).toBe(8);
+		// the paged query is the last findMany; earlier ones resolve deleted children
+		expect(fake.log.findMany.mock.calls.at(-1)![0].take).toBe(8);
 	});
 });
