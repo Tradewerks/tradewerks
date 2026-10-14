@@ -33,6 +33,15 @@ export class SimulationManager {
 		return op.snapshot();
 	}
 
+	/** Existing backend techs (not created here) can be driven too, e.g. for demos. */
+	ensureRegistered(args: { techId: string; name: string; coords: Coordinates }): TechnicianOperator {
+		const existing = this.techs.get(args.techId);
+		if (existing) return existing;
+		const op = new TechnicianOperator(args);
+		this.techs.set(args.techId, op);
+		return op;
+	}
+
 	get(id: string): TechnicianOperator | undefined {
 		return this.techs.get(id);
 	}

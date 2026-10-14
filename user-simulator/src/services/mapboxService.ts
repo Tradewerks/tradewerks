@@ -22,9 +22,11 @@ export type MapboxDirectionsResponse = {
 export const getDirections = async (
 	from: Coordinates,
 	to: Coordinates,
+	// driving-traffic matches what the backend arrival tracker forecasts with
+	profile: "driving" | "driving-traffic" = "driving",
 ): Promise<MapboxRoute | null> => {
 	const url =
-		`https://api.mapbox.com/directions/v5/mapbox/driving/` +
+		`https://api.mapbox.com/directions/v5/mapbox/${profile}/` +
 		`${from.lon},${from.lat};${to.lon},${to.lat}` +
 		`?geometries=geojson&overview=full&access_token=${config.mapboxToken}`;
 

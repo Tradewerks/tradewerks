@@ -5,6 +5,30 @@ export type TechSnapshot = {
 	currentVisitId: string | null;
 	coords: { lat: number; lon: number };
 	isActive: boolean;
+	demo: ArrivalDemo | null;
+};
+
+export type DemoScenario = "late" | "at_risk" | "on_time";
+
+export type ArrivalDemo = {
+	scenario: DemoScenario;
+	visitId: string;
+	jobId: string;
+	clientName: string;
+	dueAt: string;
+	driveSec: number;
+	startedAt: string;
+	stalledSec: number;
+	stalledUntil: string | null;
+	arrivedAt: string | null;
+	progress: number;
+};
+
+export type DemoTech = {
+	id: string;
+	name: string;
+	status: string;
+	coords: { lat: number; lon: number } | null;
 };
 
 export type ClientLite = {
@@ -72,6 +96,13 @@ export const api = {
 		scheduled_end_at: string;
 		tech_ids: string[];
 	}) => request<unknown>("POST", "/job-with-visit", body),
+
+	listDemoTechs: () => request<DemoTech[]>("GET", "/demo/techs"),
+	startArrivalDemo: (body: { techId: string; scenario: DemoScenario; clientId?: string }) =>
+		request<{ snapshot: TechSnapshot; warning?: string }>("POST", "/demo/arrival", body),
+	stallDemo: (techId: string, minutes: number) =>
+		request<TechSnapshot>("POST", `/demo/arrival/${techId}/stall`, { minutes }),
+	endDemo: (techId: string) => request<TechSnapshot>("POST", `/demo/arrival/${techId}/end`),
 
 	listScheduledVisits: () =>
 		request<VisitLite[]>("GET", "/visits?status=Scheduled"),

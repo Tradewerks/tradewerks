@@ -175,3 +175,132 @@ button.secondary:disabled {
 .toast.success {
 	background: #2e7d32;
 }
+
+/* Arrival demo */
+.demo {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.demo-intro {
+	margin: 0;
+	font-size: 12px;
+	color: #555;
+	line-height: 1.5;
+}
+
+.scenario-group {
+	border: none;
+	padding: 0;
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.scenario-group legend {
+	font-size: 12px;
+	color: #555;
+	margin-bottom: 4px;
+}
+
+form.sim-form label.scenario {
+	flex-direction: row;
+	align-items: flex-start;
+	gap: 8px;
+	border: 1px solid #d9dce1;
+	border-radius: 6px;
+	padding: 8px 10px;
+	cursor: pointer;
+	color: #222;
+}
+
+form.sim-form label.scenario.selected {
+	border-color: #1558d6;
+	background: #f2f6fe;
+}
+
+label.scenario span {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-size: 13px;
+}
+
+label.scenario small {
+	color: #555;
+	font-size: 12px;
+}
+
+.demo-list h3 {
+	font-size: 14px;
+	margin: 4px 0 8px;
+}
+
+.demo-row {
+	border: 1px solid #d9dce1;
+	border-radius: 6px;
+	padding: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-bottom: 8px;
+}
+
+.demo-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.demo-row .name {
+	font-weight: 600;
+}
+
+.demo-row .meta {
+	font-size: 12px;
+	color: #555;
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
+.demo-row .buttons {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.demo-row .stalled {
+	color: #b45309;
+	font-weight: 600;
+}
+
+.progress {
+	height: 6px;
+	border-radius: 3px;
+	background: #e6e8ec;
+	overflow: hidden;
+}
+
+.progress > div {
+	height: 100%;
+	background: #1558d6;
+	transition: width 1s linear;
+}
+
+.badge.scenario-late {
+	background: #fde2e2;
+	color: #9b1c1c;
+}
+
+.badge.scenario-at_risk {
+	background: #fdf0d5;
+	color: #8a4b08;
+}
+
+.badge.scenario-on_time {
+	background: #cfe9d6;
+	color: #165a2b;
+}

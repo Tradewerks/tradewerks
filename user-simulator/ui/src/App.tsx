@@ -5,8 +5,9 @@ import { CreateTechForm } from "./components/CreateTechForm";
 import { CreateClientForm } from "./components/CreateClientForm";
 import { CreateJobVisitForm } from "./components/CreateJobVisitForm";
 import { AssignVisitForm } from "./components/AssignVisitForm";
+import { ArrivalDemoPanel } from "./components/ArrivalDemoPanel";
 
-type TabKey = "tech" | "client" | "job" | "assign";
+type TabKey = "tech" | "client" | "job" | "assign" | "demo";
 type Toast = { kind: "success" | "error"; text: string } | null;
 
 export default function App() {
@@ -68,6 +69,12 @@ export default function App() {
 					>
 						Assign Visit
 					</button>
+					<button
+						className={`tab ${tab === "demo" ? "active" : ""}`}
+						onClick={() => setTab("demo")}
+					>
+						Arrival Demo
+					</button>
 				</div>
 
 				{tab === "tech" && (
@@ -78,6 +85,7 @@ export default function App() {
 				{tab === "assign" && (
 					<AssignVisitForm techs={techs} notify={notify} />
 				)}
+				{tab === "demo" && <ArrivalDemoPanel techs={techs} notify={notify} />}
 			</section>
 
 			<section className="panel">
