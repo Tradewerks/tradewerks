@@ -7,6 +7,10 @@ datasource db {
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
+  // Node runs the compiled output as ESM, which needs explicit extensions. Without
+  // this the generator infers them from tsconfig, and "bundler" gives none.
+  moduleFormat        = "esm"
+  importFileExtension = "js"
 }
 
 enum job_status {
