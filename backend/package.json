@@ -9,7 +9,7 @@
 		"test:coverage": "vitest run --coverage",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-		"build": "tsc",
+		"build": "tsc --noCheck",
 		"seed": "npx tsx prisma/seed.ts",
 		"start": "node dist/src/index.js",
 		"mcp": "npx tsx src/mcp/stdio.ts",
