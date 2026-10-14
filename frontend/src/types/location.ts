@@ -15,6 +15,8 @@ export interface StaticMarker {
 	color?: string;
 	statusDotColor?: string;
 	variant?: "default" | "dimmed";
+	/** Arrival tracker says this tech will miss, or may miss, their next visit. */
+	alert?: "late" | "at_risk";
 	/** Drawn, but never part of an automatic or requested fit. */
 	fitIgnore?: boolean;
 }

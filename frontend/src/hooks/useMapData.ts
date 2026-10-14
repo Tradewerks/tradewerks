@@ -7,6 +7,9 @@ import type { Technician } from "../types/technicians";
 import type { Client } from "../types/clients";
 import type { MapFilters } from "../components/ui/maps/MapPanel";
 import { buildTechMarker, hasValidCoords } from "../lib/mapMarkers";
+import { useArrivalBoardQuery } from "./useArrivals";
+import { usePermission } from "./usePermission";
+import type { Arrival } from "../types/arrivals";
 
 interface UseMapDataResult {
 	markers: StaticMarker[];
@@ -24,6 +27,19 @@ export function useMapData(): UseMapDataResult {
 	const { technicians, isLoading: techLoading } = useLiveTechnicians();
 	const { data: clients, isLoading: clientsLoading } = useAllClientsQuery();
 	const allDrivingRoutes = useTechRoutes(technicians);
+	const canSeeArrivals = usePermission("view_jobs");
+	const { data: arrivalBoard } = useArrivalBoardQuery(canSeeArrivals);
+
+	// Each tech's next stop, as the arrival tracker forecasts it
+	const nextArrivalByTech = useMemo(() => {
+		const out = new Map<string, Arrival>();
+		for (const a of arrivalBoard?.arrivals ?? []) {
+			if (a.status === "arrived" || a.stop_index !== 0) continue;
+			const prev = out.get(a.tech_id);
+			if (!prev || new Date(a.due_at) < new Date(prev.due_at)) out.set(a.tech_id, a);
+		}
+		return out;
+	}, [arrivalBoard]);
 
 	const [filters, setFilters] = useState<MapFilters>({
 		showClients: true,
@@ -84,6 +100,7 @@ export function useMapData(): UseMapDataResult {
 					buildTechMarker(tech, {
 						route: drivingRouteById.get(tech.id) ?? null,
 						showEta: filters.showETAs && !filters.hiddenETAIds.has(tech.id),
+						arrival: nextArrivalByTech.get(tech.id) ?? null,
 					}),
 				);
 			}
@@ -94,6 +111,7 @@ export function useMapData(): UseMapDataResult {
 		clients,
 		technicians,
 		drivingRouteById,
+		nextArrivalByTech,
 		filters.showClients,
 		filters.hiddenClientIds,
 		filters.showTechs,

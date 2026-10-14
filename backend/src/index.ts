@@ -12,7 +12,7 @@ import { startVisitReminderInterval } from "./services/notifications.js";
 import { startInvoiceSchedulerInterval } from "./services/invoiceScheduler.js";
 import { startFollowupSchedulerInterval } from "./services/followupScheduler.js";
 import { startMaintenanceReminderInterval } from "./services/vehicleMaintenanceScheduler.js";
-import { startLateArrivalInterval } from "./services/lateArrivalScheduler.js";
+import { startArrivalTrackingInterval } from "./services/arrivalTracker.js";
 import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
@@ -78,6 +78,7 @@ import projectsRouter from "./routes/projects.js";
 import searchRouter from "./routes/search.js";
 import assistantRouter from "./routes/assistant.js";
 import timesheetsRouter from "./routes/timesheets.js";
+import arrivalsRouter from "./routes/arrivals.js";
 
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 
@@ -315,7 +316,7 @@ startVisitReminderInterval();
 startInvoiceSchedulerInterval();
 startFollowupSchedulerInterval();
 startMaintenanceReminderInterval();
-startLateArrivalInterval();
+startArrivalTrackingInterval();
 startTrialSchedulerInterval();
 startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>
@@ -618,6 +619,7 @@ app.use("/disputes", verifyToken, requireModule("disputes"), disputesRouter);
 app.use("/technicians", verifyToken, techniciansRouter);
 app.use("/technicians", verifyToken, notificationsRouter);
 app.use("/timesheets", verifyToken, timesheetsRouter);
+app.use("/arrivals", verifyToken, arrivalsRouter);
 
 // ============================================
 // DISPATCHERS

@@ -35,6 +35,8 @@ const EXPECTED = [
 	"list_records",
 	"get_schedule",
 	"get_technician_availability",
+	"get_arrival_status",
+	"get_on_time_performance",
 	"get_inventory_levels",
 	"run_report",
 	"get_entity_history",

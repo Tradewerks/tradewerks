@@ -266,6 +266,14 @@ enum tech_visit_status {
   Done
 }
 
+enum arrival_status {
+  on_time
+  at_risk
+  late
+  arrived
+  unknown
+}
+
 enum pause_reason_type {
   AwaitingMaterials
   EquipmentIssue
@@ -519,6 +527,7 @@ model organization {
   timesheet_weeks   timesheet_week[]
   upgrade_requests  upgrade_request[]
   shift_corrections shift_correction[]
+  visit_tech_arrivals visit_tech_arrival[]
 }
 
 model saved_report {
@@ -1071,6 +1080,7 @@ model job_visit {
   line_items             job_visit_line_item[]
   time_entries           visit_tech_time_entry[]
   drives                 visit_tech_drive[]
+  arrivals               visit_tech_arrival[]
   invoice_visits         invoice_visit[]
   vehicle_stock_usages   vehicle_stock_usage[]
   stock_movements        stock_movement[]
@@ -1192,6 +1202,49 @@ model visit_tech_drive {
 
   @@index([visit_id])
   @@index([tech_id, started_at])
+}
+
+// Live arrival forecast for one tech on one visit, refreshed by arrivalTracker from
+// Mapbox driving-traffic. One row per visit+tech; it settles to `arrived` and stays
+// as the on-time record.
+model visit_tech_arrival {
+  id              String       @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id])
+
+  visit_id String
+  visit    job_visit  @relation(fields: [visit_id], references: [id], onDelete: Cascade)
+  tech_id  String
+  tech     technician @relation(fields: [tech_id], references: [id], onDelete: Cascade)
+
+  status  arrival_status @default(unknown)
+  basis   String         // "traffic" | "elapsed" | "no_location" | "actual"
+  en_route Boolean       @default(false)
+  // Position in the tech's upcoming route: 0 = next stop, 1+ = after finishing earlier stops
+  stop_index Int         @default(0)
+
+  due_at        DateTime  // the arrival commitment the forecast is judged against
+  eta_at        DateTime?
+  leave_by_at   DateTime? // latest departure that still makes due_at
+  delay_seconds Int?      // eta - due; positive = late, negative = spare time
+  drive_seconds Int?
+  traffic_delay_seconds Int? // drive time above typical conditions
+  distance_meters Int?
+  arrived_at    DateTime?
+
+  computed_at DateTime
+  routed_at   DateTime? // last live Mapbox route; between routes the cached legs roll forward
+
+  // Escalation state: late minutes at the last alert; null = no open late alert
+  alerted_late_minutes Int?
+  alerted_at           DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([visit_id, tech_id])
+  @@index([organization_id, due_at])
+  @@index([tech_id, due_at])
 }
 
 model job_note {
@@ -2897,6 +2950,7 @@ model technician {
   visit_techs    job_visit_technician[]
   time_entries   visit_tech_time_entry[]
   drives         visit_tech_drive[]
+  arrivals       visit_tech_arrival[]
   notifications  technician_notification[]
   restock_records        vehicle_restock_record[]   @relation("TechnicianRestockRecords")
   stock_adjustments      vehicle_stock_adjustment[] @relation("TechnicianAdjustments")

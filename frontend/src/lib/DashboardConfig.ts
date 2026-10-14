@@ -5,11 +5,12 @@ import { DISPUTE_VIEW_PERMISSIONS } from "./permissionGates";
 
 export const DEFAULT_LAYOUT: Layout = [
     { i: "week-strip",    x: 0, y: 0,  w: 8,  h: 5  },
-    { i: "technicians",   x: 8, y: 0,  w: 4,  h: 3  },
-    { i: "open-disputes", x: 8, y: 3,  w: 4,  h: 4  },
+    { i: "arrivals",      x: 8, y: 0,  w: 4,  h: 7  },
+    { i: "technicians",   x: 8, y: 7,  w: 4,  h: 3  },
+    { i: "open-disputes", x: 8, y: 10, w: 4,  h: 4  },
     { i: "pipeline",      x: 0, y: 5,  w: 3,  h: 6  },
     { i: "activity-feed", x: 3, y: 5,  w: 5,  h: 8  },
-    { i: "maintenance-reminders", x: 8, y: 7, w: 4, h: 6 },
+    { i: "maintenance-reminders", x: 8, y: 14, w: 4, h: 6 },
     { i: "low-stock",     x: 0, y: 11, w: 3,  h: 2  },
 ];
 
@@ -17,23 +18,25 @@ export const DEFAULT_LAYOUT: Layout = [
 // 8-col two-column layout
 const DEFAULT_MD_LAYOUT: Layout = [
     { i: "week-strip",    x: 0, y: 0,  w: 8, h: 5  },
-    { i: "pipeline",      x: 0, y: 5,  w: 4, h: 6  },
-    { i: "technicians",   x: 4, y: 5,  w: 4, h: 3  },
-    { i: "open-disputes", x: 4, y: 8,  w: 4, h: 6  },
-    { i: "maintenance-reminders", x: 0, y: 11, w: 4, h: 6 },
-    { i: "low-stock",     x: 4, y: 14, w: 4, h: 2  },
-    { i: "activity-feed", x: 0, y: 17, w: 8, h: 12 },
+    { i: "arrivals",      x: 0, y: 5,  w: 8, h: 7  },
+    { i: "pipeline",      x: 0, y: 12, w: 4, h: 6  },
+    { i: "technicians",   x: 4, y: 12, w: 4, h: 3  },
+    { i: "open-disputes", x: 4, y: 15, w: 4, h: 6  },
+    { i: "maintenance-reminders", x: 0, y: 18, w: 4, h: 6 },
+    { i: "low-stock",     x: 4, y: 21, w: 4, h: 2  },
+    { i: "activity-feed", x: 0, y: 24, w: 8, h: 12 },
 ];
 
 // 4-col single-column stacked layout
 const DEFAULT_SM_LAYOUT: Layout = [
     { i: "week-strip",    x: 0, y: 0,  w: 4, h: 4  },
-    { i: "pipeline",      x: 0, y: 4,  w: 4, h: 6  },
-    { i: "open-disputes", x: 0, y: 10, w: 4, h: 6  },
-    { i: "maintenance-reminders", x: 0, y: 16, w: 4, h: 6 },
-    { i: "activity-feed", x: 0, y: 22, w: 4, h: 12 },
-    { i: "technicians",   x: 0, y: 34, w: 4, h: 3  },
-    { i: "low-stock",     x: 0, y: 37, w: 4, h: 2  },
+    { i: "arrivals",      x: 0, y: 4,  w: 4, h: 7  },
+    { i: "pipeline",      x: 0, y: 11, w: 4, h: 6  },
+    { i: "open-disputes", x: 0, y: 17, w: 4, h: 6  },
+    { i: "maintenance-reminders", x: 0, y: 23, w: 4, h: 6 },
+    { i: "activity-feed", x: 0, y: 29, w: 4, h: 12 },
+    { i: "technicians",   x: 0, y: 41, w: 4, h: 3  },
+    { i: "low-stock",     x: 0, y: 44, w: 4, h: 2  },
 ];
 
 export const DEFAULT_RESPONSIVE_LAYOUTS: ResponsiveLayouts = {
@@ -111,6 +114,13 @@ export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
     "quickbooks":           {   label: "QuickBooks",
                                 defaultW: 3,  defaultH: 1,  minW: 3, minH: 1, maxW: 6,  maxH: 2,
                                 requiredPermission: "manage_organization",
+                            },
+    "arrivals":             {   label: "Arrivals",
+                                defaultW: 4,  defaultH: 7,  minW: 3, minH: 4, maxH: 14, maxW: 8,
+                                requiredPermission: "view_jobs",
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
                             },
     "map":                  {   label: "Live Map",
                                 defaultW: 6,  defaultH: 8,  minW: 4, minH: 5, maxW: 12, maxH: 20,

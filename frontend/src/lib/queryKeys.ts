@@ -163,6 +163,11 @@ export const qk = {
 		}) => (opts ? (["purchases", "list", opts] as const) : (["purchases", "list"] as const)),
 		detail: (id: string) => ["purchases", "detail", id] as const,
 	},
+	arrivals: {
+		all: ["arrivals"] as const,
+		board: ["arrivals", "board"] as const,
+		visit: (visitId: string) => ["arrivals", "visit", visitId] as const,
+	},
 	timesheets: {
 		all: ["timesheets"] as const,
 		week: (date?: string) => ["timesheets", "week", date ?? "current"] as const,

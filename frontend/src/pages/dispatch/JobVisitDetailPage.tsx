@@ -64,6 +64,7 @@ import { useAuthStore } from "../../auth/authStore";
 import { usePermission, useAnyPermission } from "../../hooks/usePermission";
 import { useActiveTechCount } from "../../hooks/useRecordMapData";
 import RecordMap from "../../components/ui/maps/RecordMap";
+import VisitArrivalCard from "../../components/arrivals/VisitArrivalCard";
 import { useToast } from "../../components/ui/useToast";
 
 // Overview holds what a dispatcher opens a visit to check: when it is, who is
@@ -751,6 +752,7 @@ export default function JobVisitDetailPage() {
 					<div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 						<div className="lg:col-span-2 flex flex-col gap-4">
 							{infoCard}
+							<VisitArrivalCard visitId={visit.id} />
 							{techniciansCard}
 						</div>
 						<div className="lg:col-span-1 flex flex-col">{clientCard}</div>

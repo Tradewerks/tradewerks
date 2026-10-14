@@ -8,6 +8,7 @@
  * catalog test asserts the expected names.
  */
 
+export { getArrivalStatus, getOnTimePerformance } from "./arrivals.js";
 export { proposeDraft } from "./drafts.js";
 export { getEntityHistoryTool } from "./history.js";
 export { getInventoryLevels } from "./inventory.js";

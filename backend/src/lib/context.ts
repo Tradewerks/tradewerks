@@ -81,6 +81,7 @@ const ORG_SCOPED_MODELS = new Set([
 	"purchase",
 	"timesheet_week",
 	"shift_correction",
+	"visit_tech_arrival",
 ]);
 
 /**

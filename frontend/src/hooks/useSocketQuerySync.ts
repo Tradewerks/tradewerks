@@ -83,6 +83,10 @@ export function useSocketQuerySync(): void {
 			// on the next thing that happens to refetch the detail.
 			qc.invalidateQueries({ queryKey: qk.fieldPurchases.extraction(event.id) });
 		};
+		// The arrival tracker's minute tick, and any visit change that moves a forecast
+		const onArrivalsUpdated = () => {
+			qc.invalidateQueries({ queryKey: qk.arrivals.all });
+		};
 		const onGrantRequested = (_event: FieldPurchaseGrantRequestedEvent) => {
 			qc.invalidateQueries({ queryKey: qk.fieldPurchases.grants });
 		};
@@ -132,6 +136,7 @@ export function useSocketQuerySync(): void {
 		socket.on("field_purchase:ocr", onFieldPurchaseOcr);
 		socket.on("field_purchase:grant_requested", onGrantRequested);
 		socket.on("activity-event", onActivity);
+		socket.on("arrivals:updated", onArrivalsUpdated);
 
 		return () => {
 			socket.off("entitlements:changed", onEntitlementsChanged);
@@ -150,6 +155,7 @@ export function useSocketQuerySync(): void {
 			socket.off("field_purchase:ocr", onFieldPurchaseOcr);
 			socket.off("field_purchase:grant_requested", onGrantRequested);
 			socket.off("activity-event", onActivity);
+			socket.off("arrivals:updated", onArrivalsUpdated);
 		};
 	}, [qc]);
 }

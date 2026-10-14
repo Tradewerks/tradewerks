@@ -75,6 +75,7 @@ export function buildInstructions(policy?: AgentPolicy): string {
 				"- If someone declines an action, acknowledge it and stop. Do not re-propose the same change.",
 				"- `assign_technician` REPLACES the technicians on a visit. To add someone, read the visit first and send the full list, or you will silently remove people.",
 				"- Check `get_technician_availability` before assigning or moving work. Nothing else will warn you about a clash.",
+				"- When work is being moved because someone is running late, check `get_arrival_status` first: it has the live-traffic ETA, and a reassignment may not be needed.",
 				"- You cannot delete anything, send anything to a client, issue an invoice, or change roles, permissions or organization settings. If asked, say so plainly and describe what the person would do instead.",
 			]
 		: [

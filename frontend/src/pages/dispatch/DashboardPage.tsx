@@ -40,6 +40,7 @@ import { BREAKPOINTS, resolveConstraints, getActiveCols, fitLayout, randomizeLay
 import { QUICKBOOKS_ENABLED } from "../../config/features";
 import AddWidgetModal from "../../components/widgets/AddWidgetModal";
 import MapWidget from "../../components/widgets/MapWidget";
+import LiveArrivalsWidget from "../../components/widgets/LiveArrivalsWidget";
 import QBWidget from "../../components/widgets/QBWidget";
 import {
 	OverviewWidget,
@@ -534,6 +535,7 @@ export default function DashboardPage() {
 			case "open-disputes":          return <OpenDisputesWidget />;
 			case "maintenance-reminders":  return <MaintenanceRemindersWidget />;
 			case "map":  				   return <MapWidget />;
+			case "arrivals":               return <LiveArrivalsWidget />;
 			case "quickbooks": 			   return QUICKBOOKS_ENABLED ? <QBWidget /> : null;
 			case "report-overview":        return <OverviewWidget />;
 			case "report-revenue-ytd":     return <RevenueYTDWidget />;

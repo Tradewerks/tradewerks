@@ -211,7 +211,7 @@ const DynamicMap = ({
 	const userMovedRef = useRef(false);
 
 	function markerFingerprint(m: StaticMarker): string {
-		return `${m.type}|${m.label ?? ""}|${m.color ?? ""}|${m.statusDotColor ?? ""}|${m.variant ?? ""}`;
+		return `${m.type}|${m.label ?? ""}|${m.color ?? ""}|${m.statusDotColor ?? ""}|${m.variant ?? ""}|${m.alert ?? ""}`;
 	}
 
 	const [webglError, setWebglError] = useState(false);

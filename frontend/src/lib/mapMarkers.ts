@@ -28,6 +28,18 @@ export interface TechMarkerOptions {
 	showEta: boolean;
 	/** Replaces the ETA suffix, e.g. "En route elsewhere". */
 	note?: string;
+	/** The tracker's forecast for the tech's next stop; flags the marker when it's slipping. */
+	arrival?: { status: string; delay_minutes: number | null } | null;
+}
+
+function arrivalSuffix(arrival: TechMarkerOptions["arrival"]): string {
+	if (!arrival) return "";
+	if (arrival.status === "late") {
+		return arrival.delay_minutes && arrival.delay_minutes > 0
+			? ` · Late ${arrival.delay_minutes}m`
+			: " · Late";
+	}
+	return arrival.status === "at_risk" ? " · At risk" : "";
 }
 
 export function buildTechMarker(tech: Technician, opts: TechMarkerOptions): StaticMarker {
@@ -36,7 +48,8 @@ export function buildTechMarker(tech: Technician, opts: TechMarkerOptions): Stat
 		route && opts.showEta && route.etaSeconds !== null
 			? ` · ${formatEtaShort(route.etaSeconds)}`
 			: "";
-	const suffix = opts.note ? ` · ${opts.note}` : eta;
+	const suffix = (opts.note ? ` · ${opts.note}` : eta) + arrivalSuffix(opts.arrival);
+	const status = opts.arrival?.status;
 	return {
 		id: `tech-${tech.id}`,
 		coords: route ? route.current : tech.coords,
@@ -45,5 +58,6 @@ export function buildTechMarker(tech: Technician, opts: TechMarkerOptions): Stat
 		color: route ? route.color : undefined,
 		statusDotColor: TechnicianStatusDotColors[tech.status],
 		variant: route ? "default" : "dimmed",
+		alert: status === "late" || status === "at_risk" ? status : undefined,
 	};
 }
