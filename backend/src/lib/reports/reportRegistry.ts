@@ -265,6 +265,7 @@ const paymentRow = (p: PaymentRaw): ReportRow => ({
 	note: p.note || "—",
 	amount: p.amount,
 	paidAt: fmtDate(p.paidAt),
+	_paidAtIso: new Date(p.paidAt).toISOString(),
 	qbSynced: p.qbSynced ? "Synced" : "Not synced",
 });
 
