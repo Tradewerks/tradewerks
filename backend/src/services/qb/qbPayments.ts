@@ -87,7 +87,7 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
     if (!payment) {
         throw httpError(404, ErrorCodes.NOT_FOUND, "Payment not found");
     }
-    if (payment.qb_payment_id) {
+    if (payment.qb_payment_id && payment.account_id === accountId) {
         return;
     }
     if (!payment.invoice) {
@@ -96,15 +96,15 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
     if (!payment.invoice.qb_invoice_id || payment.invoice.account_id !== accountId) {
         await pushInvoice(payment.invoice.id, organizationId);
         const updatedPayment = await sdb.invoice_payment.findFirst({
-            where: { id: paymentId, account_id: accountId },
-            include: { 
+            where: { id: paymentId },
+            include: {
                 invoice: {
-                    include: { 
+                    include: {
                         client: {
-                            include: { client_external_mapping: true }
+                            include: { client_external_mapping: { where: { provider: "quickbooks", account_id: accountId } } }
                         }
                     }
-                } 
+                }
             },
         });
         if (!updatedPayment) {

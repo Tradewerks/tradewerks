@@ -9,9 +9,7 @@ import {
 	getQBStatus,
 	getOrgRealmId,
 	QB_ENABLED,
-	isQBConnected,
 } from "../services/quickbooksService.js";
-import { isModuleOn } from "../services/entitlementService.js";
 import { 
 	pushInvoice,
 	sendInvoiceEmail,
@@ -57,7 +55,7 @@ import { queryProfitAndLossQBReport, queryQBReport } from "../services/qb/qbRepo
 import type { ProfitAndLossQuery } from "../services/qb/qbReports.js";
 import { pushPurchase, queryQBPurchaseOrders, getQBPurchaseOrderAsPDF, pushFieldPurchase } from "../services/qb/qbPurchases.js";
 import { pushTimesheet } from "../services/qb/qbTimeActivity.js";
-import { pushPaymentToQB } from "../services/qb/qbPayments.js";
+import { listUnsynced, syncUnsynced } from "../services/qb/qbUnsynced.js";
 
 const router = Router();
 
@@ -107,96 +105,9 @@ router.delete("/connection", requirePermission("manage_organization"), async (re
 	}
 });
 
-const UNSYNCED = { in: ["not_synced", "failed"] as ("not_synced" | "failed")[] };
-
-// Each filter is the set of documents its push function accepts; anything else
-// would only fail on Sync now and sit in the list for good.
-async function listUnsynced(orgId: string) {
-	const sdb = getScopedDb(orgId);
-	const [invoices, purchases, fieldPurchases, payments] = await Promise.all([
-		sdb.invoice.findMany({
-			where: { qb_sync_status: UNSYNCED, status: { not: "Void" } },
-			select: { id: true, invoice_number: true, qb_sync_status: true, updated_at: true },
-		}),
-		// Modules the org cannot use are left out: their push routes are closed too.
-		(await isModuleOn(orgId, "purchasing"))
-			? sdb.purchase.findMany({
-					where: {
-						qb_sync_status: UNSYNCED,
-						kind: "purchase",
-						OR: [
-							{ status: { in: ["ordered", "partially_received", "received"] } },
-							{ status: "cancelled", submitted_at: { not: null } },
-						],
-					},
-					select: {
-						id: true,
-						purchase_number: true,
-						qb_sync_status: true,
-						updated_at: true,
-					},
-				})
-			: [],
-		(await isModuleOn(orgId, "field_purchases"))
-			? sdb.field_purchase.findMany({
-					where: { qb_sync_status: UNSYNCED, kind: "purchase", status: "approved" },
-					select: { id: true, qb_sync_status: true, updated_at: true },
-				})
-			: [],
-		// Payments carry no sync status; one without a QuickBooks id was never pushed.
-		// Refunds are negative rows and are never pushed. The model has no org column,
-		// so the org is pinned through the invoice.
-		db.invoice_payment.findMany({
-			where: {
-				qb_payment_id: null,
-				amount: { gt: 0 },
-				invoice: { organization_id: orgId, status: { not: "Void" } },
-			},
-			select: {
-				id: true,
-				created_at: true,
-				invoice: { select: { invoice_number: true } },
-			},
-		}),
-	]);
-	return [
-		...invoices.map((d) => ({
-			type: "invoice" as const,
-			id: d.id,
-			label: d.invoice_number,
-			status: d.qb_sync_status,
-			updated_at: d.updated_at,
-		})),
-		...purchases.map((d) => ({
-			type: "purchase" as const,
-			id: d.id,
-			label: d.purchase_number,
-			status: d.qb_sync_status,
-			updated_at: d.updated_at,
-		})),
-		...fieldPurchases.map((d) => ({
-			type: "field_purchase" as const,
-			id: d.id,
-			label: `Field purchase ${d.id.slice(0, 8)}`,
-			status: d.qb_sync_status,
-			updated_at: d.updated_at,
-		})),
-		...payments.map((d) => ({
-			type: "payment" as const,
-			id: d.id,
-			label: `payment on ${d.invoice.invoice_number}`,
-			status: "not_synced" as const,
-			updated_at: d.created_at,
-		})),
-	].sort((a, b) => b.updated_at.getTime() - a.updated_at.getTime());
-}
-
 router.get("/unsynced", requirePermission("manage_organization"), async (req, res, next) => {
 	try {
-		const orgId = req.user!.organization_id as string;
-		res.json(
-			createSuccessResponse((await isQBConnected(orgId)) ? await listUnsynced(orgId) : []),
-		);
+		res.json(createSuccessResponse(await listUnsynced(req.user!.organization_id as string)));
 	} catch (err) {
 		next(err);
 	}
@@ -206,43 +117,7 @@ router.get("/unsynced", requirePermission("manage_organization"), async (req, re
 // own, and QuickBooks rate-limits parallel writes.
 router.post("/unsynced/sync", requirePermission("manage_organization"), async (req, res, next) => {
 	try {
-		const orgId = req.user!.organization_id as string;
-		const failed: { type: string; id: string; label: string; message: string }[] = [];
-		let synced = 0;
-		const all = (await isQBConnected(orgId)) ? await listUnsynced(orgId) : [];
-		// Payments last: each one links to its invoice in QuickBooks.
-		const docs = [
-			...all.filter((d) => d.type !== "payment"),
-			...all.filter((d) => d.type === "payment"),
-		];
-		const sdb = getScopedDb(orgId);
-		for (const doc of docs) {
-			try {
-				if (doc.type === "invoice") await pushInvoice(doc.id, orgId);
-				else if (doc.type === "purchase") await pushPurchase(doc.id, orgId);
-				else if (doc.type === "payment") await pushPaymentToQB(doc.id, orgId);
-				else await pushFieldPurchase(doc.id, orgId);
-				synced++;
-			} catch (err) {
-				// Same mark the single-document routes leave, so the list shows it as failed.
-				const where = { where: { id: doc.id }, data: { qb_sync_status: "failed" as const } };
-				if (doc.type !== "payment")
-					await (
-						doc.type === "invoice"
-							? sdb.invoice.updateMany(where)
-							: doc.type === "purchase"
-								? sdb.purchase.updateMany(where)
-								: sdb.field_purchase.updateMany(where)
-					).catch(() => {});
-				failed.push({
-					type: doc.type,
-					id: doc.id,
-					label: doc.label,
-					message: err instanceof Error ? err.message : "Sync failed",
-				});
-			}
-		}
-		res.json(createSuccessResponse({ synced, failed }));
+		res.json(createSuccessResponse(await syncUnsynced(req.user!.organization_id as string)));
 	} catch (err) {
 		next(err);
 	}
