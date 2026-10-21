@@ -752,74 +752,92 @@ function CostingSettingsSection() {
 		}
 	};
 
-	if (isLoading) return <Loader2 className="h-4 w-4 animate-spin text-text-muted" />;
+	const field = (
+		id: string,
+		label: string,
+		help: string,
+		value: string,
+		onChange: (v: string) => void,
+		unit: string,
+		placeholder?: string,
+	) => (
+		<div>
+			<label htmlFor={id} className="mb-1 block text-xs font-medium text-text-tertiary">
+				{label}
+			</label>
+			<p className="mb-2 text-xs text-text-muted">{help}</p>
+			<div className="flex items-center gap-2">
+				<span className="text-xs text-text-muted">$</span>
+				<input
+					id={id}
+					type="number"
+					step="any"
+					min="0"
+					value={value}
+					onChange={(e) => onChange(e.target.value)}
+					placeholder={placeholder}
+					className={`${inputBase} max-w-[140px]`}
+					disabled={updateMutation.isPending}
+				/>
+				<span className="text-xs text-text-muted">{unit}</span>
+			</div>
+		</div>
+	);
 
 	return (
-		<div className="space-y-4">
-			<div>
-				<label className="mb-1 block text-xs font-medium text-text-tertiary">
-					Monthly overhead
-				</label>
-				<input
-					type="number"
-					step="any"
-					min="0"
-					value={overhead}
-					onChange={(e) => setOverhead(e.target.value)}
-					className={inputBase}
-					disabled={updateMutation.isPending}
-				/>
-				<p className="mt-1 text-xs text-text-muted">
-					Fixed monthly costs — rent, insurance, software. Used to measure how
-					much of the month the jobs actually absorbed.
-				</p>
-			</div>
-			<div>
-				<label className="mb-1 block text-xs font-medium text-text-tertiary">
-					Cost per mile
-				</label>
-				<input
-					type="number"
-					step="any"
-					min="0"
-					value={perMile}
-					onChange={(e) => setPerMile(e.target.value)}
-					className={inputBase}
-					disabled={updateMutation.isPending}
-				/>
-				<p className="mt-1 text-xs text-text-muted">
-					Fuel, maintenance, and depreciation per mile driven.
-				</p>
-			</div>
-			<div>
-				<label className="mb-1 block text-xs font-medium text-text-tertiary">
-					Overhead rate per hour
-				</label>
-				<input
-					type="number"
-					step="any"
-					min="0"
-					value={rate}
-					onChange={(e) => setRate(e.target.value)}
-					className={inputBase}
-					disabled={updateMutation.isPending}
-					placeholder="Not set"
-				/>
-				<p className="mt-1 text-xs text-text-muted">
-					Charged per hour worked on a job. Leave blank to leave overhead out of
-					the profitability report — zero would price it as free.
-				</p>
-			</div>
-			{error && <p className="text-xs text-error-text">{error}</p>}
-			{saved && <p className="text-xs text-success-text">Saved</p>}
-			<button
-				type="button"
-				onClick={handleSave}
-				disabled={updateMutation.isPending}
-				className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-text disabled:opacity-50"
+		<div className="rounded-lg border border-border-subtle bg-base">
+			<form
+				onSubmit={(e) => {
+					e.preventDefault();
+					handleSave();
+				}}
+				className="space-y-5 px-5 py-5"
 			>
-				{updateMutation.isPending ? "Saving..." : "Save"}
-			</button>
+				{isLoading ? (
+					<Loader2 className="h-4 w-4 animate-spin text-text-muted" />
+				) : (
+					<>
+						{field(
+							"costing-overhead",
+							"Monthly Overhead",
+							"Fixed monthly costs — rent, insurance, software. Used to measure how much of the month the jobs actually absorbed.",
+							overhead,
+							setOverhead,
+							"/ month",
+						)}
+						{field(
+							"costing-per-mile",
+							"Cost Per Mile",
+							"Fuel, maintenance, and depreciation per mile driven. Defaults to the IRS business rate ($0.76).",
+							perMile,
+							setPerMile,
+							"/ mile",
+						)}
+						{field(
+							"costing-rate",
+							"Overhead Rate",
+							"Charged per hour worked on a job. Leave blank to leave overhead out of the profitability report. Zero would price it as free.",
+							rate,
+							setRate,
+							"/ hour",
+							"Not set",
+						)}
+					</>
+				)}
+
+				<div className="flex items-center gap-3">
+					<button
+						type="submit"
+						disabled={updateMutation.isPending || isLoading}
+						className="flex items-center gap-1.5 rounded-md bg-primary-hover px-4 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						{updateMutation.isPending && <Loader2 size={12} className="animate-spin" />}
+						{updateMutation.isPending ? "Saving…" : "Save Changes"}
+					</button>
+					{saved && <span className="text-xs text-success-text">Changes saved.</span>}
+					{error && <span className="text-xs text-error-text">{error}</span>}
+				</div>
+			</form>
 		</div>
 	);
 }
