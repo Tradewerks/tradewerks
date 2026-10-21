@@ -552,7 +552,7 @@ model saved_report {
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
 
-  @@unique([organization_id, name])
+  @@unique([organization_id, name, created_by_id])
   @@index([organization_id])
   @@index([created_by_id])
 }
