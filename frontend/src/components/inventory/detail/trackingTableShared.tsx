@@ -1,19 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, QrCode } from "lucide-react";
 import { useLabelQueueStore } from "../../../stores/labelQueueStore";
 import type { LabelQueueItem } from "../../../stores/labelQueueStore";
-
-// 300ms debounce for the serials/batches search inputs — short enough to feel
-// live, long enough to avoid a request per keystroke.
-// eslint-disable-next-line react-refresh/only-export-components
-export function useDebouncedValue<T>(value: T, delayMs = 300): T {
-	const [debounced, setDebounced] = useState(value);
-	useEffect(() => {
-		const timer = setTimeout(() => setDebounced(value), delayMs);
-		return () => clearTimeout(timer);
-	}, [value, delayMs]);
-	return debounced;
-}
 
 // AddToLabelQueueButton (components/inventory/labels/) only accepts a full
 // InventoryItem and hardcodes kind: "item". Serials/batches already have
