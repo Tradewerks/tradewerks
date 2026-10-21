@@ -1452,7 +1452,7 @@ export const getInventoryReport = async (
 const FLEET_ON_HAND =
 	'(SELECT COALESCE(SUM(vs.qty_on_hand), 0) FROM "vehicle_stock_item" vs WHERE vs.inventory_item_id = ii.id)';
 
-const INVENTORY_SQL_COLUMNS: ColumnMap = {
+export const INVENTORY_SQL_COLUMNS: ColumnMap = {
 	itemName: t("ii.name"),
 	sku: t("ii.sku"),
 	category: t("ii.category"),
@@ -1943,7 +1943,7 @@ export const getJobsReport = async (
 };
 
 // j = job, c = client
-const JOBS_SQL_COLUMNS: ColumnMap = {
+export const JOBS_SQL_COLUMNS: ColumnMap = {
 	jobNumber: t("j.job_number"),
 	name: t("j.name"),
 	clientName: t("c.name"),
@@ -2019,7 +2019,7 @@ const projectsBaseWhere = (
 };
 
 // p = project, c = client, md = manager_dispatcher
-const PROJECTS_SQL_COLUMNS: ColumnMap = {
+export const PROJECTS_SQL_COLUMNS: ColumnMap = {
 	projectNumber: t("p.project_number"),
 	name: t("p.name"),
 	clientName: t("c.name"),
@@ -2226,7 +2226,7 @@ export const getInvoicesReport = async (
 	return invoices.map(mapInvoiceRaw);
 };
 
-const INVOICES_SQL_COLUMNS: ColumnMap = {
+export const INVOICES_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	status: t("i.status::text"),
@@ -2403,7 +2403,7 @@ export const getRevenueLineItemsReport = async (
 	return { rows: items.map(mapRevenueLineItemRaw), truncated: items.length >= REPORT_ROW_CAP };
 };
 
-const REVENUE_LINE_ITEM_SQL_COLUMNS: ColumnMap = {
+export const REVENUE_LINE_ITEM_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	issueDate: dt("i.issue_date"),
@@ -3272,7 +3272,7 @@ export const getPaymentsReport = async (
 const PAYMENTS_FROM =
 	'"invoice_payment" p JOIN "invoice" i ON i.id = p.invoice_id JOIN "client" c ON c.id = i.client_id LEFT JOIN "dispatcher" disp ON disp.id = p.recorded_by_dispatcher_id LEFT JOIN "technician" tech ON tech.id = p.recorded_by_tech_id';
 
-const PAYMENTS_SQL_COLUMNS: ColumnMap = {
+export const PAYMENTS_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	method: t("p.method"),
@@ -3602,7 +3602,7 @@ export const getQuoteFunnelReport = async (
 	};
 };
 
-const QUOTES_SQL_COLUMNS: ColumnMap = {
+export const QUOTES_SQL_COLUMNS: ColumnMap = {
 	quoteNumber: t("q.quote_number"),
 	title: t("q.title"),
 	clientName: t("c.name"),

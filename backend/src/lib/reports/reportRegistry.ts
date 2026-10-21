@@ -29,11 +29,19 @@ import {
 	getCogsByItemReport,
 	getCogsByJobReport,
 	getJobProfitabilityReport,
-	NO_MATERIALS
+	NO_MATERIALS,
+	JOBS_SQL_COLUMNS,
+	INVOICES_SQL_COLUMNS,
+	INVENTORY_SQL_COLUMNS,
+	QUOTES_SQL_COLUMNS,
+	PAYMENTS_SQL_COLUMNS,
+	REVENUE_LINE_ITEM_SQL_COLUMNS,
+	PROJECTS_SQL_COLUMNS
 } from "../../controllers/reportsController.js";
 import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
 import { unitDisplay, unitWord } from "../units.js";
+import { searchKeysOf } from "./pushdown.js";
 
 // Catalog of eery report and a key to each report
 export interface ReportQuery {
@@ -55,9 +63,9 @@ export interface ReportDefinition {
 	 * exportServerSchema. Omitted means `filterRows` falls back to every key
 	 * except "id", which makes UUIDs and currency figures searchable.
 	 *
-	 * ⚠️ Only valid on a definition with NO `loadPage`: a loadPage report pushes
-	 * search into SQL, where searchability is already per-column, so setting both
-	 * makes page-1 search diverge from export search. Enforced below.
+	 * Required with `loadPage`: derive it via `searchKeysOf(<SQL column map>)`
+	 * so export and the in-memory fallback search the same columns SQL does.
+	 * Enforced below.
 	 */
 	searchKeys?: string[];
 	loadPage?: (
@@ -490,6 +498,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		}),
 		loadPage: async (orgId, q, params) =>
 			mapPage(await getJobsReportPage(q.startDate, q.endDate, orgId, params), jobRow),
+		searchKeys: searchKeysOf(JOBS_SQL_COLUMNS),
 	},
 	"first-time-fix": {
 		load: async (orgId, q) => ({
@@ -509,6 +518,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		}),
 		loadPage: async (orgId, q, params) =>
 			mapPage(await getInvoicesReportPage(q.startDate, q.endDate, orgId, params), invoiceRow),
+		searchKeys: searchKeysOf(INVOICES_SQL_COLUMNS),
 	},
 	clients: {
 		load: async (orgId, q) => {
@@ -547,6 +557,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				),
 				inventoryRow,
 			),
+		searchKeys: searchKeysOf(INVENTORY_SQL_COLUMNS),
 	},
 	quotes: {
 		load: async (orgId, q) => {
@@ -575,6 +586,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				summary,
 			};
 		},
+		searchKeys: searchKeysOf(QUOTES_SQL_COLUMNS),
 	},
 	payments: {
 		load: async (orgId, q) => ({
@@ -602,6 +614,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 					.sort((a, b) => b.amount - a.amount),
 			};
 		},
+		searchKeys: searchKeysOf(PAYMENTS_SQL_COLUMNS),
 	},
 	"tax-liability": {
 		load: async (orgId, q) => ({
@@ -734,6 +747,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				await getRevenueLineItemsReportPage(q.startDate, q.endDate, orgId, params),
 				revenueLineItemRow,
 			),
+		searchKeys: searchKeysOf(REVENUE_LINE_ITEM_SQL_COLUMNS),
 	},
 	projects: {
 		load: async (orgId, q) => ({
@@ -741,6 +755,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		}),
 		loadPage: async (orgId, q, params) => 
 			mapPage(await getProjectsReportPage(q.startDate, q.endDate, orgId, params), projectRow),
+		searchKeys: searchKeysOf(PROJECTS_SQL_COLUMNS),
 	},
 	"cogs-by-job": {
 		load: async (orgId, q) => {
@@ -811,13 +826,12 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 	}
 };
 
-// A loadPage report resolves search in SQL, so an in-memory searchKeys list would
-// only apply to the fallback path and silently diverge from it. Fail at import
-// rather than serve two different search behaviours for one report.
+// Export and the in-memory fallback search by searchKeys; without it they search
+// every key (amounts, dates, _ fields) while SQL searches text columns only.
 for (const [key, def] of Object.entries(REPORT_DEFINITIONS)) {
-	if (def.searchKeys && def.loadPage)
+	if (def.loadPage && !def.searchKeys)
 		throw new Error(
-			`report "${key}" sets both searchKeys and loadPage — searchKeys is only valid on reports without a SQL pushdown path`,
+			`report "${key}" has loadPage but no searchKeys — set searchKeys: searchKeysOf(<its SQL column map>)`,
 		);
 }
 

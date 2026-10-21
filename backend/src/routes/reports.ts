@@ -587,7 +587,7 @@ router.get("/job-profitability", requireModule("advanced_reporting"), requirePer
 	}
 });
 
-router.post("/export", requirePermission("view_reports"), async (req, res, next) => {
+router.post("/export", requirePermission("export_reports"), async (req, res, next) => {
 	try {
 		const parsed = exportReportSchema.safeParse(req.body);
 		if (!parsed.success) {
@@ -617,7 +617,7 @@ router.post("/export", requirePermission("view_reports"), async (req, res, next)
 
 // Server-side export for paginated reports: regenerates the full filtered set
 // (all pages) from the report key + active filters, so the sheet is complete.
-router.post("/export/server", requirePermission("view_reports"), async (req, res, next) => {
+router.post("/export/server", requirePermission("export_reports"), async (req, res, next) => {
 	try {
 		const parsed = exportServerSchema.safeParse(req.body);
 		if (!parsed.success) {

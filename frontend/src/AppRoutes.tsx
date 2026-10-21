@@ -207,7 +207,7 @@ export default function AppRoutes() {
 				<Route path="reporting/technician-scorecard" element={<RequirePermission permission="view_reports"><TechnicianScorecardPage /></RequirePermission>} />
 				<Route path="reporting/field-added-revenue" element={<RequirePermission permission="view_reports"><FieldAddedRevenuePage /></RequirePermission>} />
 				<Route path="reporting/recurring-revenue" element={<RequirePermission permission="view_reports"><RecurringRevenuePage /></RequirePermission>} />
-				<Route path="mileage" element={<MileageReportPage />} />
+				<Route path="mileage" element={<RequirePermission permission="view_reports" ><MileageReportPage /></RequirePermission>} />
 				<Route path="timesheets" element={<RequirePermission permission="view_reports"><TimesheetsReportPage /></RequirePermission>} />
 				<Route path="inventory/reorder-forecast" element={<RequirePermission permission="view_reports"><ReorderForecastPage /></RequirePermission>} />
 				<Route path="inventory" element={<RequirePermission permission="view_inventory"><InventoryPage /></RequirePermission>} />
