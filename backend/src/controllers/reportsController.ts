@@ -3937,19 +3937,17 @@ export const getJobProfitabilityReport = async (
 			// Partial rating dashes too: one unrated tech on a two-tech job yields an
 			// understated figure that reads as exact, which is worse than admitting it.
 			const laborCost = direct && direct.unratedHours > 0 ? "-" : round2(direct?.laborCost ?? 0);
-			// cost_per_mile is NOT nullable, so there is no "rate unknown" here. Zero
-			// miles on a job that had visits means nobody recorded the drive, not that
-			// nobody drove — but only say so when the rate would have cost something.
-			const travelCost =
-				perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0
-					? "-"
-					: round2((direct?.miles ?? 0) * perMile);
+			// Zero miles on a visited job is likely an unrecorded drive, but dashing it
+			// blanked Net on most rows for the smallest cost — price it at 0 and flag it.
+			const travelMissing =
+				perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0;
+			const travelCost = round2((direct?.miles ?? 0) * perMile);
 			// No rate set is unknown overhead, not free overhead — unless no hours were
 			// worked, where zero is the honest answer either way.
 			const overheadCost =
 				overheadRate == null ? (hours > 0 ? "-" : 0) : round2(hours * overheadRate);
 
-			const netKnown = cogs !== "-" && laborCost !== "-" && travelCost !== "-" && overheadCost !== "-";
+			const netKnown = cogs !== "-" && laborCost !== "-" && overheadCost !== "-";
 			const netProfit = netKnown
 				? round2(revenue - cogs - laborCost - travelCost - overheadCost)
 				: "-";
@@ -3972,6 +3970,7 @@ export const getJobProfitabilityReport = async (
 				laborHours: round2(hours),
 				laborCost,
 				travelCost,
+				_travelMissing: travelMissing,
 				overheadCost,
 				netProfit,
 				netMargin,

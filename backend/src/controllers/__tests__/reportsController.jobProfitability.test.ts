@@ -358,14 +358,16 @@ describe("getJobProfitabilityReport net costs", () => {
 		expect(rows[0].travelCost).toBe(20.77);
 	});
 
-	it("dashes travel when a job had visits but nobody recorded miles", async () => {
+	it("prices unrecorded miles at 0 and flags them, keeping net known", async () => {
 		billed1000();
 		withDirectCosts(directCost({ visitCount: 2, miles: 0 }));
 		withOrgCosting({ cost_per_mile: "0.67" });
 
 		const { rows } = await getJobProfitabilityReport(undefined, undefined, ORG);
 
-		expect(rows[0].travelCost).toBe("-");
+		expect(rows[0].travelCost).toBe(0);
+		expect(rows[0]._travelMissing).toBe(true);
+		expect(rows[0].netProfit).not.toBe("-");
 	});
 
 	it("reports zero travel when the org charges nothing per mile", async () => {
@@ -522,7 +524,7 @@ describe("job-profitability filteredSummary", () => {
 			row(),
 			row({ laborCost: "-" }),
 			row({ overheadCost: "-" }),
-			row({ travelCost: "-" }),
+			row({ travelCost: 0, _travelMissing: true }),
 		]);
 
 		expect(s.jobsMissingLaborCost).toBe(1);

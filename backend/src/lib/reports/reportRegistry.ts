@@ -800,7 +800,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				// widening it would move that report's numbers too.
 				jobsMissingLaborCost: rows.filter((r) => r.laborCost === "-").length,
 				jobsMissingOverheadCost: rows.filter((r) => r.overheadCost === "-").length,
-				jobsMissingTravelCost: rows.filter((r) => r.travelCost === "-").length,
+				jobsMissingTravelCost: rows.filter((r) => r._travelMissing === true).length,
 			};
 		},
 		// Rows key on jobId, so the default "every key but id" fallback makes job
