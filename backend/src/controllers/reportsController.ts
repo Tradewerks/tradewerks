@@ -154,6 +154,7 @@ export const getOverviewMetrics = async (
 		avgResponseTimeResult,
 		convertedQuotes,
 		totalQuotes,
+		approvedOfCreated,
 		newOneOffJobs,
 		newRecurringJobs,
 		avgJobValue,
@@ -178,6 +179,14 @@ export const getOverviewMetrics = async (
 		sdb.quote.count({
 			where: {
 				organization_id: organizationId,
+				created_at: { gte: start, lte: end },
+			},
+		}),
+		// Same cohort as totalQuotes, so the rate can't pass 100%.
+		sdb.quote.count({
+			where: {
+				organization_id: organizationId,
+				status: "Approved",
 				created_at: { gte: start, lte: end },
 			},
 		}),
@@ -217,6 +226,7 @@ export const getOverviewMetrics = async (
 		prevAvgResponseTimeResult,
 		prevConvertedQuotes,
 		prevTotalQuotes,
+		prevApprovedOfCreated,
 		prevOneOffJobs,
 		prevRecurringJobs,
 		prevAvgJobValue,
@@ -241,6 +251,13 @@ export const getOverviewMetrics = async (
 		sdb.quote.count({
 			where: {
 				organization_id: organizationId,
+				created_at: { gte: previousStart, lte: previousEnd },
+			},
+		}),
+		sdb.quote.count({
+			where: {
+				organization_id: organizationId,
+				status: "Approved",
 				created_at: { gte: previousStart, lte: previousEnd },
 			},
 		}),
@@ -288,11 +305,11 @@ export const getOverviewMetrics = async (
 
 	const convRate =
 		totalQuotes > 0
-			? Math.round((convertedQuotes / totalQuotes) * 100)
+			? Math.round((approvedOfCreated / totalQuotes) * 100)
 			: 0;
 	const prevConvRate =
 		prevTotalQuotes > 0
-			? Math.round((prevConvertedQuotes / prevTotalQuotes) * 100)
+			? Math.round((prevApprovedOfCreated / prevTotalQuotes) * 100)
 			: 0;
 
 	const avgValue = Number(avgJobValue._avg.estimated_total ?? 0);
@@ -2131,7 +2148,7 @@ export const getProjectsReportPage = async (
 
 const FTFR_INCLUDE = {
 	client: { select: { name: true } },
-	_count: { select: { visits: true } },
+	_count: { select: { visits: { where: { status: { not: "Cancelled" } } } } },
 } satisfies Prisma.jobInclude;
 
 const mapFtfrRaw = (job: Prisma.jobGetPayload<{ include: typeof FTFR_INCLUDE }>) => ({
@@ -2155,7 +2172,7 @@ export const getFirstTimeFixReport = async (
 		where: {
 			organization_id: organizationId,
 			status: "Completed",
-			visits: { some: {} },
+			visits: { some: { status: { not: "Cancelled" } } },
 			...(Object.keys(dateFilter).length && { completed_at: dateFilter }),
 		},
 		orderBy: { completed_at: "desc" },
@@ -2526,6 +2543,7 @@ export const getClientsReport = async (organizationId: string) => {
 				SUM(balance_due) AS open_balance
 			FROM invoice
 			WHERE organization_id = ${organizationId}
+			AND status NOT IN ('Draft', 'Void')
 			GROUP BY client_id
 		) inv ON inv.client_id = c.id
 		WHERE c.organization_id = ${organizationId}
@@ -4038,7 +4056,7 @@ export const BREAKDOWNS: Record<SummaryPage, string[]> = {
 	inventory: ["status", "qb_linked"],
 	projects: ["status", "priority", "manager"],
 };
-type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration" };
+type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration"; note?: string };
 type Slice = { label: string; value: number; };
 interface PageSummaryResponse {
 	page: string;
@@ -4306,22 +4324,27 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			const itemWhere = { organization_id: orgId, provisional: false, is_active: true };
 			// Total comes from count(): the row list below is capped, so its length
 			// would silently understate a large catalog.
-			const [items, itemCount] = await Promise.all([
+			// Asset value counts warehouse + fleet stock and discontinued items, like
+			// the inventory report; only stock status is limited to active items.
+			const [items, itemCount, [asset]] = await Promise.all([
 				sdb.inventory_item.findMany({
 					where: itemWhere,
-					select: { id: true, quantity: true, low_stock_threshold: true, cost: true },
+					select: { id: true, quantity: true, low_stock_threshold: true },
 					take: REPORT_ROW_CAP,
 				}),
 				sdb.inventory_item.count({ where: itemWhere }),
+				sdb.$queryRaw<{ value: number; missingCost: number }[]>(Prisma.sql`
+					SELECT
+						COALESCE(SUM(ii.cost * (ii.quantity + ${Prisma.raw(FLEET_ON_HAND)})), 0)::float AS "value",
+						COUNT(*) FILTER (WHERE ii.cost IS NULL AND ii.quantity + ${Prisma.raw(FLEET_ON_HAND)} > 0)::int AS "missingCost"
+					FROM "inventory_item" ii
+					WHERE ii.organization_id = ${orgId} AND ii.provisional = false
+				`),
 			]);
 			let low = 0;
 			let out = 0;
 			let sufficient = 0;
-			let assetValue = 0;
 			for (const it of items) {
-				// Coerced for consistency with the other Decimal-derived reads in this
-				// loop (getStockStatus below also expects a plain number).
-				assetValue += Number(it.quantity) * Number(it.cost ?? 0);
 				const status = getStockStatus(it.quantity, it.low_stock_threshold);
 				if (status === "low") low++;
 				else if (status === "out_of_stock") out++;
@@ -4358,7 +4381,14 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				{ label: "Total Items",  value: itemCount,    format: "number" },
 				{ label: "Low",          value: low,          format: "number" },
 				{ label: "Out of Stock", value: out,          format: "number" },
-				{ label: "Asset Value",  value: assetValue,   format: "currency" },
+				{
+					label: "Asset Value",
+					value: asset?.value ?? 0,
+					format: "currency",
+					...(asset?.missingCost && {
+						note: `${asset.missingCost} item${asset.missingCost === 1 ? "" : "s"} without cost`,
+					}),
+				},
 			];
 			break;
 		}

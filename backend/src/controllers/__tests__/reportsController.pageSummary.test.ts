@@ -182,6 +182,7 @@ describe("getPageSummary — inventory", () => {
 			{ id: "b", quantity: 0, low_stock_threshold: null, cost: 1 },
 		]);
 		mockDb.inventory_item.count.mockResolvedValue(12345);
+		mockDb.$queryRaw.mockResolvedValue([{ value: 55, missingCost: 0 }]);
 
 		const res = await getPageSummary(ORG, "inventory");
 
@@ -190,6 +191,21 @@ describe("getPageSummary — inventory", () => {
 			mockDb.inventory_item.findMany.mock.calls[0][0].where,
 		);
 		expect(mockDb.inventory_item.findMany.mock.calls[0][0].take).toBe(10000);
-		expect(stat(res, "Asset Value")).toBe(10);
+		expect(stat(res, "Asset Value")).toBe(55);
+		expect(res.stats.find((s) => s.label === "Asset Value")?.note).toBeUndefined();
+	});
+
+	// Asset value sums warehouse + fleet in SQL, uncapped, discontinued included.
+	it("sums asset value in SQL and notes items without cost", async () => {
+		mockDb.inventory_item.findMany.mockResolvedValue([]);
+		mockDb.inventory_item.count.mockResolvedValue(0);
+		mockDb.$queryRaw.mockResolvedValue([{ value: 55, missingCost: 3 }]);
+
+		const res = await getPageSummary(ORG, "inventory");
+
+		const sql = (mockDb.$queryRaw.mock.calls[0][0] as { strings: string[] }).strings.join("");
+		expect(sql).toContain("vehicle_stock_item");
+		expect(sql).not.toContain("is_active");
+		expect(res.stats.find((s) => s.label === "Asset Value")?.note).toBe("3 items without cost");
 	});
 });
