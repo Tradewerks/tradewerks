@@ -45,6 +45,13 @@ describe("entitlement registry", () => {
 		});
 		expect(PERMISSION_MAP.stock_own_vehicle.module).toBe("vehicle_stock");
 	});
+
+	it("has no tax_pack_* modules and no confirm_taxability permission", () => {
+		expect(getModule("tax_pack_hvac")).toBeUndefined();
+		expect(getModule("tax_pack_cleaning")).toBeUndefined();
+		expect(PERMISSION_MAP.confirm_taxability).toBeUndefined();
+		expect(getAllPermissions("dispatcher")).not.toContain("confirm_taxability");
+	});
 });
 
 describe("limit keys (build plan 2)", () => {

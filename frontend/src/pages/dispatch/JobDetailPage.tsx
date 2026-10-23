@@ -75,6 +75,13 @@ import FinancialSummary, {
 	type FinancialSummaryLineItem,
 } from "../../components/pagesections/FinancialSummary";
 import { usePermission } from "../../hooks/usePermission";
+import { useQBTaxCalculationQuery } from "../../hooks/useQuickbooks";
+import { useModuleOn } from "../../hooks/useEntitlements";
+import TaxReviewBanner from "../../components/tax/TaxReviewBanner";
+import { isV2Snapshot } from "../../types/tax";
+import { jobTaxSnapshots } from "../../lib/taxBreakdown";
+import { jobTaxSummary } from "../../lib/jobTaxSummary";
+import JobTaxNotes from "../../components/jobs/JobTaxNotes";
 import ChangeHistory from "../../components/activity/ChangeHistory";
 
 // A tab per body of work someone opens the page to do. Scheduling a crew,
@@ -261,6 +268,21 @@ export default function JobDetailPage() {
 		return record;
 	}, [linkedInvoices]);
 
+	const completedVisitList = useMemo(
+		() => (visits ?? []).filter((v) => v.status === "Completed"),
+		[visits]
+	);
+
+	const taxSnapshots = useMemo(
+		() => (job ? jobTaxSnapshots(job, completedVisitList) : []),
+		[job, completedVisitList]
+	);
+
+	const taxSummary = useMemo(
+		() => (job ? jobTaxSummary(job, completedVisitList, linkedInvoices) : null),
+		[job, completedVisitList, linkedInvoices]
+	);
+
 	const lineItems = useMemo((): FinancialSummaryLineItem[] => {
 		const jobItems: FinancialSummaryLineItem[] = (job?.line_items ?? []).map(
 			(item) => ({
@@ -269,8 +291,7 @@ export default function JobDetailPage() {
 				isVisitSource: false,
 			})
 		);
-		const visitItems: FinancialSummaryLineItem[] = (visits ?? [])
-			.filter((v) => v.status === "Completed")
+		const visitItems: FinancialSummaryLineItem[] = completedVisitList
 			.flatMap((v) =>
 				(v.line_items ?? []).map((li) => ({
 					...li,
@@ -286,7 +307,12 @@ export default function JobDetailPage() {
 				}))
 			);
 		return [...jobItems, ...visitItems];
-	}, [job?.line_items, visits]);
+	}, [job?.line_items, completedVisitList]);
+
+	const hasTaxableLine = useMemo(() => lineItems.some((li) => li.taxable !== false), [lineItems]);
+	const quickbooksOn = useModuleOn("quickbooks");
+	const qbCalculatesTax =
+		useQBTaxCalculationQuery(quickbooksOn && hasTaxableLine).data?.qb_calculates_tax === true;
 
 	// Merged subtotal from all line items (job + completed visits).
 	// Used instead of job.subtotal so the sidebar reflects the full merged picture.
@@ -666,11 +692,9 @@ export default function JobDetailPage() {
 		) : (
 			<FinancialSummary
 				lineItems={lineItems}
-				taxSnapshot={null}
-				legacyTaxRate={job.tax_rate != null ? Number(job.tax_rate) : null}
-				legacyTaxAmount={
-					job.tax_amount != null ? Number(job.tax_amount) : null
-				}
+				taxSnapshot={taxSnapshots}
+				taxSource={job.tax_source}
+				taxIsEstimate={qbCalculatesTax}
 				subtotal={mergedSubtotal}
 				discountAmount={
 					job.discount_amount != null
@@ -688,6 +712,7 @@ export default function JobDetailPage() {
 				noLineItemsDescription="No line items have been added to this job yet."
 				totalsContent={
 					<>
+						{taxSummary && <JobTaxNotes summary={taxSummary} jobId={job.id} qbCalculatesTax={qbCalculatesTax} />}
 						{/* Budget Variance — the one figure here the Job Total stat tile
 						    above does NOT already say (it's a delta, not the total).
 						    Estimated Total / Running Cost / Actual Total used to print here
@@ -1363,6 +1388,14 @@ export default function JobDetailPage() {
 					className="mt-6 space-y-4"
 				>
 					<h2 className="sr-only">Financials</h2>
+					<TaxReviewBanner
+						kind="job"
+						id={job.id}
+						needsReview={job.tax_needs_review}
+						reason={isV2Snapshot(job.tax_snapshot) ? job.tax_snapshot.review_reason : null}
+						ackAt={job.tax_review_ack_at}
+						canAcknowledge={EDIT_JOB}
+					/>
 					{financialSummaryCard}
 					{/* Stretched so the pair ends on one line. Field purchases is
 					    absent for a viewer who may not see it; invoices then takes

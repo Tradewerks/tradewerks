@@ -182,9 +182,29 @@ export const getQBTaxCodes = async (): Promise<QBTaxCodeLite[]> => {
     return response.data.data!;
 }
 
-export const getQBTaxPrefs = async (): Promise<{ automatedSalesTax: boolean }> => {
-    const response = await api.get<ApiResponse<{ automatedSalesTax: boolean }>>("integrations/quickbooks/tax-preferences");
+export interface QBTaxPrefs {
+    automatedSalesTax: boolean;
+    passthroughTaxCodeId: string | null;
+}
+
+export const getQBTaxPrefs = async (): Promise<QBTaxPrefs> => {
+    const response = await api.get<ApiResponse<QBTaxPrefs>>("integrations/quickbooks/tax-preferences");
     if (response.data.error) throw new Error(response.data.error?.message || "Failed to get QB tax preferences");
+    return response.data.data!;
+}
+
+export const getQBTaxCalculation = async (): Promise<{ qb_calculates_tax: boolean }> => {
+    const response = await api.get<ApiResponse<{ qb_calculates_tax: boolean }>>("integrations/quickbooks/tax-calculation");
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to get QB tax calculation");
+    return response.data.data!;
+}
+
+export const setPassthroughTaxCode = async (qb_tax_code_id: string | null) => {
+    const response = await api.put<ApiResponse<{ passthroughTaxCodeId: string | null }>>(
+        "integrations/quickbooks/passthrough-tax-code",
+        { qb_tax_code_id },
+    );
+    if (response.data.error) throw new Error(response.data.error?.message || "Failed to save combined tax code");
     return response.data.data!;
 }
 

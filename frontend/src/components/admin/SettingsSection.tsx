@@ -852,8 +852,8 @@ export default function SettingsSection() {
 	const VIEW_REPORTS = usePermission("view_reports");
 
 	return (
-		<div className="max-w-6xl">
-			<div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2 lg:items-start">
+		<div className="max-w-6xl 2xl:max-w-none">
+			<div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2 lg:items-start 2xl:grid-cols-3">
 				{MANAGE_ORG && (
 					<SettingRow
 						title="Organization"
@@ -866,7 +866,7 @@ export default function SettingsSection() {
 				{MANAGE_TAX && (
 					<SettingRow
 						title="Tax"
-						description="Rates and groups applied to quotes and invoices."
+						description="How tax is calculated, and the groups and rates it uses."
 						action={
 							<Toggle
 								checked={showTaxInactive}

@@ -166,6 +166,22 @@ describe("addPartsUsed", () => {
 		);
 	});
 
+	it("stamps the line with the item's taxable flag", async () => {
+		const sdb = makeSdb(
+			makeStockItem({ inventory_item: { ...makeStockItem().inventory_item, taxable: false } }),
+		);
+
+		await addPartsUsed(
+			VISIT_ID,
+			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: TECH_ID },
+			ORG_ID,
+		);
+
+		expect(sdb._tx.job_visit_line_item.create).toHaveBeenCalledWith(
+			expect.objectContaining({ data: expect.objectContaining({ taxable: false }) }),
+		);
+	});
+
 	it("accepts a fractional qty_used (12.5 ft) — vehicle stock is numeric(10,2)", async () => {
 		makeSdb();
 

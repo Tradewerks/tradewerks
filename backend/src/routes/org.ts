@@ -39,6 +39,9 @@ const orgSelect = {
 	// Orders the unit picker for the org's region. Hides nothing, converts
 	// nothing — see schema.prisma for the full rationale.
 	measurement_system: true,
+	// Editors need the mode to stop stamping default groups (spec §7 1b); /tax/settings is
+	// manage_taxes-only.
+	tax_mode: true,
 	mfa_required: true,
 	brand_color: true,
 	// null disables the control entirely - see the second sign-off routing in

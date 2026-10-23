@@ -3,7 +3,9 @@ import { useState, useEffect } from "react";
 import type { GroupTaxSummary } from "../../../hooks/forms/useFinancialCalculations";
 import type { TaxSnapshot } from "../../../types/tax";
 import { formatTaxGroupLabel } from "../../../types/tax";
-import { formatRatePercentLabel } from "../../../lib/formatTax";
+import { formatDocRatePercent, formatRatePercentLabel } from "../../../lib/formatTax";
+import { formatCurrency } from "../../../util/util";
+import { autoEstimateTax, type AutoTaxState } from "../../../lib/taxEditorMode";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +40,15 @@ interface FinancialSummaryProps {
 
 	// ── Context ───────────────────────────────────────────────────────────────
 	clientExempt?: boolean;
+	/** Set only in auto tax mode: replaces the flat rate row with an auto row and estimate. */
+	autoTax?: AutoTaxState | null;
+	/** Manual mode holding an address rate: the tax row is exact, not an estimate. */
+	keptRate?: boolean;
+	/**
+	 * The address of a kept-rate document changed: "pending" until the dispatcher answers which
+	 * tax to use, then the answered group's tax. Replaces the kept/auto row.
+	 */
+	chosenTax?: { label: string; cents: number } | "pending" | null;
 
 	// ── Edit mode ─────────────────────────────────────────────────────────────
 	mode?: "create" | "edit";
@@ -79,6 +90,9 @@ const FinancialSummary = ({
 
 	// context
 	clientExempt = false,
+	autoTax = null,
+	keptRate = false,
+	chosenTax = null,
 
 	// edit mode
 	mode = "create",
@@ -177,9 +191,32 @@ const FinancialSummary = ({
 		return [];
 	})();
 
+	// Server ignores client-side tax in auto mode, so the flat rate row would mislead.
+	const autoMode = !isSnapshotDisplay && !!autoTax;
+	const keptActive = keptRate && autoMode;
+	const autoRowActive = autoMode && !clientExempt && (autoTax?.autoTaxableAmount ?? 0) > 0;
+	const autoEstimate = autoRowActive ? (autoTax?.estimate ?? null) : null;
+	const chosen = autoRowActive ? chosenTax : null;
+	const autoTaxAmount =
+		chosen === "pending"
+			? 0
+			: chosen
+				? chosen.cents / 100
+				: autoEstimate
+					? autoEstimateTax(
+							autoTax?.autoTaxableAmount ?? 0,
+							autoEstimate,
+							autoTax?.lineBasesCents,
+						)
+					: 0;
+	// With zero groups, totalTax is the legacy flat-rate amount, which the server drops in auto.
+	const overrideTax = groupsSummary && groupsSummary.length > 0 ? (totalTax ?? 0) : 0;
+
 	// Whether we should fall back to the legacy editable tax-rate row
 	const useLegacyTaxRow =
 		!isSnapshotDisplay &&
+		!autoMode &&
+		!keptRate &&
 		(!groupsSummary || groupsSummary.length === 0) &&
 		onTaxRateChange !== undefined;
 
@@ -207,13 +244,85 @@ const FinancialSummary = ({
 						Subtotal
 					</span>
 					<span className="text-sm font-semibold text-text-secondary font-mono tabular-nums">
-						${displaySubtotal.toFixed(2)}
+						{formatCurrency(displaySubtotal)}
 					</span>
 				</div>
 			</div>
 
 			{/* Body */}
 			<div className="p-2 space-y-2">
+				{/* ── Discount Row ────────────────────────────────────────────── */}
+				<div
+					className={`group relative flex items-center justify-between p-2 rounded-md transition-all ${
+						discountRowDirty
+							? "bg-primary/5 border-l-2 border-l-primary"
+							: "hover:bg-surface/30"
+					}`}
+				>
+					<div className="flex items-center gap-3 flex-1">
+						{!isSnapshotDisplay && (
+							<div className="flex items-center bg-canvas rounded border border-border focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20 transition-all h-7">
+								<button
+									type="button"
+									onClick={() =>
+										onDiscountTypeChange(
+											discountType === "amount"
+												? "percent"
+												: "amount"
+										)
+									}
+									className="h-full px-2 text-[10px] font-bold text-text-tertiary hover:text-text-primary hover:bg-surface rounded-l transition-colors border-r border-border-subtle"
+									disabled={isLoading}
+								>
+									{discountType === "amount" ? "$" : "%"}
+								</button>
+								<input
+									type="number"
+									step="0.01"
+									min="0"
+									value={discountDisplay}
+									onChange={handleDiscountChange}
+									onBlur={() => {
+										if (
+											discountDisplay === "" ||
+											isNaN(parseFloat(discountDisplay))
+										) {
+											setDiscountDisplay(String(discountValue));
+										}
+									}}
+									className="w-16 bg-transparent border-none text-text-primary text-xs pl-2 pr-2 font-mono outline-none disabled:opacity-50"
+									disabled={isLoading}
+								/>
+							</div>
+						)}
+						<div className="flex flex-col">
+							<span className="text-xs font-medium text-text-secondary">
+								Discount
+							</span>
+							{discountRowDirty && (
+								<span className="text-[10px] text-primary-text font-medium">
+									Modified
+								</span>
+							)}
+						</div>
+					</div>
+					<div className="flex items-center gap-3">
+						<span className="text-sm font-mono text-success-text/90 tabular-nums w-20 text-right">
+							-{formatCurrency(displayDiscountAmount)}
+						</span>
+						{discountRowDirty && onDiscountUndo && (
+							<button
+								type="button"
+								onClick={onDiscountUndo}
+								className="p-1.5 rounded-full hover:bg-surface-raised text-text-muted hover:text-primary-text transition-colors"
+								title="Revert Discount"
+							>
+								<RotateCcw size={12} />
+							</button>
+						)}
+					</div>
+				</div>
+
 				{/* ── Tax Section ────────────────────────────────────────────── */}
 				{clientExempt ? (
 					/* Client exempt badge */
@@ -269,7 +378,7 @@ const FinancialSummary = ({
 						</div>
 						<div className="flex items-center gap-3">
 							<span className="text-sm font-mono text-text-secondary tabular-nums w-20 text-right">
-								${taxAmount.toFixed(2)}
+								{formatCurrency(taxAmount)}
 							</span>
 							{taxRowDirty && onTaxUndo && (
 								<button
@@ -295,7 +404,7 @@ const FinancialSummary = ({
 									{row.label}
 								</span>
 								<span className="text-sm font-mono text-text-secondary tabular-nums w-20 text-right">
-									${row.amount.toFixed(2)}
+									{formatCurrency(row.amount)}
 								</span>
 							</div>
 						))}
@@ -305,108 +414,84 @@ const FinancialSummary = ({
 									Total Tax
 								</span>
 								<span className="text-xs font-mono text-text-muted tabular-nums w-20 text-right">
-									${displayTotalTax.toFixed(2)}
+									{formatCurrency(displayTotalTax)}
 								</span>
 							</div>
 						)}
 					</div>
-				) : (
+				) : autoRowActive ? null : (
 					/* No tax groups, no legacy rate — show zero tax row */
 					<div className="flex items-center justify-between px-2 py-1.5 rounded-md">
 						<span className="text-xs font-medium text-text-secondary">Tax</span>
 						<span className="text-sm font-mono text-text-secondary tabular-nums w-20 text-right">
-							$0.00
+							{formatCurrency(0)}
 						</span>
 					</div>
 				)}
 
-				{/* ── Discount Row ────────────────────────────────────────────── */}
-				<div
-					className={`group relative flex items-center justify-between p-2 rounded-md transition-all ${
-						discountRowDirty
-							? "bg-primary/5 border-l-2 border-l-primary"
-							: "hover:bg-surface/30"
-					}`}
-				>
-					<div className="flex items-center gap-3 flex-1">
-						{isSnapshotDisplay ? (
-							/* Snapshot: show discount as read-only */
-							<div className="flex flex-col">
-								<span className="text-xs font-medium text-text-secondary">
-									Discount
-								</span>
-							</div>
-						) : (
-							<div className="flex items-center bg-canvas rounded border border-border focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20 transition-all h-7">
-								<button
-									type="button"
-									onClick={() =>
-										onDiscountTypeChange(
-											discountType === "amount"
-												? "percent"
-												: "amount"
-										)
-									}
-									className="h-full px-2 text-[10px] font-bold text-text-tertiary hover:text-text-primary hover:bg-surface rounded-l transition-colors border-r border-border-subtle"
-									disabled={isLoading}
-								>
-									{discountType === "amount" ? "$" : "%"}
-								</button>
-								<input
-									type="number"
-									step="0.01"
-									min="0"
-									value={discountDisplay}
-									onChange={handleDiscountChange}
-									onBlur={() => {
-										if (
-											discountDisplay === "" ||
-											isNaN(parseFloat(discountDisplay))
-										) {
-											setDiscountDisplay(String(discountValue));
-										}
-									}}
-									className="w-16 bg-transparent border-none text-text-primary text-xs pl-2 pr-2 font-mono outline-none disabled:opacity-50"
-									disabled={isLoading}
-								/>
-							</div>
-						)}
-						<div className="flex flex-col">
-							<span className="text-xs font-medium text-text-secondary">
-								Discount
-							</span>
-							{discountRowDirty && (
-								<span className="text-[10px] text-primary-text font-medium">
-									Modified
-								</span>
+				{chosen && (
+					<div className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-surface/30 transition-colors">
+						<span className="text-xs font-medium text-text-secondary">
+							{chosen === "pending" ? (
+								<>
+									Tax <span className="text-text-muted">Choose a tax above</span>
+								</>
+							) : (
+								`Tax — ${chosen.label}`
 							)}
-						</div>
-					</div>
-					<div className="flex items-center gap-3">
-						<span className="text-sm font-mono text-success-text/90 tabular-nums w-20 text-right">
-							-${displayDiscountAmount.toFixed(2)}
 						</span>
-						{discountRowDirty && onDiscountUndo && (
-							<button
-								type="button"
-								onClick={onDiscountUndo}
-								className="p-1.5 rounded-full hover:bg-surface-raised text-text-muted hover:text-primary-text transition-colors"
-								title="Revert Discount"
-							>
-								<RotateCcw size={12} />
-							</button>
-						)}
+						<span className="text-sm font-mono text-text-secondary tabular-nums w-20 text-right">
+							{chosen === "pending" ? "—" : formatCurrency(autoTaxAmount)}
+						</span>
 					</div>
-				</div>
+				)}
+
+				{autoRowActive && !chosen && (
+					<div className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-surface/30 transition-colors">
+						<span className="text-xs font-medium text-text-secondary">
+							{autoEstimate
+								? keptActive
+									? "Tax — Address rate (kept)"
+									: "Tax — Auto"
+								: "Tax"}{" "}
+							<span className="text-text-muted">
+								{autoEstimate
+									? `(${keptActive ? "" : "est. "}${formatDocRatePercent(autoEstimate.rate)} · ${autoEstimate.place})`
+									: keptRate
+										? "Calculated on save"
+										: "Auto — calculated on save"}
+							</span>
+						</span>
+						<span className="text-sm font-mono text-text-secondary tabular-nums w-20 text-right">
+							{autoEstimate
+								? `${keptActive ? "" : "≈ "}${formatCurrency(autoTaxAmount)}`
+								: "—"}
+						</span>
+					</div>
+				)}
 			</div>
 
 			{/* Footer / Total */}
 			<div className="bg-surface/80 px-4 py-2 border-t border-border flex items-center justify-between">
 				<span className="text-xs font-bold text-text-tertiary uppercase tracking-wider">
-					{totalLabel}
+					{autoRowActive
+						? chosen === "pending"
+							? `${totalLabel} (before tax)`
+							: chosen
+								? totalLabel
+								: autoEstimate
+									? keptActive
+										? totalLabel
+										: `Est. ${totalLabel}`
+									: `${totalLabel} (before ${keptRate ? "" : "auto "}tax)`
+						: totalLabel}
 				</span>
 				<span className="text-lg font-bold text-text-primary font-mono tabular-nums tracking-tight">
-					${displayTotal.toFixed(2)}
+					{formatCurrency(
+						autoMode
+							? subtotal - discountAmount + overrideTax + autoTaxAmount
+							: displayTotal,
+					)}
 				</span>
 			</div>
 		</div>

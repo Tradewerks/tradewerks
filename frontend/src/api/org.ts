@@ -19,6 +19,7 @@ export interface OrgSettings {
 	tax_rate: string;
 	restock_mode: RestockMode;
 	measurement_system: MeasurementSystem;
+	tax_mode: "auto" | "manual";
 	mfa_required: boolean;
 	brand_color: string | null;
 	/** Decimal over the wire, like tax_rate. Null means second sign-off is off. */

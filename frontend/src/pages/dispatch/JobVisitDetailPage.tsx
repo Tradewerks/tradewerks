@@ -52,6 +52,7 @@ import {
 import { placeActions } from "../../components/lifecycle/placement";
 import type { LifecycleStage } from "../../components/lifecycle/types";
 import { HEADER_PILL } from "../../components/documents/DocumentLineage";
+import { snapshotSource } from "../../types/tax";
 import { VisitStatusColors, VisitStatusLabels, type VisitLineItem } from "../../types/jobs";
 import {
 	formatCurrency,
@@ -617,6 +618,7 @@ export default function JobVisitDetailPage() {
 		<FinancialSummary
 			lineItems={lineItems}
 			taxSnapshot={visit.tax_snapshot}
+			taxSource={snapshotSource(visit.tax_snapshot) ?? visit.job?.tax_source ?? null}
 			legacyTaxRate={visit.tax_rate != null ? Number(visit.tax_rate) : null}
 			legacyTaxAmount={visit.tax_amount != null ? Number(visit.tax_amount) : null}
 			subtotal={visit.subtotal != null ? Number(visit.subtotal) : null}
@@ -634,13 +636,26 @@ export default function JobVisitDetailPage() {
 			totalsContent={
 				// A plain ledger line, not the highlighted card the quote and
 				// invoice pages use: that would restate the Visit Total tile.
-				<div className="flex items-center justify-between text-sm">
-					<span className="text-text-primary font-semibold">
-						Total:
-					</span>
-					<span className="text-text-primary font-semibold tabular-nums">
-						{formatCurrency(Number(visit.total ?? 0))}
-					</span>
+				<div className="space-y-1.5">
+					{visit.job?.tax_needs_review && !visit.job.tax_review_ack_at && (
+						<p className="text-xs text-warning-text">
+							Tax review is pending on the job.{" "}
+							<Link
+								to={`/dispatch/jobs/${visit.job_id}`}
+								className="underline underline-offset-2"
+							>
+								Review on the job
+							</Link>
+						</p>
+					)}
+					<div className="flex items-center justify-between text-sm">
+						<span className="text-text-primary font-semibold">
+							Total:
+						</span>
+						<span className="text-text-primary font-semibold tabular-nums">
+							{formatCurrency(Number(visit.total ?? 0))}
+						</span>
+					</div>
 				</div>
 			}
 		/>

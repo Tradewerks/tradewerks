@@ -15,6 +15,8 @@ import type {
 	RecurringPlanNote,
 	CreateRecurringPlanNoteInput,
 	UpdateRecurringPlanNoteInput,
+	TaxEstimate,
+	RecurringTaxEstimateInput,
 } from "../types/recurringPlans";
 
 
@@ -313,3 +315,16 @@ export const deleteRecurringPlanNote = async (
 
 export const getSkippedDates = async (jobId: string): Promise<string[]> =>
 	(await api.get(`/jobs/${jobId}/recurring-plan/skipped-dates`)).data.data.dates;
+
+export const getRecurringTaxEstimate = async (
+	input: RecurringTaxEstimateInput
+): Promise<TaxEstimate> => {
+	const response = await api.post<ApiResponse<TaxEstimate>>(
+		"/recurring-plans/tax-estimate",
+		input
+	);
+	if (!response.data.data) {
+		throw new Error("Tax estimate unavailable");
+	}
+	return response.data.data;
+};

@@ -8,6 +8,9 @@ import * as recurringPlansController from "../controllers/recurringPlansControll
 import { getUserContext } from '../lib/context.js';
 import { requirePermission } from '../lib/requirePermissions.js';
 import { getEntityHistory, INVALID_HISTORY_LIMIT, parseHistoryLimit } from '../controllers/logsController.js';
+import { estimateDocumentTax, planKeptRate } from "../lib/estimateDocumentTax.js";
+import { recurringTaxEstimateSchema } from "../lib/validate/recurringTaxEstimate.js";
+import { formatZodError } from "../lib/validate/shared.js";
 
 const router = Router();
 
@@ -16,6 +19,47 @@ router.get("/", requirePermission("view_recurring_plans"), async (req, res, next
 		const orgId = req.user!.organization_id as string;
 		const plans = await recurringPlansController.getAllRecurringPlans(orgId);
 		res.json(createSuccessResponse(plans, { count: plans.length }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Read-only preview; POST only because the editor sends its unsaved lines.
+router.post("/tax-estimate", requirePermission("view_recurring_plans"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const parsed = recurringTaxEstimateSchema.safeParse(req.body);
+		if (!parsed.success) {
+			return res
+				.status(400)
+				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, formatZodError(parsed.error)));
+		}
+		const body = parsed.data;
+
+		let kept = null;
+		if (body.plan_id) {
+			const found = await planKeptRate(orgId, body.plan_id);
+			if (!found.found) {
+				return res
+					.status(404)
+					.json(createErrorResponse(ErrorCodes.NOT_FOUND, "Recurring plan not found"));
+			}
+			kept = found.kept;
+		}
+
+		const estimate = await estimateDocumentTax({
+			organizationId: orgId,
+			clientId: body.client_id,
+			address: body.address,
+			coords: body.coords ?? null,
+			lines: body.line_items.map((l) => ({
+				total: Math.round(l.quantity * l.unit_price * 100) / 100,
+				taxable: l.taxable,
+				tax_group_id: l.tax_group_id,
+			})),
+			kept,
+		});
+		res.json(createSuccessResponse(estimate));
 	} catch (err) {
 		next(err);
 	}

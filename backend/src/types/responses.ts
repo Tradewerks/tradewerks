@@ -67,6 +67,14 @@ export const ErrorCodes = {
 	REQUEST_CLOSED: 'REQUEST_CLOSED',
 	// Its own code so the register page shows "paused" rather than a generic failure.
 	SIGNUPS_PAUSED: 'SIGNUPS_PAUSED',
+	// QuickBooks AST taxed the draft differently from our estimate; finalizing waits on the
+	// existing tax-review acknowledgment, which the UI already offers.
+	QB_TAX_REVIEW: 'QB_TAX_REVIEW',
+	QB_TAX_ZERO: 'QB_TAX_ZERO',
+	QB_SYNC_FAILED: 'QB_SYNC_FAILED',
+	// The address of a document taxed at a kept address rate changed; the caller must say which
+	// tax to use (address_tax_choice) rather than have it re-taxed silently.
+	ADDRESS_TAX_CHOICE_REQUIRED: 'ADDRESS_TAX_CHOICE_REQUIRED',
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

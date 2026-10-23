@@ -5,6 +5,10 @@ import type { Client, UpdateClientInput } from "../../types/clients";
 import { useUpdateClientMutation, useDeleteClientMutation } from "../../hooks/useClients";
 import AddressForm from "../ui/AddressForm";
 import type { GeocodeResult } from "../../types/location";
+import type { AddressTaxChoice, AddressTaxChoiceDetails } from "../../types/tax";
+import { useTaxGroups } from "../../hooks/useTaxGroups";
+import AddressTaxChoicePanel from "../tax/AddressTaxChoicePanel";
+import { addressTaxChoiceDetails } from "../tax/addressTaxChoice";
 
 interface EditClientModalProps {
 	isOpen: boolean;
@@ -20,6 +24,19 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 		is_active: client.is_active,
 	});
 	const [deleteConfirm, setDeleteConfirm] = useState(false);
+	// Set by a 409: the new address would re-tax this client's kept-rate drafts.
+	const [taxRefusal, setTaxRefusal] = useState<AddressTaxChoiceDetails | null>(null);
+	const [taxChoice, setTaxChoice] = useState<AddressTaxChoice | null>(null);
+	const { data: taxGroups = [] } = useTaxGroups();
+	const activeGroups = taxGroups.filter((g) => g.is_active);
+	const defaultGroup = activeGroups.find((g) => g.is_default) ?? null;
+
+	// The modal stays mounted while hidden, so an unanswered refusal must not outlive it.
+	const close = () => {
+		setTaxRefusal(null);
+		setTaxChoice(null);
+		onClose();
+	};
 
 	const updateClient = useUpdateClientMutation();
 	const deleteClient = useDeleteClientMutation();
@@ -30,10 +47,16 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 		try {
 			await updateClient.mutateAsync({
 				id: client.id,
-				data: formData,
+				data: taxRefusal && taxChoice ? { ...formData, address_tax_choice: taxChoice } : formData,
 			});
-			onClose();
+			close();
 		} catch (error) {
+			const details = addressTaxChoiceDetails(error);
+			if (details) {
+				setTaxRefusal(details);
+				setTaxChoice(null);
+				return;
+			}
 			console.error("Failed to update client:", error);
 		}
 	};
@@ -70,6 +93,8 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 			address: geoData.address,
 			coords: geoData.coords,
 		}));
+		setTaxRefusal(null);
+		setTaxChoice(null);
 	};
 
 	if (!isOpen) return null;
@@ -82,7 +107,7 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 						Edit Client
 					</h2>
 					<button
-						onClick={onClose}
+						onClick={close}
 						className="text-text-tertiary hover:text-text-primary transition-colors"
 					>
 						<X size={24} />
@@ -126,10 +151,34 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 						<label className="ml-2 ">Active Client</label>
 					</div>
 
+					{taxRefusal && (
+						<AddressTaxChoicePanel
+							docNoun="client"
+							rateLabel={taxRefusal.rate_label}
+							rate={taxRefusal.rate}
+							newAddress={formData.address ?? ""}
+							keepCents={null}
+							defaultGroup={
+								defaultGroup
+									? {
+											id: defaultGroup.id,
+											name: defaultGroup.name,
+											rate: defaultGroup.combined_rate,
+										}
+									: null
+							}
+							defaultCents={null}
+							taxGroups={activeGroups}
+							value={taxChoice}
+							onChange={setTaxChoice}
+							documents={taxRefusal.documents}
+						/>
+					)}
+
 					<div className="flex gap-3 pt-4">
 						<button
 							type="submit"
-							disabled={updateClient.isPending}
+							disabled={updateClient.isPending || (!!taxRefusal && !taxChoice)}
 							className="flex-1 px-4 py-2 bg-primary-hover hover:bg-primary-active disabled:bg-primary-disabled disabled:cursor-not-allowed text-on-primary rounded-md transition-colors"
 						>
 							{updateClient.isPending

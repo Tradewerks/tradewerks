@@ -177,6 +177,7 @@ type Line = {
 	allocation_id?: string | null;
 	visit_line_item_id?: string | null;
 	visit_line_item?: { visit_id: string } | null;
+	inventory_item?: { name: string; unit_price: number; taxable: boolean } | null;
 	allocation?: { job_visit_id: string | null } | null;
 };
 
@@ -2105,6 +2106,37 @@ describe("billing a split receipt", () => {
 
 		const moved = mockRecordMovements.mock.calls.flatMap((c: unknown[]) => c[3] as unknown[]);
 		expect(moved).toEqual([]);
+	});
+
+	it("a new charge from a non-taxable catalog item is written non-taxable; an uncatalogued one omits it", async () => {
+		const catalog = { name: "Cylinder", unit_price: 50, taxable: false };
+		mockDb.field_purchase.findFirst.mockResolvedValue(
+			purchase(
+				{},
+				[
+					consumed({ id: "line-a", allocation_id: "alloc-a" }),
+					consumed({ id: "line-b", allocation_id: "alloc-b" }),
+				],
+				SPLIT,
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			) as any,
+		);
+		billing([
+			consumed({
+				id: "line-a",
+				inventory_item_id: ITEM_UUID,
+				inventory_item: catalog,
+				allocation: { job_visit_id: "visit-a" },
+			}),
+			consumed({ id: "line-b", allocation: { job_visit_id: "visit-b" } }),
+		]);
+		tx.job_visit_line_item.create.mockResolvedValue({ id: "vli-new" });
+
+		await submitPurchase(ORG, PURCHASE, { techId: TECH });
+
+		const written = tx.job_visit_line_item.create.mock.calls.map((c: any[]) => c[0].data);
+		expect(written[0].taxable).toBe(false);
+		expect(written[1]).not.toHaveProperty("taxable");
 	});
 
 	// `visit_line_item_id` is unique, so moving a line between jobs is a delete

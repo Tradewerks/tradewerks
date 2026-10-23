@@ -132,7 +132,11 @@ export const verifyToken = (token: string) => {
 		);
 	}
 
-	const peek = jwt.decode(token) as { stage?: string; kind?: string } | null;
+	const peek = jwt.decode(token) as { stage?: string; kind?: string; aud?: unknown } | null;
+	// Access tokens never carry an audience; any token that does was minted for another purpose.
+	if (peek?.aud !== undefined) {
+		throw new Error("Audience-scoped tokens are not valid for authentication");
+	}
 	if (peek?.stage === "pending_otp") {
 		throw new Error("OTP tokens are not valid for authentication");
 	}

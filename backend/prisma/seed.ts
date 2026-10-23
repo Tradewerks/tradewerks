@@ -148,7 +148,10 @@ async function main() {
 		"quotes", "recurring_plans", "projects", "inventory", "fleet", "vehicle_stock",
 		"purchasing", "field_purchases", "followups", "disputes",
 	];
-	const PRO_MODULES = [...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto", "ai_assistant"];
+	const PRO_MODULES = [
+		...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto",
+		"ai_assistant",
+	];
 	await db.plan.createMany({
 		data: [
 			{ key: "starter", label: "Starter", assignable: true, is_signup_default: true },
@@ -422,6 +425,7 @@ async function main() {
 				category: "Refrigerants",
 				unit: "cylinder",
 				is_batch_tracked: true,
+				taxable: false,
 			},
 		}),
 		db.inventory_item.create({

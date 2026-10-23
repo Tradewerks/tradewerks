@@ -8,6 +8,8 @@ import {
 } from "../lib/reports/recurringRevenue.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { centsToDollars, dollarsToCents, type TaxSnapshot } from "../services/taxEngine.js";
+import { roundHalfUpSymmetric } from "../services/tax/rounding.js";
+import { qbAstTaxCents, roundingFor } from "../services/tax/snapshot.js";
 import {
 	getStockStatus,
 	unitBasis,
@@ -1754,6 +1756,7 @@ export interface TaxLiabilityRow {
 }
 
 const UNCATEGORIZED_KEY = "__uncategorized__";
+const QB_AST_KEY = "__qb_ast__";
 
 export const getTaxLiabilityReport = async (
 	startDate: string | undefined,
@@ -1824,6 +1827,26 @@ export const getTaxLiabilityReport = async (
 
 	for (const invoice of invoices) {
 		const snapshot = invoice.tax_snapshot as TaxSnapshot | null;
+
+		// QuickBooks computed this invoice's tax with no jurisdiction split; our estimate's
+		// groups would report a figure the customer was never charged.
+		const qbCents = qbAstTaxCents(snapshot);
+		if (qbCents != null) {
+			// A credit against an adopted invoice carries a negative qb_tax_cents and nets in here.
+			if (qbCents !== 0) {
+				add(
+					QB_AST_KEY,
+					"QuickBooks AST",
+					"QuickBooks AST",
+					0,
+					(snapshot?.groups ?? []).reduce((sum, g) => sum + g.taxable_amount_cents, 0),
+					qbCents,
+					invoice.id,
+				);
+			}
+			continue;
+		}
+
 		const hasGroups =
 			snapshot != null &&
 			snapshot.locked_at !== "draft" &&
@@ -1851,9 +1874,16 @@ export const getTaxLiabilityReport = async (
 			continue;
 		}
 
+		const halfUp = roundingFor(snapshot) === "jurisdiction_half_up";
 		for (const group of snapshot.groups) {
 			const taxableCents = group.taxable_amount_cents;
-			const rawPerRate = group.rates.map((r) => Math.floor(taxableCents * r.rate));
+			// A half-up group was taxed one rate at a time on this same base, so recomputing
+			// each rate reproduces the stored split exactly and leaves no remainder.
+			const rawPerRate = group.rates.map((r) =>
+				halfUp
+					? roundHalfUpSymmetric(taxableCents * r.rate)
+					: Math.floor(taxableCents * r.rate),
+			);
 			const rawSum = rawPerRate.reduce((sum, n) => sum + n, 0);
 			const remainder = group.tax_amount_cents - rawSum;
 

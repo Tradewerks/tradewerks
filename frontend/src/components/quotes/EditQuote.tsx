@@ -22,14 +22,27 @@ import {
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { errorMessage } from "../../util/util";
+import { rateToPercentInput } from "../../lib/formatTax";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import {
+	lineTaxPayload,
+	editorAutoTax,
+	flatRateHandler,
+	keptRateEstimate,
+	keptRateOptionLabel,
+} from "../../lib/taxEditorMode";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
+import { roundingFor } from "../../lib/taxRounding";
 import { useDirtyTracking } from "../../hooks/forms/useDirtyTracking";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
+import AddressTaxChoicePanel from "../tax/AddressTaxChoicePanel";
+import { useAddressTaxChoice } from "../tax/useAddressTaxChoice";
 
 type Step = 1 | 2 | 3;
 
@@ -81,7 +94,13 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 
 	// Shared hooks
 	const { data: taxGroups = [] } = useTaxGroups();
+	const autoModeLoaded = useAutoTaxMode();
+	const autoMode = autoModeLoaded === true;
+	const keptEstimate = keptRateEstimate(quote.tax_snapshot, autoModeLoaded, false);
+	const kept = keptEstimate != null;
+	const keptRateLabel = keptEstimate ? keptRateOptionLabel(keptEstimate) : null;
 	const clientExempt = quote.client?.is_tax_exempt ?? false;
+	const clientTaxGroupId = quote.client?.tax_group_id ?? null;
 	const taxEditable = isQuoteEditable(quote.status);
 
 	const {
@@ -98,22 +117,14 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
+		resetLineItems,
 	} = useLineItems({
 		minItems: 1,
 		mode: "edit",
 	});
 
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
-	const lineItemsForCalc = useMemo(
-		() =>
-			activeLineItems.map((item) => ({
-				id: item.id,
-				total: item.total,
-				taxable: item.taxable ?? true,
-				tax_group_id: item.tax_group_id ?? null,
-			})),
-		[activeLineItems]
-	);
+	const lineItemsForCalc = useLineItemsForCalc(activeLineItems, clientTaxGroupId);
 
 	const {
 		taxRate,
@@ -136,13 +147,29 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		undoDiscount,
 		setOriginals: setFinancialOriginals,
 	} = useFinancialCalculations(subtotal, {
-		initialTaxRate: quote.tax_rate ? Number(quote.tax_rate) * 100 : 0,
+		initialTaxRate: rateToPercentInput(quote.tax_rate),
 		initialDiscountType: (quote.discount_type as "percent" | "amount") ?? "amount",
 		initialDiscountValue: quote.discount_value ? Number(quote.discount_value) : 0,
 		taxGroups,
 		lineItemsForCalc,
 		clientExempt,
+		rounding: roundingFor(quote.tax_snapshot),
 	});
+
+	const addressTax = useAddressTaxChoice({
+		docNoun: "quote",
+		snapshot: quote.tax_snapshot,
+		keptEstimate,
+		geo: geoData,
+		doc: quote,
+		lines: lineItemsForCalc,
+		discountAmount,
+		discountType,
+		discountValue,
+		taxGroups,
+		rounding: roundingFor(quote.tax_snapshot),
+	});
+	const resetAddressTax = addressTax.reset;
 
 	const [validUntilDate, setValidUntilDate] = useState<Date | null>(null);
 	const [expiresAtDate, setExpiresAtDate] = useState<Date | null>(null);
@@ -221,7 +248,8 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			// Initialize line items
 			const initialLineItems: EditableLineItem[] =
 				quote.line_items?.map((item) => ({
-					id: crypto.randomUUID(),
+					// Server id, so the tax snapshot's per-line reasons key straight onto the line.
+					id: item.id,
 					entity_line_item_id: item.id,
 					name: item.name,
 					description: item.description || "",
@@ -236,6 +264,9 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 					isDeleted: false,
 				})) || [];
 
+			// Ids are stable server ids, so clear the previous session's dirty flags first;
+			// setLineItems below rebuilds the originals the reset empties.
+			resetLineItems();
 			setLineItems(initialLineItems);
 
 			const vud = quote.valid_until ? new Date(quote.valid_until) : null;
@@ -254,24 +285,41 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 
 			setErrors(null);
 			setSubmitError(null);
+			resetAddressTax();
 
 			setFinancialOriginals(
-				quote.tax_rate ? Number(quote.tax_rate) * 100 : 0,
+				rateToPercentInput(quote.tax_rate),
 				quote.discount_type ?? "amount",
 				quote.discount_value ? Number(quote.discount_value) : 0
 			);
 		}
-	}, [isModalOpen, quote, resetWizard, setLineItems, setOriginals, setFinancialOriginals]);
+	}, [
+		isModalOpen,
+		quote,
+		resetWizard,
+		resetLineItems,
+		setLineItems,
+		setOriginals,
+		setFinancialOriginals,
+		resetAddressTax,
+	]);
 
 	const handleChangeAddress = (result: GeocodeResult) => {
 		setGeoData({
 			address: result.address,
 			coords: result.coords,
 		});
+		addressTax.onAddressChange();
 	};
 
 	const handleClearAddress = () => {
 		setGeoData(undefined);
+		addressTax.onAddressChange();
+	};
+
+	const lineTax = (item: Parameters<typeof lineTaxPayload>[0]) => {
+		const tax = lineTaxPayload(item);
+		return { ...tax, tax_group_id: addressTax.lineGroup(tax) };
 	};
 
 	const invokeUpdate = async () => {
@@ -297,6 +345,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			total: resolvedTotal,
 			valid_until: validUntilDate ? validUntilDate.toISOString() : null,
 			expires_at: expiresAtDate ? expiresAtDate.toISOString() : null,
+			address_tax_choice: addressTax.payloadChoice,
 		};
 
 		const parseResult = UpdateQuoteSchema.safeParse(updates);
@@ -333,8 +382,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 							unit_price: Number(item.unit_price),
 							total: item.total,
 							item_type: item.item_type || undefined,
-							taxable: item.taxable,
-							tax_group_id: item.tax_group_id ?? undefined,
+							...lineTax(item),
 							inventory_item_id: item.inventory_item_id ?? undefined,
 						},
 					});
@@ -346,8 +394,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 						unit_price: Number(item.unit_price),
 						total: item.total,
 						item_type: item.item_type || undefined,
-						taxable: item.taxable,
-						tax_group_id: item.tax_group_id ?? undefined,
+						...lineTax(item),
 						inventory_item_id: item.inventory_item_id ?? undefined,
 					};
 
@@ -362,9 +409,10 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			setIsLoading(false);
 			setIsModalOpen(false);
 		} catch (error) {
+			setIsLoading(false);
+			if (addressTax.handleError(error)) return;
 			console.error("Failed to update quote:", error);
 			setSubmitError(errorMessage(error, "Failed to update quote. Please try again."));
-			setIsLoading(false);
 		}
 	};
 
@@ -568,6 +616,8 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 							taxGroups={taxGroups}
 							clientExempt={clientExempt}
 							onTaxChange={taxEditable ? setLineItemTaxGroup : undefined}
+							autoMode={autoMode}
+							keptRateLabel={keptRateLabel}
 							onTaxGroupBulkSet={taxEditable ? setAllLineItemsTaxGroup : undefined}
 						/>
 					</div>
@@ -576,6 +626,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			case 3:
 				return (
 					<div className="space-y-3 min-w-0">
+						{addressTax.ask && <AddressTaxChoicePanel {...addressTax.panelProps} />}
 						<FinancialSummary
 							subtotal={subtotal}
 							taxRate={taxRate}
@@ -588,10 +639,20 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 							totalTax={totalTax}
 							clientExempt={clientExempt}
 							isLoading={isLoading}
-							onTaxRateChange={groupsSummary.length > 0 ? undefined : setTaxRate}
+							onTaxRateChange={flatRateHandler(autoMode, groupsSummary.length, setTaxRate)}
 							onDiscountTypeChange={setDiscountType}
 							onDiscountValueChange={setDiscountValue}
 							totalLabel="Total"
+							autoTax={editorAutoTax(
+								autoMode,
+								lineItemsForCalc,
+								discountAmount,
+								quote.tax_snapshot,
+								addressTax.addressChangedForSummary,
+								kept,
+							)}
+							keptRate={kept}
+							chosenTax={addressTax.summaryChoice}
 							isTaxDirty={isTaxDirty}
 							isDiscountDirty={isDiscountDirty}
 							onTaxUndo={undoTax}
@@ -649,6 +710,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		}
 	}, [
 		currentStep,
+		autoMode,
 		getValue,
 		updateField,
 		undoField,
@@ -658,6 +720,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		quote,
 		geoData,
 		activeLineItems,
+		lineItemsForCalc,
 		addLineItemToState,
 		removeLineItemFromState,
 		updateLineItemInState,
@@ -677,6 +740,11 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 		isDiscountDirty,
 		undoTax,
 		undoDiscount,
+		taxEditable,
+		addressTax.ask,
+		addressTax.panelProps,
+		addressTax.addressChangedForSummary,
+		addressTax.summaryChoice,
 	]);
 
 	return (
@@ -693,6 +761,7 @@ const EditQuote = ({ isModalOpen, setIsModalOpen, quote }: EditQuoteProps) => {
 			onNext={goNext}
 			onBack={goBack}
 			onSubmit={invokeUpdate}
+			canSubmit={addressTax.canSubmit}
 			canGoNext={canGoNext}
 			submitLabel="Save Changes"
 			isEditMode={true}

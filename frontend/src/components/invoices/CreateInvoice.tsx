@@ -13,11 +13,15 @@ import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { errorMessage } from "../../util/util";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import { defaultGroupForMode, editorAutoTax, flatRateHandler } from "../../lib/taxEditorMode";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { TemplateSearch, type TemplateSearchResult, type TemplateSearchClient } from "../ui/forms/TemplateSearch";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
+import { jobLineSeed, visitLineSeed } from "./invoiceImportSeeds";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 import { useTaxGroups, useDefaultTaxGroup } from "../../hooks/useTaxGroups";
 import { useQBStatusQuery, useImportableQBInvoicesQuery, useQBInvoicePrefillQuery } from "../../hooks/useQuickbooks";
@@ -108,6 +112,8 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 	const { mutateAsync: checkOverlap } = useOverlapCheckMutation();
 	const { data: taxGroups = [] } = useTaxGroups();
 	const { data: defaultTaxGroup } = useDefaultTaxGroup();
+	const autoModeState = useAutoTaxMode();
+	const autoMode = autoModeState === true;
 	const qbConnected = !!useQBStatusQuery().data?.connected;
 	const {
 		data: importableQBInvoices = [],
@@ -121,6 +127,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		() => clients?.find((c) => c.id === clientId)?.is_tax_exempt ?? false,
 		[clients, clientId]
 	);
+	const clientTaxGroupId = clients?.find((c) => c.id === clientId)?.tax_group_id ?? null;
 
 	// ── Hooks ─────────────────────────────────────────────────────────────
 	const {
@@ -141,19 +148,10 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
-	} = useLineItems({ minItems: 0, mode: "create", defaultTaxGroupId: defaultTaxGroup?.id ?? null });
+	} = useLineItems({ minItems: 0, mode: "create", defaultTaxGroupId: defaultGroupForMode(autoModeState, defaultTaxGroup?.id) });
 
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
-	const lineItemsForCalc = useMemo(
-		() =>
-			activeLineItems.map((item) => ({
-				id: item.id,
-				total: item.total,
-				taxable: item.taxable ?? true,
-				tax_group_id: item.tax_group_id ?? null,
-			})),
-		[activeLineItems]
-	);
+	const lineItemsForCalc = useLineItemsForCalc(activeLineItems, clientTaxGroupId);
 
 	const {
 		taxRate,
@@ -175,7 +173,12 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		isDiscountDirty,
 		undoTax,
 		undoDiscount,
-	} = useFinancialCalculations(subtotal, { taxGroups, lineItemsForCalc, clientExempt });
+	} = useFinancialCalculations(subtotal, {
+		taxGroups,
+		lineItemsForCalc,
+		clientExempt,
+		rounding: "jurisdiction_half_up",
+	});
 
 	const {
 		currentStep,
@@ -474,18 +477,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 				if (importedSources.has(jobId)) continue;
 				const job = clientJobs.find((j) => j.id === jobId);
 				if (!job || !job.line_items?.length) continue;
-				for (const item of job.line_items) {
-					seeds.push({
-						name: item.name ?? "",
-						description: item.description ?? "",
-						quantity: Number(item.quantity ?? 1),
-						unit_price: Number(item.unit_price ?? 0),
-						item_type: item.item_type ?? "",
-						inventory_item_id: item.inventory_item_id ?? null,
-						source_job_id: jobId,
-						source_visit_id: null,
-					});
-				}
+				for (const item of job.line_items) seeds.push(jobLineSeed(item, jobId));
 				newImportedJobIds.push(jobId);
 			}
 
@@ -516,19 +508,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 					);
 					for (const li of visit.line_items) {
 						if (existingNames.has(li.name)) continue;
-						seeds.push({
-							name: li.name,
-							description: li.description ?? "",
-							quantity: Number(li.quantity),
-							unit_price: Number(li.unit_price),
-							item_type: li.item_type ?? "",
-							// The visit is where the link is real — a tech
-							// scanned or picked this part. Dropping it here was
-							// severing the only populated link in the system.
-							inventory_item_id: li.inventory_item_id ?? null,
-							source_visit_id: visit.id,
-							source_job_id: visit.job?.id ?? null,
-						});
+						seeds.push(visitLineSeed(li, visit.id, visit.job?.id ?? null));
 					}
 				}
 				setEmptyVisitWarnings(empty);
@@ -1467,6 +1447,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 							clientExempt={clientExempt}
 							onTaxChange={setLineItemTaxGroup}
 							onTaxGroupBulkSet={setAllLineItemsTaxGroup}
+							autoMode={autoMode}
 						/>
 					</div>
 				);
@@ -1575,10 +1556,10 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 							clientExempt={clientExempt}
 							isLoading={isLoading}
 							mode="create"
-							onTaxRateChange={groupsSummary.length > 0 ? undefined : (v) => {
+							onTaxRateChange={flatRateHandler(autoMode, groupsSummary.length, (v) => {
 								setTaxRate(v);
 								markDirty();
-							}}
+							})}
 							onDiscountTypeChange={(v) => {
 								setDiscountType(v);
 								markDirty();
@@ -1592,6 +1573,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 							isDiscountDirty={isDiscountDirty}
 							onTaxUndo={undoTax}
 							onDiscountUndo={undoDiscount}
+							autoTax={editorAutoTax(autoMode, lineItemsForCalc, discountAmount)}
 						/>
 					</div>
 				);
@@ -1602,6 +1584,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		}
 	}, [
 		currentStep,
+		autoMode,
 		clientId,
 		memo,
 		internalNotes,
@@ -1621,6 +1604,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		toggleVisitSelected,
 		updateLineItemSource,
 		activeLineItems,
+		lineItemsForCalc,
 		subtotal,
 		dirtyLineItemFields,
 		undoLineItemField,

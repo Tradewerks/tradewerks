@@ -132,12 +132,9 @@ export const useUpdateTaxGroup = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ id, data }: { id: string; data: UpdateTaxGroupInput }) =>
 			taxApi.updateTaxGroup(id, data),
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: ["tax-groups"] });
-			// A group becoming/losing default status must refresh the default query.
-			// Invalidate unconditionally — TQ deduplicates if the list query already triggered a fetch.
-			queryClient.invalidateQueries({ queryKey: ["tax-groups", "default"] });
-		},
+		// Returned so mutateAsync waits for the refetch; callers that close on success
+		// would otherwise flash the old default. The prefix also covers ["tax-groups", "default"].
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tax-groups"] }),
 		onError: (error: Error) => {
 			console.error("Failed to update tax group:", error);
 		},

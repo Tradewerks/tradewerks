@@ -80,6 +80,9 @@ export interface DocumentShape {
 	amount_paid?: unknown;
 	/** Invoice only: set once the invoice has been pushed to QuickBooks. */
 	qb_invoice_id?: string | null;
+	/** Invoice only: set on a credit adjustment once its CreditMemo exists in QuickBooks. */
+	qb_credit_memo_id?: string | null;
+	qb_credit_applied_payment_id?: string | null;
 	/** Invoice only: live (non-Void) adjustments written against this one. */
 	adjustments?: { id: string; invoice_number: string }[] | null;
 }
