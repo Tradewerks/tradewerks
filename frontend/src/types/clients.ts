@@ -1,5 +1,6 @@
 import z from "zod";
 import type { Coordinates } from "./location";
+import type { AddressTaxChoice } from "./tax";
 import type { RequestSummary, QuoteSummary, JobSummary } from "./common";
 
 // ============================================================================
@@ -130,6 +131,7 @@ export interface UpdateClientInput {
 	address?: string;
 	coords?: Coordinates;
 	is_active?: boolean;
+	address_tax_choice?: AddressTaxChoice;
 }
 
 export const CreateClientSchema = z.object({

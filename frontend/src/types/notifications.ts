@@ -43,6 +43,8 @@ export type DispatcherNotificationType =
 	| "subscription_changed"
 	| "upgrade_request_resolved"
 	| "trial_ending"
+	| "tax_rate_changed"
+	| "qb_tax_code_needed"
 	| "timesheet_issue_reported"
 
 export interface DispatcherNotification {
@@ -84,6 +86,8 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "followup_email_opened", group: "Sales & billing", permission: "view_followups", label: "Follow-up opens", description: "A client opened a follow-up email" },
 	{ type: "invoice_paid", group: "Sales & billing", permission: "view_invoices", label: "Invoice payments", description: "A payment was recorded on an invoice" },
 	{ type: "dispute_opened", group: "Sales & billing", permission: "resolve_disputes", label: "Disputes", description: "A dispute was opened on a document" },
+	{ type: "tax_rate_changed", group: "Sales & billing", permission: "manage_taxes", label: "Tax rate changes", description: "A jurisdiction's rate changed on open drafts" },
+	{ type: "qb_tax_code_needed", group: "Sales & billing", permission: "manage_taxes", label: "QuickBooks tax codes", description: "QuickBooks needs a tax code before automatic tax can sync" },
 	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },
 	{ type: "subscription_changed", group: "Subscription", permission: "manage_organization", label: "Subscription changes", description: "TradeWerks changed your subscription, modules or limits" },
 	{ type: "upgrade_request_resolved", group: "Subscription", permission: "manage_organization", label: "Subscription requests", description: "TradeWerks approved or declined your request" },

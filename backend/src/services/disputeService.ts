@@ -11,7 +11,7 @@ import {
 	syncBilledAmounts,
 	syncInvoicePaymentTotals,
 } from "./invoiceService.js";
-import { mirrorInvoiceVoidToQuickBooks } from "./qb/qbInvoices.js";
+import { mirrorInvoiceVoidToQuickBooks, pushInvoiceDetached } from "./qb/qbInvoices.js";
 import {
 	assertValidInvoiceTransition,
 	assertValidQuoteTransition,
@@ -595,7 +595,12 @@ export async function resolveDispute(
 	// Filled inside the transaction and acted on only after it commits: the
 	// QuickBooks void is an external call and must never see a local void that
 	// could still roll back.
-	const voidedInvoices: { id: string; qbInvoiceId: string | null }[] = [];
+	const voidedInvoices: {
+		id: string;
+		qbInvoiceId: string | null;
+		qbCreditMemo?: { id: string; appliedPaymentId: string | null };
+	}[] = [];
+	let issuedAdjustmentId: string | null = null;
 
 	const result = await sdb.$transaction(async (rawTx) => {
 		const tx = rawTx as unknown as Prisma.TransactionClient;
@@ -658,6 +663,12 @@ export async function resolveDispute(
 				voidedInvoices.push({
 					id: doc.id,
 					qbInvoiceId: doc.qb_invoice_id ?? null,
+					...(doc.qb_credit_memo_id && {
+						qbCreditMemo: {
+							id: doc.qb_credit_memo_id,
+							appliedPaymentId: doc.qb_credit_applied_payment_id ?? null,
+						},
+					}),
 				});
 			}
 		};
@@ -691,6 +702,7 @@ export async function resolveDispute(
 				where: { id: disputeId },
 				data: { adjustment_invoice_id: adjustmentId },
 			});
+			issuedAdjustmentId = adjustmentId;
 			await restoreInvoiceStatus(
 				tx,
 				doc.id,
@@ -734,7 +746,15 @@ export async function resolveDispute(
 
 	// The kebab's Void behaviour, whichever door the void came through (D3).
 	for (const voided of voidedInvoices) {
-		mirrorInvoiceVoidToQuickBooks(organizationId, voided.id, voided.qbInvoiceId);
+		mirrorInvoiceVoidToQuickBooks(
+			organizationId,
+			voided.id,
+			voided.qbInvoiceId,
+			...(voided.qbCreditMemo ? [voided.qbCreditMemo] : []),
+		);
+	}
+	if (issuedAdjustmentId) {
+		pushInvoiceDetached(issuedAdjustmentId, organizationId);
 	}
 	return result;
 }

@@ -8,7 +8,15 @@ import {
 } from "../lib/reports/recurringRevenue.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { centsToDollars, dollarsToCents, type TaxSnapshot } from "../services/taxEngine.js";
-import { getStockStatus, unitBasis, type UnitBasis } from "../lib/inventory.js";
+import { roundHalfUpSymmetric } from "../services/tax/rounding.js";
+import { qbAstTaxCents, roundingFor } from "../services/tax/snapshot.js";
+import {
+	getStockStatus,
+	unitBasis,
+	type UnitBasis,
+	CONSUMPTION_MOVEMENT_PREDICATE,
+	CONSUMPTION_SIGNED_QTY,
+} from "../lib/inventory.js";
 import {
 	buildSqlParts,
 	type ColumnDef,
@@ -20,7 +28,11 @@ import { round2 } from "../lib/reports/numbers.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { log } from "../services/appLogger.js";
 import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
-import { computeConsumptionCosts, ConsumptionCostRow } from "../lib/reports/costing.js";
+import {
+	computeConsumptionCosts,
+	computeJobDirectCosts,
+	ConsumptionCostRow,
+} from "../lib/reports/costing.js";
 import { buildShiftSegments } from "./timesheetController.js";
 
 // Upper bound on rows pulled into memory for the in-JS report aggregations
@@ -144,6 +156,7 @@ export const getOverviewMetrics = async (
 		avgResponseTimeResult,
 		convertedQuotes,
 		totalQuotes,
+		approvedOfCreated,
 		newOneOffJobs,
 		newRecurringJobs,
 		avgJobValue,
@@ -168,6 +181,14 @@ export const getOverviewMetrics = async (
 		sdb.quote.count({
 			where: {
 				organization_id: organizationId,
+				created_at: { gte: start, lte: end },
+			},
+		}),
+		// Same cohort as totalQuotes, so the rate can't pass 100%.
+		sdb.quote.count({
+			where: {
+				organization_id: organizationId,
+				status: "Approved",
 				created_at: { gte: start, lte: end },
 			},
 		}),
@@ -207,6 +228,7 @@ export const getOverviewMetrics = async (
 		prevAvgResponseTimeResult,
 		prevConvertedQuotes,
 		prevTotalQuotes,
+		prevApprovedOfCreated,
 		prevOneOffJobs,
 		prevRecurringJobs,
 		prevAvgJobValue,
@@ -231,6 +253,13 @@ export const getOverviewMetrics = async (
 		sdb.quote.count({
 			where: {
 				organization_id: organizationId,
+				created_at: { gte: previousStart, lte: previousEnd },
+			},
+		}),
+		sdb.quote.count({
+			where: {
+				organization_id: organizationId,
+				status: "Approved",
 				created_at: { gte: previousStart, lte: previousEnd },
 			},
 		}),
@@ -278,11 +307,11 @@ export const getOverviewMetrics = async (
 
 	const convRate =
 		totalQuotes > 0
-			? Math.round((convertedQuotes / totalQuotes) * 100)
+			? Math.round((approvedOfCreated / totalQuotes) * 100)
 			: 0;
 	const prevConvRate =
 		prevTotalQuotes > 0
-			? Math.round((prevConvertedQuotes / prevTotalQuotes) * 100)
+			? Math.round((prevApprovedOfCreated / prevTotalQuotes) * 100)
 			: 0;
 
 	const avgValue = Number(avgJobValue._avg.estimated_total ?? 0);
@@ -1158,7 +1187,11 @@ const buildReorderForecast = async (
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND sm.reason IN ('parts_used', 'direct_consumption')
+						-- Evidence only, so no reversals: this is not the shared predicate.
+						AND (
+							sm.reason IN ('parts_used', 'direct_consumption')
+							OR (sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed')
+						)
 				)                                   AS "firstConsumedAt",
 				-- vehicle_stock_item has no org column of its own; scope through vehicle.
 				COALESCE((
@@ -1168,22 +1201,14 @@ const buildReorderForecast = async (
 					WHERE vsi.inventory_item_id = ii.id
 						AND v.organization_id = ${organizationId}
 				), 0)::float                        AS "vehicleQty",
-				-- Net of reversals (from_location_type = 'consumed' cancels demand that
-				-- never happened) — same netting getBatchImpact uses. updatePartsUsedQty
-				-- is the current writer of these; keep this in lockstep if new reversal
-				-- paths are added.
+				-- Net of reversals (lib/inventory.ts CONSUMPTION_*), same as the item page.
 				COALESCE((
-					SELECT SUM(
-						CASE WHEN sm.reason = 'reversal' THEN -sm.qty ELSE sm.qty END
-					)
+					SELECT SUM(${CONSUMPTION_SIGNED_QTY})
 					FROM stock_movement sm
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND (
-							sm.reason IN ('parts_used', 'direct_consumption')
-							OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
-						)
+						AND ${CONSUMPTION_MOVEMENT_PREDICATE}
 				), 0)::float                        AS "qtyConsumed",
 				-- Stamped units behind that sum (same reason set + window) — the
 				-- item's own unit column says nothing about what the ledger used.
@@ -1193,10 +1218,7 @@ const buildReorderForecast = async (
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND (
-							sm.reason IN ('parts_used', 'direct_consumption')
-							OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
-						)
+						AND ${CONSUMPTION_MOVEMENT_PREDICATE}
 				)                                   AS "consumedUnits"
 			FROM inventory_item ii
 			WHERE ii.organization_id = ${organizationId}
@@ -1346,6 +1368,7 @@ const inventoryUsageByItem = async (
 			OR: [
 				{ reason: { in: ["parts_used", "direct_consumption"] } },
 				{ reason: "reversal", from_location_type: "consumed" },
+				{ reason: "supplier_purchase", to_location_type: "consumed" },
 			],
 			...(from && to ? { created_at: { gte: from, lte: to } } : {}),
 			...(itemIds ? { inventory_item_id: { in: itemIds } } : {}),
@@ -1448,7 +1471,7 @@ export const getInventoryReport = async (
 const FLEET_ON_HAND =
 	'(SELECT COALESCE(SUM(vs.qty_on_hand), 0) FROM "vehicle_stock_item" vs WHERE vs.inventory_item_id = ii.id)';
 
-const INVENTORY_SQL_COLUMNS: ColumnMap = {
+export const INVENTORY_SQL_COLUMNS: ColumnMap = {
 	itemName: t("ii.name"),
 	sku: t("ii.sku"),
 	category: t("ii.category"),
@@ -1733,6 +1756,7 @@ export interface TaxLiabilityRow {
 }
 
 const UNCATEGORIZED_KEY = "__uncategorized__";
+const QB_AST_KEY = "__qb_ast__";
 
 export const getTaxLiabilityReport = async (
 	startDate: string | undefined,
@@ -1803,6 +1827,26 @@ export const getTaxLiabilityReport = async (
 
 	for (const invoice of invoices) {
 		const snapshot = invoice.tax_snapshot as TaxSnapshot | null;
+
+		// QuickBooks computed this invoice's tax with no jurisdiction split; our estimate's
+		// groups would report a figure the customer was never charged.
+		const qbCents = qbAstTaxCents(snapshot);
+		if (qbCents != null) {
+			// A credit against an adopted invoice carries a negative qb_tax_cents and nets in here.
+			if (qbCents !== 0) {
+				add(
+					QB_AST_KEY,
+					"QuickBooks AST",
+					"QuickBooks AST",
+					0,
+					(snapshot?.groups ?? []).reduce((sum, g) => sum + g.taxable_amount_cents, 0),
+					qbCents,
+					invoice.id,
+				);
+			}
+			continue;
+		}
+
 		const hasGroups =
 			snapshot != null &&
 			snapshot.locked_at !== "draft" &&
@@ -1830,9 +1874,16 @@ export const getTaxLiabilityReport = async (
 			continue;
 		}
 
+		const halfUp = roundingFor(snapshot) === "jurisdiction_half_up";
 		for (const group of snapshot.groups) {
 			const taxableCents = group.taxable_amount_cents;
-			const rawPerRate = group.rates.map((r) => Math.floor(taxableCents * r.rate));
+			// A half-up group was taxed one rate at a time on this same base, so recomputing
+			// each rate reproduces the stored split exactly and leaves no remainder.
+			const rawPerRate = group.rates.map((r) =>
+				halfUp
+					? roundHalfUpSymmetric(taxableCents * r.rate)
+					: Math.floor(taxableCents * r.rate),
+			);
 			const rawSum = rawPerRate.reduce((sum, n) => sum + n, 0);
 			const remainder = group.tax_amount_cents - rawSum;
 
@@ -1939,7 +1990,7 @@ export const getJobsReport = async (
 };
 
 // j = job, c = client
-const JOBS_SQL_COLUMNS: ColumnMap = {
+export const JOBS_SQL_COLUMNS: ColumnMap = {
 	jobNumber: t("j.job_number"),
 	name: t("j.name"),
 	clientName: t("c.name"),
@@ -2015,7 +2066,7 @@ const projectsBaseWhere = (
 };
 
 // p = project, c = client, md = manager_dispatcher
-const PROJECTS_SQL_COLUMNS: ColumnMap = {
+export const PROJECTS_SQL_COLUMNS: ColumnMap = {
 	projectNumber: t("p.project_number"),
 	name: t("p.name"),
 	clientName: t("c.name"),
@@ -2127,7 +2178,7 @@ export const getProjectsReportPage = async (
 
 const FTFR_INCLUDE = {
 	client: { select: { name: true } },
-	_count: { select: { visits: true } },
+	_count: { select: { visits: { where: { status: { not: "Cancelled" } } } } },
 } satisfies Prisma.jobInclude;
 
 const mapFtfrRaw = (job: Prisma.jobGetPayload<{ include: typeof FTFR_INCLUDE }>) => ({
@@ -2151,7 +2202,7 @@ export const getFirstTimeFixReport = async (
 		where: {
 			organization_id: organizationId,
 			status: "Completed",
-			visits: { some: {} },
+			visits: { some: { status: { not: "Cancelled" } } },
 			...(Object.keys(dateFilter).length && { completed_at: dateFilter }),
 		},
 		orderBy: { completed_at: "desc" },
@@ -2222,7 +2273,7 @@ export const getInvoicesReport = async (
 	return invoices.map(mapInvoiceRaw);
 };
 
-const INVOICES_SQL_COLUMNS: ColumnMap = {
+export const INVOICES_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	status: t("i.status::text"),
@@ -2399,7 +2450,7 @@ export const getRevenueLineItemsReport = async (
 	return { rows: items.map(mapRevenueLineItemRaw), truncated: items.length >= REPORT_ROW_CAP };
 };
 
-const REVENUE_LINE_ITEM_SQL_COLUMNS: ColumnMap = {
+export const REVENUE_LINE_ITEM_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	issueDate: dt("i.issue_date"),
@@ -2522,6 +2573,7 @@ export const getClientsReport = async (organizationId: string) => {
 				SUM(balance_due) AS open_balance
 			FROM invoice
 			WHERE organization_id = ${organizationId}
+			AND status NOT IN ('Draft', 'Void')
 			GROUP BY client_id
 		) inv ON inv.client_id = c.id
 		WHERE c.organization_id = ${organizationId}
@@ -3268,7 +3320,7 @@ export const getPaymentsReport = async (
 const PAYMENTS_FROM =
 	'"invoice_payment" p JOIN "invoice" i ON i.id = p.invoice_id JOIN "client" c ON c.id = i.client_id LEFT JOIN "dispatcher" disp ON disp.id = p.recorded_by_dispatcher_id LEFT JOIN "technician" tech ON tech.id = p.recorded_by_tech_id';
 
-const PAYMENTS_SQL_COLUMNS: ColumnMap = {
+export const PAYMENTS_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	method: t("p.method"),
@@ -3359,8 +3411,9 @@ const summarizeCostSource = (events: ConsumptionCostRow[]) => {
 	const pricedTotal = round2(priced.reduce((s, e) => s + e.totalCost, 0));
 	const totalCogs = priced.length === 0 ? null : pricedTotal;
 	const hasNoData = events.some(e=> e.costSource === "no_cost_data");
-	const allWac = events.every(e => e.costSource === "wac");
-	const costCoverage = allWac ? "Full"
+	// "actual" is the price actually paid, so it is exact like wac, not a fallback.
+	const allExact = events.every(e => e.costSource === "wac" || e.costSource === "actual");
+	const costCoverage = allExact ? "Full"
 		: !hasNoData ? "Estimated"
 		: priced.length > 0 ? "Partial"
 		: "No Cost Data";
@@ -3597,7 +3650,7 @@ export const getQuoteFunnelReport = async (
 	};
 };
 
-const QUOTES_SQL_COLUMNS: ColumnMap = {
+export const QUOTES_SQL_COLUMNS: ColumnMap = {
 	quoteNumber: t("q.quote_number"),
 	title: t("q.title"),
 	clientName: t("c.name"),
@@ -3825,10 +3878,20 @@ const JOB_BILLING_SELECT = {
 	client: { select: { name: true } },
 } as const;
 
+// Coverage for a job that consumed nothing — distinct from "No Cost Data",
+// which means material was consumed and could not be priced.
+export const NO_MATERIALS = "No Materials";
 
-/* 
-*	 missng labor cost
-*/
+// Share of an invoice's pre-discount subtotal that survives the discount.
+// Clamped to [0,1]: a discount over subtotal would otherwise flip revenue negative.
+export const discountNetFactor = (subtotal: unknown, discountAmount: unknown) => {
+	const base = Number(subtotal ?? 0);
+	const discount = Number(discountAmount ?? 0);
+	if (!(base > 0) || !(discount > 0)) return 1;
+	return Math.max(0, 1 - discount / base);
+};
+
+
 export const getJobProfitabilityReport = async (
 	startDate: string | undefined,
 	endDate: string | undefined,
@@ -3837,11 +3900,17 @@ export const getJobProfitabilityReport = async (
 	const sdb = getScopedDb(orgId);
 	const dateFilter = buildDateFilter(startDate, endDate);
 
-	// COGS is job-lifetime on purpose: the period selects which jobs were billed,
-	// then each is costed over its whole life. Its own truncation flag comes from
-	// the 10k consumption-event cap in costing.ts and must be forwarded — dropping
-	// it understates COGS and therefore OVERSTATES profit.
 	const jobCogs = await getCogsByJobReport(undefined, undefined, orgId);
+	const directCosts = await computeJobDirectCosts(orgId);
+	// The only org-config read in this file. Decimal columns, so Number() by hand —
+	// num() returns 0 for a Decimal and would price every mile and hour at nothing.
+	const orgCfg = await sdb.organization.findFirst({
+		where: { id: orgId },
+		select: { cost_per_mile: true, monthly_overhead: true, overhead_rate_per_hour: true },
+	});
+	const perMile = Number(orgCfg?.cost_per_mile ?? 0);
+	const overheadRate =
+		orgCfg?.overhead_rate_per_hour == null ? null : Number(orgCfg.overhead_rate_per_hour);
 	const invoices = await sdb.invoice.findMany({
 		where: {
 			status: { notIn: ["Draft", "Void"] },
@@ -3849,6 +3918,14 @@ export const getJobProfitabilityReport = async (
 				OR: [{ issue_date: dateFilter }, { issue_date: null, created_at: dateFilter }],
 			}),
 		},
+		// Unordered, the cap returns an arbitrary set and the same query can report
+		// different revenue twice. Newest first, so a truncated run drops the
+		// oldest invoices; id breaks ties, which issue_date alone does not.
+		orderBy: [
+			{ issue_date: { sort: "desc", nulls: "last" } },
+			{ created_at: "desc" },
+			{ id: "asc" },
+		],
 		take: REPORT_ROW_CAP,
 		include: {
 			jobs: {
@@ -3874,27 +3951,57 @@ export const getJobProfitabilityReport = async (
 
 	type BilledJobMeta = (typeof invoices)[number]["jobs"][number]["job"];
 	const jobRevenue = new Map<string, { revenue: number; job: BilledJobMeta }>();
-	const addRevenue = (jobId: string, amount: unknown, job: BilledJobMeta) => {
+	const addRevenue = (jobId: string, amount: number, job: BilledJobMeta) => {
 		const prev = jobRevenue.get(jobId);
 		jobRevenue.set(jobId, {
-			revenue: (prev?.revenue ?? 0) + Number(amount ?? 0),
+			revenue: (prev?.revenue ?? 0) + amount,
 			job: prev?.job ?? job,
 		});
 	};
 
 	for (const i of invoices) {
-		for (const j of i.jobs) addRevenue(j.job_id, j.billed_amount, j.job);
-		for (const v of i.visits) addRevenue(v.visit.job_id, v.billed_amount, v.visit.job);
+		// billed_amount sums line items, which never carry the invoice-level
+		// discount — scale it down or the discount lands in gross profit.
+		const net = discountNetFactor(i.subtotal, i.discount_amount);
+		for (const j of i.jobs) addRevenue(j.job_id, Number(j.billed_amount ?? 0) * net, j.job);
+		for (const v of i.visits)
+			addRevenue(v.visit.job_id, Number(v.billed_amount ?? 0) * net, v.visit.job);
 	}
 
 	// Net margin
-	
+	const directByJob = new Map(directCosts.map((d) => [d.jobId, d]));
 
 	const rows = [...jobRevenue.entries()]
 		.map(([jobId, { revenue, job }]) => {
-			const cogs = round2(Number(cogsByJob.get(jobId)?.totalCogs ?? 0));
-			const profit = round2(revenue - cogs);
-			const margin = revenue > 0 ? round2((profit / revenue) * 100) : null;
+			// A null totalCogs means events exist but none could be priced — unknown.
+			// No events at all means nothing was consumed, which is a real 0.
+			const cogRow = cogsByJob.get(jobId);
+			const cogs = cogRow && cogRow.totalCogs == null ? "-" : round2(Number(cogRow?.totalCogs ?? 0));
+			const profit = cogs === "-" ? "-" : round2(revenue - cogs);
+			const margin = revenue > 0 && profit !== "-" ? round2((profit / revenue) * 100) : null;
+
+			const direct = directByJob.get(jobId);
+			const hours = direct?.hours ?? 0;
+			// Partial rating dashes too: one unrated tech on a two-tech job yields an
+			// understated figure that reads as exact, which is worse than admitting it.
+			const laborCost = direct && direct.unratedHours > 0 ? "-" : round2(direct?.laborCost ?? 0);
+			// Zero miles on a visited job is likely an unrecorded drive, but dashing it
+			// blanked Net on most rows for the smallest cost — price it at 0 and flag it.
+			const travelMissing =
+				perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0;
+			const travelCost = round2((direct?.miles ?? 0) * perMile);
+			// No rate set is unknown overhead, not free overhead — unless no hours were
+			// worked, where zero is the honest answer either way.
+			const overheadCost =
+				overheadRate == null ? (hours > 0 ? "-" : 0) : round2(hours * overheadRate);
+
+			const netKnown = cogs !== "-" && laborCost !== "-" && overheadCost !== "-";
+			const netProfit = netKnown
+				? round2(revenue - cogs - laborCost - travelCost - overheadCost)
+				: "-";
+			const netMargin =
+				revenue > 0 && netProfit !== "-" ? round2((netProfit / revenue) * 100) : null;
+
 			return {
 				jobId,
 				jobNumber: job.job_number,
@@ -3902,18 +4009,66 @@ export const getJobProfitabilityReport = async (
 				clientName: job.client?.name ?? null,
 				revenue: round2(revenue),
 				cogs,
+				// Anything but Full means the COGS beside it is soft, so profit is too.
+				costCoverage: cogRow?.costCoverage ?? NO_MATERIALS,
+				// profit/margin stay GROSS: the Gross view and its tile mean gross, and
+				// the net figures ride alongside as their own keys.
 				profit,
 				margin,
+				laborHours: round2(hours),
+				laborCost,
+				travelCost,
+				_travelMissing: travelMissing,
+				overheadCost,
+				netProfit,
+				netMargin,
 			};
 		})
 		.sort((a, b) => b.revenue - a.revenue);
+
+	// Absorption variance is org-wide and window-scoped, so it cannot be derived
+	// from the rows: it needs hours from jobs with no invoiced revenue in the
+	// window too. groupBy/aggregate is the right tool here — getScopedDb hooks it
+	// and applies the two-hop visit->job->org filter for free.
+	const windowHours = Number(
+		(
+			await sdb.visit_tech_time_entry.aggregate({
+				_sum: { hours_worked: true },
+				...(Object.keys(dateFilter).length && { where: { clocked_in_at: dateFilter } }),
+			})
+		)._sum.hours_worked ?? 0,
+	);
+	const overheadAbsorbed = overheadRate == null ? null : round2(windowHours * overheadRate);
+	// A monthly pool spread over "all time" means nothing, so no window means no
+	// variance — a null beats a confident wrong number.
+	// shortcut: a partial month counts as a whole one, so the pool overstates on
+	// ragged ranges; upgrade to day-proration if anyone reads it closely.
+	// UTC, not local: getMonth() on "2026-03-01T00:00:00Z" reads February west of
+	// Greenwich, which silently doubles the pool on a single-month range.
+	const monthsSpanned =
+		startDate && endDate
+			? (new Date(endDate).getUTCFullYear() - new Date(startDate).getUTCFullYear()) * 12 +
+				(new Date(endDate).getUTCMonth() - new Date(startDate).getUTCMonth()) +
+				1
+			: null;
+	const overheadPool =
+		monthsSpanned == null ? null : round2(Number(orgCfg?.monthly_overhead ?? 0) * monthsSpanned);
+	const absorptionVariance =
+		overheadPool == null || overheadAbsorbed == null ? null : round2(overheadPool - overheadAbsorbed);
 
 	// Three independent caps can each make these figures incomplete, and all three
 	// warrant the same warning: consumption events (understates COGS -> overstates
 	// profit), invoices scanned (understates revenue), and report rows (drops jobs).
 	const rowsTruncated = rows.length > REPORT_ROW_CAP;
 	const truncated = rowsTruncated || jobCogs.truncated || invoices.length >= REPORT_ROW_CAP;
-	return { rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows, truncated };
+	return {
+		rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows,
+		truncated,
+		overheadPool,
+		overheadAbsorbed,
+		absorptionVariance,
+		overheadRateSet: overheadRate != null,
+	};
 }
 
 // =========================================================================================================
@@ -3931,7 +4086,7 @@ export const BREAKDOWNS: Record<SummaryPage, string[]> = {
 	inventory: ["status", "qb_linked"],
 	projects: ["status", "priority", "manager"],
 };
-type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration" };
+type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration"; note?: string };
 type Slice = { label: string; value: number; };
 interface PageSummaryResponse {
 	page: string;
@@ -4199,22 +4354,27 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			const itemWhere = { organization_id: orgId, provisional: false, is_active: true };
 			// Total comes from count(): the row list below is capped, so its length
 			// would silently understate a large catalog.
-			const [items, itemCount] = await Promise.all([
+			// Asset value counts warehouse + fleet stock and discontinued items, like
+			// the inventory report; only stock status is limited to active items.
+			const [items, itemCount, [asset]] = await Promise.all([
 				sdb.inventory_item.findMany({
 					where: itemWhere,
-					select: { id: true, quantity: true, low_stock_threshold: true, cost: true },
+					select: { id: true, quantity: true, low_stock_threshold: true },
 					take: REPORT_ROW_CAP,
 				}),
 				sdb.inventory_item.count({ where: itemWhere }),
+				sdb.$queryRaw<{ value: number; missingCost: number }[]>(Prisma.sql`
+					SELECT
+						COALESCE(SUM(ii.cost * (ii.quantity + ${Prisma.raw(FLEET_ON_HAND)})), 0)::float AS "value",
+						COUNT(*) FILTER (WHERE ii.cost IS NULL AND ii.quantity + ${Prisma.raw(FLEET_ON_HAND)} > 0)::int AS "missingCost"
+					FROM "inventory_item" ii
+					WHERE ii.organization_id = ${orgId} AND ii.provisional = false
+				`),
 			]);
 			let low = 0;
 			let out = 0;
 			let sufficient = 0;
-			let assetValue = 0;
 			for (const it of items) {
-				// Coerced for consistency with the other Decimal-derived reads in this
-				// loop (getStockStatus below also expects a plain number).
-				assetValue += Number(it.quantity) * Number(it.cost ?? 0);
 				const status = getStockStatus(it.quantity, it.low_stock_threshold);
 				if (status === "low") low++;
 				else if (status === "out_of_stock") out++;
@@ -4251,7 +4411,14 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				{ label: "Total Items",  value: itemCount,    format: "number" },
 				{ label: "Low",          value: low,          format: "number" },
 				{ label: "Out of Stock", value: out,          format: "number" },
-				{ label: "Asset Value",  value: assetValue,   format: "currency" },
+				{
+					label: "Asset Value",
+					value: asset?.value ?? 0,
+					format: "currency",
+					...(asset?.missingCost && {
+						note: `${asset.missingCost} item${asset.missingCost === 1 ? "" : "s"} without cost`,
+					}),
+				},
 			];
 			break;
 		}

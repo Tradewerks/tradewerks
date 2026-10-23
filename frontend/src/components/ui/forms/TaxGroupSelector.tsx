@@ -1,6 +1,7 @@
 import { Lock } from "lucide-react";
 import type { TaxGroup } from "../../../types/tax";
-import { formatTaxGroupLabel } from "../../../types/tax";
+import { parseTaxChoice } from "../../../lib/taxEditorMode";
+import TaxChoiceOptions from "./TaxChoiceOptions";
 
 interface TaxGroupSelectorProps {
 	value: string | null;
@@ -9,6 +10,8 @@ interface TaxGroupSelectorProps {
 	clientExempt: boolean;
 	onChange: (tax_group_id: string | null, taxable: boolean) => void;
 	disabled?: boolean;
+	autoMode?: boolean;
+	keptRateLabel?: string | null;
 }
 
 const TaxGroupSelector = ({
@@ -18,6 +21,8 @@ const TaxGroupSelector = ({
 	clientExempt,
 	onChange,
 	disabled = false,
+	autoMode = false,
+	keptRateLabel = null,
 }: TaxGroupSelectorProps) => {
 	if (clientExempt) {
 		return (
@@ -28,16 +33,14 @@ const TaxGroupSelector = ({
 		);
 	}
 
-	const selectValue = taxable && value ? value : "none";
+	// Manual mode saves a taxable ungrouped line at the org default group (e.g. after picking a
+	// taxable item onto a "No Tax" line), so show that group rather than "No Tax".
+	const manualFallback = taxGroups.find((g) => g.is_default && g.is_active)?.id ?? "none";
+	const ungroupedValue = autoMode || keptRateLabel ? "auto" : manualFallback;
+	const selectValue = !taxable ? "none" : value || ungroupedValue;
 
-	const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-		const selected = e.target.value;
-		if (selected === "none") {
-			onChange(null, false);
-		} else {
-			onChange(selected, true);
-		}
-	};
+	const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) =>
+		onChange(...parseTaxChoice(e.target.value));
 
 	return (
 		<div
@@ -56,18 +59,11 @@ const TaxGroupSelector = ({
 				className={`appearance-none w-full h-full px-2.5 pr-7 bg-base text-sm border-0 outline-none focus:ring-0 disabled:cursor-not-allowed [&>option]:bg-base [&>option]:text-text-primary
 					${selectValue === "none" ? "text-text-muted" : "text-text-primary"}`}
 			>
-				<option value="none">No Tax</option>
-				{taxGroups.length === 0 ? (
-					<option value="" disabled>
-						No tax groups configured
-					</option>
-				) : (
-					taxGroups.map((group) => (
-						<option key={group.id} value={group.id}>
-							{formatTaxGroupLabel(group)}
-						</option>
-					))
-				)}
+				<TaxChoiceOptions
+					taxGroups={taxGroups}
+					autoMode={autoMode}
+					keptRateLabel={keptRateLabel}
+				/>
 			</select>
 			{/* Arrow matches Dropdown component */}
 			<svg

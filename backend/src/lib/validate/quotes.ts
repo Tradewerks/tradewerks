@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { coordsSchema, baseLineItemSchema, discountTypeEnum, validateDiscountRange } from "./shared.js";
+import {
+	coordsSchema,
+	baseLineItemSchema,
+	discountTypeEnum,
+	validateDiscountRange,
+} from "./shared.js";
+import { addressTaxChoiceSchema } from "./addressTaxChoice.js";
 
 // Quote line items — no source traceability fields
 const quoteLineItemInputSchema = baseLineItemSchema;
@@ -110,6 +116,7 @@ export const updateQuoteSchema = z
 		line_items: z
 			.array(quoteLineItemInputSchema.extend({ id: z.string().uuid().optional() }))
 			.optional(),
+		address_tax_choice: addressTaxChoiceSchema.optional(),
 	})
 	.superRefine(validateDiscountRange)
 	.transform((data) => ({

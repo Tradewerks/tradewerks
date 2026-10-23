@@ -444,6 +444,19 @@ describe("PartsUsedSection — Edit Parts quantity routing", () => {
 		]);
 	});
 
+	test("a non-stock line rewrite keeps every line's position", async () => {
+		const laborLine: VisitLineItem = { ...supplierLine, id: "li-labor", name: "Labor" };
+		await openEditTab([laborLine, supplierLine]);
+
+		await userEvent.click(screen.getAllByLabelText("Increase quantity")[1]);
+
+		await waitFor(() => expect(mockUpdateVisitMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockUpdateVisitMutateAsync.mock.calls[0][0].data.line_items).toEqual([
+			expect.objectContaining({ id: "li-labor", sort_order: 0 }),
+			expect.objectContaining({ id: "li-supplier", sort_order: 1 }),
+		]);
+	});
+
 	test("decreasing a non-stock line to zero removes it from the visit", async () => {
 		await openEditTab([{ ...supplierLine, quantity: 1, total: 3.33 }]);
 

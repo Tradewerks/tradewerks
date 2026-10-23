@@ -38,6 +38,19 @@ vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock("../../services/tax/taxMode.js", () => ({
+	getOrgTaxContext: vi.fn(async () => ({
+		stored_mode: "manual",
+		auto_entitled: false,
+		mode: "manual",
+		registered_states: [],
+		legacy_rate: 0,
+		address: null,
+	})),
+	getEffectiveTaxMode: vi.fn(async () => "manual"),
+	dropClientTaxTotals: <T,>(p: T) => p,
+}));
+
 import { db } from "../../db.js";
 import { updateQuote, deleteQuote } from "../quotesController.js";
 import type { Request } from "express";

@@ -12,7 +12,7 @@ import type {
 	DiscountType,
 } from "./common";
 import { PriorityValues } from "./common";
-import type { TaxSnapshot } from "./tax";
+import type { AddressTaxChoice, TaxProvenance, TaxSnapshot } from "./tax";
 
 // ============================================================================
 // QUOTE-SPECIFIC TYPES
@@ -96,7 +96,7 @@ export interface QuoteVersionReference {
 // QUOTE TYPES
 // ============================================================================
 
-export interface Quote {
+export interface Quote extends TaxProvenance {
 	id: string;
 	quote_number: string;
 	client_id: string;
@@ -185,6 +185,7 @@ export interface UpdateQuoteInput {
 	expires_at?: Date | string | null;
 	rejection_reason?: string | null;
 	is_active?: boolean;
+	address_tax_choice?: AddressTaxChoice;
 }
 
 export const CreateQuoteSchema = z.object({

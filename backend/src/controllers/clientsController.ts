@@ -9,6 +9,16 @@ import { logActivity, buildChanges } from "../services/logger.js";
 import { log } from "../services/appLogger.js";
 import { insertContact } from "./contactsController.js"
 import { getOrgRealmId } from "../services/quickbooksService.js";
+import { Prisma } from "../../generated/prisma/client.js";
+import { getEffectiveTaxMode } from "../services/tax/taxMode.js";
+import {
+	AddressTaxChoiceError,
+	addressMoves,
+	addressTaxChoiceRefusal,
+	applyAddressTaxChoiceToFamily,
+	choiceActor,
+	keptFamily,
+} from "../lib/addressTaxChoice.js";
 
 const buildClientInclude = () => ({
 	jobs: {
@@ -217,6 +227,19 @@ export const updateClient = async (
 			return { err: "Client not found" };
 		}
 
+		// Job-less draft invoices are taxed at the client's address.
+		const addressFamily =
+			addressMoves(data, parsed, existing) &&
+			(await getEffectiveTaxMode(organizationId)) !== "auto"
+				? await keptFamily(sdb as unknown as Prisma.TransactionClient, organizationId, {
+						kind: "client",
+						id,
+					})
+				: null;
+		if (addressFamily && !parsed.address_tax_choice) {
+			return { ...addressTaxChoiceRefusal(addressFamily), item: undefined };
+		}
+
 		const changes = buildChanges(existing, parsed, [
 			"name",
 			"address",
@@ -241,6 +264,16 @@ export const updateClient = async (
 					last_activity: new Date(),
 				},
 			});
+
+			if (addressFamily && parsed.address_tax_choice) {
+				await applyAddressTaxChoiceToFamily(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					{ kind: "client", id },
+					parsed.address_tax_choice,
+					choiceActor(context),
+				);
+			}
 
 			if (Object.keys(changes).length > 0) {
 				await logActivity({
@@ -276,6 +309,7 @@ export const updateClient = async (
 					.join(", ")}`,
 			};
 		}
+		if (e instanceof AddressTaxChoiceError) return { err: e.message };
 		return { err: "Internal server error" };
 	}
 };

@@ -52,6 +52,10 @@ import { downloadQuotePdf } from "../../api/quotes";
 import FinancialSummary from "../../components/pagesections/FinancialSummary";
 import SendDocumentModal from "../../components/ui/SendDocumentModal";
 import { usePermission } from "../../hooks/usePermission";
+import { useAcknowledgeTaxReview } from "../../hooks/useTaxSettings";
+import TaxReviewBanner from "../../components/tax/TaxReviewBanner";
+import { withTaxReviewGate } from "../../components/tax/taxReviewGate";
+import { isV2Snapshot } from "../../types/tax";
 import ChangeHistory from "../../components/activity/ChangeHistory";
 import LifecycleRecord from "../../components/lifecycle/LifecycleRecord";
 import ActivityPanel from "../../components/detail/ActivityPanel";
@@ -110,6 +114,7 @@ export default function QuoteDetailPage() {
 	const CREATE_JOB = usePermission("create_jobs");
 	const OPEN_DISPUTE = usePermission("open_disputes");
 	const SEND_QUOTE = usePermission("send_quotes");
+	const ack = useAcknowledgeTaxReview();
 
 	const { data: disputeList, isError: disputeStateUnknown } = useDisputesQuery(
 		"quote",
@@ -283,7 +288,7 @@ export default function QuoteDetailPage() {
 
 	const lifecycleActionList =
 		disputeBarActions ??
-		quoteActions({
+		withTaxReviewGate(quoteActions({
 			status: lifecycleStatus,
 			hasJob: Boolean(quote.job),
 			hasOpenDispute: Boolean(openDispute),
@@ -305,6 +310,12 @@ export default function QuoteDetailPage() {
 				withdraw: handleCancelQuote,
 				revise: handleCreateRevision,
 			},
+		}), {
+			needsAck: Boolean(quote.tax_needs_review && !quote.tax_review_ack_at),
+			canAck: SEND_QUOTE,
+			pending: ack.isPending,
+			acknowledge: () => ack.mutateAsync({ kind: "quote", id: quote.id }),
+			onError: setActionError,
 		});
 
 	// The header or the bar renders the inline share, depending on stage; this is
@@ -539,10 +550,20 @@ export default function QuoteDetailPage() {
 	);
 
 	const financialBlock = (
+		<>
+		<TaxReviewBanner
+			kind="quote"
+			id={quote.id}
+			needsReview={quote.tax_needs_review}
+			reason={isV2Snapshot(quote.tax_snapshot) ? quote.tax_snapshot.review_reason : null}
+			ackAt={quote.tax_review_ack_at}
+			canAcknowledge={SEND_QUOTE}
+		/>
 		<FinancialSummary
 			lineItems={quote.line_items ?? []}
 			contestedIds={contestedIds}
 			taxSnapshot={quote.tax_snapshot}
+			taxSource={quote.tax_source}
 			legacyTaxRate={quote.tax_rate != null ? Number(quote.tax_rate) : null}
 			legacyTaxAmount={quote.tax_amount != null ? Number(quote.tax_amount) : null}
 			subtotal={quote.subtotal != null ? Number(quote.subtotal) : null}
@@ -566,6 +587,7 @@ export default function QuoteDetailPage() {
 				</div>
 			}
 		/>
+		</>
 	);
 
 	return (

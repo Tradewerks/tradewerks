@@ -15,6 +15,7 @@ import {
 import { useState, useMemo } from "react";
 import {
 	useRecurringPlanByIdQuery,
+	useRecurringTaxEstimateQuery,
 	useOccurrencesByJobIdQuery,
 	usePauseRecurringPlanMutation,
 	useResumeRecurringPlanMutation,
@@ -25,6 +26,7 @@ import {
 } from "../../hooks/useRecurringPlans";
 import { useGenerateInvoiceMutation } from "../../hooks/useInvoices";
 import Card from "../../components/ui/Card";
+import RecurringTaxEstimate from "../../components/recurringPlans/RecurringTaxEstimate";
 import { HEADER_BTN_ICON, HEADER_META } from "../../components/ui/headerActions";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
@@ -101,6 +103,24 @@ export default function RecurringPlanDetailPage() {
 	} = useRecurringPlanByIdQuery(recurringPlanId || "");
 
 	const jobContainerId = plan?.job_container?.id;
+
+	const taxEstimateInput = useMemo(() => {
+		if (!plan?.client_id || !plan.address) return null;
+		const lines = (plan.line_items || []).filter((li) => Number(li.quantity) > 0);
+		return {
+			client_id: plan.client_id,
+			address: plan.address,
+			coords: plan.coords ?? null,
+			line_items: lines.map((li) => ({
+				quantity: Number(li.quantity),
+				unit_price: Number(li.unit_price),
+				taxable: li.taxable ?? true,
+				tax_group_id: li.tax_group_id ?? null,
+			})),
+			plan_id: plan.id,
+		};
+	}, [plan]);
+	const { data: taxEstimate } = useRecurringTaxEstimateQuery(taxEstimateInput);
 
 	const { data: occurrences = [], isLoading: occurrencesLoading } =
 		useOccurrencesByJobIdQuery(jobContainerId || "");
@@ -638,6 +658,9 @@ export default function RecurringPlanDetailPage() {
 							</div>
 						</div>
 					))}
+					<div className="pt-3">
+						<RecurringTaxEstimate estimate={taxEstimate} />
+					</div>
 				</div>
 			)}
 		</Card>

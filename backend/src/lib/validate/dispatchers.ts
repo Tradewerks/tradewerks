@@ -23,6 +23,8 @@ export const DispatcherNotificationTypeEnum = z.enum([
 	"subscription_changed",
 	"upgrade_request_resolved",
 	"trial_ending",
+	"tax_rate_changed",
+	"qb_tax_code_needed",
 	"timesheet_issue_reported",
 ]);
 

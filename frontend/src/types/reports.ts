@@ -765,7 +765,7 @@ export interface CreateFavoriteInput {
 // ===========================================================================
 export interface PageSummaryResponse {
 	page: string;
-	stats: { label: string; value: number; format: "number" | "currency" | "percent" | "duration" }[];
+	stats: { label: string; value: number; format: "number" | "currency" | "percent" | "duration"; note?: string }[];
 	breakdown: { label: string; value: number; }[];
 	breakdownLabel: string;
 }

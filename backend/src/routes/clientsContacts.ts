@@ -6,6 +6,7 @@ import {
 	createErrorResponse,
 } from "../types/responses.js";
 import { getUserContext } from "../lib/context.js";
+import { isAddressTaxChoiceRefusal } from "../lib/addressTaxChoice.js";
 import {
 	getAllClients,
 	getClientById,
@@ -114,6 +115,11 @@ router.put("/clients/:id", requirePermission("edit_clients"), async (req, res, n
         const context = getUserContext(req);
         const result = await updateClient(id, req.body, orgId, context);
 
+        if (isAddressTaxChoiceRefusal(result)) {
+            return res
+                .status(409)
+                .json(createErrorResponse(result.code, result.err, result.details));
+        }
         if (result.err) {
             const isDuplicate = result.err
                 .toLowerCase()

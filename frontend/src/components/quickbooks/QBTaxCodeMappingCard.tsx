@@ -1,5 +1,7 @@
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
-import { useLinkTaxCodeMutation, useQBTaxCodesQuery, useQBTaxPrefsQuery, useUnlinkTaxCodeMutation } from "../../hooks/useQuickbooks";
+import { errorMessage } from "../../util/util";
+import { useLinkTaxCodeMutation, useQBTaxCodesQuery, useQBTaxPrefsQuery, useSetPassthroughTaxCodeMutation, useUnlinkTaxCodeMutation } from "../../hooks/useQuickbooks";
 
 export default function QBTaxCodeMappingCard() {
     const { data: taxGroups } = useTaxGroups();
@@ -7,6 +9,8 @@ export default function QBTaxCodeMappingCard() {
     const { data: taxPrefs } = useQBTaxPrefsQuery();
     const link = useLinkTaxCodeMutation();
     const unlink = useUnlinkTaxCodeMutation();
+    const setPassthrough = useSetPassthroughTaxCodeMutation();
+    const auto = useAutoTaxMode() === true;
 
     // handle tax code selection
     const handleTaxCodeChange = (taxGroupId: string, qbTaxCodeId: string) => {
@@ -17,7 +21,7 @@ export default function QBTaxCodeMappingCard() {
         }
     };
 
-    const pending = link.isPending || unlink.isPending;
+    const pending = link.isPending || unlink.isPending || setPassthrough.isPending;
 
     return (
         <div>
@@ -31,6 +35,46 @@ export default function QBTaxCodeMappingCard() {
                     so these mappings are advisory — the tax code you send may be overridden.
                 </div>
             )}
+
+            {taxPrefs && !taxPrefs.automatedSalesTax && (
+                <div className="mb-4 flex flex-wrap items-center gap-3">
+                    <label htmlFor="qb-passthrough-code" className="text-xs font-medium text-text-secondary">
+                        {auto ? "Pass-through tax code (required for automatic tax)" : "Combined tax code"}
+                    </label>
+                    <select
+                        id="qb-passthrough-code"
+                        value={taxPrefs.passthroughTaxCodeId ?? ""}
+                        onChange={(e) => setPassthrough.mutate({ qb_tax_code_id: e.target.value || null })}
+                        disabled={pending}
+                        className="w-full max-w-[260px] rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-text-primary transition-colors focus:border-primary focus:outline-none disabled:opacity-50"
+                    >
+                        <option value="">— Not set —</option>
+                        {taxPrefs.passthroughTaxCodeId &&
+                            !qbTaxCodes?.some((c) => c.id === taxPrefs.passthroughTaxCodeId) && (
+                                <option value={taxPrefs.passthroughTaxCodeId}>
+                                    Code {taxPrefs.passthroughTaxCodeId}
+                                    {qbTaxCodes !== undefined && " (not found in QuickBooks)"}
+                                </option>
+                            )}
+                        {qbTaxCodes?.map((taxCode) => (
+                            <option key={taxCode.id} value={taxCode.id}>
+                                {taxCode.name} — {taxCode.totalRate}%
+                            </option>
+                        ))}
+                    </select>
+                    {setPassthrough.isError && (
+                        <p className="basis-full text-xs text-error-text">
+                            {errorMessage(setPassthrough.error, "Couldn't save the combined tax code.")}
+                        </p>
+                    )}
+                    <p className="basis-full text-xs text-text-muted">
+                        Used when an invoice's tax comes from more than one tax group, or from a group with no
+                        linked code. The invoice's own tax total is sent either way.
+                    </p>
+                </div>
+            )}
+
+            {auto && <p className="mb-2 text-xs text-text-muted">Used only for lines with an override tax group.</p>}
 
             <div className="overflow-x-auto">
                 <table className="w-full min-w-[480px]">
@@ -81,4 +125,4 @@ export default function QBTaxCodeMappingCard() {
             </div>
         </div>
     );
-};
+};

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { isAxiosError } from "axios";
-import { useDebouncedValue } from "../components/inventory/detail/trackingTableShared";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useApplyChanges, useOrg, usePreviewChanges } from "./hooks";
 import type { OrgDetail, StaffChange, StaffChangesPreview } from "./types";
 

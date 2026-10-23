@@ -7,6 +7,7 @@ import {
 } from "../types/responses.js";
 import {
 	assertValidQuoteTransition,
+	isQuoteFinalizingTransition,
 	InvalidTransitionError,
 } from "../lib/statusTransitions.js";
 import { documentErrorResponse } from "../lib/documentErrorResponse.js";
@@ -24,6 +25,7 @@ import {
 	deleteQuoteItem,
 } from "../controllers/quotesController.js";
 import { generateQuotePdf } from "../lib/pdf/pdfService.js";
+import { isAddressTaxChoiceRefusal } from "../lib/addressTaxChoice.js";
 import { sendQuoteEmail } from "../services/emailService.js";
 import { isSendFailure } from "../services/emailErrors.js";
 import { logActivity } from "../services/logger.js";
@@ -31,6 +33,7 @@ import { onQuoteSent } from "../services/followupTriggers.js";
 import { getUserContext } from "../lib/context.js";
 import * as quoteNotesController from "../controllers/quoteNotesController.js";
 import { requirePermission } from "../lib/requirePermissions.js";
+import { acknowledgeTaxReviewRoute } from "./tax.js";
 import {
 	getEntityHistory,
 	parseHistoryLimit,
@@ -160,7 +163,26 @@ router.post(
 				throw e;
 			}
 
+			// A re-send of an issued quote is not a finalize and is never re-judged.
+			const finalizing = isQuoteFinalizingTransition(existing.status, "Sent");
 			const context = getUserContext(req);
+			if (finalizing) {
+				// Finalize through Issued before emailing, so every lock-time check has passed
+				// and the PDF is the locked document. A failed email then leaves it Issued,
+				// ready to re-send, instead of delivered but still a draft.
+				const issued = await updateQuote(
+					{ params: { id }, body: { status: "Issued" } } as any,
+					orgId,
+					context,
+				);
+				if (issued.err) {
+					const status = issued.err.includes("not found") ? 404 : 400;
+					return res
+						.status(status)
+						.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, issued.err));
+				}
+			}
+
 			try {
 				await sendQuoteEmail(id, recipientEmail, orgId);
 			} catch (e: unknown) {
@@ -176,7 +198,7 @@ router.post(
 				const failure = isSendFailure(e) ? e : null;
 				// logActivity swallows its own errors, so this await cannot
 				// displace the response below.
-				// The status stays where it was. A quote the client never
+				// Not marked Sent. A quote the client never
 				// received must not sit on the board as Sent, and the followup
 				// enrollment below must not start chasing a reply to an email
 				// that does not exist.
@@ -200,7 +222,8 @@ router.post(
 					.json(
 						createErrorResponse(
 							failure?.code ?? ErrorCodes.EMAIL_SEND_FAILED,
-							failure?.message ?? "Email could not be sent.",
+							(finalizing ? "The quote was created, but the email was not sent. " : "") +
+								(failure?.message ?? "Email could not be sent."),
 						),
 					);
 			}
@@ -264,6 +287,11 @@ router.put("/:id", requirePermission("edit_quotes"), async (req, res, next) => {
 		const context = getUserContext(req);
 		const result = await updateQuote(req, orgId, context);
 
+		if (isAddressTaxChoiceRefusal(result)) {
+			return res
+				.status(409)
+				.json(createErrorResponse(result.code, result.err, result.details));
+		}
 		if (result.err) {
 			const statusCode = result.err.includes("not found") ? 404 : 400;
 			return res
@@ -281,6 +309,12 @@ router.put("/:id", requirePermission("edit_quotes"), async (req, res, next) => {
 		next(err);
 	}
 });
+
+router.post(
+	"/:id/tax-review/acknowledge",
+	requirePermission("send_quotes"),
+	acknowledgeTaxReviewRoute("quote"),
+);
 
 router.delete(
 	"/:id",

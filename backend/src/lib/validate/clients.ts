@@ -1,5 +1,6 @@
 import z from "zod";
 import { coordsSchema } from "./shared.js";
+import { addressTaxChoiceSchema } from "./addressTaxChoice.js";
 
 export const createClientSchema = z.object({
 	name: z.string().min(1, "Client name is required"),
@@ -18,6 +19,7 @@ export const updateClientSchema = z
 		address: z.string().min(1, "Address is required").optional(),
 		coords: coordsSchema.optional(),
 		is_active: z.boolean().optional(),
+		address_tax_choice: addressTaxChoiceSchema.optional(),
 	})
 	.refine(
 		(data) =>

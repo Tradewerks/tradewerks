@@ -388,6 +388,7 @@ enum qb_sync_status {
   not_synced
   synced
   failed
+  tax_mismatch // pushed, but QuickBooks' TotalTax differs from ours by > $0.01
 }
 
 enum followup_trigger_type {
@@ -444,7 +445,12 @@ model organization {
   coords    Json?
   email     String?
   website   String?
-  tax_rate            Decimal @default(0) @db.Decimal(5, 4)
+  tax_rate            Decimal @default(0) @db.Decimal(8, 6)
+  // "auto" | "manual" (Zod enum + DB CHECK). "auto" takes effect only while the org has the
+  // tax_auto module; otherwise documents resolve exactly as in manual mode.
+  tax_mode              String   @default("manual")
+  // USPS codes where the org is registered to collect (its nexus); out-of-state documents are flagged for review.
+  tax_registered_states String[] @default([])
   wrapping_up_minutes Int     @default(15)
   restock_mode        restock_mode @default(tech_self_serve)
   // "imperial" | "metric". ORDERS the unit picker for the org's region — it hides
@@ -468,8 +474,25 @@ model organization {
   qb_realm_id           String?
   qb_access_token       String?
   qb_refresh_token      String?
-  qb_token_expires_at   DateTime? 
+  qb_token_expires_at   DateTime?
+  // QuickBooks tax code used for TxnTaxDetail when an invoice's tax spans several tax groups
+  // (non-AST companies). Moves to QB integration storage with qb_realm_id.
+  qb_passthrough_tax_code_id String?
+  // Company (realm) the stored QB tax codes belong to: this pass-through code and every
+  // tax_group.qb_tax_code_id. QB tax code ids are small integers, so a code from another
+  // company can exist in this one with another meaning.
+  qb_tax_codes_realm_id String?
+  // Shared QB "Taxable service" stand-in Item for taxable lines with no mapped QB item; valid only in
+  // the realm that created it.
+  qb_taxable_item_id       String?
+  qb_taxable_item_realm_id String?
   
+  monthly_overhead        Decimal  @default(0) @db.Decimal(12, 2)
+  // IRS business rate from 2026-07-01; bump yearly
+  cost_per_mile           Decimal  @default(0.76) @db.Decimal(8, 4)
+  // nullable, like cost_rate — 0 would make overhead free. Nothing reads it yet.
+  overhead_rate_per_hour  Decimal? @db.Decimal(10, 4)
+
   clients               client[]
   contacts              contact[]
   technicians           technician[]
@@ -546,7 +569,7 @@ model saved_report {
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
 
-  @@unique([organization_id, name])
+  @@unique([organization_id, name, created_by_id])
   @@index([organization_id])
   @@index([created_by_id])
 }
@@ -635,7 +658,7 @@ model client {
   coords          Json
   is_active       Boolean  @default(true)
   is_tax_exempt   Boolean  @default(false)
-  tax_rate        Decimal? @db.Decimal(5, 4)
+  tax_rate        Decimal? @db.Decimal(8, 6)
   tax_group_id    String?
   tax_group       tax_group? @relation(fields: [tax_group_id], references: [id], onDelete: SetNull)
   created_at      DateTime @default(now())
@@ -794,7 +817,7 @@ model quote {
   revised_quote     quote?  @relation("QuoteRevisions")
 
   subtotal            Decimal @db.Decimal(10, 2)
-  tax_rate            Decimal @default(0) @db.Decimal(5, 4)
+  tax_rate            Decimal @default(0) @db.Decimal(8, 6)
   tax_amount          Decimal @default(0) @db.Decimal(10, 2)
   discount_type        discount_type?
   discount_value       Decimal?  @db.Decimal(10, 2)  // User input value
@@ -815,6 +838,12 @@ model quote {
   rejection_reason String?
 
   tax_snapshot Json?
+  tax_source        String?   // provider | cached_stale | manual_override | org_default | legacy | qb_ast
+  tax_resolution_id String?
+  tax_resolution    tax_address_resolution? @relation(fields: [tax_resolution_id], references: [id], onDelete: SetNull)
+  tax_needs_review  Boolean   @default(false) // degraded path; send becomes "Acknowledge & send"
+  tax_review_ack_by String?
+  tax_review_ack_at DateTime?
 
   created_by_dispatcher_id String?
   created_by_dispatcher    dispatcher? @relation("QuoteCreator", fields: [created_by_dispatcher_id], references: [id])
@@ -835,6 +864,7 @@ model quote {
   @@index([client_id, is_active])
   @@index([request_id, is_active])
   @@index([organization_id, created_at])
+  @@index([tax_resolution_id])
   @@unique([organization_id, quote_number])
 }
 
@@ -978,7 +1008,7 @@ model job {
   // For recurring: estimated_total = quote/template total
   // For recurring: actual_total = SUM(completed visit totals)
   subtotal        Decimal  @default(0) @db.Decimal(10, 2)
-  tax_rate        Decimal  @default(0) @db.Decimal(5, 4)
+  tax_rate        Decimal  @default(0) @db.Decimal(8, 6)
   tax_amount      Decimal  @default(0) @db.Decimal(10, 2)
   discount_type   discount_type?
   discount_value  Decimal? @db.Decimal(10, 2)
@@ -986,6 +1016,12 @@ model job {
   estimated_total Decimal? @db.Decimal(10, 2)
   actual_total    Decimal? @db.Decimal(10, 2)
   tax_snapshot    Json?
+  tax_source        String?   // provider | cached_stale | manual_override | org_default | legacy | qb_ast
+  tax_resolution_id String?
+  tax_resolution    tax_address_resolution? @relation(fields: [tax_resolution_id], references: [id], onDelete: SetNull)
+  tax_needs_review  Boolean   @default(false) // degraded path; send becomes "Acknowledge & send"
+  tax_review_ack_by String?
+  tax_review_ack_at DateTime?
 
   visits       job_visit[]
   notes        job_note[]
@@ -1007,6 +1043,7 @@ model job {
   @@index([client_id, status])
   @@index([organization_id, status])
   @@index([organization_id, created_at])
+  @@index([tax_resolution_id])
   @@unique([organization_id, job_number])
 }
 
@@ -1067,7 +1104,7 @@ model job_visit {
   cancellation_reason String?
 
   subtotal        Decimal  @default(0) @db.Decimal(10, 2)
-  tax_rate        Decimal  @default(0) @db.Decimal(5, 4)
+  tax_rate        Decimal  @default(0) @db.Decimal(8, 6)
   tax_amount      Decimal  @default(0) @db.Decimal(10, 2)
   discount_type   discount_type?
   discount_value  Decimal? @db.Decimal(10, 2)
@@ -1634,6 +1671,7 @@ model inventory_item {
   updated_at DateTime @updatedAt
 
   category       String?              // freetext, org-defined — no static enum
+  taxable        Boolean              @default(true) // copied onto new lines; later edits never reach them
   // Unit of MEASURE, not a serial_unit. Typed app-level: a TS union plus a Zod
   // enum at the API boundary (lib/units.ts + lib/validate/inventory.ts), with the
   // column left String so unknown legacy values still read back and adding a unit
@@ -2939,6 +2977,7 @@ model technician {
   coords      Json              @default("{}")
   last_ping_at DateTime?
   hourly_rate Decimal           @default(0) @db.Decimal(10, 2)
+  cost_rate   Decimal?          @db.Decimal(10, 2)
   last_login  DateTime?
   deactivated_at DateTime? // null = active; counts as a technician seat
   password_reset_token       String?   @unique
@@ -3284,7 +3323,7 @@ model invoice {
   voided_at                DateTime?
   void_reason              String?
   subtotal                 Decimal        @default(0) @db.Decimal(10, 2)
-  tax_rate                 Decimal        @default(0) @db.Decimal(5, 4)
+  tax_rate                 Decimal        @default(0) @db.Decimal(8, 6)
   tax_amount               Decimal        @default(0) @db.Decimal(10, 2)
   discount_type            discount_type?
   discount_value           Decimal?       @db.Decimal(10, 2)
@@ -3295,12 +3334,21 @@ model invoice {
   memo                     String?
   internal_notes           String?
   tax_snapshot             Json?
+  tax_source        String?   // provider | cached_stale | manual_override | org_default | legacy | qb_ast
+  tax_resolution_id String?
+  tax_resolution    tax_address_resolution? @relation(fields: [tax_resolution_id], references: [id], onDelete: SetNull)
+  tax_needs_review  Boolean   @default(false) // degraded path; send becomes "Acknowledge & send"
+  tax_review_ack_by String?
+  tax_review_ack_at DateTime?
   created_at               DateTime       @default(now())
   updated_at               DateTime       @updatedAt
   created_by_dispatcher_id String?
   created_by_dispatcher    dispatcher?    @relation(fields: [created_by_dispatcher_id], references: [id], onDelete: SetNull)
-  qb_invoice_id            String?        // For QuickBooks integration — uniqueness via @@unique([account_id, qb_invoice_id])
+  qb_invoice_id           String?        // For QuickBooks integration — uniqueness via @@unique([account_id, qb_invoice_id])
+  qb_credit_memo_id        String?        // QuickBooks CreditMemo a credit adjustment was pushed as
+  qb_credit_applied_payment_id String?    // the $0 Payment that applied it to the original
   qb_sync_status           qb_sync_status @default(not_synced)
+  qb_tax_amount            Decimal?       @db.Decimal(10, 2) // QuickBooks' TotalTax read back at last push
   account_id               String         @default("")
 
   version             Int      @default(1)
@@ -3335,8 +3383,10 @@ model invoice {
   @@index([organization_id, created_at])
   @@index([organization_id, issue_date])
   @@index([adjusts_invoice_id])
+  @@index([tax_resolution_id])
   @@unique([organization_id, invoice_number])
   @@unique([account_id, qb_invoice_id])
+  @@unique([account_id, qb_credit_memo_id])
 }
 
 model invoice_line_item {
@@ -3629,7 +3679,7 @@ model tax_rate {
 	organization_id String
 	organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
 	name            String
-	rate            Decimal      @db.Decimal(5, 4) // 0.0000 to 1.0000 — consistent with existing schema
+	rate            Decimal      @db.Decimal(8, 6) // 0.000000 to 1.000000 — district rates such as 0.00125
 	description     String?
 	jurisdiction    String?      // free label: "State", "County", "City", "Federal"
 	is_default      Boolean      @default(false)
@@ -3684,6 +3734,52 @@ model tax_group_rate {
 	@@index([tax_group_id])
 }
 
+// Platform-scoped (no organization_id, no client identity). A rate set is immutable: a rate
+// change produces a new set and the resolution row repoints to it.
+model tax_rate_set {
+	id               String   @id @default(uuid())
+	composition_hash String   @unique // sha256 of state + sorted (type, code, NAME, rate) tuples
+	state_code       String
+	total_rate       Decimal  @db.Decimal(8, 6)
+	created_at       DateTime @default(now())
+
+	components  tax_rate_set_component[]
+	resolutions tax_address_resolution[]
+}
+
+model tax_rate_set_component {
+	id                String       @id @default(uuid())
+	rate_set_id       String
+	rate_set          tax_rate_set @relation(fields: [rate_set_id], references: [id], onDelete: Restrict)
+	jurisdiction_type String       // "state" | "county" | "city" | "district" (Zod-validated)
+	jurisdiction_name String
+	jurisdiction_code String?      // provider-opaque (Ziptax jurTaxCode is not FIPS) — never join on it
+	rate              Decimal      @db.Decimal(8, 6)
+	sort_order        Int
+
+	@@index([rate_set_id])
+}
+
+model tax_address_resolution {
+	id                   String        @id @default(uuid())
+	address_key          String        @unique // sha256 of the normalized address, or of coords at 5 dp
+	normalized_address   String        // kept only to re-resolve
+	lat                  Decimal?      @db.Decimal(9, 6)
+	lng                  Decimal?      @db.Decimal(9, 6)
+	rate_set_id          String?
+	rate_set             tax_rate_set? @relation(fields: [rate_set_id], references: [id], onDelete: Restrict)
+	provider             String        // "ziptax" | "fixture"
+	status               String        // "ok" | "ambiguous" (failures are never cached)
+	sourcing             String?       // provider O/D flag; recorded as data only
+	resolved_at          DateTime
+	valid_until          DateTime      // first day of next calendar month (UTC) — provider updates monthly
+
+	quotes   quote[]
+	jobs     job[]
+	invoices invoice[]
+
+	@@index([valid_until])
+}
 
 // ============================================================================
 // OAuth

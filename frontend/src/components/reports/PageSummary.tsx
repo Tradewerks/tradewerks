@@ -86,7 +86,7 @@ const STAT_DESCRIPTIONS: Record<string, Record<string, string>> = {
 		"Total Items": "Active, non-provisional inventory items (current snapshot).",
 		Low: "Items at or below their low-stock threshold.",
 		"Out of Stock": "Items with zero quantity on hand.",
-		"Asset Value": "Total value of stock on hand (quantity × cost).",
+		"Asset Value": "Value of stock on hand in the warehouse and on vehicles, including discontinued items (quantity × cost).",
 	},
 };
 
@@ -214,6 +214,11 @@ export default function PageSummary({ data, onBarClick, fill }: PageSummaryProps
 							<div className="mt-1 text-lg font-semibold text-text-primary">
 								<FitText>{formatStat(stat.value, stat.format)}</FitText>
 							</div>
+							{stat.note && (
+								<div className="mt-0.5 truncate text-xs text-warning-text" title={stat.note}>
+									{stat.note}
+								</div>
+							)}
 						</div>
 					);
 				})}

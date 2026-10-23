@@ -6,6 +6,13 @@ import { db } from "../db.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { recordDrive } from "../lib/visitDrive.js";
 import {
+	applyInventoryTaxable,
+	applyInventoryTaxableToNewLines,
+	lineTaxFieldsForCreate,
+	lineTaxFieldsForUpdate,
+} from "../lib/inventoryTaxable.js";
+import { findForeignTaxGroupIds } from "../lib/taxHelpers.js";
+import {
 	createJobVisitSchema,
 	updateJobVisitSchema,
 } from "../lib/validate/jobVisits.js";
@@ -424,6 +431,14 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 		}
 
 		if (parsed.line_items && parsed.line_items.length > 0) {
+			const foreignGroups = await findForeignTaxGroupIds(
+				sdb,
+				organization_id,
+				parsed.line_items.map((li) => li.tax_group_id),
+			);
+			if (foreignGroups.length > 0) {
+				return { err: `Tax group not found: ${foreignGroups.join(", ")}` };
+			}
 			const foreignItems = await findForeignInventoryItemIds(
 				sdb,
 				organization_id,
@@ -472,8 +487,13 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 
 			// ── Create line items ─────────────────────────────────────────────
 			if (parsed.line_items && parsed.line_items.length > 0) {
+				const lineItems = await applyInventoryTaxable(
+					tx,
+					organization_id,
+					parsed.line_items,
+				);
 				await tx.job_visit_line_item.createMany({
-					data: parsed.line_items.map((li, index) => ({
+					data: lineItems.map((li, index) => ({
 						visit_id: visit.id,
 						name: li.name,
 						description: li.description ?? null,
@@ -483,8 +503,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 						item_type: li.item_type ?? null,
 						sort_order: li.sort_order ?? index,
 						source: "manual" as const,
-						tax_group_id: li.tax_group_id ?? null,
-						taxable: li.taxable ?? true,
+						...lineTaxFieldsForCreate(li),
 						...plannedLineItemFields(li.inventory_item_id, li.quantity, li),
 					})),
 				});
@@ -617,19 +636,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 
 		// G22: verify all supplied tax_group_ids belong to this org before mutating
 		if (parsed.line_items && parsed.line_items.length > 0) {
-			const incomingTaxGroupIds = [
-				...new Set(parsed.line_items.map((li) => li.tax_group_id).filter(Boolean) as string[]),
-			];
-			if (incomingTaxGroupIds.length > 0) {
-				const validGroups = await sdb.tax_group.findMany({
-					where: { id: { in: incomingTaxGroupIds }, organization_id: organizationId },
-					select: { id: true },
-				});
-				const validIds = new Set(validGroups.map((g) => g.id));
-				const foreign = incomingTaxGroupIds.find((id) => !validIds.has(id));
-				if (foreign) {
-					return { err: `Tax group not found: ${foreign}` };
-				}
+			const foreignGroups = await findForeignTaxGroupIds(
+				sdb,
+				organizationId,
+				parsed.line_items.map((li) => li.tax_group_id),
+			);
+			if (foreignGroups.length > 0) {
+				return { err: `Tax group not found: ${foreignGroups.join(", ")}` };
 			}
 
 			// Returned, not thrown: the catch below collapses every non-Zod Error.
@@ -747,6 +760,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 				const incomingIds = new Set(
 					parsed.line_items.filter((i) => i.id).map((i) => i.id!),
 				);
+				// New lines take the inventory default; existing lines keep theirs.
+				const withInventoryTaxable = await applyInventoryTaxableToNewLines(
+					tx,
+					organizationId,
+					parsed.line_items,
+					existingById,
+				);
 
 				// Delete removed items
 				for (const item of existingVisit.line_items) {
@@ -776,8 +796,8 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 										Number(item.unit_price),
 								item_type: item.item_type ?? null,
 								sort_order: item.sort_order ?? 0,
-								tax_group_id: item.tax_group_id ?? null,
-								taxable: item.taxable ?? true,
+								// Omitted keeps the group and a manual toggle (technician parts editor).
+								...lineTaxFieldsForUpdate(item),
 								// Only when the catalog link actually moved, so a retitle or requantify
 								// can't flip a tech's `voided` back to `planned`.
 								...(item.inventory_item_id !== undefined &&
@@ -818,8 +838,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 								source: "manual",
 								item_type: item.item_type ?? null,
 								sort_order: item.sort_order ?? 0,
-								tax_group_id: item.tax_group_id ?? null,
-								taxable: item.taxable ?? true,
+								...lineTaxFieldsForCreate(withInventoryTaxable(item)),
 								...plannedLineItemFields(
 									item.inventory_item_id,
 									item.quantity,

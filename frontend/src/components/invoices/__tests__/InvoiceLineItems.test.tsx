@@ -4,6 +4,23 @@ import { render, screen, within } from "@testing-library/react";
 import InvoiceLineItems from "../InvoiceLineItems";
 import type { Invoice, InvoiceLineItem, JobReference } from "../../../types/invoices";
 
+const snapshot = (lines?: object[]) =>
+	({
+		version: 2,
+		source: "provider",
+		rounding: "line_floor",
+		locked_at: "draft",
+		client_exempt: false,
+		non_taxable_amount_cents: 0,
+		total_tax_cents: 0,
+		subtotal_cents: 10000,
+		discount_cents: 0,
+		total_cents: 10000,
+		effective_rate: 0,
+		groups: [],
+		...(lines && { lines }),
+	}) as unknown as Invoice["tax_snapshot"];
+
 const job = (id: string): JobReference => ({
 	id,
 	job_number: `J-${id}`,
@@ -98,5 +115,44 @@ describe("InvoiceLineItems", () => {
 		renderItems(twoSources);
 		const totalRow = screen.getByText("Total").closest("div")!;
 		expect(within(totalRow).getByText("$350.00")).toBeInTheDocument();
+	});
+
+	it("tags taxable ungrouped lines 'Auto address rate' only on an address-sourced invoice", () => {
+		const lines = [line("l1"), line("l2", { taxable: false })];
+		const { unmount } = renderItems(invoice({ tax_source: "provider", line_items: lines }));
+		expect(screen.getByTitle("Taxed at the service address rate")).toHaveTextContent("Auto address rate");
+		expect(screen.getAllByText("No Tax")).toHaveLength(1);
+		unmount();
+
+		renderItems(invoice({ tax_source: "manual_override", line_items: lines }));
+		expect(screen.queryByTitle("Taxed at the service address rate")).not.toBeInTheDocument();
+	});
+
+	it("shows no per-line taxability note, even for a stored snapshot that still has lines", () => {
+		renderItems(
+			invoice({
+				tax_snapshot: snapshot([
+					{ id: "l1", tax_category: "hvac_service", taxability_source: "rule", derived: false },
+				]),
+				line_items: [line("l1"), line("l2", { taxable: false })],
+			})
+		);
+		expect(screen.queryByText(/Taxable —/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/hvac_service|HVAC service/)).not.toBeInTheDocument();
+		expect(screen.getAllByText("No Tax")).toHaveLength(1);
+	});
+
+	it("tags an adopted invoice's ungrouped line as 'Auto address rate', never '(auto)'", () => {
+		const snap = {
+			...snapshot(),
+			source: "qb_ast",
+			rate_set_id: "g1",
+			groups: [
+				{ id: "g1", name: "La Crosse, WI (auto)", rates: [], taxable_amount_cents: 10000, tax_amount_cents: 0 },
+			],
+		} as unknown as Invoice["tax_snapshot"];
+		renderItems(invoice({ tax_source: "qb_ast", tax_snapshot: snap, line_items: [line("l1")] }));
+		expect(screen.getByTitle("Taxed at the service address rate")).toHaveTextContent("Auto address rate");
+		expect(screen.queryByText(/\(auto\)/)).not.toBeInTheDocument();
 	});
 });

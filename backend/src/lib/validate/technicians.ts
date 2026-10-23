@@ -11,6 +11,7 @@ export const createTechnicianSchema = z.object({
 	title: z.string().min(1, "Title is required"),
 	description: z.string().default(""),
 	organization_role_id: z.string().uuid("Valid role ID is required").nullable().optional(),
+	cost_rate: z.number().min(0, "Cost rate cannot be negative").nullable().optional(),
 	status: technicianStatusEnum.default("Offline"),
 	coords: coordsSchema,
 	hire_date: z
@@ -32,6 +33,7 @@ export const updateTechnicianSchema = z
 		title: z.string().min(1, "Title is required").optional(),
 		description: z.string().optional(),
 		status: technicianStatusEnum.optional(),
+		cost_rate: z.number().min(0, "Cost rate cannot be negative").nullable().optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
 		coords: coordsSchema.optional(),
 		hire_date: z
@@ -61,6 +63,7 @@ export const updateTechnicianSchema = z
 			data.title !== undefined ||
 			data.description !== undefined ||
 			data.status !== undefined ||
+			data.cost_rate !== undefined ||
 			data.theme !== undefined ||
 			data.coords !== undefined ||
 			data.hire_date !== undefined ||

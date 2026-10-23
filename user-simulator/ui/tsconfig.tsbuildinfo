@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/AssignVisitForm.tsx","./src/components/CreateClientForm.tsx","./src/components/CreateJobVisitForm.tsx","./src/components/CreateTechForm.tsx","./src/components/TechList.tsx"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/ArrivalDemoPanel.tsx","./src/components/AssignVisitForm.tsx","./src/components/CreateClientForm.tsx","./src/components/CreateJobVisitForm.tsx","./src/components/CreateTechForm.tsx","./src/components/TechList.tsx"],"version":"5.9.3"}

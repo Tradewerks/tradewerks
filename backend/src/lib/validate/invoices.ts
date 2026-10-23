@@ -1,5 +1,9 @@
 import z from "zod";
-import { baseLineItemSchema, discountTypeEnum, validateDiscountRange } from "./shared.js";
+import {
+	baseLineItemSchema,
+	discountTypeEnum,
+	validateDiscountRange,
+} from "./shared.js";
 import { qb_sync_status } from "../../../generated/prisma/enums.js";
 
 // ============================================================================
