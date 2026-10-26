@@ -584,6 +584,12 @@ describe("invoice Revise & Resend — replacement due date (D5)", () => {
 	beforeEach(() => vi.clearAllMocks());
 
 	const DAY = 86_400_000;
+	// Calendar days like the service, so a DST change inside the window isn't an hour off.
+	const daysFromNow = (n: number) => {
+		const d = new Date();
+		d.setDate(d.getDate() + n);
+		return d.getTime();
+	};
 
 	async function reviseWith(original: Record<string, unknown>) {
 		mockFn(db.invoice.findFirst).mockResolvedValue(
@@ -620,7 +626,7 @@ describe("invoice Revise & Resend — replacement due date (D5)", () => {
 		});
 		expect(due.getTime()).toBeGreaterThan(Date.now());
 		// reissue (now) + 30 days, within a minute of wall clock
-		expect(Math.abs(due.getTime() - (Date.now() + 30 * DAY))).toBeLessThan(
+		expect(Math.abs(due.getTime() - daysFromNow(30))).toBeLessThan(
 			60_000,
 		);
 	});
@@ -645,7 +651,7 @@ describe("invoice Revise & Resend — replacement due date (D5)", () => {
 
 	it("a null original due date falls back to reissue + terms", async () => {
 		const due = await reviseWith({ due_date: null, payment_terms_days: 20 });
-		expect(Math.abs(due.getTime() - (Date.now() + 20 * DAY))).toBeLessThan(
+		expect(Math.abs(due.getTime() - daysFromNow(20))).toBeLessThan(
 			60_000,
 		);
 	});
