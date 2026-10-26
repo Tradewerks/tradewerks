@@ -35,7 +35,7 @@ async function getIncomeAccountId(orgId: string): Promise<string> {
 // QBO's Item.Name caps at 100 chars; ours allows 255.
 const QB_ITEM_NAME_MAX = 100;
 
-async function findOrCreateQBItem(orgId: string, rawName: string, unitPrice?: number): Promise<string> {
+export async function findOrCreateQBItem(orgId: string, rawName: string, unitPrice?: number): Promise<string> {
     const name = rawName.slice(0, QB_ITEM_NAME_MAX);
     const escaped = name.replace(/'/g, "\\'");
     const existing = await qbQueryAll<QBItem & { SyncToken: string; ExpenseAccountRef?: { value: string } }>(

@@ -6,7 +6,45 @@ import { qbQueryAll } from "./qbQuery.js";
 import { qbFetch, getOrgRealmId, isQBConnected } from "../quickbooksService.js";
 import { log } from "../appLogger.js";
 import { findOrCreateQBCustomer } from "./qbCustomers.js";
+import { findOrCreateQBItem } from "./qbItems.js";
+import { getQBTaxPrefs } from "./qbTax.js";
 import { ErrorCodes, httpError } from "../../types/responses.js";
+
+// QB takes one tax code per invoice, and only non-AST companies honour it; AST
+// computes its own tax (often $0), which left a tax-sized balance after QB
+// payments. Anything else goes over as this item's line.
+const SALES_TAX_ITEM = "Sales Tax";
+
+// The shared QB tax code of every taxable line, when the company will apply it.
+const mappedQBTaxCode = async (
+	orgId: string,
+	items: { taxable: boolean | null; tax_group: { qb_tax_code_id: string | null } | null }[],
+): Promise<string | null> => {
+	const codes = new Set(
+		items.filter((i) => i.taxable !== false).map((i) => i.tax_group?.qb_tax_code_id ?? null),
+	);
+	const [code] = codes;
+	if (codes.size !== 1 || !code) return null;
+	return (await getQBTaxPrefs(orgId)).automatedSalesTax ? null : code;
+};
+
+// A QB rate that differs from ours would leave a balance again; surface it.
+const warnOnTotalDrift = (
+	res: { Invoice?: { TotalAmt?: number | string } } | undefined,
+	invoice: { id: string; total: unknown },
+	orgId: string,
+) => {
+	const qbTotal = Number(res?.Invoice?.TotalAmt);
+	if (Number.isFinite(qbTotal) && Math.abs(qbTotal - Number(invoice.total)) > 0.005)
+		log.warn({ invoiceId: invoice.id, orgId, qbTotal, total: Number(invoice.total) }, "QuickBooks invoice total differs");
+};
+
+type QBLine = NonNullable<QBImportInvoice["Line"]>[number];
+const isSalesTaxLine = (l: QBLine) => l.SalesItemLineDetail?.ItemRef?.name === SALES_TAX_ITEM;
+const itemLines = (lines: QBLine[] = []) =>
+	lines.filter((l) => l.DetailType === "SalesItemLineDetail" && !isSalesTaxLine(l));
+const salesTaxTotal = (lines: QBLine[] = []) =>
+	lines.filter(isSalesTaxLine).reduce((s, l) => s + Number(l.Amount ?? 0), 0);
 
 interface QBImportInvoice {
 	Id: string;
@@ -72,9 +110,7 @@ const createOneImportedInvoice = async (
 	itemMap: Map<string, string>,
 ) => {
 	const base = `QB-${qbInvoice.DocNumber ?? qbInvoice.Id}`;
-	const lines = (qbInvoice.Line ?? []).filter(
-		(l) => l.DetailType === "SalesItemLineDetail",
-	);
+	const lines = itemLines(qbInvoice.Line);
 	const subtotal = lines.reduce((s, l) => s + Number(l.Amount ?? 0), 0);
 	const total = Number(qbInvoice.TotalAmt ?? subtotal);
 	const accountId = await getOrgRealmId(orgId);
@@ -95,7 +131,7 @@ const createOneImportedInvoice = async (
 						due_date: qbInvoice.DueDate ? new Date(qbInvoice.DueDate) : null,
 						subtotal,
 						tax_rate: 0, // legacy field — actual tax is per-line
-						tax_amount: Number(qbInvoice.TxnTaxDetail?.TotalTax ?? 0),
+						tax_amount: Number(qbInvoice.TxnTaxDetail?.TotalTax ?? 0) + salesTaxTotal(qbInvoice.Line),
 						discount_type: null,
 						discount_value: null,
 						discount_amount: 0,
@@ -189,7 +225,7 @@ export const getImportableQBInvoices = async (
 		TotalAmt: Number(i.TotalAmt ?? 0),
 		customerId: i.CustomerRef?.value ?? null,
 		customerName: i.CustomerRef?.name ?? null,
-		lineCount: (i.Line ?? []).filter((l) => l.DetailType === "SalesItemLineDetail").length,
+		lineCount: itemLines(i.Line).length,
 		alreadyImported: seen.has(i.Id),
 	}));
 };
@@ -206,7 +242,7 @@ export const getQBInvoicePrefill = async (
 	const qb = invoices[0];
 	if (!qb) throw httpError(404, "NOT_FOUND", "QuickBooks invoice not found");
 
-	const lines = (qb.Line ?? []).filter((l) => l.DetailType === "SalesItemLineDetail");
+	const lines = itemLines(qb.Line);
 
 	// Resolve QB customer → local client (only if this customer is linked)
 	let clientId: string | null = null;
@@ -412,6 +448,7 @@ async function doPushInvoice(invoiceId: string, orgId: string): Promise<void> {
 		}).catch(() => {});
 	}
 
+	const qbTaxCode = await mappedQBTaxCode(orgId, invoice.line_items);
 	const lines: any[] = invoice.line_items.map((item) => {
 		const mapping = item.inventory_item?.external_mappings?.[0];
 		return {
@@ -422,7 +459,7 @@ async function doPushInvoice(invoiceId: string, orgId: string): Promise<void> {
 				Qty: Number(item.quantity),
 				UnitPrice: Number(item.unit_price),
 				ItemRef: mapping ? { value: mapping.external_id } : { value: "1", name: "Services" },
-				TaxCodeRef: { value: item.taxable === false ? "NON" : (item.tax_group?.qb_tax_code_id ?? "TAX") }
+				TaxCodeRef: { value: qbTaxCode && item.taxable !== false ? "TAX" : "NON" },
 			},
 
 		};
@@ -436,6 +473,20 @@ async function doPushInvoice(invoiceId: string, orgId: string): Promise<void> {
 			DiscountLineDetail: { PercentBased: false },
 		});
 	}
+	if (!qbTaxCode && Number(invoice.tax_amount) > 0) {
+		lines.push({
+			Amount: Number(invoice.tax_amount),
+			DetailType: "SalesItemLineDetail",
+			Description: SALES_TAX_ITEM,
+			SalesItemLineDetail: {
+				Qty: 1,
+				UnitPrice: Number(invoice.tax_amount),
+				ItemRef: { value: await findOrCreateQBItem(orgId, SALES_TAX_ITEM), name: SALES_TAX_ITEM },
+				TaxCodeRef: { value: "NON" },
+			},
+		});
+	}
+	const taxDetail = qbTaxCode ? { TxnTaxDetail: { TxnTaxCodeRef: { value: qbTaxCode } } } : {};
 
 	
 	// Only reuse the stored QB id if it belongs to the currently-connected company.
@@ -453,16 +504,18 @@ async function doPushInvoice(invoiceId: string, orgId: string): Promise<void> {
 
 	if (qbInvoiceId) {
 		const existing = (await qbFetch(orgId, "GET", `/invoice/${qbInvoiceId}`)) as any;
-		await qbFetch(orgId, "POST", "/invoice", {
+		const updated = (await qbFetch(orgId, "POST", "/invoice", {
 			sparse: true,
 			Id: qbInvoiceId,
 			SyncToken: existing.Invoice.SyncToken,
 			CustomerRef: { value: customerId },
 			Line: lines,
+			...taxDetail,
 			...(invoice.due_date && { DueDate: invoice.due_date.toISOString().split("T")[0] }),
 			...(invoice.memo && { CustomerMemo: { value: invoice.memo } }),
 			...(primaryEmail && { BillEmail: { Address: primaryEmail } }),
-		});
+		})) as any;
+		warnOnTotalDrift(updated, invoice, orgId);
 		await sdb.invoice.update({
 			where: { id: invoiceId },
 			// persist the id + the company it belongs to (in case we resolved it via the Doc)
@@ -472,11 +525,13 @@ async function doPushInvoice(invoiceId: string, orgId: string): Promise<void> {
 		const created = (await qbFetch(orgId, "POST", "/invoice", {
 			CustomerRef: { value: customerId },
 			Line: lines,
+			...taxDetail,
 			DocNumber: invoice.invoice_number,
 			...(invoice.due_date && { DueDate: invoice.due_date.toISOString().split("T")[0] }),
 			...(invoice.memo && { CustomerMemo: { value: invoice.memo } }),
 			...(primaryEmail && { BillEmail: { Address: primaryEmail } }),
 		})) as any;
+		warnOnTotalDrift(created, invoice, orgId);
 
 		await sdb.invoice.update({
 			where: { id: invoiceId },
