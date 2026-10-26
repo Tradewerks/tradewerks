@@ -199,9 +199,8 @@ export default function JobProfitabilityPage() {
 			{
 				label: "Net Profit",
 				value: currencyOrDash(summary.totalNetProfit),
-				// Costs are job-lifetime while revenue is windowed, so a narrow range
-				// can show a loss that is only an artefact of the window.
-				hint: "Revenue less all costs — costs cover each job's whole life, not just this period",
+				// The share uses billing to date, so a later invoice moves past periods.
+				hint: "Costs shared by billing to date; open jobs may shift",
 			},
 			...common,
 			{

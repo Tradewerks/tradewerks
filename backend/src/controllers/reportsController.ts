@@ -3938,28 +3938,59 @@ export const getJobProfitabilityReport = async (
 			addRevenue(v.visit.job_id, Number(v.billed_amount ?? 0) * net, v.visit.job);
 	}
 
+	// Costs are job-lifetime, so a windowed view takes the share of them matching
+	// the share of lifetime revenue billed in the window.
+	const lifetimeRevenue = new Map<string, number>();
+	if (Object.keys(dateFilter).length && jobRevenue.size) {
+		const jobIds = [...jobRevenue.keys()];
+		const allInvoices = await sdb.invoice.findMany({
+			where: {
+				status: { notIn: ["Draft", "Void"] },
+				OR: [
+					{ jobs: { some: { job_id: { in: jobIds } } } },
+					{ visits: { some: { visit: { job_id: { in: jobIds } } } } },
+				],
+			},
+			select: {
+				subtotal: true,
+				discount_amount: true,
+				jobs: { select: { job_id: true, billed_amount: true } },
+				visits: { select: { billed_amount: true, visit: { select: { job_id: true } } } },
+			},
+		});
+		const addLifetime = (jobId: string, amount: number) =>
+			lifetimeRevenue.set(jobId, (lifetimeRevenue.get(jobId) ?? 0) + amount);
+		for (const i of allInvoices) {
+			const net = discountNetFactor(i.subtotal, i.discount_amount);
+			for (const j of i.jobs) addLifetime(j.job_id, Number(j.billed_amount ?? 0) * net);
+			for (const v of i.visits) addLifetime(v.visit.job_id, Number(v.billed_amount ?? 0) * net);
+		}
+	}
+
 	// Net margin
 	const directByJob = new Map(directCosts.map((d) => [d.jobId, d]));
 
 	const rows = [...jobRevenue.entries()]
 		.map(([jobId, { revenue, job }]) => {
+			const lifetime = lifetimeRevenue.get(jobId) ?? 0;
+			const share = lifetime > 0 ? Math.min(1, revenue / lifetime) : 1;
+
 			// A null totalCogs means events exist but none could be priced — unknown.
 			// No events at all means nothing was consumed, which is a real 0.
 			const cogRow = cogsByJob.get(jobId);
-			const cogs = cogRow && cogRow.totalCogs == null ? "-" : round2(Number(cogRow?.totalCogs ?? 0));
+			const cogs = cogRow && cogRow.totalCogs == null ? "-" : round2(Number(cogRow?.totalCogs ?? 0) * share);
 			const profit = cogs === "-" ? "-" : round2(revenue - cogs);
 			const margin = revenue > 0 && profit !== "-" ? round2((profit / revenue) * 100) : null;
 
 			const direct = directByJob.get(jobId);
-			const hours = direct?.hours ?? 0;
+			const hours = (direct?.hours ?? 0) * share;
 			// Partial rating dashes too: one unrated tech on a two-tech job yields an
 			// understated figure that reads as exact, which is worse than admitting it.
-			const laborCost = direct && direct.unratedHours > 0 ? "-" : round2(direct?.laborCost ?? 0);
+			const laborCost = direct && direct.unratedHours > 0 ? "-" : round2((direct?.laborCost ?? 0) * share);
 			// Zero miles on a visited job is likely an unrecorded drive, but dashing it
 			// blanked Net on most rows for the smallest cost — price it at 0 and flag it.
-			const travelMissing =
-				perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0;
-			const travelCost = round2((direct?.miles ?? 0) * perMile);
+			const travelMissing = perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0;
+			const travelCost = round2((direct?.miles ?? 0) * perMile * share);
 			// No rate set is unknown overhead, not free overhead — unless no hours were
 			// worked, where zero is the honest answer either way.
 			const overheadCost =

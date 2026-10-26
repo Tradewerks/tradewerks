@@ -449,6 +449,66 @@ describe("getJobProfitabilityReport net costs", () => {
 	});
 });
 
+describe("getJobProfitabilityReport windowed cost share", () => {
+	const MARCH = ["2026-03-01T00:00:00Z", "2026-03-31T00:00:00Z"] as const;
+
+	/** job-1: 400 billed in the window, 1000 lifetime, so a 40% share. */
+	const billedInParts = () => {
+		withCogs(500);
+		withDirectCosts(directCost({ hours: 10, laborCost: 300, miles: 20, visitCount: 2 }));
+		withOrgCosting({ cost_per_mile: "0.5", overhead_rate_per_hour: "10" });
+		mockDb.invoice.findMany
+			.mockResolvedValueOnce([invoice({ jobs: [jobLink(400)] })])
+			.mockResolvedValueOnce([
+				invoice({ jobs: [jobLink(400)] }),
+				invoice({ id: "inv-2", jobs: [jobLink(600)] }),
+			]);
+	};
+
+	it("charges each cost in proportion to the revenue billed in the window", async () => {
+		billedInParts();
+
+		const { rows } = await getJobProfitabilityReport(...MARCH, ORG);
+
+		expect(rows[0].revenue).toBe(400);
+		expect(rows[0].cogs).toBe(200);
+		expect(rows[0].laborCost).toBe(120);
+		expect(rows[0].laborHours).toBe(4);
+		expect(rows[0].travelCost).toBe(4);
+		expect(rows[0].overheadCost).toBe(40);
+		expect(rows[0].netProfit).toBe(36);
+	});
+
+	it("charges the full cost when the window holds all the job's billing", async () => {
+		withCogs(500);
+		mockDb.invoice.findMany.mockResolvedValue([invoice({ jobs: [jobLink(1000)] })]);
+
+		const { rows } = await getJobProfitabilityReport(...MARCH, ORG);
+
+		expect(rows[0].cogs).toBe(500);
+	});
+
+	it("skips the lifetime query without a window", async () => {
+		withCogs(500);
+		mockDb.invoice.findMany.mockResolvedValue([invoice({ jobs: [jobLink(400)] })]);
+
+		const { rows } = await getJobProfitabilityReport(undefined, undefined, ORG);
+
+		expect(mockDb.invoice.findMany).toHaveBeenCalledTimes(1);
+		expect(rows[0].cogs).toBe(500);
+	});
+
+	it("keeps unknown costs dashed", async () => {
+		billedInParts();
+		withDirectCosts(directCost({ hours: 10, laborCost: 300, unratedHours: 2, visitCount: 2 }));
+
+		const { rows } = await getJobProfitabilityReport(...MARCH, ORG);
+
+		expect(rows[0].laborCost).toBe("-");
+		expect(rows[0].netProfit).toBe("-");
+	});
+});
+
 describe("getJobProfitabilityReport absorption variance", () => {
 	it("is null without a date window", async () => {
 		withOrgCosting({ monthly_overhead: "9500", overhead_rate_per_hour: "18.5" });
