@@ -10,10 +10,21 @@ import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
-import { assertValidQuoteTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
+import {
+	assertValidQuoteTransition,
+	InvalidTransitionError,
+	isQuoteFinalizingTransition,
+} from "../lib/statusTransitions.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { fillCoords } from "../lib/geocode.js";
 import { assertInventoryItemsInOrg } from "../lib/inventory.js";
+import {
+	applyInventoryTaxable,
+	applyInventoryTaxableToNewLines,
+	lineTaxFieldsForCreate,
+	lineTaxFieldsForUpdate,
+} from "../lib/inventoryTaxable.js";
+import { assertTaxGroupsInOrg } from "../lib/taxHelpers.js";
 import { resolveDocumentLineage } from "../lib/documentLineage.js";
 import { formatCurrency } from "../lib/money.js";
 import { SOLD_BY_QUOTE_JOBS } from "../services/disputeAdapters.js";
@@ -29,6 +40,17 @@ import {
 	lockDocumentTaxSnapshot,
 	type RecomputeResult,
 } from "../lib/recomputeDocumentTotals.js";
+import { dropClientTaxTotals, getEffectiveTaxMode } from "../services/tax/taxMode.js";
+import { isLockedSnapshot } from "../services/tax/snapshot.js";
+import { keptRateRef } from "../lib/documentTaxPlan.js";
+import {
+	AddressTaxChoiceError,
+	addressMoves,
+	addressTaxChoiceRefusal,
+	applyAddressTaxChoiceToFamily,
+	choiceActor,
+	keptFamily,
+} from "../lib/addressTaxChoice.js";
 
 // ============================================================================
 // TAX HELPERS (quotes)
@@ -50,7 +72,7 @@ async function lockQuoteTaxSnapshot(
 	tx: Prisma.TransactionClient,
 	lockedAt: Date = new Date(),
 ): Promise<void> {
-	await lockDocumentTaxSnapshot("quote", quoteId, organizationId, tx, lockedAt);
+	return lockDocumentTaxSnapshot("quote", quoteId, organizationId, tx, lockedAt);
 }
 
 
@@ -149,6 +171,14 @@ export const getQuotesByClientId = async (clientId: string, organizationId: stri
 export const insertQuote = async (req: Request, organizationId: string, context?: UserContext) => {
 	try {
 		const parsed = createQuoteSchema.parse(req.body);
+		// Creating past Draft would skip the finalize gate.
+		if (
+			parsed.status &&
+			parsed.status !== "Draft" &&
+			(await getEffectiveTaxMode(organizationId)) === "auto"
+		) {
+			return { err: "New quotes start as drafts. Create or send it from the quote." };
+		}
 		await fillCoords(parsed, false);
 		const sdb = getScopedDb(organizationId);
 
@@ -282,8 +312,18 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 					organizationId,
 					parsed.line_items.map((i) => i.inventory_item_id),
 				);
+				await assertTaxGroupsInOrg(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					parsed.line_items.map((i) => i.tax_group_id),
+				);
+				const lineItems = await applyInventoryTaxable(
+					tx,
+					organizationId,
+					parsed.line_items,
+				);
 				await tx.quote_line_item.createMany({
-					data: parsed.line_items.map((item, index) => ({
+					data: lineItems.map((item, index) => ({
 						quote_id: quote.id,
 						name: item.name,
 						description: item.description || null,
@@ -292,8 +332,7 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 						total: item.total ?? item.quantity * item.unit_price,
 						item_type: item.item_type || null,
 						sort_order: item.sort_order ?? index,
-						tax_group_id: item.tax_group_id ?? null,
-						taxable: item.taxable !== undefined ? item.taxable : true,
+						...lineTaxFieldsForCreate(item),
 						inventory_item_id: item.inventory_item_id ?? null,
 					})),
 				});
@@ -366,11 +405,16 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 	}
 };
 
-export const updateQuote = async (req: Request, organizationId: string, context?: UserContext) => {
+export const updateQuote = async (
+	req: Request,
+	organizationId: string,
+	context?: UserContext,
+) => {
 	try {
 		const quoteId = req.params.id as string;
-		const parsed = updateQuoteSchema.parse(req.body);
-		await fillCoords(parsed, false);
+		const taxMode = await getEffectiveTaxMode(organizationId);
+		const raw = updateQuoteSchema.parse(req.body);
+		await fillCoords(raw, false);
 		const sdb = getScopedDb(organizationId);
 
 		const existing = await sdb.quote.findFirst({
@@ -381,6 +425,11 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 		if (!existing) {
 			return { err: "Quote not found" };
 		}
+		// A draft holding a kept address rate is taxed server-side, as in auto mode.
+		const keptDraft =
+			!isLockedSnapshot(existing.tax_snapshot) &&
+			keptRateRef(existing.tax_snapshot, null) != null;
+		const parsed = dropClientTaxTotals(raw, keptDraft ? "auto" : taxMode);
 
 		// Terminal quotes are immutable, matching how Void invoices behave.
 		// A repealed quote must stay repealed.
@@ -409,6 +458,26 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 			};
 		}
 
+		if (isQuoteFinalizingTransition(existing.status, parsed.status)) {
+			// The dispatcher reviewed the stored draft's tax; inputs changed in the same request
+			// would lock figures nobody saw.
+			const taxInputs = [parsed.line_items, parsed.address, parsed.coords];
+			if (taxMode === "auto" && taxInputs.some((v) => v !== undefined)) {
+				return { err: "Save changes before finalizing." };
+			}
+		}
+
+		const addressFamily =
+			taxMode !== "auto" && addressMoves(req.body, parsed, existing)
+				? await keptFamily(sdb as unknown as Prisma.TransactionClient, organizationId, {
+						kind: "quote",
+						id: quoteId,
+					})
+				: null;
+		if (addressFamily && !parsed.address_tax_choice) {
+			return { ...addressTaxChoiceRefusal(addressFamily), item: undefined };
+		}
+
 		const { line_items: _lineItems, ...parsedWithoutLineItems } = parsed;
 
 		const changes = buildChanges(existing, parsedWithoutLineItems, [
@@ -431,12 +500,35 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 		] as const);
 
 		const updated = await sdb.$transaction(async (tx) => {
+			const addressChanged =
+				(parsed.address !== undefined && parsed.address !== existing.address) ||
+				parsed.coords !== undefined;
+			// Every recompute below reads the address from the row, so it lands first.
+			if (
+				(taxMode === "auto" || addressFamily) &&
+				addressChanged &&
+				!isLockedSnapshot(existing.tax_snapshot)
+			) {
+				await tx.quote.update({
+					where: { id: quoteId },
+					data: {
+						...(parsed.address !== undefined && { address: parsed.address }),
+						...(parsed.coords !== undefined && { coords: parsed.coords }),
+					},
+				});
+			}
+
 			if (parsed.line_items !== undefined) {
 				const incomingItems = parsed.line_items || [];
 				await assertInventoryItemsInOrg(
 					tx,
 					organizationId,
 					incomingItems.map((i) => i.inventory_item_id),
+				);
+				await assertTaxGroupsInOrg(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					incomingItems.map((i) => i.tax_group_id),
 				);
 				const existingItemIds = new Set(
 					existing.line_items.map((item) => item.id),
@@ -445,6 +537,13 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 					incomingItems
 						.filter((item) => item.id)
 						.map((item) => item.id!),
+				);
+				// New lines take the inventory default; existing lines keep theirs.
+				const withInventoryTaxable = await applyInventoryTaxableToNewLines(
+					tx,
+					organizationId,
+					incomingItems,
+					existingItemIds,
 				);
 
 				// Delete items not in incoming list
@@ -546,12 +645,7 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 									total: item.total ?? item.quantity * item.unit_price,
 									item_type: item.item_type || null,
 									sort_order: item.sort_order ?? index,
-									...(item.tax_group_id !== undefined && {
-										tax_group_id: item.tax_group_id,
-									}),
-									...(item.taxable !== undefined && {
-										taxable: item.taxable,
-									}),
+									...lineTaxFieldsForUpdate(item),
 									...(item.inventory_item_id !== undefined && {
 										inventory_item_id: item.inventory_item_id,
 									}),
@@ -591,8 +685,7 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 								total: item.total ?? item.quantity * item.unit_price,
 								item_type: item.item_type || null,
 								sort_order: item.sort_order ?? index,
-								tax_group_id: item.tax_group_id ?? null,
-								taxable: item.taxable !== undefined ? item.taxable : true,
+								...lineTaxFieldsForCreate(withInventoryTaxable(item)),
 								inventory_item_id: item.inventory_item_id ?? null,
 							},
 						});
@@ -647,7 +740,11 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 			// Guard: skip if tax snapshot is already locked (issued quote).
 			const discountChanged =
 				parsed.discount_type !== undefined || parsed.discount_value !== undefined;
-			if (discountChanged && parsed.line_items === undefined && existing.tax_snapshot == null) {
+			if (
+				discountChanged &&
+				parsed.line_items === undefined &&
+				!isLockedSnapshot(existing.tax_snapshot)
+			) {
 				// Apply discount updates to DB first so recompute reads the new values
 				await tx.quote.update({
 					where: { id: quoteId },
@@ -661,6 +758,27 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 					},
 				});
 				await recomputeQuoteTotals(quoteId, organizationId, tx as unknown as Prisma.TransactionClient);
+			}
+			if (
+				taxMode === "auto" &&
+				addressChanged &&
+				parsed.line_items === undefined &&
+				!discountChanged
+			) {
+				await recomputeQuoteTotals(
+					quoteId,
+					organizationId,
+					tx as unknown as Prisma.TransactionClient,
+				);
+			}
+			if (addressFamily && parsed.address_tax_choice) {
+				await applyAddressTaxChoiceToFamily(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					{ kind: "quote", id: quoteId },
+					parsed.address_tax_choice,
+					choiceActor(context),
+				);
 			}
 
 			const issuedAt = (isFirstIssued || isDraftDirectSend) ? new Date() : undefined;
@@ -812,7 +930,7 @@ export const updateQuote = async (req: Request, organizationId: string, context?
 					.join(", ")}`,
 			};
 		}
-		if (e instanceof InvalidTransitionError) {
+		if (e instanceof InvalidTransitionError || e instanceof AddressTaxChoiceError) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Update quote error");
@@ -947,12 +1065,16 @@ export const insertQuoteItem = async (
 			await assertInventoryItemsInOrg(tx, organizationId, [
 				parsed.inventory_item_id,
 			]);
+			await assertTaxGroupsInOrg(tx as unknown as Prisma.TransactionClient, organizationId, [
+				parsed.tax_group_id,
+			]);
 
 			// Calculate total if not provided
 			const total =
 				parsed.total !== undefined
 					? parsed.total
 					: parsed.quantity * parsed.unit_price;
+			const [filled] = await applyInventoryTaxable(tx, organizationId, [parsed]);
 
 			const item = await tx.quote_line_item.create({
 				data: {
@@ -965,8 +1087,7 @@ export const insertQuoteItem = async (
 					item_type: parsed.item_type || null,
 					sort_order: parsed.sort_order,
 					inventory_item_id: parsed.inventory_item_id ?? null,
-					tax_group_id: parsed.tax_group_id ?? null,
-					taxable: parsed.taxable !== undefined ? parsed.taxable : true,
+					...lineTaxFieldsForCreate(filled),
 				},
 			});
 
@@ -1043,6 +1164,9 @@ export const updateQuoteItem = async (
 			await assertInventoryItemsInOrg(tx, organizationId, [
 				parsed.inventory_item_id,
 			]);
+			await assertTaxGroupsInOrg(tx as unknown as Prisma.TransactionClient, organizationId, [
+				parsed.tax_group_id,
+			]);
 
 			// Recalculate total if quantity or unit_price changed
 			let total = parsed.total;
@@ -1081,12 +1205,7 @@ export const updateQuoteItem = async (
 					...(parsed.inventory_item_id !== undefined && {
 						inventory_item_id: parsed.inventory_item_id,
 					}),
-					...(parsed.tax_group_id !== undefined && {
-						tax_group_id: parsed.tax_group_id,
-					}),
-					...(parsed.taxable !== undefined && {
-						taxable: parsed.taxable,
-					}),
+					...lineTaxFieldsForUpdate(parsed),
 				},
 			});
 

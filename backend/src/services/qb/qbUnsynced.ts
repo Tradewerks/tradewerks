@@ -11,11 +11,13 @@ const UNSYNCED = { in: ["not_synced", "failed"] as ("not_synced" | "failed")[] }
 const STALE = (accountId: string) => ({
 	OR: [
 		{ qb_sync_status: UNSYNCED },
-		{ qb_sync_status: "synced" as const, account_id: { not: accountId } },
+		{
+			qb_sync_status: { in: ["synced", "tax_mismatch"] as ("synced" | "tax_mismatch")[] },
+			account_id: { not: accountId },
+		},
 	],
 });
-const shownStatus = (s: "not_synced" | "failed" | "synced") =>
-	s === "synced" ? ("not_synced" as const) : s;
+const shownStatus = (s: string) => (s === "failed" ? s : ("not_synced" as const));
 
 // Each filter is the set of documents its push function accepts; anything else
 // would only fail on Sync now and sit in the list for good.

@@ -31,7 +31,11 @@ vi.mock("../appLogger.js", () => ({
 
 import { isQBConnected, qbFetch } from "../quickbooksService.js";
 import { log } from "../appLogger.js";
-import { mirrorInvoiceVoidToQuickBooks, pushInvoice } from "../qb/qbInvoices.js";
+import {
+	mirrorInvoiceVoidToQuickBooks,
+	pushInvoice,
+	pushInvoiceDetached,
+} from "../qb/qbInvoices.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -96,6 +100,78 @@ describe("mirrorInvoiceVoidToQuickBooks", () => {
 	});
 });
 
+// QuickBooks cannot void a CreditMemo, so the mirror deletes it, applying Payment first.
+describe("mirrorInvoiceVoidToQuickBooks for a credit adjustment", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	const tokens: Record<string, unknown> = {
+		"/payment/p-1": { Payment: { SyncToken: "2" } },
+		"/creditmemo/cm-1": { CreditMemo: { SyncToken: "5" } },
+	};
+
+	it("voiding a pushed credit removes the applying payment, then deletes the credit memo", async () => {
+		mockFn(qbFetch).mockImplementation(async (_o: string, method: string, path: string) =>
+			method === "GET" ? tokens[path] : {},
+		);
+
+		await mirrorInvoiceVoidToQuickBooks("org1", "adj1", null, {
+			id: "cm-1",
+			appliedPaymentId: "p-1",
+		});
+
+		const posts = mockFn(qbFetch).mock.calls.filter((c) => c[1] === "POST");
+		expect(posts).toEqual([
+			["org1", "POST", "/payment?operation=delete", { Id: "p-1", SyncToken: "2" }],
+			["org1", "POST", "/creditmemo?operation=delete", { Id: "cm-1", SyncToken: "5" }],
+		]);
+		expect(qbFetch).not.toHaveBeenCalledWith(
+			"org1",
+			"POST",
+			expect.stringContaining("operation=void"),
+			expect.anything(),
+		);
+		const updates = mockFn(sdb.invoice.updateMany).mock.calls;
+		expect(updates[updates.length - 1][0]).toEqual({
+			where: { id: "adj1" },
+			data: {
+				qb_credit_applied_payment_id: null,
+				qb_credit_memo_id: null,
+				qb_sync_status: "synced",
+			},
+		});
+	});
+
+	it("deletes only the credit memo when it was never applied", async () => {
+		mockFn(qbFetch).mockImplementation(async (_o: string, method: string, path: string) =>
+			method === "GET" ? tokens[path] : {},
+		);
+
+		await mirrorInvoiceVoidToQuickBooks("org1", "adj1", null, {
+			id: "cm-1",
+			appliedPaymentId: null,
+		});
+
+		const posts = mockFn(qbFetch).mock.calls.filter((c) => c[1] === "POST");
+		expect(posts.map((c) => c[2])).toEqual(["/creditmemo?operation=delete"]);
+	});
+
+	it("a failed credit memo delete marks the adjustment failed", async () => {
+		mockFn(qbFetch).mockImplementation(async (_o: string, method: string, path: string) => {
+			if (method === "POST" && path.startsWith("/creditmemo")) throw new Error("QB 400");
+			return method === "GET" ? tokens[path] : {};
+		});
+
+		await expect(
+			mirrorInvoiceVoidToQuickBooks("org1", "adj1", null, { id: "cm-1", appliedPaymentId: "p-1" }),
+		).resolves.toBeUndefined();
+
+		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
+			where: { id: "adj1" },
+			data: { qb_sync_status: "failed" },
+		});
+	});
+});
+
 describe("pushInvoice", () => {
 	beforeEach(() => vi.clearAllMocks());
 
@@ -114,5 +190,54 @@ describe("pushInvoice", () => {
 			"A void invoice can't be pushed to QuickBooks.",
 		);
 		expect(qbFetch).not.toHaveBeenCalled();
+	});
+});
+
+describe("pushInvoiceDetached", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	const voidInvoice = {
+		id: "inv1",
+		status: "Void",
+		client_id: "c1",
+		client: { name: "Acme", contacts: [], client_external_mapping: [] },
+		line_items: [],
+	};
+	const settle = () => new Promise((r) => setTimeout(r, 0));
+
+	it("does not push while the organization is disconnected", async () => {
+		mockFn(isQBConnected).mockResolvedValueOnce(false);
+
+		pushInvoiceDetached("inv1", "org1");
+		await settle();
+
+		expect(sdb.invoice.findFirst).not.toHaveBeenCalled();
+		expect(sdb.invoice.updateMany).not.toHaveBeenCalled();
+	});
+
+	it("logs and marks the invoice failed when the push rejects", async () => {
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce(voidInvoice);
+
+		pushInvoiceDetached("inv1", "org1");
+		await settle();
+
+		expect(log.error).toHaveBeenCalledWith(
+			expect.objectContaining({ invoiceId: "inv1", organizationId: "org1" }),
+			"QuickBooks invoice push failed",
+		);
+		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
+			where: { id: "inv1" },
+			data: { qb_sync_status: "failed" },
+		});
+	});
+
+	it("logs when even the failure mark cannot be written", async () => {
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce(voidInvoice);
+		mockFn(sdb.invoice.updateMany).mockRejectedValueOnce(new Error("pool exhausted"));
+
+		pushInvoiceDetached("inv1", "org1");
+		await settle();
+
+		expect(log.error).toHaveBeenCalledTimes(2);
 	});
 });

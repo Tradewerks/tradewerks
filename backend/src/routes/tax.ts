@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import {
 	ErrorCodes,
 	createSuccessResponse,
@@ -16,6 +16,16 @@ import {
 	deleteTaxGroup,
 	type TaxResult,
 } from "../controllers/taxController.js";
+import {
+	getTaxSettings,
+	previewAutoSwitch,
+	updateTaxSettings,
+} from "../controllers/taxSettingsController.js";
+import {
+	acknowledgeTaxReview,
+	type TaxReviewKind,
+} from "../controllers/taxReviewController.js";
+import { getUserContext } from "../lib/context.js";
 import { requirePermission } from "../lib/requirePermissions.js";
 
 const router = Router();
@@ -24,7 +34,7 @@ const router = Router();
 // Helper — maps controller result to HTTP response without string-parsing
 // ---------------------------------------------------------------------------
 
-function sendTaxResult<T>(
+export function sendTaxResult<T>(
 	res: import("express").Response,
 	result: TaxResult<T>,
 	successStatus = 200,
@@ -38,10 +48,28 @@ function sendTaxResult<T>(
 		CONFLICT:   { status: 409, code: ErrorCodes.CONFLICT },
 		VALIDATION: { status: 400, code: ErrorCodes.VALIDATION_ERROR },
 		INTERNAL:   { status: 500, code: ErrorCodes.SERVER_ERROR },
+		NOT_IN_PLAN: { status: 403, code: ErrorCodes.MODULE_NOT_IN_PLAN },
 	};
 	const { status, code: errCode } =
 		ERROR_MAP[result.code] ?? { status: 500, code: ErrorCodes.SERVER_ERROR };
 	res.status(status).json(createErrorResponse(errCode, result.message));
+}
+
+/** "Acknowledge & send": records who accepted a degraded tax path. */
+export function acknowledgeTaxReviewRoute(kind: TaxReviewKind): RequestHandler {
+	return async (req, res, next) => {
+		try {
+			const result = await acknowledgeTaxReview(
+				kind,
+				req.params.id as string,
+				req.user!.organization_id as string,
+				getUserContext(req),
+			);
+			sendTaxResult(res, result);
+		} catch (err) {
+			next(err);
+		}
+	};
 }
 
 // ============================================
@@ -143,6 +171,39 @@ router.delete("/groups/:id", requirePermission("manage_taxes"), async (req, res,
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
 		const result = await deleteTaxGroup(id, orgId);
+		sendTaxResult(res, result);
+	} catch (err) {
+		next(err);
+	}
+});
+
+// ============================================
+// TAX SETTINGS (mode + registered states)
+// ============================================
+
+router.get("/settings", requirePermission("manage_taxes"), async (req, res, next) => {
+	try {
+		res.json(createSuccessResponse(await getTaxSettings(req.user!.organization_id as string)));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.get("/settings/auto-switch-preview", requirePermission("manage_taxes"), async (req, res, next) => {
+	try {
+		res.json(createSuccessResponse(await previewAutoSwitch(req.user!.organization_id as string)));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.put("/settings", requirePermission("manage_taxes"), async (req, res, next) => {
+	try {
+		const result = await updateTaxSettings(
+			req.user!.organization_id as string,
+			req.body,
+			getUserContext(req).dispatcherId ?? null,
+		);
 		sendTaxResult(res, result);
 	} catch (err) {
 		next(err);

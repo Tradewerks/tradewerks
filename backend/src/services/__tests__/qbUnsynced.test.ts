@@ -27,7 +27,10 @@ import { pushPaymentToQB } from "../qb/qbPayments.js";
 import { pushInvoice } from "../qb/qbInvoices.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
-const staleBranch = { qb_sync_status: "synced", account_id: { not: "realm2" } };
+const staleBranch = {
+	qb_sync_status: { in: ["synced", "tax_mismatch"] },
+	account_id: { not: "realm2" },
+};
 
 // Synced to a previously connected company is unsynced in the current one.
 describe("listUnsynced stale company", () => {

@@ -23,7 +23,7 @@ const only = (...keys: string[]): Record<string, boolean> =>
 	Object.fromEntries(ALL.map((k) => [k, keys.includes(k)]));
 const except = (...off: string[]) => only(...ALL.filter((k) => !off.includes(k)));
 
-// Display order for the register page. Vertical packs will attach to these keys.
+// Display order for the register page.
 export const BUSINESS_TYPES: readonly BusinessType[] = [
 	{ key: "hvac", label: "HVAC", moduleDefaults: only(...ALL) },
 	{ key: "plumbing", label: "Plumbing", moduleDefaults: only(...ALL) },

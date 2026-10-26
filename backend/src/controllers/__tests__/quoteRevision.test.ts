@@ -116,6 +116,7 @@ describe("createQuoteRevision", () => {
 		const created = mockFn(db.quote.create).mock.calls[0][0].data;
 		expect(created.previous_quote_id).toBe("q1");
 		expect(created.version).toBe(2);
+		expect(created).not.toHaveProperty("work_class");
 		expect(created.status).toBe("Issued");
 		const superseded = mockFn(db.quote.update).mock.calls.find(
 			(c: [{ data: { status?: string } }]) =>

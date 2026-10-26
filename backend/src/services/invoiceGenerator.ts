@@ -194,6 +194,8 @@ export async function buildRecurringPlanInvoicePayload(
 				total,
 				item_type: li.item_type as LineItemType,
 				sort_order: li.sort_order,
+				taxable: li.taxable,
+				tax_group_id: li.tax_group_id,
 			});
 		}
 	} else if (basis === "visit_actuals") {
@@ -294,6 +296,8 @@ export async function buildRecurringPlanInvoicePayload(
 					total: Number(li.total),
 					item_type: li.item_type as LineItemType,
 					sort_order: li.sort_order,
+					taxable: li.taxable,
+					tax_group_id: li.tax_group_id,
 					source_visit_id: visit.id,
 					source_job_id: jobId,
 				});

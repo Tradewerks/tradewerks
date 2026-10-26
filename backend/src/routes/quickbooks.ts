@@ -1,19 +1,21 @@
 import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from "express";
+import { z } from "zod";
 import { requirePermission } from "../lib/requirePermissions.js";
 import { createSuccessResponse, createErrorResponse, ErrorCodes } from "../types/responses.js";
 import {
 	getAuthUrl,
-	handleCallback,
 	disconnectOrg,
 	getQBStatus,
 	getOrgRealmId,
+	isQBConnected,
 	QB_ENABLED,
 } from "../services/quickbooksService.js";
 import { 
 	pushInvoice,
 	sendInvoiceEmail,
 } from "../services/qb/qbInvoices.js"
+import { qbFaultDetail } from "../services/qb/qbCreditMemos.js";
 import { findAllQBCustomers, pushClient } from "../services/qb/qbCustomers.js"
 import {
 	getQBItems,
@@ -56,6 +58,9 @@ import type { ProfitAndLossQuery } from "../services/qb/qbReports.js";
 import { pushPurchase, queryQBPurchaseOrders, getQBPurchaseOrderAsPDF, pushFieldPurchase } from "../services/qb/qbPurchases.js";
 import { pushTimesheet } from "../services/qb/qbTimeActivity.js";
 import { listUnsynced, syncUnsynced } from "../services/qb/qbUnsynced.js";
+import { setQBPassthroughTaxCode } from "../controllers/taxSettingsController.js";
+import { sendTaxResult } from "./tax.js";
+import { log } from "../services/appLogger.js";
 
 const router = Router();
 
@@ -87,7 +92,7 @@ router.get("/connection", async (req, res, next) => {
 router.get("/connection/auth-url", requirePermission("manage_organization"), (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id!;
-		const url = getAuthUrl(orgId);
+		const url = getAuthUrl(orgId, req.user!.uid);
 		res.json(createSuccessResponse({ url }));
 	} catch (err) {
 		next(err);
@@ -126,14 +131,26 @@ router.post("/unsynced/sync", requirePermission("manage_organization"), async (r
 // Manual sync — push a single invoice to QB (or retry a failed one)
 router.post("/invoices/:id/sync", requirePermission("edit_invoices"), async (req, res, next) => {
 	const invoiceId = req.params.id as string;
+	const orgId = req.user!.organization_id!;
 	try {
-		const orgId = req.user!.organization_id!;
-		await pushInvoice(invoiceId, orgId);
-		res.json(createSuccessResponse({ synced: true }));
+		const pushed = await pushInvoice(invoiceId, orgId);
+		res.json(createSuccessResponse({ synced: pushed !== undefined }));
 	} catch (err) {
-		await db.invoice
-			.update({ where: { id: invoiceId }, data: { qb_sync_status: "failed" } })
+		// Scoped: the id comes from the URL, so it may belong to another org.
+		await getScopedDb(orgId)
+			.invoice.updateMany({ where: { id: invoiceId }, data: { qb_sync_status: "failed" } })
 			.catch(() => {});
+		const detail = qbFaultDetail(err);
+		if (detail) {
+			return res
+				.status(502)
+				.json(
+					createErrorResponse(
+						ErrorCodes.QB_SYNC_FAILED,
+						`QuickBooks rejected this document: ${detail}`,
+					),
+				);
+		}
 		next(err);
 	}
 });
@@ -506,12 +523,67 @@ router.get("/tax-codes", requirePermission("manage_taxes"), async (req, res, nex
 	}
 });
 
-// Whether this QB company uses Automated Sales Tax 
+// Whether this QB company uses Automated Sales Tax, plus the org's pass-through tax code
 router.get("/tax-preferences", requirePermission("manage_taxes"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
-		const prefs = await getQBTaxPrefs(orgId);
-		res.json(createSuccessResponse(prefs));
+		const [prefs, org] = await Promise.all([
+			getQBTaxPrefs(orgId),
+			db.organization.findUnique({
+				where: { id: orgId },
+				select: { qb_passthrough_tax_code_id: true },
+			}),
+		]);
+		res.json(
+			createSuccessResponse({
+				...prefs,
+				passthroughTaxCodeId: org?.qb_passthrough_tax_code_id ?? null,
+			}),
+		);
+	} catch (err) {
+		next(err);
+	}
+});
+
+// Whether QuickBooks will recompute tax on invoices (Automated Sales Tax). Open to every role
+// because job pages use it to label tax as an estimate. Read live, never cached (see qbInvoices.ts).
+router.get("/tax-calculation", async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		let qbCalculatesTax = false;
+		if (await isQBConnected(orgId)) {
+			try {
+				qbCalculatesTax = (await getQBTaxPrefs(orgId)).automatedSalesTax === true;
+			} catch (err) {
+				log.warn({ err, orgId }, "tax-calculation: could not read QB preferences");
+			}
+		}
+		res.json(createSuccessResponse({ qb_calculates_tax: qbCalculatesTax }));
+	} catch (err) {
+		next(err);
+	}
+});
+
+const passthroughTaxCodeSchema = z.object({
+	qb_tax_code_id: z.string().trim().min(1).max(64).nullable(),
+});
+
+// QB tax code sent on invoices whose tax spans several tax groups (non-AST companies). null clears it.
+router.put("/passthrough-tax-code", requirePermission("manage_taxes"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const parsed = passthroughTaxCodeSchema.safeParse(req.body);
+		if (!parsed.success) {
+			return res
+				.status(400)
+				.json(
+					createErrorResponse(
+						ErrorCodes.VALIDATION_ERROR,
+						"qb_tax_code_id must be a QuickBooks tax code id or null",
+					),
+				);
+		}
+		sendTaxResult(res, await setQBPassthroughTaxCode(orgId, parsed.data.qb_tax_code_id));
 	} catch (err) {
 		next(err);
 	}

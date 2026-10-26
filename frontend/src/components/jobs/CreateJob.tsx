@@ -14,6 +14,8 @@ import {
 } from "../../types/common";
 import { useAllClientsQuery } from "../../hooks/useClients";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
+import { rateToPercentInput } from "../../lib/formatTax";
+import { formatCurrency } from "../../util/util";
 import { useAllJobsQuery } from "../../hooks/useJobs";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import {
@@ -29,6 +31,9 @@ import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import { jobRounding } from "../../lib/taxRounding";
+import { editorAutoTax, flatRateHandler } from "../../lib/taxEditorMode";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import {
 	TemplateSearch,
@@ -37,6 +42,7 @@ import {
 } from "../ui/forms/TemplateSearch";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 
 type Step = 1 | 2 | 3;
@@ -109,23 +115,17 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 	} = useLineItems({ minItems: 0, mode: "create" });
 
 	const { data: taxGroups = [] } = useTaxGroups();
+	const autoModeLoaded = useAutoTaxMode();
+	const autoMode = autoModeLoaded === true;
 
 	const selectedClient = useMemo(
 		() => clients?.find((c) => c.id === clientId) ?? null,
 		[clients, clientId],
 	);
 	const clientExempt = selectedClient?.is_tax_exempt ?? false;
+	const clientTaxGroupId = selectedClient?.tax_group_id ?? null;
 
-	const lineItemsForCalc = useMemo(
-		() =>
-			activeLineItems.map((item) => ({
-				id: item.id,
-				total: Number(item.total),
-				taxable: item.taxable ?? true,
-				tax_group_id: item.tax_group_id ?? null,
-			})),
-		[activeLineItems],
-	);
+	const lineItemsForCalc = useLineItemsForCalc(activeLineItems, clientTaxGroupId);
 
 	const {
 		taxRate,
@@ -154,6 +154,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 		clientExempt,
 		initialDiscountType: "amount",
 		initialDiscountValue: 0,
+		rounding: jobRounding(autoModeLoaded, null, true),
 	});
 
 	const {
@@ -305,7 +306,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 			}
 
 			setFinancialOriginals(
-				(source.tax_rate ?? 0) * 100,
+				rateToPercentInput(source.tax_rate),
 				source.discount_type ?? "amount",
 				source.discount_value ?? 0
 			);
@@ -352,7 +353,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 				}
 				if (p.tax_rate != null) {
 					setFinancialOriginals(
-						p.tax_rate * 100,
+						rateToPercentInput(p.tax_rate),
 						p.discount_type ?? "amount",
 						p.discount_value ?? 0
 					);
@@ -463,7 +464,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 				],
 				value:
 					j.estimated_total != null
-						? `$${Number(j.estimated_total).toFixed(2)}`
+						? formatCurrency(Number(j.estimated_total))
 						: undefined,
 				createdAt: new Date(j.created_at).toISOString(),
 				clientId: j.client_id,
@@ -493,7 +494,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 			})(),
 			value:
 				d.total != null && d.total !== 0
-					? `$${Number(d.total).toFixed(2)}`
+					? formatCurrency(Number(d.total))
 					: undefined,
 			createdAt: d.created_at,
 			isDeletable: true,
@@ -784,6 +785,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 								setLineItemTaxGroup(id, groupId, taxable);
 								markDirty();
 							}}
+							autoMode={autoMode}
 							onTaxGroupBulkSet={(groupId, taxable) => {
 								setAllLineItemsTaxGroup(groupId, taxable);
 								markDirty();
@@ -805,10 +807,10 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 							total={total}
 							isLoading={isLoading}
 							mode="create"
-							onTaxRateChange={(v) => {
+							onTaxRateChange={flatRateHandler(autoMode, groupsSummary.length, (v) => {
 								setTaxRate(v);
 								markDirty();
-							}}
+							})}
 							onDiscountTypeChange={(v) => {
 								setDiscountType(v);
 								markDirty();
@@ -817,13 +819,14 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 								setDiscountValue(v);
 								markDirty();
 							}}
-							totalLabel="Estimated Total"
+							totalLabel="Job Total"
 							isTaxDirty={isTaxDirty}
 							isDiscountDirty={isDiscountDirty}
 							onTaxUndo={undoTax}
 							onDiscountUndo={undoDiscount}
 							groupsSummary={groupsSummary}
 							totalTax={totalTax}
+							autoTax={editorAutoTax(autoMode, lineItemsForCalc, discountAmount)}
 						/>
 					</div>
 				);
@@ -833,6 +836,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 		}
 	}, [
 		isSourceSearchOpen,
+		autoMode,
 		sourceMode,
 		draftResults,
 		templateClients,
@@ -851,6 +855,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 		geoData,
 		errors,
 		activeLineItems,
+		lineItemsForCalc,
 		subtotal,
 		dirtyLineItemFields,
 		undoLineItemField,

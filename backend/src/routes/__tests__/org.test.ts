@@ -165,6 +165,19 @@ describe("org routes — measurement_system", () => {
 		);
 	});
 
+	it("GET / selects tax_mode so every dispatcher can read it", async () => {
+		mockDb.organization.findUnique.mockResolvedValue({ ...baseOrg, tax_mode: "auto" } as never);
+		const handlers = getHandlers("get", "/");
+		const res = makeRes();
+		await runChain(handlers, makeReq(), res);
+		expect(mockDb.organization.findUnique).toHaveBeenCalledWith(
+			expect.objectContaining({ select: expect.objectContaining({ tax_mode: true }) }),
+		);
+		expect(res.json).toHaveBeenCalledWith(
+			expect.objectContaining({ data: expect.objectContaining({ tax_mode: "auto" }) }),
+		);
+	});
+
 	it("PATCH / accepts a valid metric value and returns it", async () => {
 		mockDb.organization.update.mockResolvedValue({
 			...baseOrg,

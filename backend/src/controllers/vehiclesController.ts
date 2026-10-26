@@ -1287,6 +1287,7 @@ export const addPartsUsed = async (visitId: string, data: unknown, organizationI
 					item_type:          "material",
 					sort_order:         0,
 					inventory_item_id:  stockItem.inventory_item_id,
+					taxable:            stockItem.inventory_item.taxable,
 					fulfillment_status: "used",
 				},
 			});

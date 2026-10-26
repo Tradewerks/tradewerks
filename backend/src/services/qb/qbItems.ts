@@ -16,6 +16,7 @@ export interface QBItem {
     PurchaseCost?: number;
     QtyOnHand?: number;
     Active?: boolean;
+    Taxable?: boolean;
 }
 
 export async function getQBItems(orgId: string) {
@@ -33,9 +34,14 @@ async function getIncomeAccountId(orgId: string): Promise<string> {
 }
 
 // QBO's Item.Name caps at 100 chars; ours allows 255.
-const QB_ITEM_NAME_MAX = 100;
+export const QB_ITEM_NAME_MAX = 100;
 
-export async function findOrCreateQBItem(orgId: string, rawName: string, unitPrice?: number): Promise<string> {
+export async function findOrCreateQBItem(
+    orgId: string,
+    rawName: string,
+    unitPrice: number | undefined,
+    taxable: boolean | undefined,
+): Promise<string> {
     const name = rawName.slice(0, QB_ITEM_NAME_MAX);
     const escaped = name.replace(/'/g, "\\'");
     const existing = await qbQueryAll<QBItem & { SyncToken: string; ExpenseAccountRef?: { value: string } }>(
@@ -65,7 +71,10 @@ export async function findOrCreateQBItem(orgId: string, rawName: string, unitPri
         Type: "Service",
         IncomeAccountRef: { value: incomeAccountId },
         ExpenseAccountRef: { value: expenseAccountId },
-        ...(unitPrice !== undefined && { UnitPrice: unitPrice })
+        ...(unitPrice !== undefined && { UnitPrice: unitPrice }),
+        // Only on items we create; an existing QB item's tax setup is the org's bookkeeping.
+        // No TaxClassificationRef: under AST QuickBooks assigns the general one to a taxable item.
+        ...(taxable !== undefined && { Taxable: taxable }),
     })) as any;
     return created.Item.Id as string;
 };
@@ -123,6 +132,7 @@ export async function importQBItem(orgId: string, qbItemId: string, actor?: Acto
                     unit_price: qbItem.UnitPrice ?? null,
                     cost: qbItem.PurchaseCost ?? null,
                     sku: qbItem.Sku ?? null,
+                    ...(qbItem.Taxable !== undefined && { taxable: qbItem.Taxable }),
                 },
             });
             await tx.item_external_mapping.create({
@@ -231,7 +241,12 @@ export async function pushItem(orgId: string, inventoryItemId: string): Promise<
     });
     if (existing) return existing.external_id;
 
-    const qbItemId = await findOrCreateQBItem(orgId, item.name, item.unit_price ? Number(item.unit_price) : undefined);
+    const qbItemId = await findOrCreateQBItem(
+        orgId,
+        item.name,
+        item.unit_price ? Number(item.unit_price) : undefined,
+        item.taxable,
+    );
     await db.item_external_mapping.create({
         data: {
             inventory_item_id: inventoryItemId,

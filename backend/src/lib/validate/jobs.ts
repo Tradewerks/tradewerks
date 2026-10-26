@@ -1,5 +1,6 @@
 import z from "zod";
 import { coordsSchema } from "./shared.js";
+import { addressTaxChoiceSchema } from "./addressTaxChoice.js";
 import { isOwnBucketUrl } from "../../services/wasabiService.js";
 
 // Note photos must live in our own storage bucket: the URL is signed blindly on
@@ -145,6 +146,7 @@ export const updateJobSchema = z
 		estimated_total: z.number().min(0).optional(),
 		actual_total: z.number().min(0).optional(),
 		cancellation_reason: z.string().optional(),
+		address_tax_choice: addressTaxChoiceSchema.optional(),
 	})
 	.transform((data) => ({
 		...data,

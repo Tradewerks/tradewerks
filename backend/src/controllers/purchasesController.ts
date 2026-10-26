@@ -16,6 +16,7 @@ import { assertInventoryItemsInOrg, assertDispositionVehiclesInOrg } from "../li
 import { toDecimal, sumDecimal, deriveAllocationAmounts } from "../lib/fieldPurchase.js";
 import { recordMovements } from "../services/stockMovements.js";
 import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
+import { applyInventoryTaxable } from "../lib/inventoryTaxable.js";
 
 /**
  * Planned vendor procurement: a dispatcher orders stock (or a job-specific part)
@@ -192,20 +193,21 @@ async function applyRecieveJobCost(
 				data: { quantity: { increment: line.quantity }, total: { increment: total } },
 			});
 		} else {
-			const created = await tx.job_visit_line_item.create({
-				data: {
+			const [data] = await applyInventoryTaxable(tx, orgId, [
+				{
 					visit_id: visitId,
 					name: line.description,
 					quantity: line.quantity,
 					unit_price: line.unit_price,
 					total,
-					source: "manual",
-					item_type: "material",
-					disposition: "non_stock",
+					source: "manual" as const,
+					item_type: "material" as const,
+					disposition: "non_stock" as const,
 					inventory_item_id: line.inventory_item_id,
-					fulfillment_status: line.inventory_item_id ? "used" : null,
+					fulfillment_status: line.inventory_item_id ? ("used" as const) : null,
 				},
-			});
+			]);
+			const created = await tx.job_visit_line_item.create({ data });
 			await tx.purchase_line.update({
 				where: { id: line.id },
 				data: { visit_line_item_id: created.id },

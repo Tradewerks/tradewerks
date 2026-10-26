@@ -16,6 +16,7 @@ import {
 	LineItemTypeLabels,
 	LineItemDispositionLabels,
 	type BaseLineItem,
+	type InventoryLink,
 	type LineItemDisposition,
 } from "../../../types/common";
 import type { InventoryItem } from "../../../types/inventory";
@@ -24,6 +25,7 @@ import type { TaxGroup } from "../../../types/tax";
 import { useCreateProvisionalItemMutation } from "../../../hooks/useInventory";
 import Dropdown from "../../ui/Dropdown";
 import TaxGroupSelector from "./TaxGroupSelector";
+import { formatCurrency } from "../../../util/util";
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
 
@@ -74,11 +76,13 @@ interface LineItemCardProps {
 	inventoryItems?: InventoryItem[];
 	onLinkInventory?: (
 		id: string,
-		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+		link: InventoryLink | null,
 	) => void;
 	taxGroups?: TaxGroup[];
 	clientExempt?: boolean;
 	onTaxChange?: (id: string, groupId: string | null, taxable: boolean) => void;
+	autoMode?: boolean;
+	keptRateLabel?: string | null;
 	/** Visit and recurring-plan forms only; other line kinds move no stock. */
 	showDisposition?: boolean;
 	/** Destinations a `receive` can land on, besides the warehouse. */
@@ -184,7 +188,7 @@ function InventoryPicker({
 	onUpdate: (id: string, field: keyof BaseLineItem, value: string | number) => void;
 	onLink: (
 		id: string,
-		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+		link: InventoryLink | null,
 	) => void;
 	onUndo?: (id: string, field: keyof BaseLineItem) => void;
 	showUndo: boolean;
@@ -274,6 +278,7 @@ function InventoryPicker({
 			inventory_item_id: invItem.id,
 			name: invItem.name,
 			unit_price: invItem.unit_price != null ? Number(invItem.unit_price) : null,
+			taxable: invItem.taxable,
 		});
 		setIsOpen(false);
 	};
@@ -325,7 +330,7 @@ function InventoryPicker({
 									{invItem.sku && `${invItem.sku} · `}
 									Qty: {formatQty(invItem.quantity, invItem.unit)}
 									{invItem.unit_price != null &&
-										` · $${Number(invItem.unit_price).toFixed(2)}`}
+										` · ${formatCurrency(Number(invItem.unit_price))}`}
 								</div>
 							</button>
 						))}
@@ -384,7 +389,7 @@ function InventoryPicker({
 						</span>
 						{margin && (
 							<span
-								title={`Catalog cost $${margin.cost.toFixed(2)} vs charged $${margin.charged.toFixed(2)}`}
+								title={`Catalog cost ${formatCurrency(margin.cost)} vs charged ${formatCurrency(margin.charged)}`}
 								className={`text-[10px] flex-shrink-0 tabular-nums ${
 									margin.pct < 0
 										? "text-error-text"
@@ -461,6 +466,8 @@ const LineItemCard = memo(
 		taxGroups = [],
 		clientExempt = false,
 		onTaxChange,
+		autoMode = false,
+		keptRateLabel = null,
 		showDisposition = false,
 		vehicles = [],
 		onDispositionChange,
@@ -720,6 +727,8 @@ const LineItemCard = memo(
 								taxable={item.taxable ?? true}
 								taxGroups={taxGroups}
 								clientExempt={clientExempt}
+								autoMode={autoMode}
+								keptRateLabel={keptRateLabel}
 								onChange={(groupId, taxable) =>
 									onTaxChange(item.id, groupId, taxable)
 								}
@@ -840,7 +849,7 @@ const LineItemCard = memo(
 							</label>
 							<div className="h-[34px] flex items-center justify-end px-2.5 rounded border-2 border-primary/40 bg-base">
 								<span className="text-sm font-bold text-text-primary tabular-nums">
-									${item.total.toFixed(2)}
+									{formatCurrency(item.total)}
 								</span>
 							</div>
 						</div>

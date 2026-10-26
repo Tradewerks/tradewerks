@@ -8,6 +8,8 @@ export interface ConfirmDialogProps {
 	confirmLabel: string;
 	tone?: "primary" | "destructive";
 	pending?: boolean;
+	/** Blocks Confirm without the "Working…" label, e.g. while a prerequisite is loading. */
+	confirmDisabled?: boolean;
 	error?: string | null;
 	/** May return a promise; the button stays guarded until it settles. */
 	onConfirm: () => unknown;
@@ -23,6 +25,7 @@ export default function ConfirmDialog({
 	confirmLabel,
 	tone = "primary",
 	pending = false,
+	confirmDisabled = false,
 	error = null,
 	onConfirm,
 	onCancel,
@@ -46,7 +49,7 @@ export default function ConfirmDialog({
 	if (!open) return null;
 
 	const handleConfirmClick = () => {
-		if (isSubmittingRef.current || pending) return;
+		if (isSubmittingRef.current || pending || confirmDisabled) return;
 		isSubmittingRef.current = true;
 		// Also release when onConfirm settles: one that refuses (e.g. a too-short
 		// reason) never makes `pending` go true, so the effect above would not
@@ -79,7 +82,7 @@ export default function ConfirmDialog({
 					<button
 						type="button"
 						onClick={handleConfirmClick}
-						disabled={pending}
+						disabled={pending || confirmDisabled}
 						className={`px-3 py-1.5 rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
 							tone === "destructive"
 								? "bg-error hover:enabled:bg-error-strong"

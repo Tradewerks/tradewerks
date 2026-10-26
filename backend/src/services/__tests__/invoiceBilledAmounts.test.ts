@@ -19,6 +19,7 @@ vi.mock("../../lib/recomputeDocumentTotals.js", () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { createInvoiceRecord, type CreateInvoicePayload } from "../invoiceService.js";
+import { recomputeDocumentTotals } from "../../lib/recomputeDocumentTotals.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 
 const ORG = "org-1";
@@ -183,5 +184,79 @@ describe("createInvoiceRecord billed_amount", () => {
 
 		expect(jobLinks).toHaveLength(1);
 		expect(jobLinks[0].billed_amount).toBe(400);
+	});
+});
+
+// Recompute reads the service address from the earliest linked job, so every link
+// must exist before it runs.
+describe("createInvoiceRecord tax recompute ordering", () => {
+	const linksAtRecompute = (jobLinks: unknown[], visitLinks: unknown[]) => {
+		const seen: Array<{ jobs: number; visits: number }> = [];
+		vi.mocked(recomputeDocumentTotals).mockImplementation(async () => {
+			seen.push({ jobs: jobLinks.length, visits: visitLinks.length });
+			return true as never;
+		});
+		return seen;
+	};
+
+	it("recomputes after billed job and visit links exist", async () => {
+		const { tx, jobLinks, visitLinks } = makeTx([line(500, { job: JOB, visit: VISIT })]);
+		const seen = linksAtRecompute(jobLinks, visitLinks);
+
+		await createInvoiceRecord(
+			payload({
+				job_billings: [{ job_id: JOB, billed_amount: 500 }],
+				visit_billings: [{ visit_id: VISIT, billed_amount: 500 }],
+			}),
+			ORG,
+			null,
+			tx,
+		);
+
+		expect(seen).toEqual([{ jobs: 1, visits: 1 }]);
+	});
+
+	it("recomputes after traceability-only job links exist", async () => {
+		const { tx, jobLinks, visitLinks } = makeTx([line(100, { visit: VISIT, job: JOB })]);
+		const seen = linksAtRecompute(jobLinks, visitLinks);
+
+		await createInvoiceRecord(
+			payload({
+				job_ids: [JOB],
+				visit_billings: [{ visit_id: VISIT, billed_amount: 100 }],
+			}),
+			ORG,
+			null,
+			tx,
+		);
+
+		expect(seen).toEqual([{ jobs: 1, visits: 1 }]);
+	});
+});
+
+describe("createInvoiceRecord tax group ownership", () => {
+	it("refuses a line whose tax_group_id belongs to another organization", async () => {
+		const { tx } = makeTx([]);
+		const findMany = vi.fn().mockResolvedValue([{ id: "g-own" }]);
+		Object.assign(tx, { tax_group: { findMany } });
+
+		await expect(
+			createInvoiceRecord(
+				payload({
+					line_items: [
+						{ name: "Part", quantity: 1, unit_price: 100, tax_group_id: "g-own" },
+						{ name: "Labor", quantity: 1, unit_price: 50, tax_group_id: "g-foreign" },
+					],
+				}),
+				ORG,
+				null,
+				tx,
+			),
+		).rejects.toThrow("Tax group not found: g-foreign");
+		expect(findMany).toHaveBeenCalledWith({
+			where: { id: { in: ["g-own", "g-foreign"] }, organization_id: ORG },
+			select: { id: true },
+		});
+		expect(tx.invoice_line_item.createMany).not.toHaveBeenCalled();
 	});
 });

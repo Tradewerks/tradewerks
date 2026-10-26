@@ -107,6 +107,8 @@ export const useUpdateJobMutation = (): UseMutationResult<
 			await queryClient.invalidateQueries({
 				queryKey: ["clients", updatedJob.client_id],
 			});
+			// Address edits re-tax the open visits server-side.
+			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 			await queryClient.invalidateQueries({ queryKey: ["clients"] });
 			await queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},

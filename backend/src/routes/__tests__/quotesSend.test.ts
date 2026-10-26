@@ -296,3 +296,24 @@ describe("POST /quotes/:id/send untranslated failure", () => {
 		expect(res.body.error.code).toBe("NOT_FOUND");
 	});
 });
+
+// Auto mode has no taxability gate: a line nobody categorised never holds a send back.
+describe("POST /quotes/:id/send auto-mode draft", () => {
+	it("finalizes and emails a draft with an uncategorised line", async () => {
+		mockGetQuoteById.mockResolvedValue({ id: "q1", status: "Draft" } as never);
+		const order: string[] = [];
+		mockUpdateQuote.mockImplementation((async (req: { body: { status: string } }) => {
+			order.push(req.body.status);
+			return { err: "", item: { id: "q1" } };
+		}) as never);
+		mockSendQuoteEmail.mockImplementationOnce(async () => {
+			order.push("email");
+		});
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(order).toEqual(["Issued", "email", "Sent"]);
+		expect(mockUpdateQuote.mock.calls[0]).toHaveLength(3);
+	});
+});

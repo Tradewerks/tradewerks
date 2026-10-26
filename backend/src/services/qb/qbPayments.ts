@@ -256,8 +256,22 @@ export async function handleInboundPaymentEvent(
         } 
 
         // Create
-        const linkedInvoiceId = payment.Line?.flatMap(l => l.LinkedTxn ?? [])
-                                .find(t => t.TxnType === "Invoice")?.TxnId;
+        // The payment we post to apply a credit is always $0; a mixed cash + credit payment has
+        // TotalAmt > 0 and must still be recorded.
+        const linked = payment.Line?.flatMap(l => l.LinkedTxn ?? []) ?? [];
+        if (payment.TotalAmt === 0) {
+            await logExternalSync({
+                provider: "quickbooks",
+                external_id: qbPaymentId,
+                entity_type: "payment",
+                action: "webhook_skipped_credit_application",
+                payload: { message: "Payment applies a credit memo" },
+                organization_id: orgId,
+            });
+            return;
+        }
+
+        const linkedInvoiceId = linked.find(t => t.TxnType === "Invoice")?.TxnId;
         if (!linkedInvoiceId) {
             await logExternalSync({
                 provider: "quickbooks",

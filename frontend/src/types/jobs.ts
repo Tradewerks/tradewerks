@@ -28,6 +28,7 @@ import {
 	type RecurringOccurrence,
 } from "./recurringPlans";
 import type { ProjectRef } from "./project";
+import type { AddressTaxChoice, TaxProvenance, TaxSnapshot } from "./tax";
 
 // ============================================================================
 // JOB-SPECIFIC TYPES
@@ -176,7 +177,7 @@ export interface RecurringPlanReference {
 	occurrences?: RecurringOccurrence[];
 }
 
-export interface Job extends PricingBreakdown, ExecutionTotals {
+export interface Job extends PricingBreakdown, ExecutionTotals, TaxProvenance {
 	id: string;
 	name: string;
 	job_number: string;
@@ -200,7 +201,8 @@ export interface Job extends PricingBreakdown, ExecutionTotals {
 	project_id?: string | null;
 	client?: ClientWithPrimaryContact;
 	request?: RequestReference | null;
-	quote?: QuoteReference | null;
+	/** tax_snapshot: on the detail GET only; a job with none of its own inherits a kept rate. */
+	quote?: (QuoteReference & { tax_snapshot?: TaxSnapshot | null }) | null;
 	recurring_plan?: RecurringPlanReference | null;
 	visits?: JobVisit[];
 	notes?: JobNote[];
@@ -231,6 +233,7 @@ export interface UpdateJobInput extends PricingBreakdown, ExecutionTotals {
 
 	cancellation_reason?: string;
 	line_items?: UpdateJobLineItemInput[];
+	address_tax_choice?: AddressTaxChoice;
 }
 
 // ============================================================================
@@ -370,7 +373,7 @@ export interface JobVisit extends PricingBreakdown {
 	created_at?: Date | string;
 	updated_at?: Date | string;
 
-	job?: JobSummary & { client: ClientWithPrimaryContact; coords: Coordinates; quote?: QuoteReference | null, project?: ProjectRef | null; };
+	job?: JobSummary & TaxProvenance & { client: ClientWithPrimaryContact; coords: Coordinates; quote?: QuoteReference | null, project?: ProjectRef | null; };
 	visit_techs: JobVisitTechnician[];
 	notes?: JobNote[];
 	line_items?: VisitLineItem[];

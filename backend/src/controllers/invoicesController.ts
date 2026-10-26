@@ -2,10 +2,17 @@ import { ZodError } from "zod";
 import { db } from "../db.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { findForeignInventoryItemIds, unknownInventoryItemsMessage } from "../lib/inventory.js";
+import {
+	applyInventoryTaxableToNewLines,
+	lineTaxFieldsForCreate,
+	lineTaxFieldsForUpdate,
+} from "../lib/inventoryTaxable.js";
+import { findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import { resolveDocumentLineage } from "../lib/documentLineage.js";
 import { formatCurrency } from "../lib/money.js";
 import { isQBConnected, getOrgRealmId } from "../services/quickbooksService.js";
-import { mirrorInvoiceVoidToQuickBooks, pushInvoice } from "../services/qb/qbInvoices.js"
+import { mirrorInvoiceVoidToQuickBooks, pushInvoiceDetached } from "../services/qb/qbInvoices.js"
+import { confirmQuickBooksTax } from "../services/qb/qbAstAuthority.js";
 import {
 	createInvoiceSchema,
 	updateInvoiceSchema,
@@ -43,6 +50,9 @@ import {
 import { logExternalSync } from "../services/qb/qbSyncLog.js";
 import { pushPaymentToQB, deleteQBPayment } from "../services/qb/qbPayments.js"
 import { notifyDispatchers } from "./notificationsController.js";
+import { dropClientTaxTotals, getEffectiveTaxMode } from "../services/tax/taxMode.js";
+import { qbAstTaxCents } from "../services/tax/snapshot.js";
+import { holdsKeptRate } from "../lib/recomputeDocumentTotals.js";
 
 // ============================================================================
 // INVOICE CRUD
@@ -125,11 +135,23 @@ const resolveUnlinkedLineSources = async (
 export const getInvoiceDetail = async (id: string, organizationId: string) => {
 	const invoice = await getInvoiceById(id, organizationId);
 	if (!invoice) return null;
-	const [lineage, unlinked_sources] = await Promise.all([
+	const sdb = getScopedDb(organizationId);
+	const [lineage, unlinked_sources, parentJob] = await Promise.all([
 		resolveDocumentLineage("invoice", id, organizationId),
 		resolveUnlinkedLineSources(invoice, organizationId),
+		// The job recompute takes a kept rate from (recomputeDocumentTotals loadDocument).
+		sdb.job.findFirst({
+			where: { invoice_jobs: { some: { invoice_id: id } } },
+			orderBy: { created_at: "asc" },
+			select: { tax_snapshot: true },
+		}),
 	]);
-	return { ...invoice, lineage, unlinked_sources };
+	return {
+		...invoice,
+		lineage,
+		unlinked_sources,
+		parent_tax_snapshot: parentJob?.tax_snapshot ?? null,
+	};
 };
 
 export const getInvoicesByClientId = async (clientId: string, organizationId: string) => {
@@ -200,25 +222,7 @@ export const insertInvoice = async (req: Request, organizationId: string, contex
 						user_agent: context?.userAgent,
 					});
 				}
-				// Fire-and-forget QB sync — failure must not block invoice creation
-				if (created) {
-					isQBConnected(organizationId)
-						.then((connected) => (connected ? pushInvoice(created!.id, organizationId) : null))
-						.catch((err) => {
-							log.error(
-								{ err, invoiceId: created!.id, organizationId },
-								"QuickBooks invoice push failed",
-							);
-							db.invoice
-								.update({ where: { id: created!.id }, data: { qb_sync_status: "failed" } })
-								.catch((markErr) =>
-									log.error(
-										{ err: markErr, invoiceId: created!.id, organizationId },
-										"Could not mark the invoice's QuickBooks sync as failed",
-									),
-								);
-						});
-				}
+				if (created) pushInvoiceDetached(created.id, organizationId);
 
 				break; // success — exit retry loop
 			} catch (e) {
@@ -250,10 +254,74 @@ export const insertInvoice = async (req: Request, organizationId: string, contex
 	}
 };
 
-export const updateInvoice = async (req: Request, organizationId: string, context?: UserContext) => {
+export interface UpdateInvoiceOptions {
+	/** The caller already ran the QuickBooks tax finalize gate (the send route, before emailing). */
+	qbTaxConfirmed?: boolean;
+	/**
+	 * The acting user holds send_invoices, the only permission that can acknowledge a QuickBooks
+	 * tax review. Derived server-side from the caller's permissions, never from the request body.
+	 */
+	canAckQbTaxReview?: boolean;
+}
+
+export interface QbTaxReviewRefusal {
+	err: string;
+	code: typeof ErrorCodes.QB_TAX_REVIEW;
+	details: { qb_tax_cents: number; ours_cents: number; reason: string | null };
+}
+
+export const isQbTaxReviewRefusal = (result: object): result is QbTaxReviewRefusal =>
+	(result as { code?: unknown }).code === ErrorCodes.QB_TAX_REVIEW;
+
+export interface QbTaxZeroRefusal {
+	err: string;
+	code: typeof ErrorCodes.QB_TAX_ZERO;
+	details: { items: string[]; line_ids: string[] };
+}
+
+export const isQbTaxZeroRefusal = (result: object): result is QbTaxZeroRefusal =>
+	(result as { code?: unknown }).code === ErrorCodes.QB_TAX_ZERO;
+
+/**
+ * Finalize gate for AST realms. QuickBooks charging $0 where we tax refuses everyone (it is a
+ * misconfigured item, not a judgement call). An unacknowledged delta refuses only someone who can
+ * acknowledge it; "unavailable" proceeds on our estimate because QuickBooks being down never
+ * blocks billing.
+ */
+export const qbTaxFinalizeRefusal = async (
+	invoiceId: string,
+	organizationId: string,
+	canAck = true,
+): Promise<QbTaxReviewRefusal | QbTaxZeroRefusal | null> => {
+	const confirmed = await confirmQuickBooksTax(invoiceId, organizationId);
+	if (confirmed.status === "zero_blocked") {
+		const items = confirmed.items ?? [];
+		return {
+			err: `QuickBooks charged no tax. Check the sales tax category on these QuickBooks items: ${items.join(", ")}`,
+			code: ErrorCodes.QB_TAX_ZERO,
+			details: { items, line_ids: confirmed.lineIds ?? [] },
+		};
+	}
+	if (confirmed.status !== "needs_ack" || !canAck) return null;
+	const qbCents = confirmed.qbTaxCents ?? 0;
+	const oursCents = confirmed.oursCents ?? 0;
+	return {
+		err: `QuickBooks calculated ${formatCurrency(qbCents / 100)} (you estimated ${formatCurrency(oursCents / 100)}). Acknowledge the tax review to continue.`,
+		code: ErrorCodes.QB_TAX_REVIEW,
+		details: { qb_tax_cents: qbCents, ours_cents: oursCents, reason: confirmed.reason ?? null },
+	};
+};
+
+export const updateInvoice = async (
+	req: Request,
+	organizationId: string,
+	context?: UserContext,
+	options: UpdateInvoiceOptions = {},
+) => {
 	try {
 		const id = req.params.id as string;
-		const parsed = updateInvoiceSchema.parse(req.body);
+		const taxMode = await getEffectiveTaxMode(organizationId);
+		const raw = updateInvoiceSchema.parse(req.body);
 
 		const sdb = getScopedDb(organizationId);
 		const existing = await sdb.invoice.findFirst({
@@ -261,6 +329,25 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 			include: { line_items: true },
 		});
 		if (!existing) return { err: "Invoice not found" };
+
+		const isLocked =
+			existing.tax_snapshot != null &&
+			(existing.tax_snapshot as { locked_at?: string }).locked_at !== "draft";
+		const sentTotals = [
+			raw.subtotal,
+			raw.tax_rate,
+			raw.tax_amount,
+			raw.discount_amount,
+			raw.total,
+		].some((v) => v !== undefined);
+		// A draft holding a kept address rate (its own, or its job's) is taxed server-side, as in
+		// auto mode; the editor's flat-rate figures would overwrite the recompute.
+		const keptDraft =
+			taxMode !== "auto" &&
+			!isLocked &&
+			sentTotals &&
+			(await holdsKeptRate("invoice", id, sdb as unknown as Prisma.TransactionClient));
+		const parsed = dropClientTaxTotals(raw, keptDraft ? "auto" : taxMode);
 
 		if (existing.status === "Void") {
 			return { err: "Void invoices cannot be modified" };
@@ -358,11 +445,37 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 			if (foreignItems.length > 0) {
 				return { err: unknownInventoryItemsMessage(foreignItems) };
 			}
+			const foreignGroups = await findForeignTaxGroupIds(
+				sdb,
+				organizationId,
+				parsed.line_items.map((li) => li.tax_group_id),
+			);
+			if (foreignGroups.length > 0) {
+				return { err: `Tax group not found: ${foreignGroups.join(", ")}` };
+			}
 		}
 
-		const isLocked =
-			existing.tax_snapshot != null &&
-			(existing.tax_snapshot as { locked_at?: string }).locked_at !== "draft";
+		// Before the transaction: the confirm pushes to QuickBooks and writes the adopted figure
+		// onto the draft, which the lock below then keeps (recompute re-applies it).
+		if (
+			!options.qbTaxConfirmed &&
+			isInvoiceFinalizingTransition(existing.status, parsed.status)
+		) {
+			// The gates below judge the stored draft; inputs changed in the same request would
+			// finalize unjudged.
+			const taxInputs = [parsed.line_items];
+			if (taxMode === "auto" && taxInputs.some((v) => v !== undefined)) {
+				return { err: "Save changes before finalizing." };
+			}
+			// A review never hard-blocks someone who cannot clear it. They finalize on
+			// QuickBooks' adopted figure and the review stays open for a send_invoices holder.
+			const refusal = await qbTaxFinalizeRefusal(
+				id,
+				organizationId,
+				!!options.canAckQbTaxReview,
+			);
+			if (refusal) return refusal;
+		}
 
 		const updated = await sdb.$transaction(async (tx) => {
 			// ── Line item replacement ──────────────────────────────────────
@@ -380,6 +493,13 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 				);
 				const incomingIds = new Set(
 					incoming.filter((i) => i.id).map((i) => i.id!),
+				);
+				// New lines take the inventory default; existing lines keep theirs.
+				const withInventoryTaxable = await applyInventoryTaxableToNewLines(
+					tx,
+					organizationId,
+					incoming,
+					existingIds,
 				);
 
 				for (const item of existing.line_items) {
@@ -408,12 +528,7 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 								source_job_id: item.source_job_id ?? null,
 								source_visit_id: item.source_visit_id ?? null,
 								inventory_item_id: item.inventory_item_id ?? null,
-								...(item.tax_group_id !== undefined && {
-									tax_group_id: item.tax_group_id,
-								}),
-								...(item.taxable !== undefined && {
-									taxable: item.taxable,
-								}),
+								...lineTaxFieldsForUpdate(item),
 							},
 						});
 					} else {
@@ -433,8 +548,7 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 								source_job_id: item.source_job_id ?? null,
 								source_visit_id: item.source_visit_id ?? null,
 								inventory_item_id: item.inventory_item_id ?? null,
-								tax_group_id: item.tax_group_id ?? null,
-								taxable: item.taxable !== undefined ? item.taxable : true,
+								...lineTaxFieldsForCreate(withInventoryTaxable(item)),
 							},
 						});
 					}
@@ -500,6 +614,17 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 				finalizedAt ??
 				(parsed.status === "Sent" ? new Date() : undefined);
 
+			// Manual mode keeps the client's totals, but an adopted QuickBooks figure (re-applied by
+			// recompute above, or written by the finalize confirm) outranks the client's estimate.
+			let keepClientTotals = !isLocked && !keptDraft && taxMode !== "auto";
+			if (keepClientTotals && sentTotals) {
+				const current = await tx.invoice.findFirst({
+					where: { id },
+					select: { tax_snapshot: true },
+				});
+				if (qbAstTaxCents(current?.tax_snapshot) != null) keepClientTotals = false;
+			}
+
 			const invoice = await tx.invoice.update({
 				where: { id },
 				data: {
@@ -521,13 +646,13 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 					...(parsed.viewed_at !== undefined && {
 						viewed_at: parsed.viewed_at,
 					}),
-					...(!isLocked && parsed.subtotal !== undefined && {
+					...(keepClientTotals && parsed.subtotal !== undefined && {
 						subtotal: parsed.subtotal,
 					}),
-					...(!isLocked && parsed.tax_rate !== undefined && {
+					...(keepClientTotals && parsed.tax_rate !== undefined && {
 						tax_rate: parsed.tax_rate,
 					}),
-					...(!isLocked && parsed.tax_amount !== undefined && {
+					...(keepClientTotals && parsed.tax_amount !== undefined && {
 						tax_amount: parsed.tax_amount,
 					}),
 					...(!isLocked && !discountChanged && parsed.discount_type !== undefined && {
@@ -536,10 +661,10 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 					...(!isLocked && !discountChanged && parsed.discount_value !== undefined && {
 						discount_value: parsed.discount_value,
 					}),
-					...(!isLocked && !discountChanged && parsed.discount_amount !== undefined && {
+					...(keepClientTotals && !discountChanged && parsed.discount_amount !== undefined && {
 						discount_amount: parsed.discount_amount,
 					}),
-					...(!isLocked && parsed.total !== undefined && { total: parsed.total }),
+					...(keepClientTotals && parsed.total !== undefined && { total: parsed.total }),
 					...(parsed.memo !== undefined && { memo: parsed.memo }),
 					...(parsed.internal_notes !== undefined && {
 						internal_notes: parsed.internal_notes,
@@ -558,7 +683,7 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 					...(parsed.status === "Void" && {
 						voided_at: new Date(),
 					}),
-					...(!isLocked && parsed.total !== undefined && {
+					...(keepClientTotals && parsed.total !== undefined && {
 						balance_due: Math.max(
 							0,
 							parsed.total - Number(existing.amount_paid),
@@ -599,21 +724,21 @@ export const updateInvoice = async (req: Request, organizationId: string, contex
 		// QB sync — fire only when a QB-mirrored field changed
 		if (qbRelevantChanged) {
 			if (parsed.status === "Void") {
-				mirrorInvoiceVoidToQuickBooks(organizationId, id, existing.qb_invoice_id);
+				mirrorInvoiceVoidToQuickBooks(
+					organizationId,
+					id,
+					existing.qb_invoice_id,
+					...(existing.qb_credit_memo_id
+						? [
+								{
+									id: existing.qb_credit_memo_id,
+									appliedPaymentId: existing.qb_credit_applied_payment_id,
+								},
+							]
+						: []),
+				);
 			} else {
-				isQBConnected(organizationId)
-					.then((connected) => (connected ? pushInvoice(updated.id, organizationId) : null))
-					.catch((err) => {
-						log.error({ err, invoiceId: id, organizationId }, "QuickBooks invoice push failed");
-						db.invoice
-							.update({ where: { id }, data: { qb_sync_status: "failed" } })
-							.catch((markErr) =>
-								log.error(
-									{ err: markErr, invoiceId: id, organizationId },
-									"Could not mark the invoice's QuickBooks sync as failed",
-								),
-							);
-					});
+				pushInvoiceDetached(updated.id, organizationId);
 			}
 		}
 
