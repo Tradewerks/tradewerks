@@ -13,7 +13,7 @@ import {
     resolveDateRange,
 } from "../../util/dateRangeUtils";
 import { DEFAULT_RESPONSIVE_LAYOUTS, KPI_CATALOG } from "../../lib/KpiConfig";
-import { BREAKPOINTS, resolveConstraints, getActiveCols, fitLayout, removeWidget } from "../../lib/gridLayoutEngine";
+import { BREAKPOINTS, resolveConstraints, getActiveCols, fitLayout, removeWidget, stackLayout } from "../../lib/gridLayoutEngine";
 import { useAuthStore } from "../../auth/authStore";
 import { useDispatcherByIdQuery, useUpdateDispatcherMutation } from "../../hooks/useDispatchers";
 import AddWidgetModal from "../../components/widgets/AddWidgetModal";
@@ -30,6 +30,8 @@ import {
     MileageSummaryWidget,
 } from "../../components/widgets/reports";
 import { Unlock, LayoutDashboard, LayoutGrid, StretchHorizontal, RotateCcw, Trash } from "lucide-react";
+import FirstTimeFixRateWidget from "../../components/widgets/reports/FirstTimeFixRateWidget";
+import RecurringRevenueWidget from "../../components/widgets/reports/RecurringRevenueWidget";
 
 const KPI_PRESETS: DateRangeOption[] = [
     "today",
@@ -54,6 +56,8 @@ function renderKPI(id: string, startDate: string, endDate: string) {
         case "report-aged-receivables-bar": return <AgedReceivablesColumnWidget />;
         // TODO: useJobBacklogQuery takes no date params — needs backend/hook support for a custom range
         case "report-job-backlog":     return <JobBacklogWidget />;
+        case "report-first-time-fix":  return <FirstTimeFixRateWidget startDate={startDate} endDate={endDate} />
+        case "report-recurring-revenue": return <RecurringRevenueWidget startDate={startDate} endDate={endDate} />
         default: return <div>Unknown widget: {id}</div>;
     }
 }
@@ -67,8 +71,6 @@ export default function KpiPage() {
     const [isEditMode, setIsEditMode] = useState(false);
     const [isAddWidgetModalOpen, setIsAddWidgetModalOpen] = useState(false);
     const justDraggedRef = useRef(false);
-    const [autoExtra, setAutoExtra] = useState<Record<string, number>>({});
-    const widgetRefs = useRef<Map<string, HTMLDivElement>>(new Map());
     
     // Seed saved layout when dispatcher data loads
     useEffect(() => {
@@ -95,45 +97,18 @@ export default function KpiPage() {
         return () => clearTimeout(t);
     }, [rawContainerWidth]);
 
-    useEffect(() => { setAutoExtra({}); }, [layouts.lg, settledWidth, isEditMode]);
-    useEffect(() => {
-        if (isEditMode || displayWidth <= 0) return;
-        const ROW_PX = 45 + 16; 
-        const SAFETY_MAX_EXTRA = 40; 
-
-        const measure = () => {
-            setAutoExtra(prev => {
-                const next = { ...prev };
-                let changed = false;
-                widgetRefs.current.forEach((wrapper, id) => {
-                    const body = wrapper.firstElementChild?.lastElementChild as HTMLElement | undefined;
-                    if (!body) return;
-                    const overflow = body.scrollHeight - body.clientHeight;
-                    const prevExtra = prev[id] ?? 0;
-                    const wantExtra = Math.min(prevExtra + Math.ceil(overflow / ROW_PX), SAFETY_MAX_EXTRA);
-                    if (overflow > 2 && wantExtra !== prevExtra) {
-                        next[id] = wantExtra;
-                        changed = true;
-                    }
-                });
-                return changed ? next : prev;
-            });
-        };
-
-        const ro = new ResizeObserver(measure);
-        widgetRefs.current.forEach(el => ro.observe(el));
-        measure();
-        return () => ro.disconnect();
-    }, [isEditMode, displayWidth, settledWidth, displayLayouts.lg, autoExtra]);
-
-
     const activeCols = useMemo(() => {
         const c = getActiveCols(settledWidth || displayWidth);
         return { lg: c, md: c, sm: c };
     }, [settledWidth, displayWidth]);
 
-    // Sync displayLayouts when layouts changes (drag/resize/reset/fit/widget add)
-    useEffect(() => { setDisplayLayouts(layouts); }, [layouts]);
+    // Sync displayLayouts when layouts or col count change; below 12 cols every widget stacks full width
+    useEffect(() => {
+        setDisplayLayouts({
+            ...layouts,
+            lg: activeCols.lg === 12 ? (layouts.lg ?? []) : stackLayout(layouts.lg ?? [], activeCols.lg),
+        });
+    }, [layouts, activeCols.lg]);
 
     const saveKpiLayout = async (id: string, newLayout: Layout) => {
         try {
@@ -161,31 +136,18 @@ export default function KpiPage() {
 
             const minW = Math.min(c.minW ?? 1, cols);
             const maxW = Math.min(c.maxW ?? cols, cols);
-            
-            const baseH = Math.min(Math.max(item.h, c.minH ?? 1), c.maxH ?? 20);
-            const h = baseH + (autoExtra[item.i] ?? 0);
             return {
                 ...item,
                 ...c,
                 minW,
                 maxW,
-                maxH: Math.max(c.maxH ?? 20, h),
+                maxH: c.maxH ?? 20,
                 w: Math.min(Math.max(item.w, minW), maxW),
-                h,
+                h: Math.min(Math.max(item.h, c.minH ?? 1), c.maxH ?? 20),
             };
         });
         return { lg: display, md: display, sm: display };
-    }, [displayLayouts.lg, settledWidth, displayWidth, activeCols.lg, autoExtra]);
-    
-    const prevColsRef = useRef(activeCols.lg);
-    useEffect(() => {
-        if (prevColsRef.current === activeCols.lg) return;
-        prevColsRef.current = activeCols.lg;
-        setDisplayLayouts(prev => ({
-            ...prev,
-            lg: activeCols.lg === 12 ? (layouts.lg ?? []) : fitLayout(KPI_CATALOG, layouts.lg ?? [], activeCols.lg),
-        }));
-    }, [activeCols.lg, layouts.lg]);
+    }, [displayLayouts.lg, settledWidth, displayWidth, activeCols.lg]);
 
     const [range, setRange] = useState<DateRangeValue>({ option: "this_month" });
 
@@ -260,13 +222,10 @@ export default function KpiPage() {
                                 Reset
                             </button>
                             <button
-                                onClick={() => {
-                                    const fitted = fitLayout(KPI_CATALOG, layouts.lg ?? [], activeCols.lg);
-                                    if (activeCols.lg === 12) handleLayoutSave(fitted);
-                                    else setDisplayLayouts(prev => ({ ...prev, lg: fitted }));
-                                }}
-                                title="Distribute widgets evenly across each row"
-                                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface hover:bg-surface-raised border border-border text-xs font-medium text-text-secondary hover:text-text-primary transition-colors"
+                                onClick={() => handleLayoutSave(fitLayout(KPI_CATALOG, layouts.lg ?? [], activeCols.lg))}
+                                disabled={activeCols.lg < 12}
+                                title={activeCols.lg < 12 ? "Widgets stack full width on narrow screens" : "Distribute widgets evenly across each row"}
+                                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface hover:bg-surface-raised border border-border text-xs font-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
                             >
                                 <StretchHorizontal size={13} />
                                 Fit
@@ -313,10 +272,6 @@ export default function KpiPage() {
                     >
                         {Object.keys(KPI_CATALOG).filter(id => layouts.lg?.some(l => l.i === id)).map((id) => (
                             <div key={id}
-                                ref={(el) => {
-                                    if (el) widgetRefs.current.set(id, el);
-                                    else widgetRefs.current.delete(id);
-                                }}
                                 className={isEditMode ?
                                     "group relative cursor-grab active:cursor-grabbing h-full hover:border hover:border-border-strong hover:border-primary hover:rounded-xl hover:shadow hover:shadow-primary"
                                     : "relative h-full"}

@@ -12,6 +12,7 @@ export const DEFAULT_LAYOUT: Layout = [
     { i: "report-arrival",              x: 8, y: 10, w: 4,  h: 7 },
     { i: "report-aged-receivables-bar", x: 0, y: 19, w: 4,  h: 7 },
     { i: "report-leads-by-source",      x: 4, y: 19, w: 4,  h: 6 },
+    { i: "report-first-time-fix",       x: 8, y: 19, w: 4,  h: 6 },
 ];
 
 // 8-col two-column layout
@@ -115,6 +116,18 @@ export const KPI_CATALOG: WidgetCatalog & Record<string, {
                             },
     "report-aged-receivables-bar":{ label: "Aged Receivables (Bars)",
                                 defaultW: 3,  defaultH: 7,  minW: 3, minH: 6, maxH: 6, maxW: 6,
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
+                            },
+    "report-first-time-fix":{   label: "First Time Fix Rate",
+                                defaultW: 4,  defaultH: 7,  minW: 3, minH: 5, maxH: 7, maxW: 6,
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
+                            },
+    "report-recurring-revenue":{ label: "Recurring Revenue",
+                                defaultW: 4,  defaultH: 7,  minW: 4, minH: 7, maxH: 9, maxW: 6,
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
                                 ]

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { AlertCircle } from "lucide-react";
 import Card from "../ui/Card";
 import { useOpenDisputesQuery } from "../../hooks/useDisputes";
-import OpenDisputeRow, { ROW_GRID } from "../disputes/OpenDisputeRow";
+import OpenDisputeRow, { RowsSkeleton } from "../disputes/OpenDisputeRow";
 import type { DisputeKind, OpenDisputeList } from "../../types/disputes";
 
 export default function OpenDisputesWidget() {
@@ -101,21 +101,6 @@ function DisputeLedger({ data }: { data: OpenDisputeList }) {
 					Showing the oldest {data.items.length} of {data.total}.
 				</p>
 			)}
-		</div>
-	);
-}
-
-function RowsSkeleton() {
-	return (
-		<div className="-mx-4 -my-4 divide-y divide-border-subtle" aria-hidden="true">
-			{Array.from({ length: 3 }).map((_, i) => (
-				<div key={i} className={ROW_GRID}>
-					<div className="h-3.5 w-2/3 rounded bg-surface-raised animate-pulse" />
-					<div className="h-3.5 w-16 rounded bg-surface-raised animate-pulse" />
-					<div className="h-2.5 w-1/2 rounded bg-surface-raised animate-pulse" />
-					<div className="h-2.5 w-14 justify-self-end rounded bg-surface-raised animate-pulse" />
-				</div>
-			))}
 		</div>
 	);
 }
