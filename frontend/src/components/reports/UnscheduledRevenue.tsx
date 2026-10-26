@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import Card from "../ui/Card";
 import { formatCurrency } from "../../util/util";
 import type { UnscheduledRevenueResponse, UnscheduledJobRevenue } from "../../types/reports";
@@ -34,9 +35,12 @@ export default function UnscheduledRevenue({ data }: UnscheduledRevenueProps) {
 			className="h-full"
 			title="Unscheduled Job Revenue"
 			headerAction={
-				<span className="text-[11px] font-medium text-text-tertiary bg-surface px-2 py-0.5 rounded-full">
-					{jobCount} {jobCount === 1 ? "Job" : "Jobs"}
-				</span>
+				<Link
+					to="/dispatch/jobs?status=Unscheduled"
+					className="text-[11px] font-medium text-text-tertiary bg-surface px-2 py-0.5 rounded-full hover:text-text-primary hover:bg-surface-raised transition-colors"
+				>
+					{jobCount} {jobCount === 1 ? "Job" : "Jobs"} →
+				</Link>
 			}
 		>
 			<p className="text-3xl font-bold text-primary tracking-tight mb-5">
@@ -62,7 +66,7 @@ export default function UnscheduledRevenue({ data }: UnscheduledRevenueProps) {
 				{segments.map((seg) => (
 					<div
 						key={seg.key}
-						className="group flex items-center justify-between text-sm px-2 py-2 rounded-lg cursor-pointer transition-colors hover:bg-surface-raised"
+						className="group flex items-center justify-between text-sm px-2 py-2 rounded-lg transition-colors hover:bg-surface-raised"
 					>
 						<div className="flex items-center gap-2.5">
 							<span
