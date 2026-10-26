@@ -1295,6 +1295,7 @@ model job_note_photo {
   note        job_note @relation(fields: [note_id], references: [id], onDelete: Cascade)
   photo_url   String
   photo_label String
+  photo_name  String?
   created_at  DateTime @default(now())
 
   @@index([note_id])
@@ -1560,6 +1561,7 @@ model project_note_photo {
   note        project_note @relation(fields: [note_id], references: [id], onDelete: Cascade)
   photo_url   String
   photo_label String
+  photo_name  String?
   created_at  DateTime @default(now())
 
   @@index([note_id])

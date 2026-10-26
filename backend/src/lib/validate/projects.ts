@@ -106,6 +106,7 @@ export const createProjectNoteSchema = z
                 z.object({
                     photo_url: notePhotoUrl,
                     photo_label: z.enum(["Before", "After", "Other"]),
+                    photo_name: z.string().trim().max(120).nullish(),
                 }),
             )
             .optional()
@@ -129,6 +130,7 @@ export const updateProjectNoteSchema = z.object({
                 id: z.string().uuid().optional(),
                 photo_url: notePhotoUrl,
                 photo_label: z.enum(["Before", "After", "Other"]),
+                photo_name: z.string().trim().max(120).nullish(),
             }),
         )
         .optional(),

@@ -91,6 +91,7 @@ export const insertProjectNote = async (
 						note_id: note.id,
 						photo_url: p.photo_url,
 						photo_label: p.photo_label,
+						photo_name: p.photo_name || null,
 					})),
 				});
 			}
@@ -200,6 +201,7 @@ export const updateProjectNote = async (
 							note_id: noteId,
 							photo_url: p.photo_url,
 							photo_label: p.photo_label,
+							photo_name: p.photo_name || null,
 						})),
 					});
 				}
