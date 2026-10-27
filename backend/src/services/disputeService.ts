@@ -186,13 +186,14 @@ export function outcomeRefusalFor(
 	authz: DisputeAuthz,
 	dispatcherId: string | undefined,
 ): DisputeRefusal | null {
+	const adapter = adapterFor(kind);
 	if (doc.status !== "Disputed") {
+		const shown = adapter.statusLabels?.[doc.status] ?? doc.status;
 		return {
-			err: `This ${kind} is no longer Disputed — it moved to ${doc.status} while the dispute was open. Reload the ${kind} and try again.`,
+			err: `This ${kind} is no longer Disputed — it moved to ${shown} while the dispute was open. Reload the ${kind} and try again.`,
 		};
 	}
 
-	const adapter = adapterFor(kind);
 	if (!adapter.availableOutcomes(doc).includes(outcome)) {
 		return {
 			err:

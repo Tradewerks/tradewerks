@@ -40,7 +40,7 @@ import { useLineItems } from "../../hooks/forms/useLineItems";
 import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 import { useTaxGroups, useDefaultTaxGroup } from "../../hooks/useTaxGroups";
-import { QuoteStatusColors } from "../../types/quotes";
+import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
 
 type Step = 1 | 2 | 3;
 
@@ -308,7 +308,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 					? q.description.slice(0, 80) +
 						(q.description.length > 80 ? "…" : "")
 					: undefined,
-				badge: q.status,
+				badge: QuoteStatusLabels[q.status] ?? q.status,
 				badgeColor: QuoteStatusColors[
 					q.status as keyof typeof QuoteStatusColors
 				],

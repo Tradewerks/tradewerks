@@ -3654,7 +3654,8 @@ export const QUOTES_SQL_COLUMNS: ColumnMap = {
 	quoteNumber: t("q.quote_number"),
 	title: t("q.title"),
 	clientName: t("c.name"),
-	status: t("q.status::text"),
+	// Rows show Issued as "Created" (quoteRow), so search and sort run on that text too.
+	status: t("CASE WHEN q.status = 'Issued' THEN 'Created' ELSE q.status::text END"),
 	source: t("COALESCE(r.source, 'manual')"),
 	total: cur("q.total"),
 	createdAt: dt("q.created_at"),

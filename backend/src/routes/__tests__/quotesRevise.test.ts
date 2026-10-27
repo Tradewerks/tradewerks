@@ -124,7 +124,7 @@ describe("POST /quotes/:id/revise", () => {
 
 	it("returns 422 for a refusal that is not a not-found", async () => {
 		mockCreateQuoteRevision.mockResolvedValue({
-			err: "A Draft quote cannot be revised. Revisions may be created from: Issued, Approved, Rejected, Expired.",
+			err: "A Draft quote cannot be revised. Revisions may be created from: Created, Approved, Rejected, Expired.",
 		});
 
 		const res = await revise();

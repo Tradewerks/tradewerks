@@ -28,7 +28,7 @@ import {
 	InvoiceStatusLabels,
 	type InvoiceStatus,
 } from "../../types/invoices";
-import { QuoteStatusColors, type QuoteStatus } from "../../types/quotes";
+import { QuoteStatusColors, QuoteStatusLabels, type QuoteStatus } from "../../types/quotes";
 import { errorMessage, formatCurrency, formatDate } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
 import ChangeHistory from "../../components/activity/ChangeHistory";
@@ -132,6 +132,7 @@ export default function ClientDetailsPage() {
 			title: q.title,
 			number: q.quote_number,
 			status: q.status,
+			statusLabel: QuoteStatusLabels[q.status as QuoteStatus],
 			created_at: q.created_at,
 			address: client.address,
 			total: q.total,

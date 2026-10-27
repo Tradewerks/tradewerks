@@ -207,4 +207,17 @@ describe("DocumentLineage", () => {
 		expect(screen.getByText(/Adjusted by/i)).toBeTruthy();
 		expect(screen.getByRole("link", { name: /INV-1009/ })).toBeTruthy();
 	});
+
+	it("names chain statuses the way the badge does, not by enum value", () => {
+		renderChips(
+			lineage({
+				self_id: "q1",
+				chain: [node(1), node(2, "Issued")],
+			})
+		);
+		openPanel();
+
+		expect(screen.getByText("Created")).toBeTruthy();
+		expect(screen.queryByText("Issued")).toBeNull();
+	});
 });

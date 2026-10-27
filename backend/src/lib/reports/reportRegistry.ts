@@ -42,6 +42,7 @@ import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
 import { unitDisplay, unitWord } from "../units.js";
 import { searchKeysOf } from "./pushdown.js";
+import { quoteAdapter } from "../../services/disputeAdapters.js";
 
 // Catalog of eery report and a key to each report
 export interface ReportQuery {
@@ -252,7 +253,7 @@ const quoteRow = (q: QuoteRaw): ReportRow => ({
 	quoteNumber: q.quoteNumber,
 	title: q.title,
 	clientName: q.clientName,
-	status: q.status,
+	status: quoteAdapter.statusLabels?.[q.status] ?? q.status,
 	source: q.source,
 	total: q.total,
 	createdAt: fmtDate(q.createdAt),
