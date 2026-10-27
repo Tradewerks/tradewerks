@@ -616,7 +616,11 @@ router.post("/:id/merge", requirePermission("manage_inventory"), async (req, res
         const id = req.params.id as string;
 		const result = await mergeProvisionalItem(id, req.body, orgId, context);
 		if (result.err) {
-			const status = result.err.includes("Validation") ? 400 : 404;
+			const status = result.err.includes("Validation")
+				? 400
+				: result.err.includes("not found")
+					? 404
+					: 500;
 			return res
 				.status(status)
 				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));

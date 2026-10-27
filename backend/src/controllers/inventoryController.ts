@@ -5188,6 +5188,14 @@ export async function mergeProvisionalItem(
 						where: { stock_item_id: ps.id },
 						data: { stock_item_id: existing.id },
 					});
+					await tx.vehicle_restock_line.updateMany({
+						where: { stock_item_id: ps.id },
+						data: { stock_item_id: existing.id },
+					});
+					await tx.vehicle_stock_adjustment_line.updateMany({
+						where: { stock_item_id: ps.id },
+						data: { stock_item_id: existing.id },
+					});
 					await tx.vehicle_stock_item.delete({ where: { id: ps.id } });
 				} else {
 					await tx.vehicle_stock_item.update({
