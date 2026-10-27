@@ -28,6 +28,7 @@ import {
 	useDeleteInvoicePaymentMutation,
 	useRecordRefundMutation,
 } from "../../hooks/useInvoices";
+import { useToast } from "../../components/ui/useToast";
 import { useDisputesQuery } from "../../hooks/useDisputes";
 import DisputeModal from "../../components/disputes/DisputeModal";
 import type { AttributionTarget } from "../../components/disputes/adjustmentDraft";
@@ -136,6 +137,7 @@ export default function InvoiceDetailPage() {
 		variables: updateVars,
 	} = useUpdateInvoiceMutation();
 	const { mutateAsync: deleteInvoice, isPending: isDeleting } = useDeleteInvoiceMutation();
+	const toast = useToast();
 	const { mutateAsync: recordPayment, isPending: isRecordingPayment } =
 		useCreateInvoicePaymentMutation();
 	const { mutateAsync: deletePayment } = useDeleteInvoicePaymentMutation();
@@ -228,9 +230,10 @@ export default function InvoiceDetailPage() {
 		setActionError(null);
 		try {
 			await deleteInvoice({ id: invoiceId, clientId: invoice.client_id });
+			toast.success(`${invoice.invoice_number} deleted`);
 			navigate("/dispatch/invoices");
 		} catch (error) {
-			setActionError(errorMessage(error, "Couldn't delete this invoice."));
+			toast.error(errorMessage(error, "Couldn't delete this invoice."));
 		}
 	};
 

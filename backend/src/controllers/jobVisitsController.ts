@@ -2106,6 +2106,9 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 		return { err: "", message: "Job visit deleted successfully" };
 	} catch (e) {
 		log.error({ err: e }, "Failed to delete job visit");
+		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+			return { err: "This visit is on an invoice or has stock used against it, so it can't be deleted. Cancel the visit instead." };
+		}
 		return { err: "Failed to delete job visit" };
 	}
 };

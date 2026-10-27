@@ -383,6 +383,9 @@ export const deleteClient = async (
 		return { err: "", message: "Client deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Delete client error");
+		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+			return { err: "This client has invoices or is linked to QuickBooks, so it can't be deleted. Mark the client inactive instead." };
+		}
 		return { err: "Failed to delete client. It may have related records." };
 	}
 };

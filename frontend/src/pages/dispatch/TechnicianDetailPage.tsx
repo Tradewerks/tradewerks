@@ -190,6 +190,7 @@ export default function TechnicianDetailsPage() {
 			delete: confirm("delete", async () => {
 				try {
 					await deleteTechnician.mutateAsync(technician.id);
+					toast.success(`${technician.name} deleted`);
 					navigate("/dispatch/technicians", { replace: true });
 				} catch (e) {
 					toast.error(

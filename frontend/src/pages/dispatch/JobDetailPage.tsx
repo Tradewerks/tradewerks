@@ -83,6 +83,7 @@ import { jobTaxSnapshots } from "../../lib/taxBreakdown";
 import { jobTaxSummary } from "../../lib/jobTaxSummary";
 import JobTaxNotes from "../../components/jobs/JobTaxNotes";
 import ChangeHistory from "../../components/activity/ChangeHistory";
+import { useToast } from "../../components/ui/useToast";
 
 // A tab per body of work someone opens the page to do. Scheduling a crew,
 // chasing the money and reading what happened are separate, and none is context
@@ -248,6 +249,7 @@ export default function JobDetailPage() {
 	const { mutateAsync: createJobVisitMutation } = useCreateJobVisitMutation();
 	const cancelVisitMutation = useCancelJobVisitMutation();
 	const deleteJobMutation = useDeleteJobMutation();
+	const toast = useToast();
 
 	// permissions
 	const CREATE_JOB = usePermission("create_jobs");
@@ -336,8 +338,10 @@ export default function JobDetailPage() {
 		}
 		try {
 			await deleteJobMutation.mutateAsync(jobId);
+			toast.success(`${job?.name} successfully deleted`)
 			navigate("/dispatch/jobs");
 		} catch (error) {
+			toast.error(errorMessage(error, "Failed to delete job"));
 			console.error("Failed to delete job:", error);
 		}
 	};

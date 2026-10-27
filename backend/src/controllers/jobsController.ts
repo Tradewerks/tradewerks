@@ -1342,6 +1342,9 @@ export const deleteJob = async (id: string, organizationId: string, context?: Us
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Delete job error");
+		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+			return { err: "This job is on an invoice, so it can't be deleted. Cancel the job instead, or remove it from the invoice first." };
+		}
 		return { err: "Internal server error" };
 	}
 };

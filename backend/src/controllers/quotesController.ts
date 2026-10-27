@@ -1017,6 +1017,9 @@ export const deleteQuote = async (id: string, organizationId: string, context?: 
 		return { err: "", item: { id } };
 	} catch (error) {
 		log.error({ err: error }, "Delete quote error");
+		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+			return { err: "This quote is part of a dispute, so it can't be deleted." };
+		}
 		return { err: "Internal server error" };
 	}
 };

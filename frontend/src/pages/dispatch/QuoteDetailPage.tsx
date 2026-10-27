@@ -18,6 +18,7 @@ import {
 	useSendQuoteMutation,
 	useReviseQuoteMutation,
 } from "../../hooks/useQuotes";
+import { useToast } from "../../components/ui/useToast";
 import { useCreateJobMutation } from "../../hooks/useJobs";
 import { useDisputesQuery } from "../../hooks/useDisputes";
 import { QuoteStatusColors, QuoteStatusLabels, isQuoteEditable } from "../../types/quotes";
@@ -89,6 +90,7 @@ export default function QuoteDetailPage() {
 	const { mutateAsync: reviseQuoteMutation, isPending: revisePending } =
 		useReviseQuoteMutation();
 	const deleteQuote = useDeleteQuoteMutation();
+	const toast = useToast();
 
 	const [activeTab, setActiveTab] = useDetailTab(QUOTE_TABS);
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -250,11 +252,12 @@ export default function QuoteDetailPage() {
 		}
 		try {
 			await deleteQuote.mutateAsync({ id: quote.id, hardDelete: false });
+			toast.success(`${quote.quote_number} deleted`);
 			navigate("/dispatch/quotes");
 		} catch (error) {
 			// A quote produced by a dispute resolution is audit trail: the server
 			// allows cancelling it, never deleting it.
-			setActionError(errorMessage(error, "Couldn't delete this quote."));
+			toast.error(errorMessage(error, "Couldn't delete this quote."));
 		}
 	};
 

@@ -818,6 +818,9 @@ export const deleteInvoice = async (id: string, organizationId: string, context?
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Delete invoice error");
+		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+			return { err: "This invoice is part of a dispute, so it can't be deleted." };
+		}
 		return { err: "Internal server error" };
 	}
 };

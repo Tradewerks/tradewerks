@@ -1,8 +1,9 @@
 import { z, ZodError } from "zod";
 import { coordsSchema } from "../lib/validate/shared.js";
-import type {
-	tech_break_reason,
-	technician_status,
+import {
+	Prisma,
+	type tech_break_reason,
+	type technician_status,
 } from "../../generated/prisma/client.js";
 import {
 	createTechnicianSchema,
@@ -448,6 +449,9 @@ export const deleteTechnician = async (
 		return { err: "", message: "Technician deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Error deleting technician");
+		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+            return { err: "This technician has work history. Deactivate them instead." };
+        }
 		return { err: "Internal server error" };
 	}
 };

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Search, Trash2, X, ArrowRight } from "lucide-react";
 import { useDeleteVehicleStockItemMutation } from "../../hooks/useVehicleStock";
 import { useToast } from "../ui/useToast";
+import { errorMessage } from "../../util/util";
 import type { VehicleStockItem } from "../../types/vehicles";
 
 export interface RemoveStockItemSheetProps {
@@ -36,7 +37,7 @@ export default function RemoveStockItemSheet({
 			toast.success(`Removed ${item.inventory_item.name} from stock list`);
 			setConfirmingId(null);
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Failed to remove item");
+			toast.error(errorMessage(e, "Failed to remove item"));
 		}
 	};
 
