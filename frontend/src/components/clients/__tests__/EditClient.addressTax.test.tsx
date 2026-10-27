@@ -106,8 +106,7 @@ describe("EditClient address-change tax prompt", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Move address" }));
 		await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 		await screen.findByText(/This client's draft invoices were taxed/);
-		const buttons = screen.getAllByRole("button");
-		await userEvent.click(buttons[0]); // the header close (X)
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(onClose).toHaveBeenCalled();
 		expect(screen.queryByText(/This client's draft invoices were taxed/)).toBeNull();
 	});

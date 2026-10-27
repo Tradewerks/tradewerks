@@ -383,7 +383,7 @@ router.delete("/contacts/:contactId", requirePermission("delete_clients"), async
 // Link an existing contact to a client
 router.post("/clients/:clientId/contacts/link", requirePermission("edit_clients"), async (req, res, next) => {
     try {
-        const clientId = req.params.id as string;
+        const clientId = req.params.clientId as string;
         const { contact_id, relationship, is_primary, is_billing } = req.body;
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);

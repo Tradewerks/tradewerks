@@ -135,7 +135,7 @@ export interface UpdateClientInput {
 }
 
 export const CreateClientSchema = z.object({
-	name: z.string().min(1, "Client name is required"),
+	name: z.string().min(1, "Client name is required").max(128, "Client name must be 128 characters or fewer"),
 	address: z.string().min(1, "Address is required"),
 	coords: z.object({
 		lat: z.number(),
@@ -145,7 +145,7 @@ export const CreateClientSchema = z.object({
 });
 
 export const UpdateClientSchema = z.object({
-	name: z.string().min(1, "Client name is required").optional(),
+	name: z.string().min(1, "Client name is required").max(128, "Client name must be 128 characters or fewer").optional(),
 	address: z.string().min(1, "Address is required").optional(),
 	coords: z
 		.object({

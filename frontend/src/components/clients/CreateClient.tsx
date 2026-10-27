@@ -254,6 +254,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 								className={INPUT}
 								disabled={isLoading}
 								defaultValue={selectedCustomer?.DisplayName ?? ""}
+								maxLength={128}
 								ref={nameRef}
 							/>
 							{nameErrors.map((err) => (
