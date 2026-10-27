@@ -50,6 +50,7 @@ const DispatcherDetailPage = () => {
 	}, []);
 
 	const handleDelete = async () => {
+		if (!dispatcher) return;
 		if (!EDIT_DISPATCHER) return;
 		if (!deleteConfirm) {
 			setDeleteConfirm(true);
@@ -58,6 +59,7 @@ const DispatcherDetailPage = () => {
 		try {
 			navigate("/dispatch/admin?tab=users", { replace: true });
 			await deleteDispatcher.mutateAsync(dispatcher!.id);
+			toast.success(`${dispatcher.name} has been deleted`)
 		} catch (error) {
 			// we already left the page, so a console line would go unseen
 			toast.error(error instanceof Error ? error.message : "Failed to delete dispatcher");
