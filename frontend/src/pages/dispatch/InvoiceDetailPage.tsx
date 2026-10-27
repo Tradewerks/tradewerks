@@ -230,10 +230,9 @@ export default function InvoiceDetailPage() {
 		setActionError(null);
 		try {
 			await deleteInvoice({ id: invoiceId, clientId: invoice.client_id });
-			toast.success(`${invoice.invoice_number} deleted`);
 			navigate("/dispatch/invoices");
 		} catch (error) {
-			toast.error(errorMessage(error, "Couldn't delete this invoice."));
+			setActionError(errorMessage(error, "Couldn't delete this invoice."));
 		}
 	};
 
@@ -671,13 +670,18 @@ export default function InvoiceDetailPage() {
 								disabledReason: !primaryEmail
 									? "No primary contact email on file for this client."
 									: undefined,
+								keepOpen: true,
 								onSelect: () =>
-									sendEmailMutation.mutate({
-										invoiceId: invoice.id,
-										sendTo:
-											primaryEmail ??
-											"",
-									}),
+									sendEmailMutation.mutate(
+										{
+											invoiceId: invoice.id,
+											sendTo: primaryEmail ?? "",
+										},
+										{
+											onSuccess: () => toast.success(`${invoice.invoice_number} sent to ${primaryEmail}`),
+											onError: (error) => toast.error(errorMessage(error,"Failed to send via QuickBooks.")),
+										}
+									),
 							},
 						]
 					: []),
