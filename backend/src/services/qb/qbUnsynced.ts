@@ -5,6 +5,7 @@ import { getOrgRealmId, isQBConnected } from "../quickbooksService.js";
 import { pushInvoice } from "./qbInvoices.js";
 import { pushPurchase, pushFieldPurchase } from "./qbPurchases.js";
 import { pushPaymentToQB } from "./qbPayments.js";
+import { qbFaultDetail } from "./qbCreditMemos.js";
 
 const UNSYNCED = { in: ["not_synced", "failed"] as ("not_synced" | "failed")[] };
 // Synced to a previously connected company counts as unsynced in this one.
@@ -141,7 +142,8 @@ export async function syncUnsynced(orgId: string) {
 				type: doc.type,
 				id: doc.id,
 				label: doc.label,
-				message: err instanceof Error ? err.message : "Sync failed",
+				// A raw QuickBooks fault folds a JSON body into the message; its Detail is the readable part.
+				message: qbFaultDetail(err) ?? (err instanceof Error ? err.message : "Sync failed"),
 			});
 		}
 	}

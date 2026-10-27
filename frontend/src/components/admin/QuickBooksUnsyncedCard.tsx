@@ -37,10 +37,18 @@ export default function QuickBooksUnsyncedCard({ connected }: { connected: boole
 			{(failed.length > 0 || docs.length > 0) && (
 				<>
 					{failed.length > 0 && (
-						<p role="alert" className="text-xs text-error-text">
-							{failed.length} could not be synced:{" "}
-							{failed.map((f) => f.label).join(", ")}
-						</p>
+						<div role="alert" className="text-xs text-error-text">
+							{failed.length} could not be synced:
+							<ul className="mt-1 space-y-1">
+								{failed.map((f) => (
+									<li key={`${f.type}:${f.id}`}>
+										<span className="font-medium">{f.label}</span>
+										{" · "}
+										{f.message}
+									</li>
+								))}
+							</ul>
+						</div>
 					)}
 					{docs.length > 0 && (
 						<details className={failed.length > 0 ? "mt-2" : undefined}>
