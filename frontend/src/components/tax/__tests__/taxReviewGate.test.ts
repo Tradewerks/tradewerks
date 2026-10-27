@@ -98,6 +98,7 @@ describe("withTaxReviewGate", () => {
 		for (const a of out.slice(0, 2)) {
 			expect(a.disabled).toBe(true);
 			expect(a.disabledReason).toBe("Acknowledging the tax review…");
+			expect(a.pending).toBe(true);
 		}
 		expect(out[0].label).toBe(GATED_ACTION_LABEL.send);
 		expect(out[1].label).toBe(GATED_ACTION_LABEL.issue);

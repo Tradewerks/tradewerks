@@ -2,10 +2,11 @@ import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { errorMessage } from "../../util/util";
 import { useLinkTaxCodeMutation, useQBTaxCodesQuery, useQBTaxPrefsQuery, useSetPassthroughTaxCodeMutation, useUnlinkTaxCodeMutation } from "../../hooks/useQuickbooks";
+import { Loader2 } from "lucide-react";
 
 export default function QBTaxCodeMappingCard() {
     const { data: taxGroups } = useTaxGroups();
-    const { data: qbTaxCodes } = useQBTaxCodesQuery();
+    const { data: qbTaxCodes, isLoading: qbTaxCodesLoading } = useQBTaxCodesQuery();
     const { data: taxPrefs } = useQBTaxPrefsQuery();
     const link = useLinkTaxCodeMutation();
     const unlink = useUnlinkTaxCodeMutation();
@@ -97,19 +98,24 @@ export default function QBTaxCodeMappingCard() {
                                         {(taxGroup.combined_rate * 100).toFixed(2)}%
                                     </td>
                                     <td className="px-3 py-3">
-                                        <select
-                                            value={taxGroup.qb_tax_code_id ?? ""}
-                                            onChange={(e) => handleTaxCodeChange(taxGroup.id, e.target.value)}
-                                            disabled={pending}
-                                            className="w-full max-w-[260px] rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-text-primary transition-colors focus:border-primary focus:outline-none disabled:opacity-50"
-                                        >
-                                            <option value="">— Not linked —</option>
-                                            {qbTaxCodes?.map((taxCode) => (
-                                                <option key={taxCode.id} value={taxCode.id}>
-                                                    {taxCode.name} — {taxCode.totalRate}%
-                                                </option>
-                                            ))}
-                                        </select>
+                                        <span className="flex items-center gap-2">
+                                            <select
+                                                value={taxGroup.qb_tax_code_id ?? ""}
+                                                onChange={(e) => handleTaxCodeChange(taxGroup.id, e.target.value)}
+                                                disabled={pending}
+                                                className="w-full max-w-[260px] rounded-md border border-border bg-surface-raised px-2.5 py-1.5 text-sm text-text-primary transition-colors focus:border-primary focus:outline-none disabled:opacity-50"
+                                            >
+                                                <option value="">{qbTaxCodesLoading ? "Loading tax codes" : "— Not linked —"}</option>
+                                                {qbTaxCodes?.map((taxCode) => (
+                                                    <option key={taxCode.id} value={taxCode.id}>
+                                                        {taxCode.name} — {taxCode.totalRate}%
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            {(qbTaxCodesLoading || pending) && (
+                                                <Loader2 size={12} className="shrink-0 animate-spin text-text-muted" />
+                                            )}
+                                        </span>
                                     </td>
                                 </tr>
                             ))
@@ -125,4 +131,4 @@ export default function QBTaxCodeMappingCard() {
             </div>
         </div>
     );
-};
+};

@@ -44,6 +44,7 @@ export function withTaxReviewGate(
 				label: GATED_ACTION_LABEL[a.id],
 				disabled: true,
 				disabledReason: "Acknowledging the tax review…",
+				pending: true,
 			};
 		}
 		let pending = false;

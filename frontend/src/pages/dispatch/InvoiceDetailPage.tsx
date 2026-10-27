@@ -130,8 +130,11 @@ export default function InvoiceDetailPage() {
 			void queryClient.invalidateQueries({ queryKey: ["invoices"] });
 		}
 	};
-	const { mutateAsync: updateInvoice, isPending: isUpdatingInvoice } =
-		useUpdateInvoiceMutation();
+	const {
+		mutateAsync: updateInvoice,
+		isPending: isUpdatingInvoice,
+		variables: updateVars,
+	} = useUpdateInvoiceMutation();
 	const { mutateAsync: deleteInvoice, isPending: isDeleting } = useDeleteInvoiceMutation();
 	const { mutateAsync: recordPayment, isPending: isRecordingPayment } =
 		useCreateInvoicePaymentMutation();
@@ -528,6 +531,7 @@ export default function InvoiceDetailPage() {
 		canSend: SEND_INVOICE,
 		canOpenDispute: OPEN_DISPUTE,
 		canRefund: REFUND_INVOICE,
+		issuing: isUpdatingInvoice && updateVars?.updates.status === "Issued",
 		handlers: {
 			send: () => setIsSendModalOpen(true),
 			issue: () => handleStatusTransition("Issued"),

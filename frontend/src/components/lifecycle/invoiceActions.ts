@@ -38,6 +38,8 @@ export interface InvoiceActionContext {
 	/** Holds refund_invoices — cash out, which covers both the refund and
 	 *  the void. */
 	canRefund: boolean;
+	/** The Draft → Issued update is in flight (it waits on the QuickBooks tax check). */
+	issuing?: boolean;
 	handlers: Record<
 		"send" | "issue" | "recordPayment" | "refund" | "dispute" | "void",
 		() => void
@@ -81,19 +83,22 @@ export function invoiceActions(ctx: InvoiceActionContext): LifecycleAction[] {
 						: null,
 			ctx.handlers.send
 		),
-		build(
-			"issue",
-			"Create Without Sending",
-			"neutral",
-			!ctx.canEdit
-				? NO_PERMISSION
-				: dead
-					? notApplicable("A void invoice can't be marked Created.")
-					: ctx.status !== "Draft"
-						? notApplicable("This invoice has already been created.")
-						: null,
-			ctx.handlers.issue
-		),
+		{
+			...build(
+				"issue",
+				"Create Without Sending",
+				"neutral",
+				!ctx.canEdit
+					? NO_PERMISSION
+					: dead
+						? notApplicable("A void invoice can't be marked Created.")
+						: ctx.status !== "Draft"
+							? notApplicable("This invoice has already been created.")
+							: null,
+				ctx.handlers.issue
+			),
+			pending: ctx.issuing,
+		},
 		build(
 			"recordPayment",
 			"Record Payment",
