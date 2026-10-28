@@ -18,3 +18,4 @@ docs/superpowers/
 
 # Stray tool caches when vitest/vite run from the repo root
 node_modules/
+backend/generated/*
