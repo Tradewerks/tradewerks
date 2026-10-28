@@ -25,6 +25,10 @@ Object.defineProperty(globalThis, "ResizeObserver", {
 	},
 });
 
+// jsdom has no scrollIntoView either; a component that keeps an element in view
+// (NoteEditCard's action bar) would throw on mount. Tests that care stub it.
+Element.prototype.scrollIntoView = function scrollIntoView() {};
+
 // Mock window.matchMedia
 Object.defineProperty(window, "matchMedia", {
 	writable: true,

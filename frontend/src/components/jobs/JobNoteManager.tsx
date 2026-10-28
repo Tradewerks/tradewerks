@@ -1,7 +1,9 @@
-import { useState, useRef } from "react";
-import { Plus, Edit2, Trash2, X, Calendar } from "lucide-react";
-import Card from "../ui/Card";
-import { HEADER_BTN_PRIMARY } from "../ui/headerActions";
+import { useState } from "react";
+import { Edit2, Trash2, Calendar } from "lucide-react";
+import NotesRail from "../detail/NotesRail";
+import NoteComposer from "../detail/NoteComposer";
+import NoteEditCard from "../detail/NoteEditCard";
+import { useNoteEditSession } from "../detail/useNoteEditSession";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import type { JobNote, JobVisit, JobNotePhoto, NotePhoto, UpdateJobNoteInput } from "../../types/jobs";
 import {
@@ -21,15 +23,13 @@ interface JobNoteManagerProps {
 }
 
 export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManagerProps) {
-	const formRef = useRef<HTMLDivElement>(null);
-	const [isAdding, setIsAdding] = useState(false);
-	const [editingId, setEditingId] = useState<string | null>(null);
 	const [noteToDelete, setNoteToDelete] = useState<string | null>(null);
 	const [deleteError, setDeleteError] = useState<string | null>(null);
-	const [content, setContent] = useState("");
-	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-	const [photos, setPhotos] = useState<NotePhoto[]>([]);
+	// Composer photos (new note) are kept apart from the inline edit's photos so
+	// editing a note never touches an unsent composer draft.
+	const [composerPhotos, setComposerPhotos] = useState<NotePhoto[]>([]);
+	const [editPhotos, setEditPhotos] = useState<NotePhoto[]>([]);
 	const [existingPhotos, setExistingPhotos] = useState<JobNotePhoto[]>([]);
 
 	const { data: notes, isLoading } = useJobNotesQuery(jobId);
@@ -45,22 +45,19 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 		? notes?.filter((note) => note.visit_id === visitId) || []
 		: notes || [];
 
-	const resetForm = () => {
-		setContent("");
-		setIsAdding(false);
-		setEditingId(null);
-		setErrorMessage(null);
-		setPhotos([]);
+	const session = useNoteEditSession(filteredNotes.map((n) => n.id));
+
+	const closeEdit = () => {
+		session.stop();
+		setEditPhotos([]);
 		setExistingPhotos([]);
 	};
 
 	const handleEdit = (note: JobNote) => {
 		if (!EDIT_NOTES) return;
-		setContent(note.content);
-		setEditingId(note.id);
-		setIsAdding(true);
 		setExistingPhotos(note.photos ?? []);
-		setPhotos([]);
+		setEditPhotos([]);
+		session.start(note.id);
 	};
 
 	const handleDelete = (noteId: string) => {
@@ -80,49 +77,23 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 		}
 	};
 
-	const handleSubmit = async (e: React.FormEvent) => {
-		e.preventDefault();
-		if (!EDIT_NOTES) return;
-		setErrorMessage(null);
-
-		if (!content.trim()) return;
-
-		try {
-			if (editingId) {
-				const updateData: UpdateJobNoteInput = {
-					content,
-					photos: [
-						...existingPhotos.map((p) => ({ id: p.id, photo_url: p.photo_url, photo_label: p.photo_label })),
-						...photos.map((p) => ({ photo_url: p.photo_url, photo_label: p.photo_label, photo_name: p.photo_name })),
-					],
-				};
-
-				await updateNote.mutateAsync({
-					jobId,
-					noteId: editingId,
-					data: updateData,
-				});
-			} else {
-				await createNote.mutateAsync({
-					jobId,
-					data: {
-						content,
-						visit_id: visitId || null,
-						photos: photos.map((p) => ({
-							photo_url: p.photo_url,
-							photo_label: p.photo_label,
-							photo_name: p.photo_name,
-						})),
-					},
-				});
-			}
-			resetForm();
-		} catch (error) {
-			console.error("Failed to save note:", error);
-			const errorMsg =
-				error instanceof Error ? error.message : "Failed to save note";
-			setErrorMessage(errorMsg);
-		}
+	// Throws on failure so NoteEditCard shows the error and stays open.
+	const handleEditSave = async (content: string) => {
+		if (!EDIT_NOTES || !session.editingId) return;
+		const updateData: UpdateJobNoteInput = {
+			content,
+			photos: [
+				...existingPhotos.map((p) => ({ id: p.id, photo_url: p.photo_url, photo_label: p.photo_label })),
+				...editPhotos.map((p) => ({ photo_url: p.photo_url, photo_label: p.photo_label, photo_name: p.photo_name })),
+			],
+		};
+		await updateNote.mutateAsync({
+			jobId,
+			noteId: session.editingId,
+			data: updateData,
+		});
+		setEditPhotos([]);
+		setExistingPhotos([]);
 	};
 
 	const formatDate = (date: Date | string) => {
@@ -141,321 +112,147 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 		return `${visitName}${formatDate(visit.scheduled_start_at)}`;
 	};
 
-	if (isLoading) {
-		return (
-			<Card title="Notes" className="h-fit">
-				<div className="text-text-tertiary text-sm">Loading notes...</div>
-			</Card>
+	const renderMeta = (note: JobNote) => (
+		<div className="flex items-center gap-2 text-xs text-text-muted">
+			<span>{formatDate(note.created_at)}</span>
+			{note.updated_at &&
+				new Date(note.updated_at).getTime() !==
+					new Date(note.created_at).getTime() && <span>(edited)</span>}
+			{note.creator_tech && (
+				<>
+					<span>•</span>
+					<span>{note.creator_tech.name}</span>
+				</>
+			)}
+			{note.creator_dispatcher && (
+				<>
+					<span>•</span>
+					<span>{note.creator_dispatcher.name}</span>
+				</>
+			)}
+		</div>
+	);
+
+	const renderVisitLabel = (note: JobNote) =>
+		!visitId &&
+		note.visit_id && (
+			<div className="flex items-center gap-1.5 text-xs text-primary-text mt-2">
+				<Calendar size={12} />
+				<span>Visit: {getVisitLabel(note.visit_id)}</span>
+			</div>
 		);
-	}
+
+	const noteState = isLoading ? "loading" : filteredNotes.length > 0 ? "ready" : "empty";
 
 	return (
-		<Card
-			title={visitId ? "Visit Notes" : "Job Notes"}
-			headerAction={
-				<button
-					disabled={!EDIT_NOTES}
-					title={!EDIT_NOTES ? "You don't have permission to perform this action" : ""}
-					onClick={() => {
-						if (!EDIT_NOTES) return;
-						setIsAdding(true)
-					}}
-					className={HEADER_BTN_PRIMARY}
-				>
-					<Plus size={14} />
-					Add Note
-				</button>
-			}
-			className="h-fit"
-		>
-			<div className="space-y-4">
-				{isAdding && !editingId && (
-					<div
-						ref={formRef}
-						className="p-4 bg-surface rounded-lg border border-border"
-					>
-						<div className="flex justify-between items-center mb-4">
-							<h3 className="text-text-primary font-semibold">
-								New Note
-							</h3>
-							<button
-								onClick={resetForm}
-								className="text-text-tertiary hover:text-text-primary transition-colors"
-							>
-								<X size={20} />
-							</button>
-						</div>
-
-						{errorMessage && (
-							<div className="mb-4 p-3 bg-error-bg border border-error-border rounded-md text-error-text text-sm">
-								{errorMessage}
-							</div>
-						)}
-
-						<form onSubmit={handleSubmit} className="space-y-3">
-							<textarea
-								value={content}
-								onChange={(e) =>
-									setContent(e.target.value)
-								}
-								placeholder="Enter your note..."
-								rows={4}
-								className="w-full px-3 py-2 bg-base border border-border rounded-md text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-								required
-								autoFocus
-							/>
-
+		<>
+			<NotesRail
+				title={visitId ? "Visit Notes" : "Job Notes"}
+				state={noteState}
+				newestId={filteredNotes[0]?.id}
+				editing={session.editingId !== null}
+				composer={
+					<NoteComposer
+						onSubmit={async (content) => {
+							await createNote.mutateAsync({
+								jobId,
+								data: {
+									content,
+									visit_id: visitId || null,
+									photos: composerPhotos.map((p) => ({
+										photo_url: p.photo_url,
+										photo_label: p.photo_label,
+										photo_name: p.photo_name,
+									})),
+								},
+							});
+							setComposerPhotos([]);
+						}}
+						canWrite={EDIT_NOTES}
+						pending={createNote.isPending}
+						disabled={isLoading}
+						attachments={
 							<NotePhotoPicker
 								jobId={jobId}
 								capture={false}
-								photos={photos}
-								onPhotosChange={setPhotos}
-								disabled={createNote.isPending}
+								photos={composerPhotos}
+								onPhotosChange={setComposerPhotos}
+								disabled={!EDIT_NOTES || isLoading || createNote.isPending}
 							/>
-
-							<button
-								type="submit"
-								disabled={
-									createNote.isPending ||
-									updateNote.isPending
-								}
-								className="w-full px-4 py-2 bg-primary-hover hover:bg-primary-active disabled:bg-primary-disabled disabled:cursor-not-allowed text-on-primary rounded-md text-sm font-medium transition-colors"
-							>
-								{createNote.isPending ||
-								updateNote.isPending
-									? "Saving..."
-									: "Add Note"}
-							</button>
-						</form>
-					</div>
-				)}
-
-				{/* Notes List */}
-				{filteredNotes.length > 0 ? (
-					<div className="space-y-3">
-						{filteredNotes.map((note) => (
-							<div key={note.id}>
-								<div className="p-3 bg-surface rounded-lg border border-border group hover:border-border-strong transition-colors">
-									<div className="flex justify-between items-start mb-2">
-										<div className="flex-1">
-											{note.photos && note.photos.length > 0 && (
-												<div className="mt-2">
-													<NotePhotoGallery photos={note.photos} />
-												</div>
-											)}
-											<p className="text-text-primary text-sm mb-1 whitespace-pre-wrap">
-												{
-													note.content
-												}
-											</p>
-
-											{!visitId &&
-												note.visit_id && (
-													<div className="flex items-center gap-1.5 text-xs text-primary-text mt-2">
-														<Calendar
-															size={
-																12
-															}
-														/>
-														<span>
-															Visit:{" "}
-															{getVisitLabel(
-																note.visit_id
-															)}
-														</span>
-													</div>
-												)}
+						}
+					/>
+				}
+			>
+				{filteredNotes.map((note) =>
+					session.editingId === note.id ? (
+						<NoteEditCard
+							key={note.id}
+							initialContent={note.content}
+							onSave={handleEditSave}
+							onClose={closeEdit}
+							pending={updateNote.isPending}
+							meta={renderMeta(note)}
+							below={renderVisitLabel(note)}
+							attachments={
+								<NotePhotoPicker
+									jobId={jobId}
+									capture={false}
+									photos={editPhotos}
+									onPhotosChange={setEditPhotos}
+									existingPhotos={existingPhotos}
+									onRemoveExisting={(id) =>
+										setExistingPhotos((prev) => prev.filter((p) => p.id !== id))
+									}
+									disabled={updateNote.isPending}
+								/>
+							}
+						/>
+					) : (
+						<div
+							key={note.id}
+							className="p-3 bg-surface rounded-lg border border-border group hover:border-border-strong transition-colors"
+						>
+							<div className="flex justify-between items-start mb-2">
+								<div className="flex-1 min-w-0">
+									{note.photos && note.photos.length > 0 && (
+										<div className="mt-2">
+											<NotePhotoGallery photos={note.photos} />
 										</div>
+									)}
+									<p className="text-text-primary text-sm mb-1 whitespace-pre-wrap break-words">
+										{note.content}
+									</p>
 
-										<div className="flex gap-2 ml-3 opacity-0 group-hover:opacity-100 transition-opacity">
-											<button
-												onClick={() =>
-													handleEdit(
-														note
-													)
-												}
-												disabled={!EDIT_NOTES}
-												className="text-text-tertiary hover:text-primary-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-												aria-label="Edit note"
-											>
-												<Edit2
-													size={
-														14
-													}
-												/>
-											</button>
-											<button
-												onClick={() =>
-													handleDelete(
-														note.id
-													)
-												}
-												disabled={!EDIT_NOTES}
-												className="text-text-tertiary hover:text-error-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-												title="Delete note"
-												aria-label="Delete note"
-											>
-												<Trash2
-													size={
-														14
-													}
-												/>
-											</button>
-										</div>
-									</div>
-
-									<div className="flex items-center gap-2 text-xs text-text-muted">
-										<span>
-											{formatDate(
-												note.created_at
-											)}
-										</span>
-										{note.updated_at &&
-											new Date(
-												note.updated_at
-											).getTime() !==
-												new Date(
-													note.created_at
-												).getTime() && (
-												<span>
-													(edited)
-												</span>
-											)}
-										{note.creator_tech && (
-											<>
-												<span>
-													•
-												</span>
-												<span>
-													{
-														note
-															.creator_tech
-															.name
-													}
-												</span>
-											</>
-										)}
-										{note.creator_dispatcher && (
-											<>
-												<span>
-													•
-												</span>
-												<span>
-													{
-														note
-															.creator_dispatcher
-															.name
-													}
-												</span>
-											</>
-										)}
-									</div>
+									{renderVisitLabel(note)}
 								</div>
 
-								{/* Edit form appears below the note being edited */}
-								{editingId === note.id && (
-									<div className="mt-2">
-										<div
-											ref={
-												formRef
-											}
-											className="p-4 bg-surface rounded-lg border border-border"
-										>
-											<div className="flex justify-between items-center mb-4">
-												<h3 className="text-text-primary font-semibold">
-													Edit
-													Note
-												</h3>
-												<button
-													onClick={
-														resetForm
-													}
-													className="text-text-tertiary hover:text-text-primary transition-colors"
-												>
-													<X
-														size={
-															20
-														}
-													/>
-												</button>
-											</div>
-
-											{errorMessage && (
-												<div className="mb-4 p-3 bg-error-bg border border-error-border rounded-md text-error-text text-sm">
-													{
-														errorMessage
-													}
-												</div>
-											)}
-
-											<form
-												onSubmit={
-													handleSubmit
-												}
-												className="space-y-3"
-											>
-												<textarea
-													value={
-														content
-													}
-													onChange={(
-														e
-													) =>
-														setContent(
-															e
-																.target
-																.value
-														)
-													}
-													placeholder="Enter your note..."
-													rows={
-														4
-													}
-													className="w-full px-3 py-2 bg-base border border-border rounded-md text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-													required
-													autoFocus
-												/>
-
-												<NotePhotoPicker
-													jobId={jobId}
-													capture={false}
-													photos={photos}
-													onPhotosChange={setPhotos}
-													existingPhotos={existingPhotos}
-													onRemoveExisting={(id) =>
-														setExistingPhotos((prev) => prev.filter((p) => p.id !== id))
-													}
-													disabled={updateNote.isPending}
-												/>
-
-												<button
-													type="submit"
-													disabled={
-														createNote.isPending ||
-														updateNote.isPending
-													}
-													className="w-full px-4 py-2 bg-primary-hover hover:bg-primary-active disabled:bg-primary-disabled disabled:cursor-not-allowed text-on-primary rounded-md text-sm font-medium transition-colors"
-												>
-													{createNote.isPending ||
-													updateNote.isPending
-														? "Saving..."
-														: "Update Note"}
-												</button>
-											</form>
-										</div>
-									</div>
-								)}
+								<div className="flex gap-2 ml-3 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+									<button
+										ref={session.editButtonRef(note.id)}
+										onClick={() => handleEdit(note)}
+										disabled={!EDIT_NOTES || session.isLocked(note.id)}
+										className="text-text-tertiary hover:text-primary-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+										aria-label="Edit note"
+									>
+										<Edit2 size={14} />
+									</button>
+									<button
+										onClick={() => handleDelete(note.id)}
+										disabled={!EDIT_NOTES || session.isLocked(note.id)}
+										className="text-text-tertiary hover:text-error-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+										title="Delete note"
+										aria-label="Delete note"
+									>
+										<Trash2 size={14} />
+									</button>
+								</div>
 							</div>
-						))}
-					</div>
-				) : (
-					<p className="text-text-tertiary text-sm text-center py-4">
-						{visitId
-							? "No notes for this visit yet"
-							: "No notes available"}
-					</p>
+
+							{renderMeta(note)}
+						</div>
+					)
 				)}
-			</div>
+			</NotesRail>
 
 			<ConfirmDialog
 				open={noteToDelete !== null}
@@ -471,6 +268,6 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 					setDeleteError(null);
 				}}
 			/>
-		</Card>
+		</>
 	);
 }

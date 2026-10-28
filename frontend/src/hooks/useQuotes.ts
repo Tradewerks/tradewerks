@@ -363,8 +363,8 @@ export const useUpdateQuoteNoteMutation = () => {
 			noteId: string;
 			data: UpdateQuoteNoteInput;
 		}) => updateQuoteNote(quoteId, noteId, data),
-		onSuccess: (_, variables) => {
-			queryClient.invalidateQueries({
+		onSuccess: async (_, variables) => {
+			await queryClient.invalidateQueries({
 				queryKey: ["quotes", variables.quoteId, "notes"],
 			});
 		},

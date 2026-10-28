@@ -1069,7 +1069,7 @@ export default function RecurringPlanDetailPage() {
 							   empty column beside a populated history reads as a
 							   load failure. */
 							<Card title="Notes">
-								<p className="rounded-lg border border-dashed border-border-subtle p-6 text-center text-sm text-text-tertiary">
+								<p className="rounded-lg border border-dashed border-border-subtle p-6 text-center text-sm text-text-tertiary flex-1 flex items-center justify-center">
 									Notes open once this plan
 									generates its first
 									occurrence.

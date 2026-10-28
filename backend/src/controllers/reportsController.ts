@@ -4107,7 +4107,7 @@ export const getJobProfitabilityReport = async (
 // Page Summary
 // =========================================================================================================
 
-export const PAGES = ["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects"] as const;
+export const PAGES = ["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects", "recurring_plans"] as const;
 export type SummaryPage = (typeof PAGES)[number];
 export const BREAKDOWNS: Record<SummaryPage, string[]> = {
 	jobs: ["status", "priority", "type"],
@@ -4117,6 +4117,7 @@ export const BREAKDOWNS: Record<SummaryPage, string[]> = {
 	clients: ["status", "tax_exempt"],
 	inventory: ["status", "qb_linked"],
 	projects: ["status", "priority", "manager"],
+	recurring_plans: ["status", "priority"],
 };
 type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration"; note?: string };
 type Slice = { label: string; value: number; };
@@ -4143,6 +4144,213 @@ const DISPUTED_INVOICE_STATUS = { equals: "Disputed" } satisfies Prisma.invoiceW
 export const isSummaryPage = (page: string): page is SummaryPage =>
 	(PAGES as readonly string[]).includes(page);
 
+type ScopedDb = ReturnType<typeof getScopedDb>;
+
+// Mirrors aged receivables: only issued, unpaid invoices carry a real balance.
+// Clients' Open Balance and Invoices' Outstanding both read this so they can't drift.
+const openReceivables = async (sdb: ScopedDb, orgId: string): Promise<number> => {
+	const [aging, disputed] = await Promise.all([
+		sdb.invoice.aggregate({
+			where: {
+				organization_id: orgId,
+				status: AGING_INVOICE_STATUS,
+				// not: 0, so an unapplied credit nets against the
+				// open balance instead of being invisible.
+				balance_due: { not: 0 },
+			},
+			_sum: { balance_due: true },
+		}),
+		// Disputed invoices are still owed, so they stay in the receivables
+		// total (see AGING_INVOICE_STATUS above) — added back in here.
+		sdb.invoice.aggregate({
+			where: { organization_id: orgId, status: DISPUTED_INVOICE_STATUS, balance_due: { not: 0 } },
+			_sum: { balance_due: true },
+		}),
+	]);
+	return Number(aging._sum.balance_due ?? 0) + Number(disputed._sum.balance_due ?? 0);
+};
+
+const inventoryStock = async (sdb: ScopedDb, orgId: string) => {
+	const itemWhere = { organization_id: orgId, provisional: false, is_active: true };
+	// Total comes from count(): the row list below is capped, so its length
+	// would silently understate a large catalog.
+	// Asset value counts warehouse + fleet stock and discontinued items, like
+	// the inventory report; only stock status is limited to active items.
+	const [items, itemCount, [asset]] = await Promise.all([
+		sdb.inventory_item.findMany({
+			where: itemWhere,
+			select: { id: true, quantity: true, low_stock_threshold: true },
+			take: REPORT_ROW_CAP,
+		}),
+		sdb.inventory_item.count({ where: itemWhere }),
+		sdb.$queryRaw<{ value: number; missingCost: number }[]>(Prisma.sql`
+			SELECT
+				COALESCE(SUM(ii.cost * (ii.quantity + ${Prisma.raw(FLEET_ON_HAND)})), 0)::float AS "value",
+				COUNT(*) FILTER (WHERE ii.cost IS NULL AND ii.quantity + ${Prisma.raw(FLEET_ON_HAND)} > 0)::int AS "missingCost"
+			FROM "inventory_item" ii
+			WHERE ii.organization_id = ${orgId} AND ii.provisional = false
+		`),
+	]);
+	let low = 0;
+	let out = 0;
+	let sufficient = 0;
+	for (const it of items) {
+		const status = getStockStatus(it.quantity, it.low_stock_threshold);
+		if (status === "low") low++;
+		else if (status === "out_of_stock") out++;
+		else if (status === "sufficient") sufficient++;
+	}
+	const stockStats: Stat[] = [
+		{ label: "Low",          value: low,  format: "number" },
+		{ label: "Out of Stock", value: out,  format: "number" },
+		{
+			label: "Asset Value",
+			value: asset?.value ?? 0,
+			format: "currency",
+			...(asset?.missingCost && {
+				note: `${asset.missingCost} item${asset.missingCost === 1 ? "" : "s"} without cost`,
+			}),
+		},
+	];
+	return { items, itemCount, low, out, sufficient, stockStats };
+};
+
+interface PageSnapshotResponse {
+	page: string;
+	stats: Stat[];
+}
+
+// "Right now" numbers for the list-page subtitle. Never ranged: a backlog or a
+// balance owed doesn't depend on when the rows were created.
+export const getPageSnapshot = async (orgId: string, page: string): Promise<PageSnapshotResponse> => {
+	if (!isSummaryPage(page))
+		throw httpError(400, ErrorCodes.VALIDATION_ERROR, `Unknown page: ${page}`);
+	const sdb = getScopedDb(orgId);
+	const now = new Date();
+	let stats: Stat[] = [];
+
+	switch (page) {
+		case "jobs": {
+			const [open, backlog] = await Promise.all([
+				sdb.job.count({ where: { organization_id: orgId, status: { in: ["Unscheduled", "Scheduled", "InProgress"] } } }),
+				sdb.job.aggregate({
+					where: { organization_id: orgId, status: "Unscheduled" },
+					_sum: { estimated_total: true },
+				}),
+			]);
+			stats = [
+				{ label: "Open",        value: open,                                     format: "number" },
+				{ label: "Unscheduled", value: Number(backlog._sum.estimated_total ?? 0), format: "currency" },
+			];
+			break;
+		}
+		case "quotes": {
+			const openWhere = { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES] } };
+			const [open, pipeline] = await Promise.all([
+				sdb.quote.count({ where: openWhere }),
+				sdb.quote.aggregate({ where: openWhere, _sum: { total: true } }),
+			]);
+			stats = [
+				{ label: "Open",     value: open,                             format: "number" },
+				{ label: "Pipeline", value: Number(pipeline._sum.total ?? 0), format: "currency" },
+			];
+			break;
+		}
+		case "requests": {
+			const open = await sdb.request.count({
+				where: { organization_id: orgId, status: { in: ["New", "Reviewing"] } },
+			});
+			stats = [{ label: "Open", value: open, format: "number" }];
+			break;
+		}
+		case "invoices": {
+			const [outstanding, overdue] = await Promise.all([
+				openReceivables(sdb, orgId),
+				// Same collectable rule as aged receivables: past its terms (or its
+				// creation, with no due date), positive only — a credit is never overdue.
+				sdb.invoice.aggregate({
+					where: {
+						organization_id: orgId,
+						status: AGING_INVOICE_STATUS,
+						balance_due: { gt: 0 },
+						OR: [{ due_date: { lte: now } }, { due_date: null, created_at: { lte: now } }],
+					},
+					_sum: { balance_due: true },
+				}),
+			]);
+			stats = [
+				{ label: "Outstanding", value: outstanding,                              format: "currency" },
+				{ label: "Overdue",     value: Number(overdue._sum.balance_due ?? 0),     format: "currency" },
+			];
+			break;
+		}
+		case "clients": {
+			const [total, active, openBalance, income] = await Promise.all([
+				sdb.client.count({ where: { organization_id: orgId } }),
+				sdb.client.count({ where: { organization_id: orgId, is_active: true } }),
+				openReceivables(sdb, orgId),
+				sdb.invoice.aggregate({
+					where: { organization_id: orgId, status: ISSUED_INVOICE_STATUS },
+					_sum: { total: true },
+				}),
+			]);
+			// Avg income per client = total billed spread over the whole client book
+			const avgIncome = total > 0 ? Number(income._sum.total ?? 0) / total : 0;
+			stats = [
+				{ label: "Active",       value: active,      format: "number" },
+				{ label: "Open Balance", value: openBalance, format: "currency" },
+				{ label: "Avg. Income",  value: avgIncome,   format: "currency" },
+			];
+			break;
+		}
+		case "inventory": {
+			stats = (await inventoryStock(sdb, orgId)).stockStats;
+			break;
+		}
+		case "projects": {
+			const [open, overdue] = await Promise.all([
+				sdb.project.count({ where: { organization_id: orgId, status: { in: ["Planning", "Active", "OnHold"] } } }),
+				sdb.project.count({
+					where: {
+						organization_id: orgId,
+						target_end_at: { lt: now },
+						completed_at: null,
+						status: { notIn: ["Completed", "Cancelled"] },
+					},
+				}),
+			]);
+			stats = [
+				{ label: "Open",    value: open,    format: "number" },
+				{ label: "Overdue", value: overdue, format: "number" },
+			];
+			break;
+		}
+		case "recurring_plans": {
+			const endingSoonBy = new Date(now.getTime() + 30 * 86_400_000);
+			const [active, paused, endingSoon] = await Promise.all([
+				sdb.recurring_plan.count({ where: { organization_id: orgId, status: "Active" } }),
+				sdb.recurring_plan.count({ where: { organization_id: orgId, status: "Paused" } }),
+				// Overdue (end passed, still live) counts too — it needs attention most.
+				sdb.recurring_plan.count({
+					where: {
+						organization_id: orgId,
+						status: { in: ["Active", "Paused"] },
+						ends_at: { lte: endingSoonBy },
+					},
+				}),
+			]);
+			stats = [
+				{ label: "Active",      value: active,     format: "number" },
+				{ label: "Paused",      value: paused,     format: "number" },
+				{ label: "Ending Soon", value: endingSoon, format: "number" },
+			];
+			break;
+		}
+	}
+
+	return { page, stats };
+};
+
 export const getPageSummary = async (orgId: string, page:string, startDate?: string, endDate?: string, groupBy?: string): Promise<PageSummaryResponse> => {
 	if (!isSummaryPage(page))
 		throw httpError(400, ErrorCodes.VALIDATION_ERROR, `Unknown page: ${page}`);
@@ -4159,14 +4367,8 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 	
 	switch (page) {
 		case "jobs": {
-			const OPEN_STATUSES = ["Unscheduled", "Scheduled", "InProgress"] as const;
-			const [total, open, backlog, revenue] = await Promise.all([
+			const [total, revenue] = await Promise.all([
 				sdb.job.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.job.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES] }, ...createdWhere }}),
-				sdb.job.aggregate({
-					where: { organization_id: orgId, status: "Unscheduled", ...createdWhere },
-					_sum: { estimated_total: true },
-				}),
 				sdb.job_visit.aggregate({
 					// Revenue is scoped by completion date, not job creation.
 					where: { status: "Completed", ...(dated ? { actual_end_at: dated } : {}) },
@@ -4194,9 +4396,7 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",         value: total,                                        format: "number" },
-				{ label: "Open",          value: open,                                         format: "number" },
-				{ label: "Unscheduled",   value: Number(backlog._sum.estimated_total ?? 0),    format: "currency" },
-				{ label: "Revenue",       value: Number(revenue._sum.total ?? 0),              format: "currency" },
+				{ label: "Revenue",      value: Number(revenue._sum.total ?? 0),              format: "currency" },
 			];
 			break;
 		}
@@ -4204,14 +4404,9 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			const createdRangeSql = Prisma.sql`
 				${dated?.gte ? Prisma.sql`AND created_at >= ${dated.gte}` : Prisma.empty}
 				${dated?.lte ? Prisma.sql`AND created_at <= ${dated.lte}` : Prisma.empty}`;
-			const [total, open, pipeline, approved, rows] = await Promise.all([
+			const [total, approved, rows] = await Promise.all([
 				sdb.quote.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.quote.count({ where: { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES]}, ...createdWhere }}),
 				sdb.quote.aggregate({
-					where: { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES]}, ...createdWhere },
-					_sum: { total: true }
-				}),
-				sdb.quote.aggregate({ 
 					where: { organization_id: orgId, status: "Approved", ...createdWhere},
 					_sum: { total: true },
 				}),
@@ -4236,18 +4431,14 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",    	 	  value: total,                            format: "number" },
-				{ label: "Open",     	 	  value: open,                             format: "number" },
-				{ label: "Pipeline", 	 	  value: Number(pipeline._sum.total ?? 0), format: "currency" },
 				{ label: "Approved", 	 	  value: Number(approved._sum.total ?? 0), format: "currency" },
-				{ label: "Avg. Approve Time", value: Number(avgDays), 	  		  	   format: "duration"}
+				{ label: "Approve Time",      value: Number(avgDays), 	  		  	   format: "duration"}
 			];
 			break;
 		} 
 		case "requests": {
-			const OPEN_STATUSES = ["New", "Reviewing"] as const;
-			const [total, open, converted, estimatedValue] = await Promise.all([
+			const [total, converted, estimatedValue] = await Promise.all([
 				sdb.request.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.request.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES]}, ...createdWhere}}),
 				sdb.request.count({ where: { organization_id: orgId, status: "ConvertedToJob", ...createdWhere }}),
 				sdb.request.aggregate({
 					where: { organization_id: orgId, ...createdWhere },
@@ -4265,7 +4456,6 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",      value: total,                                        format: "number" },
-				{ label: "Open",       value: open,                                         format: "number" },
 				{ label: "Converted",  value: converted,                                    format: "number" },
 				{ label: "Est. Value", value: Number(estimatedValue._sum.estimated_value ?? 0),   format: "currency" },
 			];
@@ -4328,42 +4518,7 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			break;
 		}
 		case "clients": {
-			const [total, added, active, agingBalance, disputedBalance, income] = await Promise.all([
-				sdb.client.count({ where: { organization_id: orgId } }),
-				sdb.client.count({ where: { organization_id: orgId, ...createdWhere } }),
-				sdb.client.count({ where: { organization_id: orgId, is_active: true } }),
-				// Mirrors aged receivables: only issued, unpaid invoices carry a real balance.
-				sdb.invoice.aggregate({
-					where: {
-						organization_id: orgId,
-						status: AGING_INVOICE_STATUS,
-						// not: 0, so an unapplied credit nets against the
-						// client's open balance instead of being invisible.
-						balance_due: { not: 0 },
-					},
-					_sum: { balance_due: true },
-				}),
-				// Disputed invoices are still owed, so they stay in the receivables
-				// total (see AGING_INVOICE_STATUS above) — added back in below.
-				sdb.invoice.aggregate({
-					where: {
-						organization_id: orgId,
-						status: DISPUTED_INVOICE_STATUS,
-						// not: 0, so an unapplied credit nets against the
-						// client's open balance instead of being invisible.
-						balance_due: { not: 0 },
-					},
-					_sum: { balance_due: true },
-				}),
-				sdb.invoice.aggregate({
-					where: { organization_id: orgId, status: ISSUED_INVOICE_STATUS },
-					_sum: { total: true },
-				}),
-			]);
-			const openBalance =
-				Number(agingBalance._sum.balance_due ?? 0) + Number(disputedBalance._sum.balance_due ?? 0);
-			// Avg income per client = total billed spread over the whole client book
-			const avgIncome = total > 0 ? Number(income._sum.total ?? 0) / total : 0;
+			const added = await sdb.client.count({ where: { organization_id: orgId, ...createdWhere } });
 			if (grouping === "tax_exempt") {
 				const g = await sdb.client.groupBy({ by: ["is_tax_exempt"], where: { organization_id: orgId }, _count: { _all: true } });
 				breakdown = g.map((r) => ({ label: r.is_tax_exempt ? "Exempt" : "Taxable", value: r._count._all }));
@@ -4374,44 +4529,13 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				breakdownLabel = "By Status";
 			}
 			stats = [
-				{ label: "Total",        value: total,                                     format: "number" },
 				{ label: "New",          value: added,                                     format: "number" },
-				{ label: "Active",       value: active,                                    format: "number" },
-				{ label: "Open Balance", value: openBalance,                                     format: "currency" },
-				{ label: "Avg. Income",   value: avgIncome,                                 format: "currency" },
 			];
 			break;
 		}
 		case "inventory": {
-			const itemWhere = { organization_id: orgId, provisional: false, is_active: true };
-			// Total comes from count(): the row list below is capped, so its length
-			// would silently understate a large catalog.
-			// Asset value counts warehouse + fleet stock and discontinued items, like
-			// the inventory report; only stock status is limited to active items.
-			const [items, itemCount, [asset]] = await Promise.all([
-				sdb.inventory_item.findMany({
-					where: itemWhere,
-					select: { id: true, quantity: true, low_stock_threshold: true },
-					take: REPORT_ROW_CAP,
-				}),
-				sdb.inventory_item.count({ where: itemWhere }),
-				sdb.$queryRaw<{ value: number; missingCost: number }[]>(Prisma.sql`
-					SELECT
-						COALESCE(SUM(ii.cost * (ii.quantity + ${Prisma.raw(FLEET_ON_HAND)})), 0)::float AS "value",
-						COUNT(*) FILTER (WHERE ii.cost IS NULL AND ii.quantity + ${Prisma.raw(FLEET_ON_HAND)} > 0)::int AS "missingCost"
-					FROM "inventory_item" ii
-					WHERE ii.organization_id = ${orgId} AND ii.provisional = false
-				`),
-			]);
-			let low = 0;
-			let out = 0;
-			let sufficient = 0;
-			for (const it of items) {
-				const status = getStockStatus(it.quantity, it.low_stock_threshold);
-				if (status === "low") low++;
-				else if (status === "out_of_stock") out++;
-				else if (status === "sufficient") sufficient++;
-			}
+			// No period here: the whole report is a stock snapshot.
+			const { items, itemCount, low, out, sufficient, stockStats } = await inventoryStock(sdb, orgId);
 			if (grouping === "qb_linked") {
 				const realmId = await getOrgRealmId(orgId);
 				const mappings = realmId
@@ -4439,34 +4563,34 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				];
 				breakdownLabel = "By Stock Status";
 			}
-			stats = [
-				{ label: "Total Items",  value: itemCount,    format: "number" },
-				{ label: "Low",          value: low,          format: "number" },
-				{ label: "Out of Stock", value: out,          format: "number" },
-				{
-					label: "Asset Value",
-					value: asset?.value ?? 0,
-					format: "currency",
-					...(asset?.missingCost && {
-						note: `${asset.missingCost} item${asset.missingCost === 1 ? "" : "s"} without cost`,
-					}),
-				},
-			];
+			stats = [{ label: "Total Items", value: itemCount, format: "number" }, ...stockStats];
+			break;
+		}
+		case "recurring_plans": {
+			// The Plans list's Date filter keeps plans IN EFFECT during the range
+			// (started by its end, not ended before its start), so the report ranges
+			// the same way and drilled bars land on the same set.
+			const inRange: Prisma.recurring_planWhereInput = {
+				...(dated?.lte ? { starts_at: { lte: dated.lte } } : {}),
+				...(dated?.gte ? { OR: [{ ends_at: null }, { ends_at: { gte: dated.gte } }] } : {}),
+			};
+			const planWhere = { organization_id: orgId, ...inRange };
+			const total = await sdb.recurring_plan.count({ where: planWhere });
+			if (grouping === "priority") {
+				const g = await sdb.recurring_plan.groupBy({ by: ["priority"], where: planWhere, _count: { _all: true } });
+				breakdown = g.map((r) => ({ label: r.priority, value: r._count._all }));
+				breakdownLabel = "By Priority";
+			} else {
+				const g = await sdb.recurring_plan.groupBy({ by: ["status"], where: planWhere, _count: { _all: true } });
+				breakdown = g.map((r) => ({ label: r.status, value: r._count._all }));
+				breakdownLabel = "By Status";
+			}
+			stats = [{ label: "Total", value: total, format: "number" }];
 			break;
 		}
 		case "projects": {
-			const OPEN_STATUSES = ["Planning", "Active", "OnHold"] as const;
-			const [total, open, overdue, budget, committed] = await Promise.all([
+			const [total, budget, committed] = await Promise.all([
 				sdb.project.count({ where: { organization_id: orgId, ...createdWhere } }),
-				sdb.project.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES] }, ...createdWhere } }),
-				sdb.project.count({
-					where: {
-						organization_id: orgId,
-						target_end_at: { lt: now },
-						completed_at: null,
-						status: { notIn: ["Completed", "Cancelled"] },
-					},
-				}),
 				sdb.project.aggregate({ where: { organization_id: orgId, ...createdWhere }, _sum: { budget: true } }),
 				sdb.$queryRaw<{ committed: Prisma.Decimal | null }[]>(Prisma.sql`
 						SELECT SUM(COALESCE(j.actual_total, j.estimated_total)) AS committed
@@ -4512,8 +4636,6 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",			value: total,                                						 format: "number" },
-				{ label: "Open",			value: open,                                 						format: "number" },
-				{ label: "Overdue",		 value: overdue,                              						format: "number" },
 				{ label: "Budget",		   value: Number(budget._sum.budget ?? 0),      	format: "currency" },
 				{ label: "Committed", 	value: Number(committed[0]?.committed ?? 0), format: "currency" },
 			];

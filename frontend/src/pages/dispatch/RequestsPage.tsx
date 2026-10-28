@@ -17,7 +17,9 @@ import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRange
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
-import PageReportSection from "../../components/reports/PageReportSection";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 import SortControl from "../../components/ui/SortControl";
 import type { SortDir } from "../../util/sortUtil";
 import {
@@ -67,6 +69,7 @@ export default function RequestsPage() {
 
 	// permissions
 	const CREATE_REQUEST = usePermission("create_requests");
+	const report = usePageReport("requests", "Requests report");
 
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
 	const { removeTerm: removeStatus } = useMultiSearch("status");
@@ -216,7 +219,8 @@ export default function RequestsPage() {
 
 	return (
 		<div className="text-text-primary">
-			<PageHeader title="Requests">
+			<PageHeader title="Requests" subtitle={<PageReportKpis report={report} />}>
+				<PageReportButton report={report} />
 				<button
 					disabled={!CREATE_REQUEST}
 					title={!CREATE_REQUEST ? "You don't have permission to perform this action" : undefined}
@@ -231,7 +235,6 @@ export default function RequestsPage() {
 				</button>
 			</PageHeader>
 
-			<PageReportSection page="requests" label="Requests report" />
 
 			<PageControls
 				className="mb-3"

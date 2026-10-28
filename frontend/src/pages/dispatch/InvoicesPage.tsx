@@ -18,7 +18,9 @@ import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
 import { useQBStatusQuery } from "../../hooks/useQuickbooks";
-import PageReportSection from "../../components/reports/PageReportSection";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 import type { SortDir } from "../../util/sortUtil";
 import { withDir, compareByOrder, compareDateNullsLast, compareString, compareNumber } from "../../util/sortUtil";
 import { isCurrentQbRealm } from "../../lib/qbRealm";
@@ -73,6 +75,7 @@ export default function InvoicesPage() {
 
 	//permissions
 	const CREATE_INVOICE = usePermission("create_invoices");
+	const report = usePageReport("invoices", "Invoices report");
 
 	const { data: filterClient } = useClientByIdQuery(clientFilter ?? "");
 	const { data: qbStatus } = useQBStatusQuery();
@@ -302,7 +305,8 @@ export default function InvoicesPage() {
 				setIsModalOpen={setIsCreateModalOpen}
 			/>
 
-			<PageHeader title="Invoices">
+			<PageHeader title="Invoices" subtitle={<PageReportKpis report={report} />}>
+				<PageReportButton report={report} />
 				<button
 					title={!CREATE_INVOICE ? "You don't have permission to perform this action" : ""}
 					disabled={!CREATE_INVOICE}
@@ -349,7 +353,6 @@ export default function InvoicesPage() {
 				</div>
 			</PageHeader>
 
-			<PageReportSection page="invoices" label="Invoices report" />
 
 			{/* Summary Cards */}
 			<div className="grid grid-cols-3 gap-3 mb-4">

@@ -1,7 +1,9 @@
-﻿import { useState, useEffect, useRef } from "react";
-import { Plus, Edit2, Trash2, X } from "lucide-react";
-import Card from "../ui/Card";
-import { HEADER_BTN_PRIMARY } from "../ui/headerActions";
+﻿import { useState } from "react";
+import { Edit2, Trash2 } from "lucide-react";
+import NotesRail from "../detail/NotesRail";
+import NoteComposer from "../detail/NoteComposer";
+import NoteEditCard from "../detail/NoteEditCard";
+import { useNoteEditSession } from "../detail/useNoteEditSession";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import type { RecurringPlanNote } from "../../types/recurringPlans";
 import {
@@ -17,13 +19,8 @@ interface RecurringPlanNoteManagerProps {
 }
 
 export default function RecurringPlanNoteManager({ jobId }: RecurringPlanNoteManagerProps) {
-	const formRef = useRef<HTMLDivElement>(null);
-	const [isAdding, setIsAdding] = useState(false);
-	const [editingId, setEditingId] = useState<string | null>(null);
 	const [noteToDelete, setNoteToDelete] = useState<string | null>(null);
 	const [deleteError, setDeleteError] = useState<string | null>(null);
-	const [content, setContent] = useState("");
-	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
 	const { data: notes, isLoading } = useRecurringPlanNotesQuery(jobId);
 	const createNote = useCreateRecurringPlanNoteMutation();
@@ -33,63 +30,21 @@ export default function RecurringPlanNoteManager({ jobId }: RecurringPlanNoteMan
 	// permissions
 	const EDIT_NOTES = usePermission("manage_recurring_plans");
 
-	const resetForm = () => {
-		setContent("");
-		setIsAdding(false);
-		setEditingId(null);
-		setErrorMessage(null);
-	};
+	const session = useNoteEditSession(notes?.map((n) => n.id) ?? []);
 
-	useEffect(() => {
-		const handleClickOutside = (event: MouseEvent) => {
-			if (formRef.current && !formRef.current.contains(event.target as Node)) {
-				resetForm();
-			}
-		};
-
-		if (isAdding) {
-			document.addEventListener("mousedown", handleClickOutside);
-		}
-
-		return () => {
-			document.removeEventListener("mousedown", handleClickOutside);
-		};
-	}, [isAdding]);
-
-	const handleSubmit = async (e: React.FormEvent) => {
-		e.preventDefault();
-		if (!EDIT_NOTES) return;
-		setErrorMessage(null);
-
-		if (!content.trim()) return;
-
-		try {
-			if (editingId) {
-				await updateNote.mutateAsync({
-					jobId,
-					noteId: editingId,
-					data: { content },
-				});
-			} else {
-				await createNote.mutateAsync({
-					jobId,
-					data: { content },
-				});
-			}
-			resetForm();
-		} catch (error) {
-			console.error("Failed to save note:", error);
-			const errorMsg =
-				error instanceof Error ? error.message : "Failed to save note";
-			setErrorMessage(errorMsg);
-		}
+	// Throws on failure so NoteEditCard shows the error and stays open.
+	const handleEditSave = async (content: string) => {
+		if (!EDIT_NOTES || !session.editingId) return;
+		await updateNote.mutateAsync({
+			jobId,
+			noteId: session.editingId,
+			data: { content },
+		});
 	};
 
 	const handleEdit = (note: RecurringPlanNote) => {
 		if (!EDIT_NOTES) return;
-		setContent(note.content);
-		setEditingId(note.id);
-		setIsAdding(true);
+		session.start(note.id);
 	};
 
 	const handleDelete = (noteId: string) => {
@@ -109,229 +64,81 @@ export default function RecurringPlanNoteManager({ jobId }: RecurringPlanNoteMan
 		}
 	};
 
-	if (isLoading) {
-		return (
-			<Card title="Plan Notes">
-				<div className="text-text-tertiary">Loading notes...</div>
-			</Card>
-		);
-	}
+	const noteState = isLoading ? "loading" : notes && notes.length > 0 ? "ready" : "empty";
 
 	return (
-		<Card
-			title="Plan Notes"
-			headerAction={
-				<button
-					disabled={!EDIT_NOTES}
-					title={!EDIT_NOTES ? "You don't have permission to perform this action" : ""}
-					onClick={() => {
-						if (!EDIT_NOTES) return;
-						setIsAdding(true)
-					}}
-					className={HEADER_BTN_PRIMARY}
-				>
-					<Plus size={14} />
-					Add Note
-				</button>
-			}
-			className="h-fit"
-		>
-			<div className="space-y-4">
-				{isAdding && !editingId && (
-					<div
-						ref={formRef}
-						className="p-4 bg-surface rounded-lg border border-border"
-					>
-						<div className="flex justify-between items-center mb-4">
-							<h3 className="text-text-primary font-semibold">
-								New Note
-							</h3>
-							<button
-								onClick={resetForm}
-								className="text-text-tertiary hover:text-text-primary transition-colors"
-							>
-								<X size={20} />
-							</button>
-						</div>
-
-						{errorMessage && (
-							<div className="mb-4 p-3 bg-error-bg border border-error-border rounded-md text-error-text text-sm">
-								{errorMessage}
-							</div>
-						)}
-
-						<form onSubmit={handleSubmit} className="space-y-3">
-							<textarea
-								value={content}
-								onChange={(e) =>
-									setContent(e.target.value)
-								}
-								placeholder="Enter your note..."
-								rows={4}
-								className="w-full px-3 py-2 bg-base border border-border rounded-md text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-								required
-							/>
-							<button
-								type="submit"
-								disabled={
-									createNote.isPending ||
-									updateNote.isPending
-								}
-								className="w-full px-4 py-2 bg-primary-hover hover:bg-primary-active disabled:bg-primary-disabled disabled:cursor-not-allowed text-on-primary rounded-md text-sm font-medium transition-colors"
-							>
-								{createNote.isPending ||
-								updateNote.isPending
-									? "Saving..."
-									: "Add Note"}
-							</button>
-						</form>
-					</div>
-				)}
-
-				<div className="space-y-3">
-					{notes && notes.length > 0 ? (
-						notes.map((note) => (
-							<div key={note.id}>
-								<div className="p-3 bg-surface rounded-lg border border-border group hover:border-border-strong transition-colors">
-									<div className="flex justify-between items-start mb-2">
-										<p className="text-text-primary text-sm flex-1">
-											{
-												note.content
-											}
-										</p>
-										<div className="flex gap-2 ml-3 opacity-0 group-hover:opacity-100 transition-opacity">
-											<button
-												onClick={() =>
-													handleEdit(
-														note
-													)
-												}
-												disabled={!EDIT_NOTES}
-												className="text-text-tertiary hover:text-primary-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-											>
-												<Edit2
-													size={
-														14
-													}
-												/>
-											</button>
-											<button
-												onClick={() =>
-													handleDelete(
-														note.id
-													)
-												}
-												disabled={!EDIT_NOTES}
-												className="text-text-tertiary hover:text-error-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-												title="Delete note"
-											>
-												<Trash2
-													size={
-														14
-													}
-												/>
-											</button>
-										</div>
-									</div>
-									<p className="text-xs text-text-muted">
-										{new Date(
-											note.created_at
-										).toLocaleDateString()}
-										{note.updated_at &&
-											new Date(
-												note.updated_at
-											).getTime() !==
-												new Date(
-													note.created_at
-												).getTime() &&
-											" (edited)"}
-									</p>
-								</div>
-
-								{/* Edit form appears below the note being edited */}
-								{editingId === note.id && (
-									<div
-										ref={formRef}
-										className="mt-2 p-4 bg-surface rounded-lg border border-border"
-									>
-										<div className="flex justify-between items-center mb-4">
-											<h3 className="text-text-primary font-semibold">
-												Edit
-												Note
-											</h3>
-											<button
-												onClick={
-													resetForm
-												}
-												className="text-text-tertiary hover:text-text-primary transition-colors"
-											>
-												<X
-													size={
-														20
-													}
-												/>
-											</button>
-										</div>
-
-										{errorMessage && (
-											<div className="mb-4 p-3 bg-error-bg border border-error-border rounded-md text-error-text text-sm">
-												{
-													errorMessage
-												}
-											</div>
-										)}
-
-										<form
-											onSubmit={
-												handleSubmit
-											}
-											className="space-y-3"
-										>
-											<textarea
-												value={
-													content
-												}
-												onChange={(
-													e
-												) =>
-													setContent(
-														e
-															.target
-															.value
-													)
-												}
-												placeholder="Enter your note..."
-												rows={
-													4
-												}
-												className="w-full px-3 py-2 bg-base border border-border rounded-md text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-												required
-											/>
-											<button
-												type="submit"
-												disabled={
-													createNote.isPending ||
-													updateNote.isPending
-												}
-												className="w-full px-4 py-2 bg-primary-hover hover:bg-primary-active disabled:bg-primary-disabled disabled:cursor-not-allowed text-on-primary rounded-md text-sm font-medium transition-colors"
-											>
-												{createNote.isPending ||
-												updateNote.isPending
-													? "Saving..."
-													: "Update Note"}
-											</button>
-										</form>
-									</div>
-								)}
-							</div>
-						))
-					) : (
-						<p className="text-text-tertiary text-sm">
-							No notes available
+		<>
+			<NotesRail
+				title="Plan Notes"
+				state={noteState}
+				newestId={notes?.[0]?.id}
+				editing={session.editingId !== null}
+				composer={
+					<NoteComposer
+						onSubmit={async (content) => {
+							await createNote.mutateAsync({
+								jobId,
+								data: { content },
+							});
+						}}
+						canWrite={EDIT_NOTES}
+						pending={createNote.isPending}
+						disabled={isLoading}
+					/>
+				}
+			>
+				{notes?.map((note) => {
+					const meta = (
+						<p className="text-xs text-text-muted">
+							{new Date(note.created_at).toLocaleDateString()}
+							{note.updated_at &&
+								new Date(note.updated_at).getTime() !==
+									new Date(note.created_at).getTime() &&
+								" (edited)"}
 						</p>
-					)}
-				</div>
-			</div>
+					);
+					return session.editingId === note.id ? (
+						<NoteEditCard
+							key={note.id}
+							initialContent={note.content}
+							onSave={handleEditSave}
+							onClose={session.stop}
+							pending={updateNote.isPending}
+							meta={meta}
+						/>
+					) : (
+						<div
+							key={note.id}
+							className="p-3 bg-surface rounded-lg border border-border group hover:border-border-strong transition-colors"
+						>
+							<div className="flex justify-between items-start mb-2">
+								<p className="text-text-primary text-sm flex-1">{note.content}</p>
+								<div className="flex gap-2 ml-3 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+									<button
+										ref={session.editButtonRef(note.id)}
+										onClick={() => handleEdit(note)}
+										disabled={!EDIT_NOTES || session.isLocked(note.id)}
+										aria-label="Edit note"
+										className="text-text-tertiary hover:text-primary-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+									>
+										<Edit2 size={14} />
+									</button>
+									<button
+										onClick={() => handleDelete(note.id)}
+										disabled={!EDIT_NOTES || session.isLocked(note.id)}
+										className="text-text-tertiary hover:text-error-text transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+										title="Delete note"
+										aria-label="Delete note"
+									>
+										<Trash2 size={14} />
+									</button>
+								</div>
+							</div>
+							{meta}
+						</div>
+					);
+				})}
+			</NotesRail>
 
 			<ConfirmDialog
 				open={noteToDelete !== null}
@@ -347,6 +154,6 @@ export default function RecurringPlanNoteManager({ jobId }: RecurringPlanNoteMan
 					setDeleteError(null);
 				}}
 			/>
-		</Card>
+		</>
 	);
 }

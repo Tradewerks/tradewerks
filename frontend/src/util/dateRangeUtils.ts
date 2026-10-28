@@ -121,6 +121,14 @@ export function matchesDateRange(date: Date | null, value: DateRangeValue): bool
 	return date >= range.start && date <= range.end;
 }
 
+/** Whether a span (open-ended when `end` is null) is in effect at any point in the range. */
+export function overlapsDateRange(start: Date, end: Date | null, value: DateRangeValue): boolean {
+	if (value.option === "all") return true;
+	const range = resolveDateRange(value);
+	if (!range) return true;
+	return start <= range.end && (end === null || end >= range.start);
+}
+
 export function formatTriggerLabel(value: DateRangeValue): string {
 	switch (value.option) {
 		case "all":

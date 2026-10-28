@@ -16,6 +16,7 @@ import type {
 	TechScorecardVisitRow,
 	Paginated,
 	ReportFetchParams,
+	PageSnapshotResponse,
 	PageSummaryResponse,
 } from "../types/reports";
 import * as reportsApi from "../api/reports";
@@ -230,9 +231,25 @@ export const usePageSummaryQuery = (
 	startDate?: string,
 	endDate?: string,
 	groupBy?: string,
+	enabled = true,
 ): UseQueryResult<PageSummaryResponse, Error> => {
 	return useQuery({
 		queryKey: ["reports", "page-summary", page, startDate, endDate, groupBy],
 		queryFn: () => reportsApi.getPageSummary(page, startDate, endDate, groupBy),
+		enabled,
+		// Mounted by every list page; don't refetch on each hop between lists.
+		staleTime: 60_000,
 	});
 };
+
+export const usePageSnapshotQuery = (
+	page: string,
+	enabled = true,
+): UseQueryResult<PageSnapshotResponse, Error> =>
+	useQuery({
+		// No dates in the key: the subtitle must not refetch when the popover range changes.
+		queryKey: ["reports", "page-snapshot", page],
+		queryFn: () => reportsApi.getPageSnapshot(page),
+		enabled,
+		staleTime: 60_000,
+	});

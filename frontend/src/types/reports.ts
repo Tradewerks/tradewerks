@@ -769,3 +769,8 @@ export interface PageSummaryResponse {
 	breakdown: { label: string; value: number; }[];
 	breakdownLabel: string;
 }
+
+export interface PageSnapshotResponse {
+	page: string;
+	stats: PageSummaryResponse["stats"];
+}

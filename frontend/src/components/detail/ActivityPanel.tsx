@@ -4,10 +4,12 @@ import type { ReactNode } from "react";
  * Activity's two-column shell: what a dispatcher READS on the left (the record,
  * then the log), what they WRITE on the right.
  *
- * One layout, no branch. The main column can't come up empty — ChangeHistory
- * always renders its card, filter row and empty state, taller than the rail
- * beside it — so the underfill to guard is an empty rail, which `self-start`
- * answers by letting it end at its own height.
+ * One layout, no branch. Both columns end on one bottom line at `lg`: the main
+ * column sets the row height, and its last card stretches into any extra.
+ * The rail's `contain-size` stops its content (many notes) from growing the
+ * row, so the rail scrolls internally instead; `min-h-104` is its floor, and
+ * the main column stretches up to it when shorter. Sticky was dropped on
+ * purpose (spec 2026-10-27-activity-tab-flat-bottom).
  */
 interface ActivityPanelProps {
 	/** The write surface. Rides the rail. */
@@ -26,23 +28,18 @@ export default function ActivityPanel({ notes, lifecycle, history }: ActivityPan
 			className="mt-6"
 		>
 			<h2 className="sr-only">Activity</h2>
-			{/* `items-start` is load-bearing rather than tidiness: a stretched
-			    grid item has nowhere to move, so the rail's `sticky` would
-			    silently do nothing.
-
-			    DOM order is the reading order in both directions — record then
+			{/* DOM order is the reading order in both directions — record then
 			    rail, left to right at `lg` and top to bottom below it. No
 			    `order-*` reshuffle: it would leave the focus order pointing
 			    one way and the layout the other. */}
-			<div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-				<div className="lg:col-span-2 space-y-4">
+			<div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+				<div className="lg:col-span-2 flex flex-col gap-4 [&>:last-child]:flex-1">
 					{lifecycle}
 					{history}
 				</div>
-				{/* Sticky only from `lg`, where there is a rail to pin: the
-				    scrolling ancestor is DispatchLayout's overflow container,
-				    and `top-6` clears the tab strip's own breathing room. */}
-				<div className="lg:col-span-1 lg:self-start lg:sticky lg:top-6">
+				{/* Its only child gets a definite height at `lg` (`h-full`), so a
+				    card there fills the row without ever sizing it. */}
+				<div className="lg:col-span-1 lg:contain-size lg:min-h-104 lg:[&>*]:h-full">
 					{notes}
 				</div>
 			</div>

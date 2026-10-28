@@ -12,15 +12,16 @@ vi.mock("../../db.js", () => {
 
 vi.mock("../reportsController.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../reportsController.js")>();
-	return { ...actual, getPageSummary: vi.fn() };
+	return { ...actual, getPageSummary: vi.fn(), getPageSnapshot: vi.fn() };
 });
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import reportsRouter from "../../routes/reports.js";
-import { getPageSummary } from "../reportsController.js";
+import { getPageSnapshot, getPageSummary } from "../reportsController.js";
 
 const mockGetPageSummary = vi.mocked(getPageSummary);
+const mockGetPageSnapshot = vi.mocked(getPageSnapshot);
 
 // ── Harness — same shape as routes/__tests__/org.test.ts: pull the handler
 // chain off the Router's stack and dispatch it like Express would. ───────────
@@ -157,5 +158,37 @@ describe("GET /reports/page-summary validation", () => {
 		await dispatch(getHandlers("get", "/page-summary"), req, res, 0);
 		expect(res.status).toHaveBeenCalledWith(403);
 		expect(mockGetPageSummary).not.toHaveBeenCalled();
+	});
+});
+
+describe("GET /reports/page-snapshot", () => {
+	const snap = async (query: Record<string, unknown>, permissions = ["view_reports"]) => {
+		const res = makeRes();
+		const req = {
+			user: { organization_id: "org-1", role: "dispatcher", permissions },
+			query,
+			body: {},
+		} as unknown as Request;
+		await dispatch(getHandlers("get", "/page-snapshot"), req, res, 0);
+		return res;
+	};
+	beforeEach(() => mockGetPageSnapshot.mockResolvedValue({ page: "jobs", stats: [] }));
+
+	it("passes the page through, never dates", async () => {
+		const res = await snap({ page: "invoices", startDate: "2026-08-01" });
+		expect(res.status).not.toHaveBeenCalledWith(400);
+		expect(mockGetPageSnapshot).toHaveBeenCalledWith("org-1", "invoices");
+	});
+
+	it("400s on an unknown page without reaching the controller", async () => {
+		const res = await snap({ page: "payroll" });
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(mockGetPageSnapshot).not.toHaveBeenCalled();
+	});
+
+	it("is gated on view_reports", async () => {
+		const res = await snap({ page: "jobs" }, []);
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(mockGetPageSnapshot).not.toHaveBeenCalled();
 	});
 });

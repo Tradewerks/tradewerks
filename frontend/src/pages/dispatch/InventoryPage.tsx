@@ -26,7 +26,9 @@ import StatusFilter from "../../components/ui/StatusFilter";
 import { moneyRound } from "../../components/reconcile/reconcileFormat";
 import PageHeader from "../../components/ui/PageHeader";
 import { usePermission } from "../../hooks/usePermission";
-import PageReportSection from "../../components/reports/PageReportSection";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 import {
 	useQBStatusQuery,
 	useQBMappedItemsQuery,
@@ -35,6 +37,8 @@ import LinkQBItemModal from "../../components/quickbooks/LinkQBItemModal";
 import LabelQueueToast from "../../components/inventory/labels/LabelQueueToast";
 import LabelQueueButton from "../../components/inventory/labels/LabelQueueButton";
 import { useInventoryViewMode } from "../../hooks/useInventoryViewMode";
+import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { getItemStockStatus } from "../../util/util";
 import UntrackedStockNotice from "../../components/entitlements/UntrackedStockNotice";
 
 const SORT_OPTIONS: { value: InventorySortOption; label: string }[] = [
@@ -45,6 +49,14 @@ const SORT_OPTIONS: { value: InventorySortOption; label: string }[] = [
 	{ value: "recently_added", label: "Recently Added" },
 ];
 
+// `none` is an item with no low-stock threshold — the badge's "No Alert".
+const STOCK_OPTIONS = [
+	{ value: "sufficient", label: "Sufficient" },
+	{ value: "low", label: "Low" },
+	{ value: "out_of_stock", label: "Out of Stock" },
+	{ value: "none", label: "No Alert" },
+];
+
 export default function InventoryPage() {
 	const [searchParams, setSearchParams] = useSearchParams();
 	const navigate = useNavigate();
@@ -52,6 +64,16 @@ export default function InventoryPage() {
 	const [search, setSearch] = useState("");
 	const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 	const [unassignedOnly, setUnassignedOnly] = useState(false);
+	// URL-backed so the report popover's stock-status slices drill here.
+	const {
+		terms: stockTerms,
+		removeTerm: removeStockFilter,
+		clearAll: clearStockFilter,
+	} = useMultiSearch("stock");
+	// getAll() hands back a new array every render; key on its contents so
+	// filteredItems only recomputes when the selection changes.
+	const stockKey = stockTerms.join(",");
+	const stockFilter = useMemo(() => (stockKey ? stockKey.split(",") : []), [stockKey]);
 	const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
 	const [isCreateOpen, setIsCreateOpen] = useState(false);
 	const [isImportExportOpen, setIsImportExportOpen] = useState(false);
@@ -71,6 +93,7 @@ export default function InventoryPage() {
 
 	//permissions
 	const MANAGE_INVENTORY = usePermission("manage_inventory");
+	const report = usePageReport("inventory", "Inventory report");
 
 	const { data: inventoryItems = [], isLoading, error } = useAllInventoryQuery(sort);
 	// The reconcile page reads this same cached query, so arriving costs no
@@ -124,12 +147,24 @@ export default function InventoryPage() {
 			items = items.filter((item) => item.location == null);
 		}
 
+		if (stockFilter.length > 0) {
+			items = items.filter((item) =>
+				stockFilter.includes(getItemStockStatus(item) ?? "none"),
+			);
+		}
+
 		return items;
-	}, [inventoryItems, search, selectedTagIds, unassignedOnly]);
+	}, [inventoryItems, search, selectedTagIds, unassignedOnly, stockFilter]);
 
 	const mappedIds = useMemo(() => {
 		return new Set(mappedItems.map((item) => item.inventory_item_id));
 	}, [mappedItems]);
+
+	const stockChips: FilterChip[] = stockFilter.map((value) => ({
+		label: `Stock: ${STOCK_OPTIONS.find((o) => o.value === value)?.label ?? value}`,
+		color: "green" as const,
+		onRemove: () => removeStockFilter(value),
+	}));
 
 	const activeTagChips: FilterChip[] = selectedTagIds.flatMap((id) => {
 		const tag = allTags.find((t) => t.id === id);
@@ -257,7 +292,8 @@ export default function InventoryPage() {
 			{/* Main content */}
 			<div className="flex-1 overflow-y-auto p-4 mr-7">
 				<UntrackedStockNotice module="inventory" />
-				<PageHeader title="Inventory">
+				<PageHeader title="Inventory" subtitle={<PageReportKpis report={report} />}>
+					<PageReportButton report={report} />
 						<LabelQueueButton />
 						{/* Value-carrying, and absent entirely when there is nothing
 						    to reconcile — a chip that is always there stops being
@@ -304,7 +340,6 @@ export default function InventoryPage() {
 						</button>
 				</PageHeader>
 
-				<PageReportSection page="inventory" label="Inventory report" />
 
 				<PageControls
 					className="mb-4"
@@ -326,6 +361,12 @@ export default function InventoryPage() {
 					}
 					middle={
 						<div className="flex items-center gap-2">
+							<StatusFilter
+								paramKey="stock"
+								placeholder="Stock"
+								allLabel="Any stock level"
+								options={STOCK_OPTIONS}
+							/>
 							<TagPicker
 								tags={allTags}
 								selectedIds={selectedTagIds}
@@ -369,12 +410,13 @@ export default function InventoryPage() {
 				/>
 
 				<FilterChips
-					filters={activeTagChips}
+					filters={[...stockChips, ...activeTagChips]}
 					resultCount={filteredItems.length}
 					onClearAll={() => {
 						setSearch("");
 						setSelectedTagIds([]);
 						setUnassignedOnly(false);
+						clearStockFilter();
 					}}
 				/>
 
@@ -439,7 +481,10 @@ export default function InventoryPage() {
 
 						{filteredItems.length === 0 && (
 							<div className="w-full py-12 text-center text-text-muted">
-								{search || selectedTagIds.length > 0
+								{search ||
+								selectedTagIds.length > 0 ||
+								unassignedOnly ||
+								stockFilter.length > 0
 									? "No items match your filters"
 									: "No inventory items yet. Click \"New Item\" to add one."}
 							</div>

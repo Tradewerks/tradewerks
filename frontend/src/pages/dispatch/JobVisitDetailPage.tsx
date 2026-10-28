@@ -849,7 +849,7 @@ export default function JobVisitDetailPage() {
 						   only ever be empty, the column points at the log that does
 						   hold this visit's rows. */
 						<Card title="Change History">
-							<div className="rounded-lg border border-dashed border-border-subtle p-6 text-center">
+							<div className="rounded-lg border border-dashed border-border-subtle p-6 text-center flex-1 flex flex-col items-center justify-center">
 								<p className="text-sm text-text-tertiary">
 									Changes to this visit are
 									recorded in the job's

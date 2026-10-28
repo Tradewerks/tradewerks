@@ -15,7 +15,9 @@ import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
 import PageHeader from "../../components/ui/PageHeader";
 import { usePermission } from "../../hooks/usePermission";
-import PageReportSection from "../../components/reports/PageReportSection";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 
 export default function ClientsPage() {
 	const [pageSearchParams, setPageSearchParams] = useSearchParams();
@@ -34,6 +36,7 @@ export default function ClientsPage() {
 
 	//permissions
 	const CREATE_CLIENT = usePermission("create_clients");
+	const report = usePageReport("clients", "Clients report");
 
 	useEffect(() => {
 		const handleOutsideClick = (e: MouseEvent) => {
@@ -55,6 +58,15 @@ export default function ClientsPage() {
 		setPageSearchParams(next);
 	};
 
+	// Same split as the report popover's Tax Status breakdown, so its slices drill here.
+	const taxFilter = pageSearchParams.get("tax");
+
+	const clearTax = () => {
+		const next = new URLSearchParams(pageSearchParams);
+		next.delete("tax");
+		setPageSearchParams(next);
+	};
+
 	const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
 
 	const filteredClients = clients
@@ -69,8 +81,10 @@ export default function ClientsPage() {
 				});
 				if (!matches) return false;
 			}
-			if (statusFilter === "active") return c.is_active === true;
-			if (statusFilter === "inactive") return c.is_active === false;
+			if (statusFilter === "active" && !c.is_active) return false;
+			if (statusFilter === "inactive" && c.is_active) return false;
+			if (taxFilter === "exempt" && !c.is_tax_exempt) return false;
+			if (taxFilter === "taxable" && c.is_tax_exempt) return false;
 			return true;
 		})
 		.sort((a, b) => {
@@ -80,7 +94,8 @@ export default function ClientsPage() {
 
 	return (
 		<div className="text-text-primary">
-			<PageHeader title="Clients">
+			<PageHeader title="Clients" subtitle={<PageReportKpis report={report} />}>
+				<PageReportButton report={report} />
 					<button
 						title={!CREATE_CLIENT ? "You don't have permission to perform this action" : undefined}
 						className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -135,7 +150,6 @@ export default function ClientsPage() {
 				</div>
 			</PageHeader>
 
-			<PageReportSection page="clients" label="Clients report" />
 
 			<PageControls
 				className="mb-4"
@@ -148,14 +162,24 @@ export default function ClientsPage() {
 					/>
 				}
 				middle={
-					<StatusFilter
-						paramKey="status"
-						placeholder="Status"
-						options={[
-							{ value: "active", label: "Active" },
-							{ value: "inactive", label: "Inactive" },
-						]}
-					/>
+					<div className="flex items-center gap-2">
+						<StatusFilter
+							paramKey="status"
+							placeholder="Status"
+							options={[
+								{ value: "active", label: "Active" },
+								{ value: "inactive", label: "Inactive" },
+							]}
+						/>
+						<StatusFilter
+							paramKey="tax"
+							placeholder="Tax status"
+							options={[
+								{ value: "exempt", label: "Exempt" },
+								{ value: "taxable", label: "Taxable" },
+							]}
+						/>
+					</div>
 				}
 				right={<ViewToggle value={viewMode} onChange={setViewMode} />}
 			/>
@@ -168,6 +192,13 @@ export default function ClientsPage() {
 								label: `Status: ${statusFilter === "active" ? "Active" : "Inactive"}`,
 								color: "green" as const,
 								onRemove: clearStatus,
+						  }
+						: null,
+					taxFilter
+						? {
+								label: `Tax: ${taxFilter === "exempt" ? "Exempt" : "Taxable"}`,
+								color: "blue" as const,
+								onRemove: clearTax,
 						  }
 						: null,
 					...terms.map((term) => ({
@@ -183,6 +214,7 @@ export default function ClientsPage() {
 					const next = new URLSearchParams(pageSearchParams);
 					next.delete("search");
 					next.delete("status");
+					next.delete("tax");
 					setPageSearchParams(next);
 				}}
 			/>
