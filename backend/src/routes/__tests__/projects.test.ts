@@ -22,6 +22,11 @@ vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
 
+vi.mock("../../services/socketService.js", () => ({
+	getSocket: vi.fn(() => ({ emit: vi.fn() })),
+	emitToOrg: vi.fn(),
+}));
+
 vi.mock("../../controllers/logsController.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../controllers/logsController.js")>();
 	return {
