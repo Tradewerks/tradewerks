@@ -33,17 +33,18 @@ vi.mock("../../services/emailService.js", async (orig) => ({
 	sendStaffInviteEmail: vi.fn(async () => {}),
 	sendOrgAdminInviteEmail: vi.fn(async () => {}),
 	sendStaffSecurityNotice: vi.fn(async () => {}),
+	sendStaffEnrollEmail: vi.fn(async () => {}),
 }));
 
 import platformRouter from "../platform/index.js";
 import { callRoute, leaves } from "./harness.js";
 import { db } from "../../db.js";
 import { resetMfa } from "../../controllers/mfaController.js";
-import { signStaffPending, signStaffToken } from "../../platform/staffToken.js";
 import {
-	forgetStaff,
-	setStaffActive,
-} from "../../platform/verifyStaffToken.js";
+	signStaffPending,
+	signStaffToken,
+	verifyStaffPending,
+} from "../../platform/staffToken.js";
 import {
 	applyStaffChange,
 	applyStaffChanges,
@@ -53,15 +54,27 @@ import {
 	type StaffChange,
 } from "../../services/entitlementService.js";
 import { MODULES } from "../../lib/entitlements/registry.js";
-import { sendOrgAdminInviteEmail, sendStaffSecurityNotice } from "../../services/emailService.js";
+import {
+	sendOrgAdminInviteEmail,
+	sendStaffEnrollEmail,
+	sendStaffSecurityNotice,
+} from "../../services/emailService.js";
+import { hashInviteToken } from "../../lib/inviteToken.js";
 
 const mockDb = db as any;
 const staffAuth = (id = "s-1") => {
-	setStaffActive(id, true);
+	mockDb.platform_staff.findFirst.mockResolvedValue({ id });
 	return {
 		authorization: `Bearer ${signStaffToken({ id, email: `${id}@t.test`, name: id })}`,
 	};
 };
+
+// Stands in for the revocation query: an active member whose sessions were revoked at `at`.
+const staffRevokedAt = (at: Date) =>
+	mockDb.platform_staff.findFirst.mockImplementation(async ({ where }: any) => {
+		const issuedAt: Date = where.OR[1].sessions_valid_after.lte;
+		return where.status === "active" && at <= issuedAt ? { id: where.id } : null;
+	});
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -86,6 +99,7 @@ describe("route table", () => {
 			"POST /setup",
 			"POST /auth/login",
 			"POST /auth/mfa",
+			"POST /auth/mfa/enroll/link",
 			"POST /auth/mfa/enroll/start",
 			"POST /auth/mfa/enroll",
 			"POST /invites/preview",
@@ -156,7 +170,7 @@ describe("POST /platform/auth/login", () => {
 		});
 	});
 
-	it("refuses a locked account with 429 even with the right password", async () => {
+	it("a locked account with the right password gets the same generic 401", async () => {
 		mockDb.platform_staff.findUnique.mockResolvedValue({
 			id: "s-1",
 			email: "x@t.test",
@@ -171,9 +185,10 @@ describe("POST /platform/auth/login", () => {
 				body: { email: "x@t.test", password: "right-password-1" },
 			}),
 		).rejects.toMatchObject({
-			statusCode: 429,
-			message: "Too many attempts. Try again in 15 minutes.",
+			statusCode: 401,
+			message: "Invalid email or password",
 		});
+		expect(mockDb.mfa_credential.findUnique).not.toHaveBeenCalled();
 	});
 
 	it("locks after the fifth wrong password", async () => {
@@ -209,7 +224,7 @@ describe("POST /platform/auth/login", () => {
 		});
 	});
 
-	it("sends a staff member without enabled MFA to enrolment", async () => {
+	it("emails a staff member without enabled MFA a setup link instead of a setup token", async () => {
 		mockDb.platform_staff.findUnique.mockResolvedValue({
 			id: "s-1",
 			email: "x@t.test",
@@ -225,13 +240,64 @@ describe("POST /platform/auth/login", () => {
 			body: { email: "X@T.test", password: "right-password-1" },
 		});
 		expect(r.status).toBe(200);
-		expect(r.body.data.stage).toBe("enroll");
+		expect(r.body.data).toEqual({ stage: "enroll_email" });
+		const saved = mockDb.platform_staff.update.mock.calls.at(-1)[0];
+		expect(saved).toMatchObject({
+			where: { id: "s-1" },
+			data: { enroll_token_hash: expect.any(String), enroll_expires_at: expect.any(Date) },
+		});
+		const url = vi.mocked(sendStaffEnrollEmail).mock.calls[0][2];
+		const token = new URL(url).searchParams.get("token")!;
+		expect(new URL(url).pathname).toBe("/platform/enroll");
+		expect(hashInviteToken(token)).toBe(saved.data.enroll_token_hash);
 		expect(mockDb.platform_staff.findUnique.mock.calls[0][0].where).toEqual(
 			{ email: "x@t.test" },
 		);
 		expect(mockDb.mfa_credential.findUnique).toHaveBeenCalledWith({
 			where: { user_id_role: { user_id: "s-1", role: "platform_staff" } },
 		});
+	});
+});
+
+describe("POST /platform/auth/mfa/enroll/link", () => {
+	const token = "t".repeat(43);
+	const live = (over: Record<string, unknown> = {}) => ({
+		id: "s-1",
+		status: "active",
+		enroll_expires_at: new Date(Date.now() + 60_000),
+		...over,
+	});
+	const exchange = () =>
+		callRoute(platformRouter, "post", "/auth/mfa/enroll/link", { body: { token } });
+
+	it("trades a live link for a setup token once, clearing it with a conditional claim", async () => {
+		mockDb.platform_staff.findUnique.mockResolvedValue(live());
+		mockDb.platform_staff.updateMany.mockResolvedValue({ count: 1 });
+		const r = await exchange();
+		expect(mockDb.platform_staff.findUnique.mock.calls[0][0].where).toEqual({
+			enroll_token_hash: hashInviteToken(token),
+		});
+		expect(mockDb.platform_staff.updateMany).toHaveBeenCalledWith({
+			where: { id: "s-1", enroll_token_hash: hashInviteToken(token), status: "active" },
+			data: { enroll_token_hash: null, enroll_expires_at: null },
+		});
+		expect(verifyStaffPending(r.body.data.pendingToken, "enroll").sid).toBe("s-1");
+	});
+
+	it("refuses a link opened twice in parallel", async () => {
+		mockDb.platform_staff.findUnique.mockResolvedValue(live());
+		mockDb.platform_staff.updateMany.mockResolvedValue({ count: 0 });
+		await expect(exchange()).rejects.toMatchObject({ statusCode: 404 });
+	});
+
+	it.each([
+		["expired", live({ enroll_expires_at: new Date(Date.now() - 1) })],
+		["disabled", live({ status: "disabled" })],
+		["unknown", null],
+	])("refuses a %s link", async (_l, row) => {
+		mockDb.platform_staff.findUnique.mockResolvedValue(row);
+		await expect(exchange()).rejects.toMatchObject({ statusCode: 404 });
+		expect(mockDb.platform_staff.updateMany).not.toHaveBeenCalled();
 	});
 });
 
@@ -613,7 +679,7 @@ describe("staff management", () => {
 
 	it("a disabled staff member's token stops working", async () => {
 		const headers = staffAuth("s-3");
-		setStaffActive("s-3", false);
+		mockDb.platform_staff.findFirst.mockResolvedValue(null);
 		const r = await callRoute(platformRouter, "get", "/staff", { headers });
 		expect(r.status).toBe(401);
 	});
@@ -631,11 +697,7 @@ describe("staff management", () => {
 				process.env.PLATFORM_JWT_SECRET!,
 				{ expiresIn: "8h" },
 			);
-		forgetStaff("s-4");
-		mockDb.platform_staff.findUnique.mockResolvedValue({
-			status: "active",
-			sessions_valid_after: new Date(Date.now() - 30_000),
-		});
+		staffRevokedAt(new Date(Date.now() - 30_000));
 		mockDb.platform_staff.findMany.mockResolvedValue([]);
 		mockDb.mfa_credential.findMany.mockResolvedValue([]);
 		const old = await callRoute(platformRouter, "get", "/staff", {
@@ -688,10 +750,7 @@ describe("staff management", () => {
 			params: { id: "s-2" },
 			body: { status: "active" },
 		});
-		mockDb.platform_staff.findUnique.mockResolvedValue({
-			status: "active",
-			sessions_valid_after: new Date(Date.now() - 1_000),
-		});
+		staffRevokedAt(new Date(Date.now() - 1_000));
 		const r = await callRoute(platformRouter, "get", "/staff", {
 			headers: { authorization: `Bearer ${before}` },
 		});
@@ -812,7 +871,11 @@ describe("staff management", () => {
 		});
 		expect(mockDb.platform_staff.update).toHaveBeenCalledWith({
 			where: { id: "s-2" },
-			data: { sessions_valid_after: expect.any(Date) },
+			data: {
+				sessions_valid_after: expect.any(Date),
+				enroll_token_hash: null,
+				enroll_expires_at: null,
+			},
 		});
 	});
 });
@@ -1829,5 +1892,20 @@ describe("staff create organization (build plan 4)", () => {
 		expect(where.entitlement.trial_plan_version_id).toEqual({ not: null });
 		expect(where.entitlement.trial_ends_at.gt).toBeInstanceOf(Date);
 		expect(where.entitlement.trial_ends_at.lte).toBeInstanceOf(Date);
+	});
+
+	it("the list filter narrows to one tier, and to one of its versions", async () => {
+		mockDb.organization.count.mockResolvedValue(0);
+		mockDb.organization.findMany.mockResolvedValue([]);
+		await call("get", "/orgs", { query: { tier: "starter" } });
+		expect(mockDb.organization.findMany.mock.calls[0][0].where.entitlement).toEqual({
+			plan_version: { plan: { key: "starter" } },
+		});
+		await call("get", "/orgs", {
+			query: { tier: "starter", version: "2", trial_ending_within_days: "7" },
+		});
+		const both = mockDb.organization.findMany.mock.calls[1][0].where.entitlement;
+		expect(both.plan_version).toEqual({ plan: { key: "starter" }, version: 2 });
+		expect(both.trial_plan_version_id).toEqual({ not: null });
 	});
 });

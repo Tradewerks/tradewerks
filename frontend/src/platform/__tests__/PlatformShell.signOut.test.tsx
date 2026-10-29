@@ -39,6 +39,7 @@ beforeEach(() => {
 describe("PlatformShell sign out", () => {
 	it("signs out at once when nothing is unsaved", () => {
 		renderShell(false);
+		fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
 		fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 		expect(screen.getByText("login page")).toBeInTheDocument();
 		expect(usePlatformAuth.getState().token).toBeNull();
@@ -46,11 +47,13 @@ describe("PlatformShell sign out", () => {
 
 	it("asks first while a draft is unsaved; Cancel stays, Discard signs out", () => {
 		renderShell(true);
+		fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
 		fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 		expect(screen.getByText("Discard unsaved changes?")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(screen.getByText("org page")).toBeInTheDocument();
 		expect(usePlatformAuth.getState().token).toBe("t");
+		fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
 		fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 		fireEvent.click(screen.getByRole("button", { name: "Discard and sign out" }));
 		expect(screen.getByText("login page")).toBeInTheDocument();

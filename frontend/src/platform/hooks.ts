@@ -1,11 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { platform } from "./api";
-import type { RequestResolution, StaffChange } from "./types";
+import type { RequestResolution, StaffChange, TierFilter } from "./types";
 
-export const useOrgs = (q: string, page: number, trialEnding = false) =>
+export const useOrgs = (q: string, page: number, trialEnding = false, tier?: TierFilter) =>
 	useQuery({
-		queryKey: ["platform", "orgs", q, page, trialEnding],
-		queryFn: () => platform.orgs(q, page, trialEnding),
+		queryKey: ["platform", "orgs", q, page, trialEnding, tier?.key ?? null, tier?.version ?? null],
+		queryFn: () => platform.orgs(q, page, trialEnding, tier),
 		placeholderData: keepPreviousData,
 	});
 export const useOrg = (id: string) =>

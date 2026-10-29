@@ -7,6 +7,7 @@ import PlatformShell from "./PlatformShell";
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const SetupPage = lazy(() => import("./pages/SetupPage"));
 const InvitePage = lazy(() => import("./pages/InvitePage"));
+const EnrollPage = lazy(() => import("./pages/EnrollPage"));
 const OrgsPage = lazy(() => import("./pages/OrgsPage"));
 const OrgDetailPage = lazy(() => import("./pages/OrgDetailPage"));
 const TiersPage = lazy(() => import("./pages/TiersPage"));
@@ -48,6 +49,7 @@ export default function PlatformRoutes() {
 			<Route path="login" element={<LoginPage />} />
 			<Route path="setup" element={<SetupPage />} />
 			<Route path="invite" element={<InvitePage />} />
+			<Route path="enroll" element={<EnrollPage />} />
 			<Route
 				element={
 					<RequireStaff>

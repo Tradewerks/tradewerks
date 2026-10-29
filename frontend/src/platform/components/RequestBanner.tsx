@@ -1,5 +1,5 @@
 import { requestParts } from "../requests";
-import { shortDate, textButton, type OpenChange } from "./orgDetailUi";
+import { shortDate, smallButton, type OpenChange } from "./orgDetailUi";
 import type { RequestResolution, TierRow, UpgradeRequest } from "../types";
 
 export default function RequestBanner({
@@ -37,7 +37,7 @@ export default function RequestBanner({
 							{change ? (
 								<button
 									type="button"
-									className={textButton}
+									className={smallButton}
 									onClick={() =>
 										onApply({
 											change,
@@ -56,17 +56,17 @@ export default function RequestBanner({
 					))}
 				</ul>
 			)}
-			<div className="flex flex-wrap gap-3">
+			<div className="flex flex-wrap gap-2">
 				<button
 					type="button"
-					className={textButton}
+					className={smallButton}
 					onClick={() => onResolve("approved")}
 				>
 					Mark approved (already in effect)
 				</button>
 				<button
 					type="button"
-					className={textButton}
+					className={smallButton}
 					onClick={() => onResolve("declined")}
 				>
 					Decline

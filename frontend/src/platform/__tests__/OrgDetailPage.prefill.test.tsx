@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigate = vi.fn();
@@ -73,6 +73,8 @@ import OrgDetailPage from "../pages/OrgDetailPage";
 const renderAt = (state?: unknown) =>
 	render(
 		<MemoryRouter initialEntries={[{ pathname: "/platform/orgs/org-1", state }]}>
+			{/* Stands in for the shell's nav and Back, which the page no longer renders. */}
+			<Link to="/platform/orgs">Organizations</Link>
 			<Routes>
 				<Route path="/platform/orgs/:orgId" element={<OrgDetailPage />} />
 			</Routes>
@@ -201,7 +203,7 @@ describe("OrgDetailPage unsaved draft guard", () => {
 	it("asks before leaving through an in-app link, and leaves on confirm", () => {
 		startDraft();
 		navigate.mockClear();
-		fireEvent.click(screen.getByRole("link", { name: "← Organizations" }));
+		fireEvent.click(screen.getByRole("link", { name: "Organizations" }));
 		expect(screen.getByText("Discard unsaved changes?")).toBeInTheDocument();
 		expect(navigate).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Discard and leave" }));
@@ -210,7 +212,7 @@ describe("OrgDetailPage unsaved draft guard", () => {
 
 	it("stays on the page on Cancel", () => {
 		startDraft();
-		fireEvent.click(screen.getByRole("link", { name: "← Organizations" }));
+		fireEvent.click(screen.getByRole("link", { name: "Organizations" }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(screen.queryByText("Discard unsaved changes?")).toBeNull();
 		expect(

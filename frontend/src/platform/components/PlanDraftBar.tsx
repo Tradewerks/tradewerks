@@ -8,11 +8,11 @@ import { noteReady, REASON_TOO_SHORT } from "../notes";
 import type { PlanDraft, SaveResult } from "../usePlanDraft";
 import type { OrgDetail, TierRow } from "../types";
 import ChangeSummary, { Section } from "./ChangeSummary";
-import { textButton, versionLabel } from "./orgDetailUi";
+import { smallButton, versionLabel } from "./orgDetailUi";
 
 const saveTone = {
-	primary: "bg-primary hover:enabled:bg-primary-hover",
-	destructive: "bg-error hover:enabled:bg-error-strong",
+	primary: "bg-primary-hover hover:enabled:bg-primary-active text-on-primary",
+	destructive: "bg-error hover:enabled:bg-error-strong text-white",
 };
 
 export default function PlanDraftBar({
@@ -164,10 +164,10 @@ export default function PlanDraftBar({
 				</p>
 			)}
 			<FormErrorBanner message={error} />
-			<div className="flex items-center justify-end gap-3">
+			<div className="flex items-center justify-end gap-2">
 				<button
 					type="button"
-					className={textButton}
+					className={smallButton}
 					disabled={draft.saving}
 					onClick={draft.discard}
 				>
@@ -175,7 +175,7 @@ export default function PlanDraftBar({
 				</button>
 				<button
 					type="button"
-					className={`h-8 rounded-md px-3 text-sm font-medium text-white transition-colors duration-150 ease-out disabled:opacity-50 ${saveTone[losing ? "destructive" : "primary"]}`}
+					className={`h-8 rounded-md px-3 text-sm font-medium transition-colors duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed ${saveTone[losing ? "destructive" : "primary"]}`}
 					disabled={draft.previewPending || draft.saving || !p}
 					onClick={onSave}
 				>

@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Layers, Plus } from "lucide-react";
+import Card from "../../components/ui/Card";
+import EmptyState from "../../components/ui/EmptyState";
+import PageHeader from "../../components/ui/PageHeader";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { useToast } from "../../components/ui/useToast";
 import { platform, platformError } from "../api";
@@ -8,7 +11,7 @@ import { useCatalog, useTierMutation, useTiers } from "../hooks";
 import { useRowOpen } from "../rowOpen";
 import { tierFlags } from "../tierForm";
 import TierContentsForm from "../components/TierContentsForm";
-import { chip, smallButton } from "../components/orgDetailUi";
+import { chip, pageAction } from "../components/orgDetailUi";
 import SkeletonRows from "../components/SkeletonRows";
 import type { TierContents } from "../types";
 
@@ -23,79 +26,106 @@ export default function TiersPage() {
 			platform.createTier(b)
 	);
 	return (
-		<div className="space-y-4">
-			<div className="flex items-center justify-between gap-2">
-				<h1 className="text-lg font-semibold text-text-primary">Tiers</h1>
+		<div className="text-text-primary">
+			<PageHeader title="Tiers">
 				<button
 					type="button"
-					className={smallButton}
+					className={pageAction}
 					onClick={() => setCreating(true)}
 				>
+					<Plus size={16} />
 					Create tier
 				</button>
-			</div>
-			{tiers.error && <FormErrorBanner message={platformError(tiers.error)} />}
+			</PageHeader>
+			{tiers.error && (
+				<FormErrorBanner
+					className="mb-4"
+					message={platformError(tiers.error)}
+				/>
+			)}
 			{tiers.isLoading ? (
-				<SkeletonRows />
+				<Card flush>
+					<div className="p-4">
+						<SkeletonRows />
+					</div>
+				</Card>
 			) : (
-				<ul className="space-y-2">
-					{(tiers.data ?? []).map((t) => (
-						<li
-							key={t.key}
-							onClick={(ev) =>
-								openRow(
-									ev,
-									`/platform/tiers/${t.key}`
-								)
-							}
-							className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-surface p-3 transition-colors duration-150 ease-out hover:bg-surface-inset"
-						>
-							<div className="min-w-0 flex-1 space-y-1">
-								<div className="flex flex-wrap items-center gap-2 text-sm">
-									<Link
-										to={`/platform/tiers/${t.key}`}
-										className="font-medium text-text-primary hover:text-primary hover:underline"
-									>
-										{t.label}
-									</Link>
-									<span className="text-xs text-text-tertiary">
-										{t.key}
-									</span>
-									{tierFlags(t).map((f) => (
-										<span
-											key={f}
-											className={
-												chip
-											}
+				<Card flush>
+					{tiers.data?.length === 0 && (
+						<EmptyState icon={<Layers size={28} />} title="No tiers yet." />
+					)}
+					<ul className="divide-y divide-border-subtle">
+						{(tiers.data ?? []).map((t) => (
+							<li
+								key={t.key}
+								onClick={(ev) =>
+									openRow(
+										ev,
+										`/platform/tiers/${t.key}`
+									)
+								}
+								className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors duration-150 ease-out hover:bg-surface-raised"
+							>
+								<div className="min-w-0 flex-1 space-y-1">
+									<div className="flex flex-wrap items-center gap-2 text-sm">
+										<Link
+											to={`/platform/tiers/${t.key}`}
+											className="font-medium text-text-primary hover:text-primary hover:underline"
 										>
-											{f}
+											{t.label}
+										</Link>
+										<span className="text-xs text-text-tertiary">
+											{t.key}
 										</span>
-									))}
+										{tierFlags(t).map(
+											(f) => (
+												<span
+													key={
+														f
+													}
+													className={
+														chip
+													}
+												>
+													{
+														f
+													}
+												</span>
+											)
+										)}
+									</div>
+									<p className="text-xs text-text-secondary tabular-nums">
+										{t.versions
+											.filter(
+												(
+													v,
+													i
+												) =>
+													i ===
+														0 ||
+													v.org_count >
+														0
+											)
+											.map(
+												(
+													v
+												) =>
+													`v${v.version} · ${v.org_count} org${v.org_count === 1 ? "" : "s"}`
+											)
+											.join(
+												" · "
+											)}
+									</p>
 								</div>
-								<p className="text-xs text-text-secondary tabular-nums">
-									{t.versions
-										.filter(
-											(v, i) =>
-												i ===
-													0 ||
-												v.org_count >
-													0
-										)
-										.map(
-											(v) =>
-												`v${v.version} · ${v.org_count} org${v.org_count === 1 ? "" : "s"}`
-										)
-										.join(" · ")}
-								</p>
-							</div>
-							<ChevronRight
-								size={16}
-								aria-hidden
-								className="shrink-0 text-text-tertiary"
-							/>
-						</li>
-					))}
-				</ul>
+								<ChevronRight
+									size={16}
+									aria-hidden
+									className="shrink-0 text-text-tertiary"
+								/>
+							</li>
+						))}
+					</ul>
+				</Card>
 			)}
 			<TierContentsForm
 				open={creating}

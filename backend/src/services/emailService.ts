@@ -658,6 +658,45 @@ export const sendStaffInviteEmail = async (
 	}
 };
 
+export const sendStaffEnrollEmail = async (to: string, name: string, enrollUrl: string) => {
+	if (EMAIL_DISABLED) {
+		// The URL is a credential. Production never logs it; local dev has no other way to get it.
+		if (process.env.NODE_ENV === "production")
+			log.info({ to }, "[EMAIL DISABLED] Skipping staff MFA setup email.");
+		else log.warn({ to, enrollUrl }, "[EMAIL DISABLED] Staff MFA setup link (dev only).");
+		return;
+	}
+	try {
+		const htmlContent = `
+			<!DOCTYPE html>
+			<html>
+				<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+					<div style="max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 32px;">
+						<h2 style="color: #1a1a1a; margin-bottom: 8px;">TradeWerks back office</h2>
+						<p style="color: #555; margin-bottom: 24px;">
+							Hi ${escapeHtml(name)}, someone signed in to your back office account and needs to set up two-step sign-in.
+							The link below works once and expires in 30 minutes. If this wasn't you, tell the team right away: your password is known to someone else.
+						</p>
+						<a href="${enrollUrl}" style="display: inline-block; padding: 12px 24px; font-size: 16px; color: white; background-color: #2563eb; border-radius: 8px; text-decoration: none;">
+							Set up two-step sign-in
+						</a>
+					</div>
+				</body>
+			</html>
+		`;
+		await client.sendEmail({
+			From: POSTMARK_FROM_EMAIL,
+			To: to,
+			Subject: "Set up two-step sign-in for the TradeWerks back office",
+			HtmlBody: htmlContent,
+			TextBody: `Set up two-step sign-in for your TradeWerks back office account within 30 minutes: ${enrollUrl} If this wasn't you, tell the team right away: your password is known to someone else.`,
+			MessageStream: "outbound",
+		});
+	} catch (error) {
+		log.error({ err: error }, "Failed to send staff MFA setup email");
+	}
+};
+
 export const sendOrgAdminInviteEmail = async (
 	to: string,
 	company: string,

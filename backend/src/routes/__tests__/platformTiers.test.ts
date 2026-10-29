@@ -40,11 +40,10 @@ import platformRouter from "../platform/index.js";
 import { callRoute } from "./harness.js";
 import { db } from "../../db.js";
 import { signStaffToken } from "../../platform/staffToken.js";
-import { setStaffActive } from "../../platform/verifyStaffToken.js";
 
 const mockDb = db as any;
 const staffAuth = (id = "s-1") => {
-	setStaffActive(id, true);
+	mockDb.platform_staff.findFirst.mockResolvedValue({ id });
 	return {
 		authorization: `Bearer ${signStaffToken({ id, email: `${id}@t.test`, name: id })}`,
 	};
@@ -477,10 +476,10 @@ describe("move orgs", () => {
 			.mockRejectedValueOnce(new Error("boom"))
 			.mockResolvedValueOnce(ent("o2"));
 		const r = await move({ fromVersionId: "v2", orgIds: ["o1", "o2"] });
-		expect(r.body.data.skipped[0]).toMatchObject({
+		expect(r.body.data.skipped[0]).toEqual({
 			orgId: "o1",
+			name: "Acme",
 			cause: "error",
-			message: "boom",
 		});
 		expect(r.body.data.moved).toEqual([{ orgId: "o2", name: "Bolt" }]);
 	});
