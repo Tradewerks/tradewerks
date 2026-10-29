@@ -55,6 +55,7 @@ import { HEADER_PILL } from "../../components/documents/DocumentLineage";
 import { snapshotSource } from "../../types/tax";
 import { VisitStatusColors, VisitStatusLabels, type VisitLineItem } from "../../types/jobs";
 import {
+	formatConstraintTime,
 	formatCurrency,
 	formatDate,
 	formatDateTime,
@@ -318,15 +319,6 @@ export default function JobVisitDetailPage() {
 
 	const lineItems: VisitLineItem[] = visit.line_items || [];
 	const lineItemCount = lineItems.length;
-
-	const formatConstraintTime = (time: string | null | undefined): string => {
-		if (!time) return "";
-		const [hours, minutes] = time.split(":").map(Number);
-		const period = hours >= 12 ? "PM" : "AM";
-		const displayHours = hours % 12 || 12;
-		const displayMinutes = minutes > 0 ? `:${minutes.toString().padStart(2, "0")}` : "";
-		return `${displayHours}${displayMinutes} ${period}`;
-	};
 
 	const openEnded = visit.finish_constraint === "when_done";
 	const hasActuals = Boolean(visit.actual_start_at && visit.actual_end_at);

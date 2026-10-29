@@ -56,6 +56,15 @@ export const formatDate = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
 	});
 };
 
+export const formatConstraintTime = (time: string | null | undefined): string => {
+	if (!time) return "";
+	const [hours, minutes] = time.split(":").map(Number);
+	const period = hours >= 12 ? "PM" : "AM";
+	const displayHours = hours % 12 || 12;
+	const displayMinutes = minutes > 0 ? `:${minutes.toString().padStart(2, "0")}` : "";
+	return `${displayHours}${displayMinutes} ${period}`;
+};
+
 // Rail rows are one line wide; the year only earns its space when it differs.
 export function formatShortDate(
 	date: Date | string,
