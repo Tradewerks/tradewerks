@@ -487,7 +487,7 @@ export default function DashboardPage() {
 
 	return (
 		<div className="min-h-0 bg-canvas text-text-primary w-full">
-			<div className="w-full px-3 sm:px-5 lg:px-6" ref={containerRef}>
+			<div className="w-full">
 				{/* Header */}
 				<div className="mb-3 flex items-end justify-between gap-4">
 					<div>
@@ -601,7 +601,8 @@ export default function DashboardPage() {
 
 				{/* Dashboard grid */}
 				<div 
-					className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} px-2 py-2`} 
+					ref={containerRef}
+					className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} -mx-4 -mb-4`}
 					style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}
 				>
 					{displayWidth > 0 && dispatcher && <ResponsiveGridLayout

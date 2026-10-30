@@ -168,7 +168,7 @@ export default function KpiPage() {
 
     return (
         <div className="min-h-0 bg-canvas text-text-primary w-full">
-            <div className="w-full px-4 sm:px-5 lg:px-6 pt-4">
+            <div className="w-full">
                 {/* Header Section */}
                 <PageHeader title="Key Performance Indicators">
                     <DateRangeFilter value={range} onChange={setRange} presets={KPI_PRESETS} />
@@ -233,8 +233,8 @@ export default function KpiPage() {
                 </div>
             </div>
 
-            <div className="w-full px-3 lg:px-4" ref={containerRef} >
-                <div className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} px-2 py-2`} style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}>
+            <div className="-mx-4 -mb-4" ref={containerRef}>
+                <div className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""}`} style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}>
                     {displayWidth > 0 && dispatcher && <ResponsiveGridLayout
                         key={`grid-${dispatcher.id}-${dispatcher.kpi_layout ? 'saved' : 'default'}`}
                         width={displayWidth}

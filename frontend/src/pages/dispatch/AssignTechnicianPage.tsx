@@ -292,10 +292,10 @@ export default function AssignTechnicianPage() {
 	};
 
     return (
-        <div className="min-h-screen bg-canvas">
+        <div className="bg-canvas">
 			{/* Header Section */}
 			<div className="border-b border-border-subtle">
-				<div className="w-full px-6 pb-6">
+				<div className="w-full pb-6">
 					{/* Page Title */}
 					<div className="mb-3">
 						<h2 className="text-sm font-semibold uppercase tracking-wide text-text-tertiary">

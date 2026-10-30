@@ -9,7 +9,7 @@ export default function InventoryImportsPage() {
 	const query = useInventoryImports();
 	const canManage = usePermission("manage_inventory");
 	return (
-		<div className="mx-auto max-w-6xl space-y-6 p-6">
+		<div className="mx-auto max-w-6xl space-y-6">
 			<div className="flex items-center justify-between">
 				<div><h1 className="text-2xl font-semibold text-text-primary">Inventory imports</h1><p className="mt-1 text-sm text-muted">Persistent drafts, review decisions, commits, and undo history.</p></div>
 				{canManage && <Link to="/dispatch/inventory/imports/new" className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-on-primary"><FilePlus2 size={15} /> New import</Link>}

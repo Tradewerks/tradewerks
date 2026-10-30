@@ -453,7 +453,7 @@ export default function ClientDetailsPage() {
 
 	return (
 		<div className="min-h-0 bg-canvas text-text-primary w-full">
-			<div className="w-full px-4 sm:px-5 lg:px-6 py-4">
+			<div className="w-full">
 				<div className="mb-5">
 					<DetailHeader
 						title={client.name}
