@@ -19,6 +19,12 @@ interface AuthState {
 	setHasHydrated: (v: boolean) => void;
 }
 
+export function clearSessionStorage() {
+	localStorage.removeItem("accessToken");
+	// The next account on this browser must not start from this org's module state.
+	localStorage.removeItem("entitlements:last");
+}
+
 export const useAuthStore = create<AuthState>()(
 	persist(
 		(set) => ({
@@ -27,9 +33,7 @@ export const useAuthStore = create<AuthState>()(
 			login: (role, name, userId, orgId, orgTimezone, permissions) =>
 				set({ user: { role, name, userId, orgId, orgTimezone, permissions } }),
 			logout: (remember?: boolean) => {
-				localStorage.removeItem("accessToken");
-				// The next account on this browser must not start from this org's module state.
-				localStorage.removeItem("entitlements:last");
+				clearSessionStorage();
 				if (!remember) {
 					useRememberedAccountsStore.getState().removeAccount(useAuthStore.getState().user?.userId || "");
 				}

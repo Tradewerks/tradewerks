@@ -96,7 +96,7 @@ export default function MoveOrgsDialog({
 			}
 		>
 			{result ? (
-				<div className="space-y-3 text-sm">
+				<div className="space-y-3 p-5 text-sm">
 					<p className="font-medium text-text-primary">
 						{result.moved.length} org
 						{result.moved.length === 1 ? "" : "s"} moved to v
@@ -125,12 +125,12 @@ export default function MoveOrgsDialog({
 					)}
 				</div>
 			) : (
-				<div className="space-y-3">
+				<div className="space-y-3 p-5">
 					{sources.length > 1 && (
 						<label className="flex items-center gap-2 text-sm text-text-secondary">
 							From
 							<select
-								className="h-8 rounded-md border border-border bg-surface px-2 text-sm text-text-primary"
+								className="h-8 rounded-md border border-border bg-base px-2 text-sm text-text-primary"
 								value={from ?? ""}
 								onChange={(e) => {
 									setFrom(e.target.value);

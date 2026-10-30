@@ -1,5 +1,6 @@
-﻿import { useParams, useNavigate } from "react-router-dom";
+﻿import { useParams, useNavigate, Link } from "react-router-dom";
 import { useState, useCallback, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	Edit2,
 	Calendar,
@@ -27,6 +28,7 @@ import {
 	useDeleteInvoicePaymentMutation,
 	useRecordRefundMutation,
 } from "../../hooks/useInvoices";
+import { useToast } from "../../components/ui/useToast";
 import { useDisputesQuery } from "../../hooks/useDisputes";
 import DisputeModal from "../../components/disputes/DisputeModal";
 import type { AttributionTarget } from "../../components/disputes/adjustmentDraft";
@@ -71,6 +73,12 @@ import {
 } from "../../types/invoices";
 import { daysUntil, errorMessage, formatCurrency, formatDate } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
+import { useAcknowledgeTaxReview } from "../../hooks/useTaxSettings";
+import TaxReviewBanner from "../../components/tax/TaxReviewBanner";
+import { isQbTaxReviewError, withTaxReviewGate } from "../../components/tax/taxReviewGate";
+import QbTaxZeroPanel from "../../components/tax/QbTaxZeroPanel";
+import { useQbTaxZero } from "../../components/tax/useQbTaxZero";
+import { isV2Snapshot } from "../../types/tax";
 import {
 	useQBStatusQuery,
 	useQBInvoiceSyncMutation,
@@ -79,6 +87,7 @@ import {
 import ChangeHistory from "../../components/activity/ChangeHistory";
 import LifecycleRecord from "../../components/lifecycle/LifecycleRecord";
 import ActivityPanel from "../../components/detail/ActivityPanel";
+import { isCurrentQbRealm } from "../../lib/qbRealm";
 
 // The same two tabs as QUOTE_TABS, in the same order. Line items stay in
 // Overview because they are what a dispatcher opens the document to read;
@@ -114,9 +123,21 @@ export default function InvoiceDetailPage() {
 	const navigate = useNavigate();
 
 	const { data: invoice, isLoading } = useInvoiceByIdQuery(invoiceId!);
-	const { mutateAsync: updateInvoice, isPending: isUpdatingInvoice } =
-		useUpdateInvoiceMutation();
+	const queryClient = useQueryClient();
+	// QB_TAX_REVIEW leaves the invoice flagged for review server-side; refetching is what
+	// makes the banner and the acknowledge gate appear.
+	const refetchOnQbTaxReview = (error: unknown) => {
+		if (isQbTaxReviewError(error)) {
+			void queryClient.invalidateQueries({ queryKey: ["invoices"] });
+		}
+	};
+	const {
+		mutateAsync: updateInvoice,
+		isPending: isUpdatingInvoice,
+		variables: updateVars,
+	} = useUpdateInvoiceMutation();
 	const { mutateAsync: deleteInvoice, isPending: isDeleting } = useDeleteInvoiceMutation();
+	const toast = useToast();
 	const { mutateAsync: recordPayment, isPending: isRecordingPayment } =
 		useCreateInvoicePaymentMutation();
 	const { mutateAsync: deletePayment } = useDeleteInvoicePaymentMutation();
@@ -182,9 +203,11 @@ export default function InvoiceDetailPage() {
 	//permissions
 	const EDIT_INVOICE = usePermission("edit_invoices");
 	const SEND_INVOICE = usePermission("send_invoices");
+	const ack = useAcknowledgeTaxReview();
 	const DELETE_INVOICE = usePermission("delete_invoices");
 	const REFUND_INVOICE = usePermission("refund_invoices");
 	const OPEN_DISPUTE = usePermission("open_disputes");
+	const qbTaxZero = useQbTaxZero();
 
 	const { data: qbStatus } = useQBStatusQuery();
 	const { mutate: syncToQB, isPending: isSyncingQB } = useQBInvoiceSyncMutation();
@@ -222,6 +245,8 @@ export default function InvoiceDetailPage() {
 		} catch (error) {
 			// Real refusals land here (the open-dispute lock, the pre-email
 			// transition guard), so the server's sentence is shown.
+			refetchOnQbTaxReview(error);
+			if (qbTaxZero.handleError(error)) return;
 			setActionError(errorMessage(error, "Couldn't update this invoice."));
 		}
 	};
@@ -340,7 +365,23 @@ export default function InvoiceDetailPage() {
 	};
 
 	const handleSendConfirm = async (email: string) => {
-		await sendInvoice(invoiceId!, email);
+		try {
+			await sendInvoice(invoiceId!, email);
+		} catch (error) {
+			// A draft is finalized before the email goes out, so a failed send can still have
+			// moved it to Created; a QB_TAX_REVIEW also changes server state.
+			void queryClient.invalidateQueries({ queryKey: ["invoices"] });
+			// Left open, a re-click would go straight to send and 409 again; closing hands the
+			// user to the acknowledge gate on the bar's Send.
+			if (isQbTaxReviewError(error)) {
+				setIsSendModalOpen(false);
+				setActionError(errorMessage(error, "Couldn't send this invoice."));
+			}
+			if (qbTaxZero.handleError(error)) {
+				setIsSendModalOpen(false);
+			}
+			throw error;
+		}
 	};
 
 	const handleDownloadPdf = async () => {
@@ -409,11 +450,16 @@ export default function InvoiceDetailPage() {
 
 	// ── QuickBooks sync state (shared by header badge + toolbar action + menu) ──
 	const qbConnected = !!qbStatus?.connected;
-	const qbInThisRealm =
-		qbConnected && !!invoice.account_id && invoice.account_id === qbStatus?.realmId;
+	const qbInThisRealm = isCurrentQbRealm(invoice.account_id, qbStatus);
 	const qbSynced = qbInThisRealm && invoice.qb_sync_status === "synced";
 	const qbFailed = qbInThisRealm && invoice.qb_sync_status === "failed";
-	const qbHasRemote = qbInThisRealm && !!invoice.qb_invoice_id;
+	const qbTaxMismatch = qbInThisRealm && invoice.qb_sync_status === "tax_mismatch";
+	// A credit adjustment lives in QuickBooks as a credit memo, even before it has an id there.
+	const qbIsCreditMemo = !!invoice.adjusts_invoice_id && Number(invoice.total) < 0;
+	const qbRemoteId = qbIsCreditMemo ? invoice.qb_credit_memo_id : invoice.qb_invoice_id;
+	const qbRemoteKind = qbIsCreditMemo ? "credit memo" : "invoice";
+	const qbRemoteSuffix = qbRemoteId ? ` #${qbRemoteId}` : "";
+	const qbHasRemote = qbInThisRealm && !!qbRemoteId;
 
 	const qbActionLabel = qbFailed
 		? "Retry sync"
@@ -421,20 +467,28 @@ export default function InvoiceDetailPage() {
 			? "Update in QuickBooks"
 			: "Sync to QuickBooks";
 	const qbActionTitle = qbHasRemote
-		? `Sync your latest changes to QuickBooks invoice #${invoice.qb_invoice_id}`
-		: "Create this invoice in QuickBooks Online (one-way sync — nothing is pulled back)";
+		? `Sync your latest changes to QuickBooks ${qbRemoteKind}${qbRemoteSuffix}`
+		: `Create this ${qbRemoteKind} in QuickBooks Online (one-way sync — nothing is pulled back)`;
 	// Not on a Void invoice: a dispute void leaves qb_sync_status "not_synced"
 	// and pushInvoice refuses a Void, so the button could only push a dead
-	// document.
-	const qbShowAction = qbConnected && !qbSynced && invoice.status !== "Void";
-	const qbCanSendVia = qbConnected && (qbSynced || qbHasRemote);
+	// document. Not on a Draft either: it reaches QuickBooks when it is created or sent.
+	const qbShowAction =
+		qbConnected && !qbSynced && invoice.status !== "Void" && invoice.status !== "Draft";
+	// The server refuses a Draft: emailing from QuickBooks skips the finalize gates.
+	// A credit memo has no QuickBooks email action here.
+	const qbCanSendVia =
+		qbConnected &&
+		!qbTaxMismatch &&
+		!qbIsCreditMemo &&
+		(qbSynced || qbHasRemote) &&
+		invoice.status !== "Draft";
 
 	const qbBadge = qbSynced
 		? {
 				cls: "bg-success-bg text-success-bright-text border-success-border",
 				Icon: CheckCircle2,
 				text: "In QuickBooks",
-				title: `Synced to QuickBooks invoice #${invoice.qb_invoice_id}`,
+				title: `Synced to QuickBooks ${qbRemoteKind}${qbRemoteSuffix}`,
 			}
 		: qbFailed
 			? {
@@ -443,25 +497,32 @@ export default function InvoiceDetailPage() {
 					text: "Sync failed",
 					title: "QuickBooks sync failed — use Retry sync",
 				}
-			: qbHasRemote
+			: qbTaxMismatch
 				? {
 						cls: "bg-warning-bg text-warning-text border-warning-border",
-						Icon: Clock,
-						text: "Changes pending",
-						title: `Edited since last sync — sync to update QuickBooks #${invoice.qb_invoice_id}`,
+						Icon: AlertCircle,
+						text: "Tax differs in QuickBooks",
+						title: "QuickBooks calculated a different tax amount — see the note below",
 					}
-				: {
-						cls: "bg-neutral/20 text-text-tertiary border-border-strong/30",
-						Icon: Clock,
-						text: "Not in QuickBooks",
-						title: "This invoice has not been pushed to QuickBooks yet",
-					};
+				: qbHasRemote
+					? {
+							cls: "bg-warning-bg text-warning-text border-warning-border",
+							Icon: Clock,
+							text: "Changes pending",
+							title: `Edited since last sync — sync to update QuickBooks${qbRemoteSuffix}`,
+						}
+					: {
+							cls: "bg-neutral/20 text-text-tertiary border-border-strong/30",
+							Icon: Clock,
+							text: "Not in QuickBooks",
+							title: `This ${qbRemoteKind} has not been pushed to QuickBooks yet`,
+						};
 	const QbBadgeIcon = qbBadge.Icon;
 
 	// Built once: the bar swaps in dispute outcomes while a dispute is open, but
 	// the Payments card reads its Record / Refund buttons off this list in every
 	// state, so the two can't disagree about the same money act.
-	const invoiceBarActions = invoiceActions({
+	const invoiceBarActions = withTaxReviewGate(invoiceActions({
 		status: invoice.status,
 		amountPaid,
 		hasOpenDispute: Boolean(openDispute),
@@ -472,6 +533,7 @@ export default function InvoiceDetailPage() {
 		canSend: SEND_INVOICE,
 		canOpenDispute: OPEN_DISPUTE,
 		canRefund: REFUND_INVOICE,
+		issuing: isUpdatingInvoice && updateVars?.updates.status === "Issued",
 		handlers: {
 			send: () => setIsSendModalOpen(true),
 			issue: () => handleStatusTransition("Issued"),
@@ -480,6 +542,12 @@ export default function InvoiceDetailPage() {
 			dispute: () => setDisputeModalMode("open"),
 			void: openVoidModal,
 		},
+	}), {
+		needsAck: Boolean(invoice.tax_needs_review && !invoice.tax_review_ack_at),
+		canAck: SEND_INVOICE,
+		pending: ack.isPending,
+		acknowledge: () => ack.mutateAsync({ kind: "invoice", id: invoice.id }),
+		onError: setActionError,
 	});
 	const recordPaymentAction = invoiceBarActions.find((a) => a.id === "recordPayment");
 	const refundAction = invoiceBarActions.find((a) => a.id === "refund");
@@ -602,13 +670,18 @@ export default function InvoiceDetailPage() {
 								disabledReason: !primaryEmail
 									? "No primary contact email on file for this client."
 									: undefined,
+								keepOpen: true,
 								onSelect: () =>
-									sendEmailMutation.mutate({
-										invoiceId: invoice.id,
-										sendTo:
-											primaryEmail ??
-											"",
-									}),
+									sendEmailMutation.mutate(
+										{
+											invoiceId: invoice.id,
+											sendTo: primaryEmail ?? "",
+										},
+										{
+											onSuccess: () => toast.success(`${invoice.invoice_number} sent to ${primaryEmail}`),
+											onError: (error) => toast.error(errorMessage(error,"Failed to send via QuickBooks.")),
+										}
+									),
 							},
 						]
 					: []),
@@ -807,7 +880,19 @@ export default function InvoiceDetailPage() {
 		</Card>
 	);
 
-	const lineItemsCard = <InvoiceLineItems invoice={invoice} contestedIds={contestedIds} />;
+	const lineItemsCard = (
+		<>
+			<TaxReviewBanner
+				kind="invoice"
+				id={invoice.id}
+				needsReview={invoice.tax_needs_review}
+				reason={isV2Snapshot(invoice.tax_snapshot) ? invoice.tax_snapshot.review_reason : null}
+				ackAt={invoice.tax_review_ack_at}
+				canAcknowledge={SEND_INVOICE}
+			/>
+			<InvoiceLineItems invoice={invoice} contestedIds={contestedIds} />
+		</>
+	);
 
 	const clientCard = (
 		<ClientDetailsCard client_id={invoice.client_id} client={invoice.client} />
@@ -992,7 +1077,7 @@ export default function InvoiceDetailPage() {
 	// ── Render ────────────────────────────────────────────────────────────────
 
 	return (
-		<div className="text-text-primary pb-4 md:pb-6">
+		<div className="text-text-primary">
 			{/* Header, lifecycle and the tab strip are one unit: a tight stack
 			    closed by the strip's bottom border, rather than cards floating
 			    at the same weight as the body below them. */}
@@ -1072,7 +1157,12 @@ export default function InvoiceDetailPage() {
 								   buttons behind a divider. */
 								<button
 									onClick={() =>
-										syncToQB(invoiceId!)
+										syncToQB(invoiceId!, {
+											onError: (e) =>
+												setActionError(
+													errorMessage(e, "Couldn't sync to QuickBooks.")
+												),
+										})
 									}
 									disabled={isSyncingQB}
 									title={qbActionTitle}
@@ -1153,6 +1243,40 @@ export default function InvoiceDetailPage() {
 							This invoice's dispute status couldn't be
 							loaded, so dispute and refund actions are
 							unavailable. Reload the page to try again.
+						</span>
+					</div>
+				)}
+
+				{/* The amounts are the whole diagnosis, so they sit in the page
+				    rather than only in the badge's hover title. */}
+				{qbTaxMismatch && (
+					<div
+						role="status"
+						className="flex items-center gap-2 rounded-lg border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
+					>
+						<AlertTriangle size={16} className="flex-shrink-0" />
+						<span>
+							QuickBooks calculated{" "}
+							<span className="font-semibold tabular-nums">
+								{formatCurrency(Math.abs(Number(invoice.qb_tax_amount ?? 0)))}
+							</span>{" "}
+							tax; this {qbIsCreditMemo ? "credit memo credits" : "invoice charges"}{" "}
+							<span className="font-semibold tabular-nums">
+								{formatCurrency(Math.abs(Number(invoice.tax_amount ?? 0)))}
+							</span>
+							.
+							{qbIsCreditMemo
+								? ""
+								: " Sending from QuickBooks is blocked until they match."}{" "}
+							Check the
+							tax code mapping in{" "}
+							<Link
+								to="/dispatch/admin?tab=integrations"
+								className="font-medium underline underline-offset-2 hover:text-text-primary"
+							>
+								Admin › Integrations
+							</Link>
+							, then use Update in QuickBooks.
 						</span>
 					</div>
 				)}
@@ -1745,6 +1869,10 @@ export default function InvoiceDetailPage() {
 					setIsModalOpen={setIsEditModalOpen}
 					invoice={invoice}
 				/>
+			)}
+
+			{qbTaxZero.qbZero && (
+				<QbTaxZeroPanel zero={qbTaxZero.qbZero} onClose={qbTaxZero.clear} />
 			)}
 
 			<SendDocumentModal

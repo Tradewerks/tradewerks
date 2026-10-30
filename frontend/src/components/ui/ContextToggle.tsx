@@ -9,7 +9,7 @@ interface ContextToggleProps {
 
 export default function ContextToggle({ value, onChange }: ContextToggleProps) {
 	return (
-		<div className="flex items-center bg-surface-raised gap-px rounded-md overflow-hidden border border-border shrink-0" role="group" aria-label="View context">
+		<div className="flex items-center bg-surface-raised gap-px rounded-md overflow-hidden border border-border shrink-0" role="group" aria-label="View context" data-report-context>
 			<button
 				onClick={() => onChange("jobs")}
 				aria-pressed={value === "jobs"}

@@ -102,6 +102,30 @@ export const inventoryPostImportEdits = meter.createCounter("hvac_inventory_post
 	description: "Inventory item edits within seven days of a committed import",
 });
 
+// ── Tax rate lookups ────────────────────────────────────────────────────────
+// Spec §5: provider health (alert on > 20% failed over 15 min), cache effectiveness,
+// and how many drafts are waiting on a dispatcher's tax review.
+
+export const taxProviderCalls = meter.createCounter("hvac_tax_provider_calls", {
+	description: "Tax rate provider calls by outcome",
+});
+
+// The exporter adds no unit suffix (see hvac_http_request_duration), so the name carries it.
+export const taxProviderLatency = meter.createHistogram("hvac_tax_provider_latency_seconds", {
+	description: "Tax rate provider call time in seconds",
+	unit: "s",
+	advice: { explicitBucketBoundaries: [0.1, 0.25, 0.5, 1, 2, 3, 5] },
+});
+
+export const taxResolutionCacheHits = meter.createCounter("hvac_tax_resolution_cache_hits", {
+	description: "Tax address resolutions answered from the cache",
+});
+
+export const taxDocumentsNeedsReview = meter.createObservableGauge(
+	"hvac_tax_documents_needs_review",
+	{ description: "Unlocked documents flagged for tax review, by document type" },
+);
+
 export const httpMetricsMiddleware = (req: Request, res: Response, next: NextFunction) => {
 	const start = performance.now();
 	res.on("finish", () => {

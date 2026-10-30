@@ -4,27 +4,27 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { ErrorCodes, httpError } from "../types/responses.js";
 import { logActivity } from "../services/logger.js";
-import { hashInviteToken } from "../lib/inviteToken.js";
+import { hashInviteToken, newInviteToken } from "../lib/inviteToken.js";
+import { sendStaffEnrollEmail } from "../services/emailService.js";
 import {
 	KEY,
 	buildOtpAuthUri,
 	generateRecoveryCodes,
 	generateSecret,
-	hashRecoveryCode,
-	verifyTotp,
 } from "../services/totpService.js";
-import { decryptSecret, encryptSecret } from "../services/crypto.js";
+import { encryptSecret } from "../services/crypto.js";
+import { acceptTotp, spendRecoveryCode } from "../services/mfaCode.js";
 import {
 	signStaffPending,
 	signStaffToken,
 	verifyStaffPending,
 } from "./staffToken.js";
-import { setStaffActive } from "./verifyStaffToken.js";
 
 export const STAFF_ROLE = "platform_staff";
 export const PASSWORD_SCHEMA = z.string().min(12).max(128);
 const LOCK_AFTER = 5;
 const LOCK_MS = 15 * 60_000;
+const ENROLL_LINK_MS = 30 * 60_000;
 const DUMMY_HASH = bcrypt.hashSync("never-a-real-password", 10);
 
 export type StaffSession = {
@@ -50,6 +50,12 @@ const setupUnavailable = () =>
 	httpError(404, ErrorCodes.NOT_FOUND, "Setup is not available");
 const signInAgain = () =>
 	httpError(401, ErrorCodes.INVALID_TOKEN, "Sign in again");
+const badEnrollLink = () =>
+	httpError(
+		404,
+		ErrorCodes.NOT_FOUND,
+		"This setup link is invalid or has expired. Sign in again for a new one.",
+	);
 
 const digest = (s: string) => crypto.createHash("sha256").update(s).digest();
 const safeEqual = (a: string, b: string) =>
@@ -85,13 +91,11 @@ async function session(s: {
 	id: string;
 	email: string;
 	name: string;
-	sessions_valid_after?: Date | null;
 }): Promise<StaffSession> {
 	await db.platform_staff.update({
 		where: { id: s.id },
 		data: { last_login: new Date() },
 	});
-	setStaffActive(s.id, true, s.sessions_valid_after ?? null);
 	await logActivity({
 		event_type: "platform_staff.login",
 		action: "viewed",
@@ -153,7 +157,7 @@ export async function setupFirstStaff(input: {
 export async function staffLogin(
 	email: string,
 	password: string,
-): Promise<{ stage: "mfa" | "enroll"; pendingToken: string }> {
+): Promise<{ stage: "mfa"; pendingToken: string } | { stage: "enroll_email" }> {
 	const s = await db.platform_staff.findUnique({
 		where: { email: email.trim().toLowerCase() },
 		omit: { password: false },
@@ -162,10 +166,11 @@ export async function staffLogin(
 		await bcrypt.compare(password, DUMMY_HASH);
 		throw invalidLogin();
 	}
-	const isLocked = !!s.locked_until && s.locked_until > new Date();
-	if (!(await bcrypt.compare(password, s.password))) {
-		// While locked a wrong password still gets the generic 401: a 429 would confirm the account exists.
-		if (isLocked) throw invalidLogin();
+	const passwordOk = await bcrypt.compare(password, s.password);
+	// While locked every password gets the generic 401, right or wrong: a distinct answer for the
+	// right one would let guessing continue through the lock, and a 429 would confirm the account.
+	if (s.locked_until && s.locked_until > new Date()) throw invalidLogin();
+	if (!passwordOk) {
 		// Atomic increment: parallel wrong guesses must all count.
 		const { failed_attempts } = await db.platform_staff.update({
 			where: { id: s.id },
@@ -184,7 +189,6 @@ export async function staffLogin(
 		}
 		throw invalidLogin();
 	}
-	if (isLocked) throw locked();
 	await db.platform_staff.update({
 		where: { id: s.id },
 		data: { failed_attempts: 0, locked_until: null },
@@ -192,8 +196,36 @@ export async function staffLogin(
 	const cred = await db.mfa_credential.findUnique({
 		where: { user_id_role: { user_id: s.id, role: STAFF_ROLE } },
 	});
-	const stage = cred?.enabled ? "mfa" : "enroll";
-	return { stage, pendingToken: signStaffPending(s.id, stage) };
+	if (cred?.enabled) return { stage: "mfa", pendingToken: signStaffPending(s.id, "mfa") };
+	await sendEnrollLink(s);
+	return { stage: "enroll_email" };
+}
+
+// A password alone must not bind a new authenticator: whoever enrolls first owns the account.
+// The link proves the mailbox too. A new link replaces any earlier one.
+async function sendEnrollLink(s: { id: string; email: string; name: string }) {
+	const link = newInviteToken("/platform/enroll", ENROLL_LINK_MS);
+	await db.platform_staff.update({
+		where: { id: s.id },
+		data: { enroll_token_hash: link.hash, enroll_expires_at: link.expires },
+	});
+	await sendStaffEnrollEmail(s.email, s.name, link.url);
+}
+
+export async function exchangeEnrollLink(token: string): Promise<{ pendingToken: string }> {
+	const s = await db.platform_staff.findUnique({
+		where: { enroll_token_hash: hashInviteToken(token) },
+		select: { id: true, status: true, enroll_expires_at: true },
+	});
+	if (!s || s.status !== "active" || !s.enroll_expires_at || s.enroll_expires_at <= new Date())
+		throw badEnrollLink();
+	// Conditional on the hash: a link opened twice in parallel yields one setup token.
+	const { count } = await db.platform_staff.updateMany({
+		where: { id: s.id, enroll_token_hash: hashInviteToken(token), status: "active" },
+		data: { enroll_token_hash: null, enroll_expires_at: null },
+	});
+	if (count !== 1) throw badEnrollLink();
+	return { pendingToken: signStaffPending(s.id, "enroll") };
 }
 
 export async function staffVerifyMfa(
@@ -208,27 +240,9 @@ export async function staffVerifyMfa(
 	if (!cred?.enabled) throw signInAgain();
 	if (cred.locked_until && cred.locked_until > new Date()) throw locked();
 
-	let ok =
-		!!input.code && verifyTotp(decryptSecret(cred.secret, KEY), input.code);
-	if (!ok && input.recoveryCode) {
-		const row = await db.mfa_recovery_code.findFirst({
-			where: {
-				user_id: s.id,
-				role: STAFF_ROLE,
-				code: hashRecoveryCode(input.recoveryCode),
-				used_at: null,
-			},
-		});
-		// Conditional claim: two simultaneous logins cannot both spend one code.
-		ok =
-			!!row &&
-			(
-				await db.mfa_recovery_code.updateMany({
-					where: { id: row.id, used_at: null },
-					data: { used_at: new Date() },
-				})
-			).count === 1;
-	}
+	const ok =
+		(await acceptTotp(cred, input.code)) ||
+		(await spendRecoveryCode(s.id, STAFF_ROLE, input.recoveryCode));
 	if (!ok) {
 		const { failed_attempts } = await db.mfa_credential.update({
 			where: { id: cred.id },
@@ -273,7 +287,11 @@ export async function staffEnrollStart(
 			secret: encryptSecret(secret, KEY),
 			enabled: false,
 		},
-		update: { secret: encryptSecret(secret, KEY), enabled: false },
+		update: {
+			secret: encryptSecret(secret, KEY),
+			enabled: false,
+			last_used_step: null,
+		},
 	});
 	return {
 		otpAuthUri: buildOtpAuthUri(secret, s.email, "TradeWerks Back Office"),
@@ -294,7 +312,7 @@ export async function staffEnrollFinish(
 		throw httpError(400, ErrorCodes.BAD_REQUEST, "Start MFA setup first");
 	if (cred.enabled)
 		throw httpError(409, ErrorCodes.CONFLICT, "MFA is already set up");
-	if (!verifyTotp(decryptSecret(cred.secret, KEY), code))
+	if (!(await acceptTotp(cred, code)))
 		throw httpError(401, ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
 	const { codes, hashed_codes } = generateRecoveryCodes();
 	await db.$transaction(async (tx) => {
@@ -365,7 +383,6 @@ export async function acceptInvite(
 		},
 	});
 	if (count !== 1) throw badInvite();
-	setStaffActive(s.id, true, s.sessions_valid_after);
 	await logActivity({
 		event_type: "platform_staff.invite_accepted",
 		action: "updated",

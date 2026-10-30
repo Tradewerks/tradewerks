@@ -25,6 +25,7 @@ import { getAgedReceivables,
     getTimesheetReport,
     getUnscheduledRevenue,
 	getPageSummary,
+	getPageSnapshot,
 	PAGES,
 	BREAKDOWNS,
 } from '../controllers/reportsController.js';
@@ -587,7 +588,7 @@ router.get("/job-profitability", requireModule("advanced_reporting"), requirePer
 	}
 });
 
-router.post("/export", requirePermission("view_reports"), async (req, res, next) => {
+router.post("/export", requirePermission("export_reports"), async (req, res, next) => {
 	try {
 		const parsed = exportReportSchema.safeParse(req.body);
 		if (!parsed.success) {
@@ -617,7 +618,7 @@ router.post("/export", requirePermission("view_reports"), async (req, res, next)
 
 // Server-side export for paginated reports: regenerates the full filtered set
 // (all pages) from the report key + active filters, so the sheet is complete.
-router.post("/export/server", requirePermission("view_reports"), async (req, res, next) => {
+router.post("/export/server", requirePermission("export_reports"), async (req, res, next) => {
 	try {
 		const parsed = exportServerSchema.safeParse(req.body);
 		if (!parsed.success) {
@@ -891,6 +892,36 @@ router.get("/page-summary", requirePermission("view_reports"), async (req, res, 
 		const result = await getPageSummary(orgId, page, startDate, endDate, groupBy);
 
 		res.json(createSuccessResponse(result));
+	} catch (err) {
+		next(err);
+	}
+});
+
+// The list-page subtitle: current state only, so no dates or grouping.
+router.get("/page-snapshot", requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const parsed = z.object({ page: z.enum(PAGES) }).safeParse(req.query);
+		if (!parsed.success) {
+			return res
+				.status(400)
+				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, parsed.error.message));
+		}
+		const { page } = parsed.data;
+
+		const refused = await ownerReadRefusal(orgId, page, PAGE_SUMMARY_MODULE);
+		if (refused) {
+			return res
+				.status(403)
+				.json(
+					createErrorResponse(
+						ErrorCodes.MODULE_NOT_IN_PLAN,
+						`${refused.label} is not included in your plan`,
+					),
+				);
+		}
+
+		res.json(createSuccessResponse(await getPageSnapshot(orgId, page)));
 	} catch (err) {
 		next(err);
 	}

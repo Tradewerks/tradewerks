@@ -5,16 +5,18 @@ export default function SideNavItem({
 	icon,
 	label,
 	expanded,
+	end = true,
 }: {
 	to: string;
 	icon: React.ReactNode;
 	label: string;
 	expanded: boolean;
+	end?: boolean;
 }) {
 	return (
 		<NavLink
 			to={to}
-			end
+			end={end}
 			className={({ isActive }) =>
 				`
 				group relative flex items-center h-10 rounded-md mx-2

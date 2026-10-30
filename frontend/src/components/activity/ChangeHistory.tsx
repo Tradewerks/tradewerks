@@ -143,7 +143,7 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
                 </button>
             }
         >
-            <div>
+            <div className="flex-1 flex flex-col">
                 <div className="flex flex-wrap items-center gap-1 pb-3 mb-1">
                     {actionFilters.map((f) => {
                         const active = activeActions.has(f.key);
@@ -166,7 +166,7 @@ export default function ChangeHistory({ scope, title, pageSize = CHANGE_HISTORY_
                 {historyLoading ? (
                     <p>Loading Change History</p>
                 ) : entries.length === 0 ? (
-                    <div className="rounded-lg border border-border-subtle bg-base px-4 py-8 text-center">
+                    <div className="flex-1 flex flex-col items-center justify-center rounded-lg border border-border-subtle bg-base px-4 py-8 text-center">
                         <CalendarDays size={20} className="mx-auto text-text-muted mb-2" />
                         <p className="text-sm text-text-muted">
                             {allEntries.length > 0 ? "No changes match the selected filters." : "No recent changes."}

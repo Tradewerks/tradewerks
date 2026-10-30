@@ -16,7 +16,10 @@ import {
 	type Priority,
 } from "../../types/common";
 import { useAllClientsQuery } from "../../hooks/useClients";
-import { useCreateRecurringPlanMutation } from "../../hooks/useRecurringPlans";
+import {
+	useCreateRecurringPlanMutation,
+	useDebouncedRecurringTaxEstimate,
+} from "../../hooks/useRecurringPlans";
 import {
 	useDraftsByTypeQuery,
 	useCreateDraftMutation,
@@ -29,6 +32,7 @@ import type { GeocodeResult } from "../../types/location";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import RecurringTaxEstimate from "./RecurringTaxEstimate";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import { useVehiclesQuery } from "../../hooks/useVehicles";
 import TimeConstraints, { type TimeConstraintsState } from "../ui/forms/TimeConstraints";
@@ -41,6 +45,8 @@ import { ScheduleConfiguration } from "../ui/forms/ScheduleConfiguration";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useTaxGroups } from "../../hooks/useTaxGroups";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
@@ -140,10 +146,19 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		undoLineItemField,
 		setLineItemInventoryItem,
 		setLineItemDisposition,
+		setLineItemTaxGroup,
 		clearLineItemField,
 		seedLineItems,
 	} = useLineItems({ minItems: 0, mode: "create" });
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
+	const { data: taxGroups = [] } = useTaxGroups();
+	const autoMode = useAutoTaxMode() === true;
+	const { data: taxEstimate } = useDebouncedRecurringTaxEstimate({
+		clientId,
+		address: geoData?.address,
+		coords: geoData?.coords,
+		lineItems: activeLineItems,
+	});
 	const { data: vehicles = [] } = useVehiclesQuery("active");
 	// Draft-dirty wrapper, same as the other line-item mutators.
 	const dirtySetLineItemDisposition = useCallback(
@@ -152,6 +167,13 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 			markDirty();
 		},
 		[setLineItemDisposition, markDirty]
+	);
+	const dirtySetLineItemTax = useCallback(
+		(id: string, groupId: string | null, taxable: boolean) => {
+			setLineItemTaxGroup(id, groupId, taxable);
+			markDirty();
+		},
+		[setLineItemTaxGroup, markDirty]
 	);
 	const dirtyAddLineItem = useCallback(() => {
 		addLineItem();
@@ -357,6 +379,8 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 						unit_price: number;
 						item_type?: string | null;
 						inventory_item_id?: string | null;
+						taxable?: boolean;
+						tax_group_id?: string | null;
 						disposition?: LineItemDisposition | null;
 						disposition_vehicle_id?: string | null;
 					}>;
@@ -402,6 +426,8 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 								| LineItemType
 								| "",
 							inventory_item_id: li.inventory_item_id ?? null,
+							taxable: li.taxable ?? true,
+							tax_group_id: li.tax_group_id ?? null,
 							disposition: li.disposition ?? null,
 							disposition_vehicle_id:
 								li.disposition_vehicle_id ?? null,
@@ -462,6 +488,8 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 				item_type: item.item_type,
 				total: item.total,
 				inventory_item_id: item.inventory_item_id ?? null,
+				taxable: item.taxable ?? true,
+				tax_group_id: item.tax_group_id ?? null,
 				disposition: item.disposition ?? null,
 				disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 			})),
@@ -594,6 +622,8 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 			// Plan lines are the template a generated visit is stamped from —
 			// dropping the link here would strand the picker's whole purpose.
 			inventory_item_id: item.inventory_item_id ?? null,
+			taxable: item.taxable ?? true,
+			tax_group_id: item.tax_group_id ?? null,
 			disposition: item.disposition ?? null,
 			disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 		}));
@@ -983,6 +1013,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 							showDisposition
 							vehicles={vehicles}
 							onDispositionChange={dirtySetLineItemDisposition}
+							taxGroups={taxGroups}
+							onTaxChange={dirtySetLineItemTax}
+							autoMode={autoMode}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={dirtyAddLineItem}
@@ -995,6 +1028,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 							onUndo={undoLineItemField}
 							onClear={clearLineItemField}
 						/>
+						<div className="pt-3">
+							<RecurringTaxEstimate estimate={taxEstimate} />
+						</div>
 					</div>
 				);
 
@@ -1039,6 +1075,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		removeLineItem,
 		updateLineItem,
 		subtotal,
+		taxGroups,
+		autoMode,
+		taxEstimate,
 		dirtyLineItemFields,
 		undoLineItemField,
 		clearLineItemField,

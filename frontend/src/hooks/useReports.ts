@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { keepPreviousData, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useDebouncedValue } from "./useDebouncedValue";
 import type {
 	OverviewResponse,
 	RevenueYTDResponse,
@@ -14,6 +16,7 @@ import type {
 	TechScorecardVisitRow,
 	Paginated,
 	ReportFetchParams,
+	PageSnapshotResponse,
 	PageSummaryResponse,
 } from "../types/reports";
 import * as reportsApi from "../api/reports";
@@ -21,6 +24,27 @@ import * as reportsApi from "../api/reports";
 // ============================================================================
 // REPORT QUERIES
 // ============================================================================
+
+// Only searchTerms is debounced, so paging and filters stay instant. It's
+// debounced as a string because pages rebuild the array every render.
+const usePaginatedReport = (
+	key: string[],
+	fetch: (params: ReportFetchParams) => Promise<Paginated>,
+	params: ReportFetchParams,
+	enabled = true,
+): UseQueryResult<Paginated, Error> => {
+	const terms = useDebouncedValue(JSON.stringify(params.searchTerms ?? null));
+	const effective = useMemo(
+		() => ({ ...params, searchTerms: (JSON.parse(terms) as string[] | null) ?? undefined }),
+		[params, terms],
+	);
+	return useQuery({
+		queryKey: ["reports", ...key, effective],
+		queryFn: () => fetch(effective),
+		placeholderData: keepPreviousData,
+		enabled,
+	});
+};
 
 export const useOverviewQuery = (
 	startDate: string,
@@ -115,23 +139,11 @@ export const useTimesheetsReportQuery = (
 	});
 };
 
-export const useReorderForecastQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "reorder-forecast", params],
-		queryFn: () => reportsApi.getReorderForecast(params),
-		placeholderData: keepPreviousData,
-	});
+export const useReorderForecastQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["reorder-forecast"], reportsApi.getReorderForecast, params);
 
-export const useInventoryReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "inventory-full", params],
-		queryFn: () => reportsApi.getInventoryReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useInventoryReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["inventory-full"], reportsApi.getInventoryReport, params);
 
 export const useAgedReceivablesQuery = (): UseQueryResult<AgedReceivablesResponse, Error> => {
 	return useQuery({
@@ -147,171 +159,59 @@ export const useJobBacklogQuery = (): UseQueryResult<JobBacklogResponse, Error> 
 	});
 };
 
-export const useAgedReceivablesByClientQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "aged-receivables", "by-client", params],
-		queryFn: () => reportsApi.getAgedReceivablesByClient(params),
-		placeholderData: keepPreviousData,
-	});
+export const useAgedReceivablesByClientQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["aged-receivables", "by-client"], reportsApi.getAgedReceivablesByClient, params);
 
-export const useTaxLiabilityReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "tax-liability", params],
-		queryFn: () => reportsApi.getTaxLiabilityReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useTaxLiabilityReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["tax-liability"], reportsApi.getTaxLiabilityReport, params);
 
-export const useJobsReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "jobs", params],
-		queryFn: () => reportsApi.getJobsReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useJobsReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["jobs"], reportsApi.getJobsReport, params);
 
-export const useInvoicesReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "invoices", params],
-		queryFn: () => reportsApi.getInvoicesReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useInvoicesReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["invoices"], reportsApi.getInvoicesReport, params);
 
-export const useClientsReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "clients", params],
-		queryFn: () => reportsApi.getClientsReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useClientsReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["clients"], reportsApi.getClientsReport, params);
 
-export const useClientRetentionQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "client-retention", params],
-		queryFn: () => reportsApi.getClientRetentionReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useClientRetentionQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["client-retention"], reportsApi.getClientRetentionReport, params);
 
-export const useClientLifetimeValueQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "client-ltv", params],
-		queryFn: () => reportsApi.getClientLifetimeValueReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useClientLifetimeValueQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["client-ltv"], reportsApi.getClientLifetimeValueReport, params);
 
-export const useClientDiscountsQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "client-discounts", params],
-		queryFn: () => reportsApi.getClientDiscountsReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useClientDiscountsQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["client-discounts"], reportsApi.getClientDiscountsReport, params);
 
-export const useFieldAddedRevenueQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "field-added-revenue", params],
-		queryFn: () => reportsApi.getFieldAddedRevenueReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useFieldAddedRevenueQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["field-added-revenue"], reportsApi.getFieldAddedRevenueReport, params);
 
-export const useRecurringRevenueQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "recurring-revenue", params],
-		queryFn: () => reportsApi.getRecurringRevenueReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useRecurringRevenueQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["recurring-revenue"], reportsApi.getRecurringRevenueReport, params);
 
-export const usePaymentsReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "payments", params],
-		queryFn: () => reportsApi.getPaymentsReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const usePaymentsReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["payments"], reportsApi.getPaymentsReport, params);
 
-export const useRevenueByLineItemTypeQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "revenue-by-line-item-type", params],
-		queryFn: () => reportsApi.getRevenueByLineItemTypeReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useRevenueByLineItemTypeQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["revenue-by-line-item-type"], reportsApi.getRevenueByLineItemTypeReport, params);
 
-export const useRevenueLineItemsQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "revenue-line-items", params],
-		queryFn: () => reportsApi.getRevenueLineItemsReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useRevenueLineItemsQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["revenue-line-items"], reportsApi.getRevenueLineItemsReport, params);
 
-export const useQuoteFunnelQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "quote-funnel", params],
-		queryFn: () => reportsApi.getQuoteFunnelReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useQuoteFunnelQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["quote-funnel"], reportsApi.getQuoteFunnelReport, params);
 
-export const useFirstTimeFixQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "first-time-fix", params],
-		queryFn: () => reportsApi.getFirstTimeFixReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useFirstTimeFixQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["first-time-fix"], reportsApi.getFirstTimeFixReport, params);
 
-export const useProjectsReportQuery = (
-	params: ReportFetchParams,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "projects", params],
-		queryFn: () => reportsApi.getProjectsReport(params),
-		placeholderData: keepPreviousData,
-	});
+export const useProjectsReportQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["projects"], reportsApi.getProjectsReport, params);
 
-export const useCogsByJobReportQuery = (
-	params: ReportFetchParams,
-	enabled = true
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "cogs-by-job", params],
-		queryFn: () => reportsApi.getCogsByJobReport(params),
-		placeholderData: keepPreviousData,
-		enabled,
-	});
+export const useCogsByJobReportQuery = (params: ReportFetchParams, enabled = true) =>
+	usePaginatedReport(["cogs-by-job"], reportsApi.getCogsByJobReport, params, enabled);
 
-export const useCogsByItemReportQuery = (
-	params: ReportFetchParams,
-	enabled = true
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "cogs-by-item", params],
-		queryFn: () => reportsApi.getCogsByItemReport(params),
-		placeholderData: keepPreviousData,
-		enabled,
-	});
+export const useCogsByItemReportQuery = (params: ReportFetchParams, enabled = true) =>
+	usePaginatedReport(["cogs-by-item"], reportsApi.getCogsByItemReport, params, enabled);
 
 export const useTechnicianScorecardQuery = (
 	startDate?: string,
@@ -323,25 +223,33 @@ export const useTechnicianScorecardQuery = (
 	});
 };
 
-export const useJobProfitabilityReportQuery = (
-	params: ReportFetchParams,
-	enabled = true,
-): UseQueryResult<Paginated, Error> =>
-	useQuery({
-		queryKey: ["reports", "job-profitability", params],
-		queryFn: () => reportsApi.getJobProfitabilityReport(params),
-		placeholderData: keepPreviousData,
-		enabled,
-	});
+export const useJobProfitabilityReportQuery = (params: ReportFetchParams, enabled = true) =>
+	usePaginatedReport(["job-profitability"], reportsApi.getJobProfitabilityReport, params, enabled);
 
 export const usePageSummaryQuery = (
 	page: string,
 	startDate?: string,
 	endDate?: string,
 	groupBy?: string,
+	enabled = true,
 ): UseQueryResult<PageSummaryResponse, Error> => {
 	return useQuery({
 		queryKey: ["reports", "page-summary", page, startDate, endDate, groupBy],
 		queryFn: () => reportsApi.getPageSummary(page, startDate, endDate, groupBy),
+		enabled,
+		// Mounted by every list page; don't refetch on each hop between lists.
+		staleTime: 60_000,
 	});
 };
+
+export const usePageSnapshotQuery = (
+	page: string,
+	enabled = true,
+): UseQueryResult<PageSnapshotResponse, Error> =>
+	useQuery({
+		// No dates in the key: the subtitle must not refetch when the popover range changes.
+		queryKey: ["reports", "page-snapshot", page],
+		queryFn: () => reportsApi.getPageSnapshot(page),
+		enabled,
+		staleTime: 60_000,
+	});

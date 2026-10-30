@@ -102,6 +102,14 @@ export const useVehicleReadinessQuery = (vehicleId: string | undefined, date?: s
 		staleTime: 30_000,
 	});
 
+export const useFleetReadinessQuery = (date: string, enabled = true) =>
+	useQuery({
+		queryKey: qk.fleetReadiness(date),
+		queryFn: () => vehiclesApi.getFleetReadiness(date),
+		enabled,
+		staleTime: 30_000,
+	});
+
 export const useConfirmReadinessMutation = () => {
 	const qc = useQueryClient();
 	return useMutation({

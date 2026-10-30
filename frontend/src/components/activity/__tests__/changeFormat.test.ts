@@ -72,3 +72,29 @@ describe("organization settings log formatting", () => {
 		);
 	});
 });
+
+describe("document status log formatting", () => {
+	test("a quote status change reads Issued as Created", () => {
+		const { rows } = formatChange(
+			{ ...log({ status: { old: "Draft", new: "Issued" } }), entity_type: "quote" },
+			"UTC"
+		);
+		expect(rows).toEqual([expect.objectContaining({ from: "Draft", to: "Created" })]);
+	});
+
+	test("an invoice status change reads Paid as Fully Paid", () => {
+		const { rows } = formatChange(
+			{ ...log({ status: { old: "Issued", new: "Paid" } }), entity_type: "invoice" },
+			"UTC"
+		);
+		expect(rows).toEqual([expect.objectContaining({ from: "Created", to: "Fully Paid" })]);
+	});
+
+	test("other entities keep their stored status text", () => {
+		const { rows } = formatChange(
+			{ ...log({ status: { old: "Scheduled", new: "Issued" } }), entity_type: "job" },
+			"UTC"
+		);
+		expect(rows).toEqual([expect.objectContaining({ from: "Scheduled", to: "Issued" })]);
+	});
+});

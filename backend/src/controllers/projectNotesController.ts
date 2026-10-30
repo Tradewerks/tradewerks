@@ -5,6 +5,7 @@ import {
 	updateProjectNoteSchema,
 } from "../lib/validate/projects.js";
 import { logActivity, buildChanges } from "../services/logger.js";
+import { emitToOrg } from "../services/socketService.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
@@ -91,6 +92,7 @@ export const insertProjectNote = async (
 						note_id: note.id,
 						photo_url: p.photo_url,
 						photo_label: p.photo_label,
+						photo_name: p.photo_name || null,
 					})),
 				});
 			}
@@ -123,6 +125,7 @@ export const insertProjectNote = async (
 
 		if (!created) return { err: "Failed to create note" };
 		const signed = await signNotePhotos(created);
+		emitToOrg(organizationId, "project:updated", { projectId });
 		return { err: "", item: signed };
 	} catch (e) {
 		if (e instanceof ZodError) {
@@ -200,6 +203,7 @@ export const updateProjectNote = async (
 							note_id: noteId,
 							photo_url: p.photo_url,
 							photo_label: p.photo_label,
+							photo_name: p.photo_name || null,
 						})),
 					});
 				}
@@ -237,6 +241,7 @@ export const updateProjectNote = async (
 			);
 		}
 		const signed = await signNotePhotos(updated);
+		emitToOrg(organizationId, "project:updated", { projectId });
 		return { err: "", item: signed };
 	} catch (e) {
 		if (e instanceof ZodError) {
@@ -289,6 +294,7 @@ export const deleteProjectNote = async (
 			await tx.project_note.delete({ where: { id: noteId } });
 		});
 
+		emitToOrg(organizationId, "project:updated", { projectId });
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Error deleting project note");

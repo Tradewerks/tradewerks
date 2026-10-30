@@ -4,28 +4,31 @@ import { FileText } from "lucide-react";
 import Card from "../ui/Card";
 import type { Invoice, InvoiceLineItem } from "../../types/invoices";
 import { isOverdue } from "../../types/invoices";
+import { isV2Snapshot, snapshotSource } from "../../types/tax";
 import type { TaxSnapshotRate } from "../../types/tax";
 import { formatCurrency } from "../../util/util";
-import { formatRatePercentLabel } from "../../lib/formatTax";
+import { formatDocRatePercent, formatRatePercentLabel } from "../../lib/formatTax";
+import {
+	autoRateLocation,
+	collapseSnapshotRates,
+	isAddressRateSnapshot,
+	taxBasis,
+	type CollapsedRate,
+} from "../../lib/taxBreakdown";
+import { QbTaxEstimate } from "../tax/QbTaxEstimate";
+import { AutoLineTaxTag, TaxSourceChip } from "../tax/TaxSourceChip";
 import {
 	groupLineItemsBySource,
 	resolveLineSources,
 	shouldGroupBySource,
 	type LineItemGroup,
 } from "./invoiceSources";
+import { isKeptAddressRate, ungroupedLineGroup } from "../../lib/taxEditorMode";
 
 interface InvoiceLineItemsProps {
 	invoice: Invoice;
 	/** Line item ids named by any dispute on this invoice, open or resolved. */
 	contestedIds: Set<string>;
-}
-
-/** Collapsed per-rate tax entry used in the totals section. */
-interface CollapsedRate {
-	id: string;
-	name: string;
-	rate: number;
-	amountCents: number;
 }
 
 const HEADER_CELL = "min-w-0 text-xs font-semibold uppercase tracking-wide text-text-tertiary";
@@ -35,15 +38,25 @@ function LineRow({
 	item,
 	isContested,
 	groupRatesMap,
+	addressSourced,
+	ungroupedGroupName,
 }: {
 	item: InvoiceLineItem;
 	isContested: boolean;
 	groupRatesMap: Map<string, TaxSnapshotRate[]>;
+	addressSourced: boolean;
+	/** Group that taxed lines with no group of their own (client group, org default). */
+	ungroupedGroupName: string | null;
 }) {
+	// Manual mode stamps the default group on non-taxable lines too.
+	const groupName =
+		item.taxable === false ? null : item.tax_group?.name || ungroupedGroupName;
+	const autoTaxed = item.taxable !== false && !groupName && addressSourced;
 	const hasSubRow =
 		(item.description != null && item.description !== "") ||
-		item.tax_group?.name != null ||
-		item.taxable === false;
+		groupName != null ||
+		item.taxable === false ||
+		autoTaxed;
 
 	return (
 		<div
@@ -97,12 +110,12 @@ function LineRow({
 						</p>
 					)}
 					<div className="flex flex-wrap items-center gap-1.5">
-						{item.tax_group?.name ? (
+						{groupName ? (
 							<span className="inline-flex items-center gap-1 whitespace-nowrap rounded border border-border-strong/50 bg-surface-raised/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-text-muted">
-								{item.tax_group.name}
-								{groupRatesMap.has(item.tax_group.name)
+								{groupName}
+								{groupRatesMap.has(groupName)
 									? ` · ${groupRatesMap
-											.get(item.tax_group.name)!
+											.get(groupName)!
 											.map(
 												(r) =>
 													`${r.name} ${formatRatePercentLabel(r.rate)}`
@@ -110,6 +123,8 @@ function LineRow({
 											.join(" + ")}`
 									: ""}
 							</span>
+						) : autoTaxed ? (
+							<AutoLineTaxTag />
 						) : (
 							<span className="inline-flex items-center whitespace-nowrap rounded border border-border-strong/30 bg-surface-raised/40 px-1.5 py-0.5 text-[10px] leading-none text-text-faint">
 								No Tax
@@ -170,28 +185,10 @@ export default function InvoiceLineItems({ invoice, contestedIds }: InvoiceLineI
 		return map;
 	}, [invoice.tax_snapshot]);
 
-	// Per-rate totals from the snapshot; deduplicate by rate id, sum amounts.
-	const collapsedTaxRates = useMemo((): CollapsedRate[] => {
-		if (!invoice.tax_snapshot) return [];
-		const rateMap = new Map<string, CollapsedRate>();
-		for (const group of invoice.tax_snapshot.groups ?? []) {
-			for (const rate of group.rates ?? []) {
-				const cents = Math.round(rate.rate * (group.taxable_amount_cents ?? 0));
-				const entry = rateMap.get(rate.id);
-				if (entry) {
-					entry.amountCents += cents;
-				} else {
-					rateMap.set(rate.id, {
-						id: rate.id,
-						name: rate.name,
-						rate: rate.rate,
-						amountCents: cents,
-					});
-				}
-			}
-		}
-		return [...rateMap.values()];
-	}, [invoice.tax_snapshot]);
+	const collapsedTaxRates = useMemo(
+		() => collapseSnapshotRates(invoice.tax_snapshot),
+		[invoice.tax_snapshot]
+	);
 
 	// Fallback: derive per-rate totals from line items when no snapshot exists.
 	const lineItemCollapsedRates = useMemo((): CollapsedRate[] => {
@@ -252,6 +249,28 @@ export default function InvoiceLineItems({ invoice, contestedIds }: InvoiceLineI
 		);
 	}
 
+	const taxSource = invoice.tax_source ?? snapshotSource(invoice.tax_snapshot);
+	const addressSourced = isAddressRateSnapshot(invoice.tax_snapshot, taxSource);
+	// QuickBooks' tax is the invoice's tax; the snapshot's groups are only our estimate.
+	const qbSnapshot =
+		taxSource === "qb_ast" &&
+		isV2Snapshot(invoice.tax_snapshot) &&
+		invoice.tax_snapshot.qb_tax_cents != null
+			? invoice.tax_snapshot
+			: null;
+	const qbTaxCents = qbSnapshot?.qb_tax_cents ?? null;
+	const rateLocation = autoRateLocation(invoice.tax_snapshot);
+	const basis = taxBasis(invoice.tax_snapshot);
+	// QuickBooks charging tax on an exempt client is shown as charged, not hidden.
+	const exempt = invoice.tax_snapshot?.client_exempt === true && qbTaxCents == null;
+	const ungroupedGroupName = addressSourced
+		? null
+		: (ungroupedLineGroup(
+				invoice.tax_snapshot,
+				taxSource,
+				lineItems.flatMap((li) => (li.tax_group?.name ? [li.tax_group.name] : [])),
+			)?.name ?? null);
+
 	const renderRows = (items: InvoiceLineItem[]) =>
 		items.map((item, index) => (
 			<LineRow
@@ -259,6 +278,8 @@ export default function InvoiceLineItems({ invoice, contestedIds }: InvoiceLineI
 				item={item}
 				isContested={item.id != null && contestedIds.has(item.id)}
 				groupRatesMap={groupRatesMap}
+				addressSourced={addressSourced}
+				ungroupedGroupName={ungroupedGroupName}
 			/>
 		));
 
@@ -304,7 +325,34 @@ export default function InvoiceLineItems({ invoice, contestedIds }: InvoiceLineI
 						</div>
 					)}
 
-					{rates.length > 0 ? (
+					{invoice.discount_amount != null &&
+						Number(invoice.discount_amount) > 0 && (
+							<div className="flex justify-between text-sm">
+								<span className="text-text-tertiary">Discount</span>
+								<span className="tabular-nums text-success-text">
+									{"- "}
+									{formatCurrency(
+										Number(invoice.discount_amount)
+									)}
+								</span>
+							</div>
+						)}
+
+					{exempt ? (
+						<div className="flex justify-between text-sm">
+							<span className="text-text-tertiary">Tax</span>
+							<span className="text-text-primary">Client is tax exempt</span>
+						</div>
+					) : qbTaxCents != null ? (
+						<div className="flex justify-between text-sm">
+							<span className="text-text-tertiary">
+								Sales tax (calculated by QuickBooks)
+							</span>
+							<span className="tabular-nums text-text-primary">
+								{formatCurrency(qbTaxCents / 100)}
+							</span>
+						</div>
+					) : rates.length > 0 ? (
 						<>
 							{rates.map((rate) => (
 								<div
@@ -343,11 +391,7 @@ export default function InvoiceLineItems({ invoice, contestedIds }: InvoiceLineI
 						Number(invoice.tax_rate) > 0 && (
 							<div className="flex justify-between text-sm">
 								<span className="text-text-tertiary">
-									Tax (
-									{formatRatePercentLabel(
-										Number(invoice.tax_rate)
-									)}
-									)
+									Tax ({formatDocRatePercent(invoice.tax_rate)})
 								</span>
 								<span className="tabular-nums text-text-primary">
 									{formatCurrency(
@@ -358,18 +402,27 @@ export default function InvoiceLineItems({ invoice, contestedIds }: InvoiceLineI
 						)
 					)}
 
-					{invoice.discount_amount != null &&
-						Number(invoice.discount_amount) > 0 && (
-							<div className="flex justify-between text-sm">
-								<span className="text-text-tertiary">Discount</span>
-								<span className="tabular-nums text-success-text">
-									{"- "}
-									{formatCurrency(
-										Number(invoice.discount_amount)
-									)}
+					{!exempt && (
+						<div className="flex flex-wrap items-center gap-1.5 empty:hidden">
+							<TaxSourceChip
+								source={taxSource}
+								kept={
+									isKeptAddressRate(invoice.tax_snapshot) &&
+									isV2Snapshot(invoice.tax_snapshot) &&
+									invoice.tax_snapshot.kept_from_auto === true
+								}
+							/>
+							{rateLocation && (
+								<span className="text-xs text-text-muted">
+									Rates for {rateLocation}
 								</span>
-							</div>
-						)}
+							)}
+							{basis && (
+								<span className="text-xs tabular-nums text-text-muted">{basis}</span>
+							)}
+						</div>
+					)}
+					{qbSnapshot && <QbTaxEstimate snapshot={qbSnapshot} />}
 
 					<div className="flex justify-between border-t border-border pt-2">
 						<span className="font-semibold text-text-primary">Total</span>

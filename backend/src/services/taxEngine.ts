@@ -4,6 +4,10 @@
  * All monetary arithmetic uses integer cents to prevent floating-point drift.
  */
 
+import { allocateHalfUp, type TaxRounding } from "./tax/rounding.js";
+
+export type { TaxRounding };
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -181,11 +185,15 @@ export function computeCombinedRate(
  * @param clientExempt   When true all line items are treated as non-taxable.
  * @param lockedAt       If provided, snapshot.locked_at is set to this ISO string.
  *                       If omitted, snapshot.locked_at is "draft".
+ * @param rounding       "line_floor" truncates each line's tax per rate (every document taxed
+ *                       before §0 item 6). "jurisdiction_half_up" rounds each rate of a group
+ *                       once, on the group's aggregate base, and splits it back over the lines.
  */
 export function calculateDocumentTax(
 	input: DocumentTaxInput,
 	clientExempt: boolean,
 	lockedAt?: Date,
+	rounding: TaxRounding = "line_floor",
 ): DocumentTaxOutput {
 	const { line_items, discount_type, discount_value } = input;
 
@@ -225,6 +233,7 @@ export function calculateDocumentTax(
 		string,
 		{ group: TaxGroupConfig; taxable_amount_cents: number; tax_amount_cents: number }
 	>();
+	const halfUpLines = new Map<string, { id: string; base: number }[]>();
 
 	let taxable_subtotal_cents = 0; // sum of effective_taxable for all taxable items
 	let non_taxable_amount_cents = 0;
@@ -254,6 +263,24 @@ export function calculateDocumentTax(
 		// Accumulate into taxable subtotal
 		taxable_subtotal_cents += effective_taxable;
 
+		if (rounding === "jurisdiction_half_up") {
+			line_item_tax_amounts[li.id] = 0;
+			const acc = groupAccumulator.get(tax_group.id);
+			if (acc) {
+				acc.taxable_amount_cents += effective_taxable;
+			} else {
+				groupAccumulator.set(tax_group.id, {
+					group: tax_group,
+					taxable_amount_cents: effective_taxable,
+					tax_amount_cents: 0,
+				});
+			}
+			const lines = halfUpLines.get(tax_group.id) ?? [];
+			lines.push({ id: li.id, base: effective_taxable });
+			halfUpLines.set(tax_group.id, lines);
+			continue;
+		}
+
 		// Compute tax for each rate, summing with floor per rate
 		let line_tax = 0;
 		for (const taxRate of tax_group.rates) {
@@ -272,6 +299,18 @@ export function calculateDocumentTax(
 				group: tax_group,
 				taxable_amount_cents: effective_taxable,
 				tax_amount_cents: line_tax,
+			});
+		}
+	}
+
+	for (const [groupId, lines] of halfUpLines) {
+		const acc = groupAccumulator.get(groupId)!;
+		const bases = lines.map((l) => l.base);
+		for (const taxRate of acc.group.rates) {
+			const { total, perLine } = allocateHalfUp(bases, taxRate.rate);
+			acc.tax_amount_cents += total;
+			perLine.forEach((cents, i) => {
+				line_item_tax_amounts[lines[i].id] += cents;
 			});
 		}
 	}

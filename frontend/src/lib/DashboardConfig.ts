@@ -54,11 +54,6 @@ export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
     minH?: number;
     maxW?: number;
     maxH?: number;
-    /* Row ceiling for the auto-grow pass, which ignores `maxH` — that bounds
-       dragging only. Needed on widgets whose content scales with the org, or a
-       big roster grows the card until it pushes the widgets below it off-screen.
-       Omit for no ceiling. Inert today: auto-grow is dormant, see DashboardPage. */
-    autoGrowMaxH?: number;
     responsiveConstraints?: ResponsiveConstraints;
     requiredPermission?: string;
     requiredAnyPermission?: readonly string[];
@@ -76,7 +71,7 @@ export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
                                 ]
                             },
     "activity-feed":        {   label: "Activity Feed",
-                                defaultW: 5,  defaultH: 11, minW: 3, minH: 4, maxH: 12, maxW: 6,
+                                defaultW: 5,  defaultH: 11, minW: 3, minH: 6, maxH: 12, maxW: 6,
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
                                 ]
@@ -86,7 +81,6 @@ export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
                                    this widget from the picker gave a taller card than a fresh
                                    dashboard did. */
                                 defaultW: 4,  defaultH: 3,  minW: 3, minH: 3, maxH: 6, maxW: 6,
-                                autoGrowMaxH: 6,
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
                                 ]
@@ -116,7 +110,7 @@ export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
                                 requiredPermission: "manage_organization",
                             },
     "arrivals":             {   label: "Arrivals",
-                                defaultW: 4,  defaultH: 7,  minW: 3, minH: 4, maxH: 14, maxW: 8,
+                                defaultW: 4,  defaultH: 7,  minW: 3, minH: 3, maxH: 14, maxW: 8,
                                 requiredPermission: "view_jobs",
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
@@ -201,6 +195,20 @@ export const WIDGET_CATALOG: WidgetCatalog & Record<string, {
     "report-job-backlog":   {   label: "Job Backlog",
                                 defaultW: 4,  defaultH: 8,  minW: 3, minH: 6, maxH: 12, maxW: 8,
                                 requiredPermission: "view_reports",
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
+                            },
+    "overdue-invoices":     {   label: "Overdue Invoices",
+                                defaultW: 4,  defaultH: 6,  minW: 3, minH: 4, maxH: 12, maxW: 6,
+                                requiredPermission: "view_invoices",
+                                responsiveConstraints: [
+                                    { atWidth: 800, minW: 4, maxW: 12 },
+                                ]
+                            },
+    "vehicle-readiness":    {   label: "Vehicle Readiness",
+                                defaultW: 4,  defaultH: 6,  minW: 3, minH: 4, maxH: 12, maxW: 6,
+                                requiredAnyPermission: ["view_inventory", "manage_technicians"],
                                 responsiveConstraints: [
                                     { atWidth: 800, minW: 4, maxW: 12 },
                                 ]

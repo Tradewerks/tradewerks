@@ -1,6 +1,7 @@
 import { Check, Flag, History, Link2, Lock, LockOpen, Pencil, Plus, Repeat, Send, ShieldCheck, Trash2, Unlink, UserCheck, UserX, X } from "lucide-react";
 import type React from "react";
 import type { ActivityLog } from "../../types/logs";
+import { documentStatusLabel } from "../lifecycle/documentStatusLabel";
 
 export type ChangeRow = {
 	key: string;
@@ -350,10 +351,16 @@ export const formatChange = (log: ActivityLog, tz: string): ChangeEntry => {
 		? Object.entries(log.changes).flatMap(([key, delta]) => {
 				if (isBreadcrumb(key) || isSensitiveKey(key)) return [];
 
-				const from = formatValue(key, delta.old, tz);
+				// Logs store the enum (Issued); the row reads as the badge does (Created).
+				const docStatus = key === "status" && (log.entity_type === "quote" || log.entity_type === "invoice");
+				const value = (v: unknown) =>
+					docStatus && typeof v === "string"
+						? documentStatusLabel(log.entity_type as "quote" | "invoice", v)
+						: formatValue(key, v, tz);
+				const from = value(delta.old);
 				const to = key === "acknowledged_at" && delta.new == null
 					? "Unacknowledged"
-					: formatValue(key, delta.new, tz);
+					: value(delta.new);
 				if (from === to) return [];
 
 				return [{ key, label: labelFor(key), from, to, refType: ID_REF_FIELDS[key]}];

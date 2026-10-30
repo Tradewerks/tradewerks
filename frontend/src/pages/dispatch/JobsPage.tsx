@@ -17,11 +17,18 @@ import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
 import SortControl from "../../components/ui/SortControl";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
-import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRangeUtils";
+import {
+	parseDateRangeFromParams,
+	matchesDateRange,
+	overlapsDateRange,
+	type DateRangeOption,
+} from "../../util/dateRangeUtils";
 import ContextToggle, { type JobsView } from "../../components/ui/ContextToggle";
 import PageHeader from "../../components/ui/PageHeader";
 import { usePermission } from "../../hooks/usePermission";
-import PageReportSection from "../../components/reports/PageReportSection";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 import type { SortDir } from "../../util/sortUtil";
 import {
 	withDir,
@@ -37,6 +44,20 @@ const jobStatusOptions = JobStatusValues.map((s) => ({
 	value: s,
 	label: addSpacesToCamelCase(s),
 }));
+
+// Plans are filtered by when they're in effect, so past and future ranges both
+// mean something; Tomorrow alone adds nothing over Today/Next 7 days.
+const PLAN_DATE_PRESETS: DateRangeOption[] = [
+	"all",
+	"today",
+	"last_7_days",
+	"last_30_days",
+	"this_month",
+	"next_7_days",
+	"next_30_days",
+	"next_month",
+	"custom",
+];
 
 const planStatusOptions = RecurringPlanStatusValues.map((s) => ({
 	value: s,
@@ -112,6 +133,12 @@ export default function JobsPage() {
 	const [isCreatePlanModalOpen, setIsCreatePlanModalOpen] = useState(false);
 	const [searchInput, setSearchInput] = useState("");
 	const [viewMode, setViewMode] = useState<JobsView>("jobs");
+	const report = usePageReport(
+		viewMode === "templates" ? "recurring_plans" : "jobs",
+		viewMode === "templates" ? "Recurring plans report" : "Jobs report",
+		// The plans list is empty without this permission; don't report on it.
+		{ allowed: viewMode !== "templates" || MANAGE_RECURRING_PLAN },
+	);
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
 	const { removeTerm: removeStatus } = useMultiSearch("status");
 	const { removeTerm: removePriority } = useMultiSearch("priority");
@@ -224,6 +251,8 @@ export default function JobsPage() {
 						_scheduleDate: scheduleDate,
 						_clientId: plan.client_id,
 						_recurringPlanId: plan.id,
+						_startsAt: new Date(plan.starts_at),
+						_endsAt: plan.ends_at ? new Date(plan.ends_at) : null,
 					};
 				}) || [];
 
@@ -254,8 +283,10 @@ export default function JobsPage() {
 			}
 
 			if (dateRange.option !== "all") {
+				// A plan's date is when it's in effect, not its next visit: "Today" means
+				// every plan running today.
 				templatesData = templatesData.filter((item) =>
-					matchesDateRange(item._scheduleDate, dateRange)
+					overlapsDateRange(item._startsAt, item._endsAt, dateRange)
 				);
 			}
 
@@ -518,7 +549,8 @@ export default function JobsPage() {
 
 	return (
 		<div className="text-text-primary">
-			<PageHeader title="Jobs">
+			<PageHeader title="Jobs" subtitle={<PageReportKpis report={report} />}>
+				<PageReportButton report={report} />
 				{CREATE_JOB && (
 					<button
 						className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -570,7 +602,6 @@ export default function JobsPage() {
 					)}
 				</div>
 			</PageHeader>
-			<PageReportSection page="jobs" label="Jobs report" />
 			<PageControls
 				className="mb-4"
 				left={
@@ -609,7 +640,10 @@ export default function JobsPage() {
 								options={jobPriorityOptions}
 							/>
 						)}
-						<DateRangeFilter paramKey="date" />
+						<DateRangeFilter
+							paramKey="date"
+							presets={viewMode === "templates" ? PLAN_DATE_PRESETS : undefined}
+						/>
 						{viewMode === "jobs" && (
 							<SortControl
 								options={[

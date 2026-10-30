@@ -52,8 +52,10 @@ import {
 import { placeActions } from "../../components/lifecycle/placement";
 import type { LifecycleStage } from "../../components/lifecycle/types";
 import { HEADER_PILL } from "../../components/documents/DocumentLineage";
+import { snapshotSource } from "../../types/tax";
 import { VisitStatusColors, VisitStatusLabels, type VisitLineItem } from "../../types/jobs";
 import {
+	formatConstraintTime,
 	formatCurrency,
 	formatDate,
 	formatDateTime,
@@ -317,15 +319,6 @@ export default function JobVisitDetailPage() {
 
 	const lineItems: VisitLineItem[] = visit.line_items || [];
 	const lineItemCount = lineItems.length;
-
-	const formatConstraintTime = (time: string | null | undefined): string => {
-		if (!time) return "";
-		const [hours, minutes] = time.split(":").map(Number);
-		const period = hours >= 12 ? "PM" : "AM";
-		const displayHours = hours % 12 || 12;
-		const displayMinutes = minutes > 0 ? `:${minutes.toString().padStart(2, "0")}` : "";
-		return `${displayHours}${displayMinutes} ${period}`;
-	};
 
 	const openEnded = visit.finish_constraint === "when_done";
 	const hasActuals = Boolean(visit.actual_start_at && visit.actual_end_at);
@@ -617,6 +610,7 @@ export default function JobVisitDetailPage() {
 		<FinancialSummary
 			lineItems={lineItems}
 			taxSnapshot={visit.tax_snapshot}
+			taxSource={snapshotSource(visit.tax_snapshot) ?? visit.job?.tax_source ?? null}
 			legacyTaxRate={visit.tax_rate != null ? Number(visit.tax_rate) : null}
 			legacyTaxAmount={visit.tax_amount != null ? Number(visit.tax_amount) : null}
 			subtotal={visit.subtotal != null ? Number(visit.subtotal) : null}
@@ -634,13 +628,26 @@ export default function JobVisitDetailPage() {
 			totalsContent={
 				// A plain ledger line, not the highlighted card the quote and
 				// invoice pages use: that would restate the Visit Total tile.
-				<div className="flex items-center justify-between text-sm">
-					<span className="text-text-primary font-semibold">
-						Total:
-					</span>
-					<span className="text-text-primary font-semibold tabular-nums">
-						{formatCurrency(Number(visit.total ?? 0))}
-					</span>
+				<div className="space-y-1.5">
+					{visit.job?.tax_needs_review && !visit.job.tax_review_ack_at && (
+						<p className="text-xs text-warning-text">
+							Tax review is pending on the job.{" "}
+							<Link
+								to={`/dispatch/jobs/${visit.job_id}`}
+								className="underline underline-offset-2"
+							>
+								Review on the job
+							</Link>
+						</p>
+					)}
+					<div className="flex items-center justify-between text-sm">
+						<span className="text-text-primary font-semibold">
+							Total:
+						</span>
+						<span className="text-text-primary font-semibold tabular-nums">
+							{formatCurrency(Number(visit.total ?? 0))}
+						</span>
+					</div>
 				</div>
 			}
 		/>
@@ -673,7 +680,7 @@ export default function JobVisitDetailPage() {
 				: null;
 
 	return (
-		<div className="text-text-primary pb-4 md:pb-6">
+		<div className="text-text-primary">
 			<div className="space-y-4">
 				<DetailHeader
 					title={visit.name ?? "Job Visit"}
@@ -834,7 +841,7 @@ export default function JobVisitDetailPage() {
 						   only ever be empty, the column points at the log that does
 						   hold this visit's rows. */
 						<Card title="Change History">
-							<div className="rounded-lg border border-dashed border-border-subtle p-6 text-center">
+							<div className="rounded-lg border border-dashed border-border-subtle p-6 text-center flex-1 flex flex-col items-center justify-center">
 								<p className="text-sm text-text-tertiary">
 									Changes to this visit are
 									recorded in the job's

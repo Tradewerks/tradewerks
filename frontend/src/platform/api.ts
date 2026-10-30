@@ -12,6 +12,7 @@ import type {
 	TierPatch,
 	OrgDetail,
 	OrgListPage,
+	TierFilter,
 	ResolvedEntitlements,
 	StaffChange,
 	StaffChangePreview,
@@ -56,8 +57,12 @@ export const platform = {
 	setup: (b: { code: string; email: string; name: string; password: string }) =>
 		data<{ pendingToken: string }>(platformApi.post("/platform/setup", b)),
 	login: (email: string, password: string) =>
-		data<{ stage: "mfa" | "enroll"; pendingToken: string }>(
+		data<{ stage: "mfa"; pendingToken: string } | { stage: "enroll_email" }>(
 			platformApi.post("/platform/auth/login", { email, password })
+		),
+	exchangeEnrollLink: (token: string) =>
+		data<{ pendingToken: string }>(
+			platformApi.post("/platform/auth/mfa/enroll/link", { token })
 		),
 	verifyMfa: (pending: string, b: { code?: string; recoveryCode?: string }) =>
 		data<StaffSession>(
@@ -99,10 +104,15 @@ export const platform = {
 		data<null>(platformApi.patch(`/platform/staff/${id}`, { status })),
 	resetStaffMfa: (id: string) =>
 		data<null>(platformApi.post(`/platform/staff/${id}/reset-mfa`)),
-	orgs: (q: string, page: number, trialEnding = false) =>
+	orgs: (q: string, page: number, trialEnding = false, tier?: TierFilter) =>
 		data<OrgListPage>(
 			platformApi.get("/platform/orgs", {
-				params: { q, page, ...(trialEnding && { trial_ending_within_days: 7 }) },
+				params: {
+					q,
+					page,
+					...(trialEnding && { trial_ending_within_days: 7 }),
+					...(tier && { tier: tier.key, ...(tier.version && { version: tier.version }) }),
+				},
 			})
 		),
 	createOrg: (b: CreateOrgBody) =>

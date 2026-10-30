@@ -36,7 +36,7 @@ import { canSeeWidget } from "../../lib/permissionGates";
 import ActivityFeed from "../../components/dashboard/ActivityFeed";
 import { useDispatcherByIdQuery, useUpdateDispatcherMutation } from "../../hooks/useDispatchers";
 import { DEFAULT_RESPONSIVE_LAYOUTS, WIDGET_CATALOG } from "../../lib/DashboardConfig";
-import { BREAKPOINTS, resolveConstraints, getActiveCols, fitLayout, randomizeLayout, removeWidget } from "../../lib/gridLayoutEngine";
+import { BREAKPOINTS, resolveConstraints, getActiveCols, fitLayout, randomizeLayout, removeWidget, stackLayout } from "../../lib/gridLayoutEngine";
 import { QUICKBOOKS_ENABLED } from "../../config/features";
 import AddWidgetModal from "../../components/widgets/AddWidgetModal";
 import MapWidget from "../../components/widgets/MapWidget";
@@ -55,6 +55,8 @@ import {
 	JobBacklogWidget,
 	PageReportWidget,
 } from "../../components/widgets/reports";
+import OverdueInvoicesWidget from "../../components/widgets/OverdueInvoicesWidget";
+import VehicleReadinessWidget from "../../components/widgets/VehicleReadinessWidget";
 
 
 /* Status underline on the technician badge. Eight statuses collapse to three
@@ -96,11 +98,6 @@ export default function DashboardPage() {
 	const [displayLayouts, setDisplayLayouts] = useState<ResponsiveLayouts>(DEFAULT_RESPONSIVE_LAYOUTS);
 	const [isEditMode, setIsEditMode] = useState(false);
 	const [isAddWidgetModalOpen, setIsAddWidgetModalOpen] = useState(false);
-
-	// Auto-grow: extra rows added to a widget when its content overflows its cell.
-	// Keyed by widget id; never persisted — purely a render-time fit-to-content pass.
-	const [autoExtra, setAutoExtra] = useState<Record<string, number>>({});
-	const widgetRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
 	// Seed saved layout when dispatcher data loads
 	useEffect(() => {
@@ -278,19 +275,13 @@ export default function DashboardPage() {
 		return { lg: c, md: c, sm: c };
 	}, [settledWidth, displayWidth]);
 
-	// Sync displayLayouts when layouts changes (drag/resize/reset/fit/widget add)
-	useEffect(() => { setDisplayLayouts(layouts); }, [layouts]);
-
-	// Auto-fit displayLayouts when col count changes
-	const prevColsRef = useRef(activeCols.lg);
+	// Sync displayLayouts when layouts or col count change; below 12 cols every widget stacks full width
 	useEffect(() => {
-		if (prevColsRef.current === activeCols.lg) return;
-		prevColsRef.current = activeCols.lg;
-		setDisplayLayouts(prev => ({
-			...prev,
-			lg: activeCols.lg === 12 ? (layouts.lg ?? []) : fitLayout(WIDGET_CATALOG, layouts.lg ?? [], activeCols.lg),
-		}));
-	}, [activeCols.lg, layouts.lg]);
+		setDisplayLayouts({
+			...layouts,
+			lg: activeCols.lg === 12 ? (layouts.lg ?? []) : stackLayout(layouts.lg ?? [], activeCols.lg),
+		});
+	}, [layouts, activeCols.lg]);
 
 	const constrainedLayouts = useMemo(() => {
 		const w = settledWidth || displayWidth;
@@ -298,82 +289,22 @@ export default function DashboardPage() {
 		// The grid must never be handed a layout entry it has no child for.
 		const display = (displayLayouts.lg ?? []).filter(item => canSeeWidget(user, WIDGET_CATALOG[item.i])).map(item => {
 			const c = resolveConstraints(WIDGET_CATALOG, item.i, w);
-			
+
 			const minW = Math.min(c.minW ?? 1, cols);
 			const maxW = Math.min(c.maxW ?? cols, cols);
-			
-			const baseH = Math.min(Math.max(item.h, c.minH ?? 1), c.maxH ?? 20);
-			// autoGrowMaxH is opt-in: widgets that don't declare it keep the
-			// existing unbounded fit-to-content behaviour.
-			const growCeiling = WIDGET_CATALOG[item.i]?.autoGrowMaxH;
-			const grown = baseH + (autoExtra[item.i] ?? 0);
-			const h = growCeiling ? Math.min(grown, growCeiling) : grown;
+
 			return {
 				...item,
 				...c,
 				minW,
 				maxW,
-				maxH: Math.max(c.maxH ?? 20, h),
+				maxH: c.maxH ?? 20,
 				w: Math.min(Math.max(item.w, minW), maxW),
-				h,
+				h: Math.min(Math.max(item.h, c.minH ?? 1), c.maxH ?? 20),
 			};
 		});
 		return { lg: display, md: display, sm: display };
-	}, [displayLayouts.lg, settledWidth, displayWidth, activeCols.lg, autoExtra, user]);
-
-	useEffect(() => { setAutoExtra({}); }, [layouts.lg, settledWidth, isEditMode]);
-
-	/* DORMANT — measured 2026-09-17, not yet fixed.
-	   `widgetRefs` is never populated, so this pass has nothing to measure and
-	   no widget has ever auto-grown. react-grid-layout 2.2.3 renders children
-	   via `cloneElement(child, { ref: elementRef, ... })`, and that ref replaces
-	   the callback ref set on the mapped wrapper below — so the map stays empty.
-	   Reviving it means merging rgl's ref with ours, which would switch
-	   fit-to-content on for every widget at once and resize dashboards people
-	   have already arranged. Deliberately left off pending that decision;
-	   widgets must size themselves without relying on this. */
-	useEffect(() => {
-		if (isEditMode || displayWidth <= 0) return;
-		const ROW_PX = 45 + 16;
-		const SAFETY_MAX_EXTRA = 40;
-
-		const measure = () => {
-			setAutoExtra(prev => {
-				const next = { ...prev };
-				let changed = false;
-				widgetRefs.current.forEach((wrapper, id) => {
-					const body = wrapper.firstElementChild?.lastElementChild as HTMLElement | undefined;
-					if (!body) return;
-					const overflow = body.scrollHeight - body.clientHeight;
-					const prevExtra = prev[id] ?? 0;
-					// A widget that has hit its autoGrowMaxH will keep overflowing
-					// for good — it scrolls from here. Cap the extra it can ask for
-					// so it stops requesting rows the render pass will discard,
-					// instead of climbing to SAFETY_MAX_EXTRA one render at a time.
-					const growCeiling = WIDGET_CATALOG[id]?.autoGrowMaxH;
-					const placed = (displayLayouts.lg ?? []).find(l => l.i === id);
-					const ceilingExtra = growCeiling && placed
-						? Math.max(0, growCeiling - placed.h)
-						: SAFETY_MAX_EXTRA;
-					const wantExtra = Math.min(
-						prevExtra + Math.ceil(overflow / ROW_PX),
-						ceilingExtra,
-						SAFETY_MAX_EXTRA
-					);
-					if (overflow > 2 && wantExtra !== prevExtra) {
-						next[id] = wantExtra;
-						changed = true;
-					}
-				});
-				return changed ? next : prev;
-			});
-		};
-
-		const ro = new ResizeObserver(measure);
-		widgetRefs.current.forEach(el => ro.observe(el));
-		measure();
-		return () => ro.disconnect();
-	}, [isEditMode, displayWidth, settledWidth, displayLayouts.lg, autoExtra]);
+	}, [displayLayouts.lg, settledWidth, displayWidth, activeCols.lg, user]);
 
 	function renderWidget(id: string) {
 		switch (id) {
@@ -548,13 +479,15 @@ export default function DashboardPage() {
 			case "report-aged-receivables-bar": return <AgedReceivablesColumnWidget />;
 			case "report-page-summary":    return <PageReportWidget />;
 			case "report-job-backlog":     return <JobBacklogWidget />;
+			case "overdue-invoices": 	   return <OverdueInvoicesWidget />;
+			case "vehicle-readiness": 	   return <VehicleReadinessWidget />;
 			default: return <div>Unknown widget: {id}</div>;
 		}
 	}
 
 	return (
 		<div className="min-h-0 bg-canvas text-text-primary w-full">
-			<div className="w-full px-3 sm:px-5 lg:px-6" ref={containerRef}>
+			<div className="w-full">
 				{/* Header */}
 				<div className="mb-3 flex items-end justify-between gap-4">
 					<div>
@@ -646,13 +579,10 @@ export default function DashboardPage() {
 								Reset
 							</button>
 							<button
-								onClick={() => {
-									const fitted = fitLayout(WIDGET_CATALOG, layouts.lg ?? [], activeCols.lg);
-									if (activeCols.lg === 12) handleLayoutSave(fitted);
-									else setDisplayLayouts(prev => ({ ...prev, lg: fitted }));
-								}}
-								title="Distribute widgets evenly across each row"
-								className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface hover:bg-surface-raised border border-border text-xs font-medium text-text-secondary hover:text-text-primary transition-colors"
+								onClick={() => handleLayoutSave(fitLayout(WIDGET_CATALOG, layouts.lg ?? [], activeCols.lg))}
+								disabled={activeCols.lg < 12}
+								title={activeCols.lg < 12 ? "Widgets stack full width on narrow screens" : "Distribute widgets evenly across each row"}
+								className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-surface hover:bg-surface-raised border border-border text-xs font-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
 							>
 								<StretchHorizontal size={13} />
 								Fit
@@ -670,7 +600,11 @@ export default function DashboardPage() {
 				</div>
 
 				{/* Dashboard grid */}
-				<div className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} px-2 py-2`} style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}>
+				<div 
+					ref={containerRef}
+					className={`rgl-grid ${isEditMode ? "show-grid" : ""} ${isResizing ? "no-transitions" : ""} -mx-4 -mb-4`}
+					style={{ '--grid-width': `${displayWidth}px` } as React.CSSProperties}
+				>
 					{displayWidth > 0 && dispatcher && <ResponsiveGridLayout
 						key={`grid-${dispatcher.id}-${dispatcher.dashboard_layout ? 'saved' : 'default'}`}
 						width={displayWidth}
@@ -703,15 +637,10 @@ export default function DashboardPage() {
 							} else {
 								setDisplayLayouts(prev => ({ ...prev, lg: layout }));
 							}
-						}}
-
+						}}					
 					>
 						{Object.keys(WIDGET_CATALOG).filter(id => layouts.lg?.some(l => l.i === id) && canSeeWidget(user, WIDGET_CATALOG[id])).map((id) => (
 							<div key={id}
-								ref={(el) => {
-									if (el) widgetRefs.current.set(id, el);
-									else widgetRefs.current.delete(id);
-								}}
 								className={isEditMode ?
 									"group relative cursor-grab active:cursor-grabbing h-full hover:border hover:border-border-strong hover:border-primary hover:rounded-xl hover:shadow hover:shadow-primary"
 									: "relative h-full"}
@@ -733,7 +662,9 @@ export default function DashboardPage() {
 									</button>
 								)}
 
-								{renderWidget(id)}
+								<div inert={isEditMode} className="h-full">
+									{renderWidget(id)}
+								</div>
 							</div>
 						))}
 					</ResponsiveGridLayout>}

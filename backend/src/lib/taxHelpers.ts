@@ -24,16 +24,27 @@ export interface DocumentLineItemRaw {
 	taxable: boolean;
 }
 
+export interface ResolveTaxInputOptions {
+	/** Already loaded by the caller; skips the client query. */
+	client?: { is_tax_exempt: boolean; tax_group_id: string | null } | null;
+	/** Replaces the org-default lookup for lines with no group of their own (spec §4.3). */
+	defaultGroup?: TaxGroupConfig | null;
+}
+
 export async function resolveLineItemTaxInputs(
 	lineItems: DocumentLineItemRaw[],
 	clientId: string,
 	organizationId: string,
 	tx: Prisma.TransactionClient,
+	opts: ResolveTaxInputOptions = {},
 ): Promise<{ inputs: LineItemTaxInput[]; clientExempt: boolean }> {
-	const client = await tx.client.findFirst({
-		where: { id: clientId, organization_id: organizationId },
-		select: { is_tax_exempt: true, tax_group_id: true },
-	});
+	const client =
+		opts.client !== undefined
+			? opts.client
+			: await tx.client.findFirst({
+					where: { id: clientId, organization_id: organizationId },
+					select: { is_tax_exempt: true, tax_group_id: true },
+				});
 
 	const clientExempt = client?.is_tax_exempt ?? false;
 
@@ -58,7 +69,10 @@ export async function resolveLineItemTaxInputs(
 	// Only fetch org default when at least one line item has no explicit group
 	// and the client also has no group fallback — avoids an unnecessary DB query
 	// in the common case where all items are explicitly assigned.
-	const needsOrgDefault = lineItems.some((li) => !li.tax_group_id) && !client?.tax_group_id;
+	const needsOrgDefault =
+		opts.defaultGroup === undefined &&
+		lineItems.some((li) => !li.tax_group_id) &&
+		!client?.tax_group_id;
 
 	const [fetchedGroups, orgDefaultGroup] = await Promise.all([
 		neededGroupIds.size > 0
@@ -86,7 +100,12 @@ export async function resolveLineItemTaxInputs(
 	for (const g of fetchedGroups) {
 		taxGroupCache.set(g.id, mapPrismaTaxGroup(g));
 	}
-	const orgDefault = orgDefaultGroup ? mapPrismaTaxGroup(orgDefaultGroup) : null;
+	const orgDefault =
+		opts.defaultGroup !== undefined
+			? opts.defaultGroup
+			: orgDefaultGroup
+				? mapPrismaTaxGroup(orgDefaultGroup)
+				: null;
 
 	const inputs: LineItemTaxInput[] = lineItems.map((li) => {
 		let resolvedGroup: TaxGroupConfig | null = null;
@@ -106,4 +125,43 @@ export async function resolveLineItemTaxInputs(
 	});
 
 	return { inputs, clientExempt: false };
+}
+
+/** line.tax_group_id is an FK to tax_group but not to the caller's org; this closes that. */
+export async function assertTaxGroupsInOrg(
+	tx: Prisma.TransactionClient,
+	organizationId: string,
+	ids: (string | null | undefined)[],
+): Promise<void> {
+	const wanted = [...new Set(ids.filter((v): v is string => !!v))];
+	if (wanted.length === 0) return;
+	const found = await tx.tax_group.count({
+		where: { id: { in: wanted }, organization_id: organizationId },
+	});
+	if (found !== wanted.length) throw new Error("Tax group not found");
+}
+
+interface TaxGroupReader {
+	tax_group: {
+		findMany(args: {
+			where: { id: { in: string[] }; organization_id: string };
+			select: { id: true };
+		}): Promise<{ id: string }[]>;
+	};
+}
+
+/** Non-throwing form of {@link assertTaxGroupsInOrg}, for callers that return `{ err }`. */
+export async function findForeignTaxGroupIds(
+	client: TaxGroupReader,
+	organizationId: string,
+	ids: readonly (string | null | undefined)[],
+): Promise<string[]> {
+	const wanted = [...new Set(ids.filter((v): v is string => !!v))];
+	if (wanted.length === 0) return [];
+	const found = await client.tax_group.findMany({
+		where: { id: { in: wanted }, organization_id: organizationId },
+		select: { id: true },
+	});
+	const valid = new Set(found.map((g) => g.id));
+	return wanted.filter((id) => !valid.has(id));
 }

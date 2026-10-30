@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
 import { moduleQuery } from "./moduleQuery";
 import type {
@@ -15,6 +16,8 @@ import type {
 	RecurringPlanNote,
 	CreateRecurringPlanNoteInput,
 	UpdateRecurringPlanNoteInput,
+	TaxEstimate,
+	RecurringTaxEstimateInput,
 } from "../types/recurringPlans";
 import * as recurringPlanApi from "../api/recurringPlans";
 import type { Job } from "../types/jobs";
@@ -512,3 +515,64 @@ export const useSkippedDatesQuery = (jobId: string | undefined) =>
 		enabled: !!jobId,
 		staleTime: 5 * 60_000,
 	});
+
+export const useRecurringTaxEstimateQuery = (
+	input: RecurringTaxEstimateInput | null
+): UseQueryResult<TaxEstimate, Error> =>
+	useQuery({
+		queryKey: ["recurringTaxEstimate", input],
+		queryFn: () => recurringPlanApi.getRecurringTaxEstimate(input as RecurringTaxEstimateInput),
+		enabled: !!input,
+		// Keep the last figure while retyping lines, never across a client/address change or a cleared input.
+		placeholderData: (prev, prevQuery) => {
+			const before = prevQuery?.queryKey[1] as RecurringTaxEstimateInput | null | undefined;
+			if (!input || !before) return undefined;
+			return before.client_id === input.client_id && before.address === input.address
+				? prev
+				: undefined;
+		},
+	});
+
+const DEBOUNCE_MS = 300;
+
+/** Builds the estimate input from editor state; null (query disabled) without client or address. */
+export function useDebouncedRecurringTaxEstimate(
+	parts: {
+		clientId: string;
+		address: string | undefined;
+		coords?: RecurringTaxEstimateInput["coords"];
+		lineItems: { quantity: number; unit_price: number; taxable?: boolean; tax_group_id?: string | null }[];
+		planId?: string;
+	}
+): UseQueryResult<TaxEstimate, Error> {
+	const { clientId, address, coords, lineItems, planId } = parts;
+	const built = useMemo<RecurringTaxEstimateInput | null>(() => {
+		if (!clientId.trim() || !address?.trim()) return null;
+		return {
+			client_id: clientId.trim(),
+			address,
+			coords: coords ?? null,
+			line_items: lineItems
+				.filter((li) => Number(li.quantity) > 0)
+				.map((li) => ({
+					quantity: Number(li.quantity) || 0,
+					unit_price: Number(li.unit_price) || 0,
+					taxable: li.taxable ?? true,
+					tax_group_id: li.tax_group_id ?? null,
+				})),
+			...(planId ? { plan_id: planId } : {}),
+		};
+	}, [clientId, address, coords, lineItems, planId]);
+	const key = JSON.stringify(built);
+	const [debounced, setDebounced] = useState(built);
+	useEffect(() => {
+		const t = setTimeout(() => setDebounced(built), DEBOUNCE_MS);
+		return () => clearTimeout(t);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [key]);
+	const settled =
+		built && debounced && debounced.client_id === built.client_id && debounced.address === built.address
+			? debounced
+			: null;
+	return useRecurringTaxEstimateQuery(settled);
+}

@@ -22,6 +22,11 @@ vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
 
+vi.mock("../../services/socketService.js", () => ({
+	getSocket: vi.fn(() => ({ emit: vi.fn() })),
+	emitToOrg: vi.fn(),
+}));
+
 // clientsController pulls these in; neither is exercised by the deleteClient guard.
 vi.mock("../../services/quickbooksService.js", () => ({
 	getOrgRealmId: vi.fn().mockResolvedValue(null),

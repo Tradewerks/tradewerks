@@ -1,22 +1,26 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import Card from "../../components/ui/Card";
 import SegmentedToggle from "../../components/ui/SegmentedToggle";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { useToast } from "../../components/ui/useToast";
 import { platform, platformError } from "../api";
 import { useCatalog, useModuleLabel, useTierHistory, useTierMutation, useTiers } from "../hooks";
+import RecordHeader from "../components/RecordHeader";
 import HistoryList from "../components/HistoryList";
 import MoveOrgsDialog from "../components/MoveOrgsDialog";
 import TierActionDialog, { type TierAction } from "../components/TierActionDialog";
 import TierContentsForm from "../components/TierContentsForm";
+import TierOrgsPanel from "../components/TierOrgsPanel";
 import {
-	card,
+	canvasChip,
 	chip,
 	isAssignable,
+	primaryButton,
 	shortDate,
 	smallButton,
-	textButton,
 } from "../components/orgDetailUi";
+import { HEADER_BTN_SECONDARY, HEADER_META } from "../../components/ui/headerActions";
 import { showLimit } from "../breakdown";
 import { LIMIT_KEYS, LIMIT_LABELS } from "../limits";
 import { tierFlags } from "../tierForm";
@@ -34,10 +38,22 @@ const contentsOf = (v: TierRow["versions"][number]): TierContents => ({
 	limits: v.limits as TierContents["limits"],
 });
 
+type TierTab = "versions" | "orgs" | "history";
+
 export default function TierDetailPage() {
 	const { tierKey = "" } = useParams();
 	const [params, setParams] = useSearchParams();
-	const tab = params.get("tab") === "history" ? "history" : "versions";
+	const tabParam = params.get("tab");
+	const tab: TierTab = tabParam === "history" || tabParam === "orgs" ? tabParam : "versions";
+	const orgVersion = Number(params.get("version")) || null;
+	const showTab = (id: TierTab, version: number | null = null) =>
+		setParams(
+			{
+				...(id !== "versions" && { tab: id }),
+				...(id === "orgs" && version && { version: String(version) }),
+			},
+			{ replace: true }
+		);
 	const tiers = useTiers();
 	const catalog = useCatalog();
 	const history = useTierHistory(tierKey);
@@ -60,7 +76,7 @@ export default function TierDetailPage() {
 					to="/platform/tiers"
 					className="text-sm text-primary hover:underline"
 				>
-					← Tiers
+					Back to tiers
 				</Link>
 				{tiers.error ? (
 					<FormErrorBanner message={platformError(tiers.error)} />
@@ -90,52 +106,45 @@ export default function TierDetailPage() {
 
 	return (
 		<div className="space-y-4">
-			<Link to="/platform/tiers" className="text-sm text-primary hover:underline">
-				← Tiers
-			</Link>
-			<div className="flex flex-wrap items-start justify-between gap-2">
-				<div className="space-y-2">
-					<h1 className="text-lg font-semibold text-text-primary">
-						{tier.label}{" "}
-						<span className="text-sm font-normal text-text-tertiary">
-							{tier.key}
-						</span>
-					</h1>
-					<div className="flex flex-wrap gap-2">
-						<span className={chip}>
-							Latest v{latest?.version}
-						</span>
+			<RecordHeader
+				title={tier.label}
+				subtitle={tier.key}
+				badges={
+					<>
+						<span className={canvasChip}>Latest v{latest?.version}</span>
 						{tierFlags(tier).map((f) => (
-							<span key={f} className={chip}>
+							<span key={f} className={canvasChip}>
 								{f}
 							</span>
 						))}
-					</div>
-				</div>
-				<div className="flex flex-wrap gap-2">
-					{editable && (
-						<button
-							type="button"
-							className={smallButton}
-							onClick={() => setEditing(true)}
-						>
-							Edit
-						</button>
-					)}
-					{actions
-						.filter((a) => a.show)
-						.map((a) => (
+					</>
+				}
+				actions={
+					<>
+						{editable && (
 							<button
-								key={a.id}
 								type="button"
-								className={textButton}
-								onClick={() => setAction(a.id)}
+								className={primaryButton}
+								onClick={() => setEditing(true)}
 							>
-								{a.text}
+								Edit
 							</button>
-						))}
-				</div>
-			</div>
+						)}
+						{actions
+							.filter((a) => a.show)
+							.map((a) => (
+								<button
+									key={a.id}
+									type="button"
+									className={smallButton}
+									onClick={() => setAction(a.id)}
+								>
+									{a.text}
+								</button>
+							))}
+					</>
+				}
+			/>
 			{olderOrgs > 0 && editable && (
 				<div
 					role="status"
@@ -147,27 +156,34 @@ export default function TierDetailPage() {
 					</span>
 					<button
 						type="button"
-						className={textButton}
+						className={smallButton}
 						onClick={() => setMoveFrom(oldest.id)}
 					>
 						Move orgs…
 					</button>
 				</div>
 			)}
-			<SegmentedToggle<"versions" | "history">
+			<SegmentedToggle<TierTab>
 				ariaLabel="Tier view"
 				value={tab}
 				options={[
 					{ id: "versions", label: "Versions" },
+					{
+						id: "orgs",
+						label: "Organizations",
+						badge: tier.versions.reduce((n, v) => n + v.org_count, 0),
+					},
 					{ id: "history", label: "History" },
 				]}
-				onChange={(id) =>
-					setParams(id === "history" ? { tab: "history" } : {}, {
-						replace: true,
-					})
-				}
+				onChange={(id) => showTab(id)}
 			/>
-			{tab === "history" ? (
+			{tab === "orgs" ? (
+				<TierOrgsPanel
+					tier={tier}
+					version={orgVersion}
+					onVersionChange={(v) => showTab("orgs", v)}
+				/>
+			) : tab === "history" ? (
 				<HistoryList
 					rows={history.data}
 					isLoading={history.isLoading}
@@ -177,87 +193,90 @@ export default function TierDetailPage() {
 			) : (
 				<ul className="space-y-3">
 					{tier.versions.map((v, i) => (
-						<li key={v.id} className={card}>
-							<div className="flex flex-wrap items-center gap-2 text-sm">
-								<span className="font-semibold text-text-primary">
-									v{v.version}
-								</span>
-								{i === 0 && (
-									<span className={chip}>
-										Latest
-									</span>
-								)}
-								<span className="text-text-secondary tabular-nums">
-									{v.org_count} org
-									{v.org_count === 1
-										? ""
-										: "s"}
-									{v.trial_org_count > 0 &&
-										` · ${v.trial_org_count} on trial`}
-								</span>
-								<span className="ml-auto text-xs text-text-tertiary">
-									{shortDate(v.created_at)}
-								</span>
-							</div>
-							{v.note && (
-								<p className="text-sm text-text-secondary">
-									{v.note}
-								</p>
-							)}
-							<div className="flex flex-wrap gap-1">
-								{v.modules.length === 0 ? (
-									<span className="text-xs text-text-tertiary">
-										No paid features or
-										optional modules
-									</span>
-								) : (
-									v.modules.map((m) => (
-										<span
-											key={m}
-											className={
-												chip
+						<li key={v.id}>
+							<Card
+								title={`v${v.version}`}
+								headerAction={
+									<div className="flex flex-wrap items-center gap-2">
+										{i === 0 && <span className={chip}>Latest</span>}
+										{v.org_count > 0 ? (
+											<button
+												type="button"
+												className={`${HEADER_BTN_SECONDARY} tabular-nums`}
+												onClick={() => showTab("orgs", v.version)}
+											>
+												{v.org_count} org{v.org_count === 1 ? "" : "s"}
+												{v.trial_org_count > 0 && ` · ${v.trial_org_count} on trial`}
+											</button>
+										) : (
+											<span className={HEADER_META}>0 orgs</span>
+										)}
+										<span className={HEADER_META}>{shortDate(v.created_at)}</span>
+									</div>
+								}
+							>
+								<div className="space-y-3">
+									{v.note && (
+										<p className="text-sm text-text-secondary">
+											{v.note}
+										</p>
+									)}
+									<div className="flex flex-wrap gap-1">
+										{v.modules.length === 0 ? (
+											<span className="text-xs text-text-tertiary">
+												No paid features or
+												optional modules
+											</span>
+										) : (
+											v.modules.map((m) => (
+												<span
+													key={m}
+													className={
+														chip
+													}
+												>
+													{moduleLabel(
+														m
+													)}
+												</span>
+											))
+										)}
+									</div>
+									<dl className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+										{LIMIT_KEYS.map((k) => (
+											<div key={k}>
+												<dt className="text-text-tertiary">
+													{
+														LIMIT_LABELS[
+															k
+														]
+													}
+												</dt>
+												<dd className="text-text-primary tabular-nums">
+													{showLimit(
+														v
+															.limits[
+															k
+														] ??
+															null
+													)}
+												</dd>
+											</div>
+										))}
+									</dl>
+									{i > 0 && v.org_count > 0 && editable && (
+										<button
+											type="button"
+											className={smallButton}
+											onClick={() =>
+												setMoveFrom(v.id)
 											}
 										>
-											{moduleLabel(
-												m
-											)}
-										</span>
-									))
-								)}
-							</div>
-							<dl className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-								{LIMIT_KEYS.map((k) => (
-									<div key={k}>
-										<dt className="text-text-tertiary">
-											{
-												LIMIT_LABELS[
-													k
-												]
-											}
-										</dt>
-										<dd className="text-text-primary tabular-nums">
-											{showLimit(
-												v
-													.limits[
-													k
-												] ??
-													null
-											)}
-										</dd>
-									</div>
-								))}
-							</dl>
-							{i > 0 && v.org_count > 0 && editable && (
-								<button
-									type="button"
-									className={textButton}
-									onClick={() =>
-										setMoveFrom(v.id)
-									}
-								>
-									Move orgs…
-								</button>
-							)}
+											Move orgs…
+										</button>
+									)}
+								</div>
+							</Card>
 						</li>
 					))}
 				</ul>

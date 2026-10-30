@@ -38,6 +38,9 @@ const changeSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("limit"), key: limitKey, override }),
 ]);
 const orgId = (req: Request) => param(req, "id");
+// Past Postgres int4 the query fails with a 500 instead of matching nothing.
+const MAX_VERSION = 2_147_483_647;
+const MAX_PAGE = 10_000;
 const createOrgSchema = z.object({
 	name,
 	admin_name: name,
@@ -75,13 +78,19 @@ export function registerOrgs(router: Router): void {
 	router.get("/orgs", ...staff, async (req, res) => {
 		const q =
 			typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
-		const page = Math.max(
-			1,
-			Number.parseInt(String(req.query.page ?? "1"), 10) || 1,
+		const page = Math.min(
+			Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1),
+			MAX_PAGE,
 		);
 		const days = Number.parseInt(String(req.query.trial_ending_within_days ?? ""), 10);
 		const trialEnding = days >= 1 && days <= 30 ? days : undefined;
-		res.json(createSuccessResponse(await listOrgs(q, page, trialEnding)));
+		const tierKey =
+			typeof req.query.tier === "string" ? req.query.tier.trim().slice(0, 64) : "";
+		const version = Number.parseInt(String(req.query.version ?? ""), 10);
+		const tier = tierKey
+			? { key: tierKey, ...(version >= 1 && version <= MAX_VERSION && { version }) }
+			: undefined;
+		res.json(createSuccessResponse(await listOrgs(q, page, trialEnding, tier)));
 	});
 
 	router.post("/orgs", ...staff, async (req, res) => {

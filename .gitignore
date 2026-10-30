@@ -15,3 +15,7 @@ docs/superpowers/
 
 # Codex local config (contains API tokens)
 .codex/
+
+# Stray tool caches when vitest/vite run from the repo root
+node_modules/
+backend/generated/*

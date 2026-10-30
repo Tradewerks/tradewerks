@@ -88,7 +88,7 @@ export default function ProjectNoteManager({ projectId }: ProjectNoteManagerProp
 					content,
 					photos: [
 						...existingPhotos.map((p) => ({ id: p.id, photo_url: p.photo_url, photo_label: p.photo_label })),
-						...photos.map((p) => ({ photo_url: p.photo_url, photo_label: p.photo_label })),
+						...photos.map((p) => ({ photo_url: p.photo_url, photo_label: p.photo_label, photo_name: p.photo_name })),
 					],
 				};
 
@@ -105,6 +105,7 @@ export default function ProjectNoteManager({ projectId }: ProjectNoteManagerProp
 						photos: photos.map((p) => ({
 							photo_url: p.photo_url,
 							photo_label: p.photo_label,
+							photo_name: p.photo_name,
 						})),
 					},
 				});

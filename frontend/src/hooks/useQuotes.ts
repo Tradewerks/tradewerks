@@ -200,6 +200,11 @@ export const useSendQuoteMutation = () => {
 			queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 			queryClient.invalidateQueries({ queryKey: ["disputes", "quote", updatedQuote.id] });
 		},
+		// A draft is finalized before the email goes out, so a failed send can still have
+		// moved it to Created.
+		onError: (_err, { id }) => {
+			queryClient.invalidateQueries({ queryKey: ["quotes", id] });
+		},
 	});
 };
 
@@ -358,8 +363,8 @@ export const useUpdateQuoteNoteMutation = () => {
 			noteId: string;
 			data: UpdateQuoteNoteInput;
 		}) => updateQuoteNote(quoteId, noteId, data),
-		onSuccess: (_, variables) => {
-			queryClient.invalidateQueries({
+		onSuccess: async (_, variables) => {
+			await queryClient.invalidateQueries({
 				queryKey: ["quotes", variables.quoteId, "notes"],
 			});
 		},

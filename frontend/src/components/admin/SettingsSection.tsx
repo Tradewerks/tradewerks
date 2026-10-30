@@ -5,6 +5,8 @@ import {
 	useUploadOrgLogo,
 	useDeleteOrgLogo,
 	useUpdateOrgSettings,
+	useOrgCosting,
+	useUpdateOrgCosting,
 } from "../../hooks/useOrg";
 import type {
 	OrgSettings,
@@ -695,15 +697,163 @@ function Toggle({ checked, onChange, label }: ToggleProps) {
 
 // ── Settings page shell ───────────────────────────────────────────────────────
 
+// Own state and own submit, deliberately not folded into OrgSettingsSection:
+// that form posts a fixed full payload on every save, so a numeric field sitting
+// in it as "" would 400 every organization save, not just this one.
+function CostingSettingsSection() {
+	const { data: costing, isLoading } = useOrgCosting();
+	const updateMutation = useUpdateOrgCosting();
+
+	const [overhead, setOverhead] = useState("");
+	const [perMile, setPerMile] = useState("");
+	const [rate, setRate] = useState("");
+	const [error, setError] = useState<string | null>(null);
+	const [saved, setSaved] = useState(false);
+
+	useEffect(() => {
+		if (!costing) return;
+		setOverhead(costing.monthly_overhead ?? "");
+		setPerMile(costing.cost_per_mile ?? "");
+		setRate(costing.overhead_rate_per_hour ?? "");
+	}, [costing]);
+
+	const handleSave = async () => {
+		const parsedOverhead = Number(overhead);
+		const parsedPerMile = Number(perMile);
+		if (
+			overhead.trim() === "" ||
+			perMile.trim() === "" ||
+			Number.isNaN(parsedOverhead) ||
+			Number.isNaN(parsedPerMile) ||
+			parsedOverhead < 0 ||
+			parsedPerMile < 0
+		) {
+			setError("Monthly overhead and cost per mile must be numbers of 0 or more");
+			return;
+		}
+		// Blank is legal here and means "not set" — the report dashes overhead rather
+		// than pricing it at 0.
+		const parsedRate = rate.trim() === "" ? null : Number(rate);
+		if (parsedRate !== null && (Number.isNaN(parsedRate) || parsedRate < 0)) {
+			setError("Overhead rate must be a number of 0 or more, or blank");
+			return;
+		}
+		setError(null);
+		try {
+			await updateMutation.mutateAsync({
+				monthly_overhead: parsedOverhead,
+				cost_per_mile: parsedPerMile,
+				overhead_rate_per_hour: parsedRate,
+			});
+			setSaved(true);
+			setTimeout(() => setSaved(false), 2000);
+		} catch {
+			setError("Could not save costing settings");
+		}
+	};
+
+	const field = (
+		id: string,
+		label: string,
+		help: string,
+		value: string,
+		onChange: (v: string) => void,
+		unit: string,
+		placeholder?: string,
+	) => (
+		<div>
+			<label htmlFor={id} className="mb-1 block text-xs font-medium text-text-tertiary">
+				{label}
+			</label>
+			<p className="mb-2 text-xs text-text-muted">{help}</p>
+			<div className="flex items-center gap-2">
+				<span className="text-xs text-text-muted">$</span>
+				<input
+					id={id}
+					type="number"
+					step="any"
+					min="0"
+					value={value}
+					onChange={(e) => onChange(e.target.value)}
+					placeholder={placeholder}
+					className={`${inputBase} max-w-[140px]`}
+					disabled={updateMutation.isPending}
+				/>
+				<span className="text-xs text-text-muted">{unit}</span>
+			</div>
+		</div>
+	);
+
+	return (
+		<div className="rounded-lg border border-border-subtle bg-base">
+			<form
+				onSubmit={(e) => {
+					e.preventDefault();
+					handleSave();
+				}}
+				className="space-y-5 px-5 py-5"
+			>
+				{isLoading ? (
+					<Loader2 className="h-4 w-4 animate-spin text-text-muted" />
+				) : (
+					<>
+						{field(
+							"costing-overhead",
+							"Monthly Overhead",
+							"Fixed monthly costs — rent, insurance, software. Used to measure how much of the month the jobs actually absorbed.",
+							overhead,
+							setOverhead,
+							"/ month",
+						)}
+						{field(
+							"costing-per-mile",
+							"Cost Per Mile",
+							"Fuel, maintenance, and depreciation per mile driven. Defaults to the IRS business rate ($0.76).",
+							perMile,
+							setPerMile,
+							"/ mile",
+						)}
+						{field(
+							"costing-rate",
+							"Overhead Rate",
+							"Charged per hour worked on a job. Leave blank to leave overhead out of the profitability report. Zero would price it as free.",
+							rate,
+							setRate,
+							"/ hour",
+							"Not set",
+						)}
+					</>
+				)}
+
+				<div className="flex items-center gap-3">
+					<button
+						type="submit"
+						disabled={updateMutation.isPending || isLoading}
+						className="flex items-center gap-1.5 rounded-md bg-primary-hover px-4 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						{updateMutation.isPending && <Loader2 size={12} className="animate-spin" />}
+						{updateMutation.isPending ? "Saving…" : "Save Changes"}
+					</button>
+					{saved && <span className="text-xs text-success-text">Changes saved.</span>}
+					{error && <span className="text-xs text-error-text">{error}</span>}
+				</div>
+			</form>
+		</div>
+	);
+}
+
 export default function SettingsSection() {
 	const [showTaxInactive, setShowTaxInactive] = useState(false);
 
 	const MANAGE_ORG = usePermission("manage_organization");
 	const MANAGE_TAX = usePermission("manage_taxes");
+	// GET /org/costing is gated on view_reports, PATCH on manage_organization —
+	// both are needed for the section to load and save.
+	const VIEW_REPORTS = usePermission("view_reports");
 
 	return (
-		<div className="max-w-6xl">
-			<div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2 lg:items-start">
+		<div className="max-w-6xl 2xl:max-w-none">
+			<div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2 lg:items-start 2xl:grid-cols-3">
 				{MANAGE_ORG && (
 					<SettingRow
 						title="Organization"
@@ -716,7 +866,7 @@ export default function SettingsSection() {
 				{MANAGE_TAX && (
 					<SettingRow
 						title="Tax"
-						description="Rates and groups applied to quotes and invoices."
+						description="How tax is calculated, and the groups and rates it uses."
 						action={
 							<Toggle
 								checked={showTaxInactive}
@@ -728,6 +878,14 @@ export default function SettingsSection() {
 						}
 					>
 						<TaxSettingsSection showInactive={showTaxInactive} />
+					</SettingRow>
+				)}
+				{MANAGE_ORG && VIEW_REPORTS && (
+					<SettingRow
+						title="Costing"
+						description="Overhead and mileage rates used by the profitability report."
+					>
+						<CostingSettingsSection />
 					</SettingRow>
 				)}
 			</div>

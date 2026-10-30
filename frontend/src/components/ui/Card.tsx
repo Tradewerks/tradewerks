@@ -12,9 +12,11 @@ interface CardProps {
 	/* Drops the body padding for content that runs edge to edge under the header
 	   divider (row lists with their own dividers and gutters). */
 	flush?: boolean;
+	/* Keeps the header on one line: the title truncates instead of wrapping. */
+	noWrap?: boolean;
 }
 
-export default function Card({ title, headerAction, children, className = "", scrollable = false, quietScroll = false, flush = false }: CardProps) {
+export default function Card({ title, headerAction, children, className = "", scrollable = false, quietScroll = false, flush = false, noWrap = false }: CardProps) {
 	return (
 		<div
 			className={`bg-base border border-border-subtle rounded-xl overflow-hidden flex flex-col ${className}`}
@@ -30,9 +32,9 @@ export default function Card({ title, headerAction, children, className = "", sc
 				   (ui/headerActions): py-3.5 + 28px + the 1px divider, the same
 				   height a title-only p-4 header always had. A row only grows when
 				   it wraps, so side-by-side cards keep their dividers on one line. */
-				<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 min-h-[57px] px-4 py-3.5 border-b border-border-subtle">
-					<h3 className="font-semibold text-text-primary">{title}</h3>
-					{headerAction && <div>{headerAction}</div>}
+				<div className={`flex ${noWrap ? "flex-nowrap" : "flex-wrap"} items-center justify-between gap-x-3 gap-y-2 min-h-[57px] px-4 py-3.5 border-b border-border-subtle`}>
+					<h3 className={`font-semibold text-text-primary${noWrap ? " truncate min-w-0" : ""}`}>{title}</h3>
+					{headerAction && <div className={noWrap ? "shrink-0 whitespace-nowrap" : undefined}>{headerAction}</div>}
 				</div>
 			)}
 			<div className={`${flush ? "" : "p-4 "}flex-1 flex flex-col min-h-0${scrollable ? " widget-scroll" : ""}${scrollable && quietScroll ? " scrollbar-on-hover" : ""}`}>{children}</div>

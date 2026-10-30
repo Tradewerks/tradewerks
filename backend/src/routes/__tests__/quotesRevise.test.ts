@@ -12,6 +12,8 @@ vi.mock("../../lib/requirePermissions.js", () => ({
 		(mw as unknown as { __permission: string }).__permission = permission;
 		return mw;
 	},
+	// Loaded with the tax routes the quote router imports; never under test here.
+	requireAnyPermission: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 vi.mock("../../db.js", async () => ({
@@ -78,6 +80,7 @@ vi.mock("../../controllers/logsController.js", () => ({
 import quotesRouter from "../quotes.js";
 import { callRoute, getHandlers } from "./harness.js";
 import { createQuoteRevision } from "../../services/quoteRevision.js";
+import { updateQuote } from "../../controllers/quotesController.js";
 
 const mockCreateQuoteRevision = vi.mocked(createQuoteRevision);
 
@@ -121,7 +124,7 @@ describe("POST /quotes/:id/revise", () => {
 
 	it("returns 422 for a refusal that is not a not-found", async () => {
 		mockCreateQuoteRevision.mockResolvedValue({
-			err: "A Draft quote cannot be revised. Revisions may be created from: Issued, Approved, Rejected, Expired.",
+			err: "A Draft quote cannot be revised. Revisions may be created from: Created, Approved, Rejected, Expired.",
 		});
 
 		const res = await revise();
@@ -145,5 +148,29 @@ describe("POST /quotes/:id/revise", () => {
 		expect(res.status).toBe(200);
 		expect(res.body.success).toBe(true);
 		expect(res.body.data).toEqual({ id: "q2", quote_number: "Q-1043" });
+	});
+});
+
+describe("PUT /quotes/:id — address tax choice refusal", () => {
+	it("answers 409 with the typed code and the kept-rate details", async () => {
+		const details = {
+			rate_label: "La Crosse, WI",
+			rate: 0.055,
+			documents: [{ kind: "quote", id: "q1", number: "Q-0010" }],
+		};
+		vi.mocked(updateQuote).mockResolvedValue({
+			err: "The address changed on a document taxed at a kept address rate. Choose which tax to use.",
+			code: "ADDRESS_TAX_CHOICE_REQUIRED",
+			details,
+			item: undefined,
+		} as never);
+
+		const res = await callRoute(quotesRouter, "put", "/:id", {
+			params: { id: "q1" },
+			body: { address: "100 N State St" },
+		});
+
+		expect(res.status).toBe(409);
+		expect(res.body.error).toMatchObject({ code: "ADDRESS_TAX_CHOICE_REQUIRED", details });
 	});
 });

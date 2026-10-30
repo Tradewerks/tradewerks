@@ -14,6 +14,7 @@ import type {
 	AgedReceivablesResponse,
 	JobBacklogResponse,
 	TechScorecardVisitRow,
+	PageSnapshotResponse,
 	PageSummaryResponse,
 	Paginated,
 	ReportFetchParams,
@@ -384,6 +385,14 @@ export const getPageSummary = async (
 	}
 	return response.data.data;
 }
+
+export const getPageSnapshot = async (page: string): Promise<PageSnapshotResponse> => {
+	const response = await api.get("/reports/page-snapshot", { params: { page } });
+	if (!response.data.data) {
+		throw new Error("Failed to fetch page snapshot");
+	}
+	return response.data.data;
+};
 
 export interface ExportServerArgs {
 	report: string;

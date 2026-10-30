@@ -12,6 +12,7 @@ export interface InventoryTag {
 
 export interface InventoryItem {
 	id: string;
+	taxable?: boolean;
 	name: string;
 	description: string;
 	location: string | null;
@@ -47,6 +48,7 @@ export type InventorySortOption =
 	| "recently_added";
 
 export interface CreateInventoryItemInput {
+	taxable?: boolean;
 	name: string;
 	description: string;
 	location?: string | null;

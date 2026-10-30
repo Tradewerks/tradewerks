@@ -1,14 +1,20 @@
 import type { StaffChange, TierRow } from "../types";
 
-export const chip = "rounded px-1.5 py-0.5 text-xs bg-surface-inset text-text-secondary";
-export const card = "space-y-3 rounded-lg border border-border bg-surface p-4";
-export const cardTitle = "text-sm font-semibold text-text-primary";
-export const textButton =
-	"text-sm text-primary hover:underline disabled:opacity-50 disabled:no-underline";
+// surface-inset is the canvas colour in dark mode, so an inset fill vanished; the border
+// carries the shape wherever the fill alone can't.
+export const chip =
+	"rounded border border-border bg-surface-raised px-1.5 py-0.5 text-xs text-text-secondary";
+// For chips sitting on the page canvas (record headers), where surface-raised barely differs.
+export const canvasChip =
+	"rounded border border-border bg-base px-1.5 py-0.5 text-xs text-text-secondary";
 export const smallButton =
-	"h-8 rounded-md border border-border px-3 text-sm text-text-primary hover:bg-surface-inset disabled:opacity-50";
+	"h-8 shrink-0 rounded-md border border-border px-3 text-sm text-text-secondary transition-colors duration-150 ease-out hover:enabled:border-border-strong hover:enabled:bg-surface-raised hover:enabled:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed";
+export const dangerButton =
+	"h-8 shrink-0 rounded-md border border-border px-3 text-sm text-error-text transition-colors duration-150 ease-out hover:enabled:border-error-border hover:enabled:bg-error-bg disabled:opacity-40 disabled:cursor-not-allowed";
 export const primaryButton =
-	"h-8 rounded-md bg-primary px-3 text-sm font-medium text-white disabled:opacity-50";
+	"h-8 rounded-md bg-primary-hover px-3 text-sm font-medium text-on-primary transition-colors duration-150 ease-out hover:enabled:bg-primary-active disabled:opacity-40 disabled:cursor-not-allowed";
+export const pageAction =
+	"flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
 export const onPill = "rounded px-1.5 py-0.5 text-xs bg-success/10 text-success-text";
 const offPill = "rounded px-1.5 py-0.5 text-xs bg-error/10 text-error-text";
 /** `projected` colours an Off as a loss; a current Off stays neutral. */

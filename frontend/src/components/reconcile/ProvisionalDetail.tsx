@@ -12,6 +12,7 @@ import {
 	useRejectItemMutation,
 } from "../../hooks/useInventory";
 import { useToast } from "../ui/useToast";
+import { errorMessage } from "../../util/util";
 import { DEFAULT_UNIT_CODE, formatQty, normalizeUnitCode, type UnitCode } from "../../lib/units";
 import type { ReconcileProvisionalRow, ReconcileTarget } from "../../api/inventory";
 
@@ -26,7 +27,7 @@ const BTN_OUTLINE =
 const BTN_DANGER =
 	"inline-flex h-8 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border border-error-border bg-base px-3 text-xs font-semibold text-error-text transition-colors duration-150 hover:enabled:bg-error-strong hover:enabled:text-on-primary disabled:cursor-not-allowed disabled:opacity-50";
 
-const errText = (e: unknown) => (e instanceof Error ? e.message : null);
+const errText = (e: unknown) => (e ? errorMessage(e, "Something went wrong") : null);
 
 /**
  * Completing, folding away, or binning an under-specified item row. Adopting is

@@ -19,6 +19,7 @@ export interface OrgSettings {
 	tax_rate: string;
 	restock_mode: RestockMode;
 	measurement_system: MeasurementSystem;
+	tax_mode: "auto" | "manual";
 	mfa_required: boolean;
 	brand_color: string | null;
 	/** Decimal over the wire, like tax_rate. Null means second sign-off is off. */
@@ -38,6 +39,33 @@ export interface OrgSettingsUpdate {
 	brand_color?: string | null;
 	field_purchase_second_signoff_threshold?: number | null;
 }
+
+// Kept off /org and OrgSettings on purpose: GET /org carries no permission gate,
+// so anything in that payload reaches every technician.
+export interface OrgCosting {
+	monthly_overhead: string;
+	cost_per_mile: string;
+	// Null means "not set", which dashes the overhead column rather than pricing it at 0.
+	overhead_rate_per_hour: string | null;
+}
+
+export interface OrgCostingUpdate {
+	monthly_overhead?: number;
+	cost_per_mile?: number;
+	overhead_rate_per_hour?: number | null;
+}
+
+export const getOrgCosting = async (): Promise<OrgCosting> => {
+	const response = await api.get<ApiResponse<OrgCosting>>("/org/costing");
+	if (!response.data.data) throw new Error("Costing settings not found");
+	return response.data.data;
+};
+
+export const updateOrgCosting = async (data: OrgCostingUpdate): Promise<OrgCosting> => {
+	const response = await api.patch<ApiResponse<OrgCosting>>("/org/costing", data);
+	if (!response.data.data) throw new Error("Failed to update costing settings");
+	return response.data.data;
+};
 
 export const getOrgSettings = async (): Promise<OrgSettings> => {
 	const response = await api.get<ApiResponse<OrgSettings>>("/org");

@@ -66,7 +66,7 @@ export default function WelcomePage() {
 	};
 
 	return (
-		<div className="mx-auto max-w-[720px] space-y-6 py-6">
+		<div className="mx-auto max-w-[720px] space-y-6">
 			<div>
 				<h1 className="text-xl font-semibold text-text-primary">
 					Here's what's on for {typeLabel}

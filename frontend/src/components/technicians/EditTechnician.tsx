@@ -2,6 +2,7 @@
 import type { Technician, UpdateTechnicianInput } from "../../types/technicians";
 import { useUpdateTechnicianMutation } from "../../hooks/useTechnicians";
 import { useOrgRolesQuery, useAssignOrgRoleMutation } from "../../hooks/useOrgRoles";
+import { usePermission } from "../../hooks/usePermission";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import DatePicker from "../ui/DatePicker";
 import Dropdown from "../ui/Dropdown";
@@ -41,7 +42,9 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 		technician.hire_date ? new Date(technician.hire_date) : new Date()
 	);
 	const [organizationRoleId, setOrganizationRoleId] = useState<string>(technician.organization_role?.id ?? "");
+	const [costRate, setCostRate] = useState<string>(technician.cost_rate ?? "");
 
+	const canManage = usePermission("manage_technicians");
 	const updateTechnician = useUpdateTechnicianMutation();
 	const assignRole = useAssignOrgRoleMutation();
 	const { data: orgRoles } = useOrgRolesQuery();
@@ -61,6 +64,7 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 				technician.hire_date ? new Date(technician.hire_date) : new Date()
 			);
 			setOrganizationRoleId(technician.organization_role?.id ?? "");
+			setCostRate(technician.cost_rate ?? "");
 		}
 	}, [isOpen, technician]);
 
@@ -76,6 +80,10 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 					description,
 					status,
 					hire_date: hireDate,
+					// Blank clears it back to "not set" — 0 would mean this tech is free.
+					...(canManage
+						? { cost_rate: costRate.trim() === "" ? null : Number(costRate) }
+						: {}),
 				},
 			});
 			const newRoleId = organizationRoleId || null;
@@ -180,6 +188,26 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 					</select>
 				</div>
 
+				{/* Cost Rate */}
+				{canManage && (
+					<div className="min-w-0">
+						<label className={LABEL}>Hourly Cost</label>
+						<input
+							type="number"
+							step="any"
+							min="0"
+							placeholder="Not set"
+							value={costRate}
+							onChange={(e) => setCostRate(e.target.value)}
+							className={INPUT}
+							disabled={isLoading}
+						/>
+						<p className="mt-0.5 text-xs text-text-tertiary">
+							Fully-burdened hourly cost (wage + tax + benefits). Not the billing rate.
+						</p>
+					</div>
+				)}
+
 				{/* Status + Hire Date */}
 				<div className="grid grid-cols-2 gap-2 lg:gap-3 min-w-0">
 					<div className="min-w-0">
@@ -210,7 +238,7 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 				</div>
 			</div>
 		),
-		[name, email, phone, title, description, status, hireDate, organizationRoleId, technicianRoles, isLoading]
+		[name, email, phone, title, description, status, hireDate, organizationRoleId, technicianRoles, isLoading, costRate, canManage]
 	);
 
 	return (

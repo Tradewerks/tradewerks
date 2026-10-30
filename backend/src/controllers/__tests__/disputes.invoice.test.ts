@@ -9,6 +9,7 @@ const { mockDb } = vi.hoisted(() => {
 		invoice: {
 			findFirst: vi.fn(),
 			update: vi.fn(),
+			updateMany: vi.fn(async () => ({ count: 1 })),
 			create: vi.fn(),
 			// Both void doors read the live adjustments; none by default.
 			findMany: vi.fn(async () => []),
@@ -75,7 +76,7 @@ vi.mock("../../lib/context.js", () => ({
 vi.mock("../../services/invoiceService.js", () => ({
 	syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
 	syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
-	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue(undefined),
+	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
 	// The void / revise guards read paid-to-date from the payment rows now;
 	// override per test to exercise a stale amount_paid column.
 	invoicePaidTotal: vi.fn().mockResolvedValue(0),
@@ -91,7 +92,12 @@ vi.mock("../../services/invoiceService.js", () => ({
 // its own suite.
 vi.mock("../../services/qb/qbInvoices.js", () => ({
 	mirrorInvoiceVoidToQuickBooks: vi.fn().mockResolvedValue(undefined),
-	pushInvoice: vi.fn().mockResolvedValue(undefined),
+	pushInvoiceDetached: vi.fn(),
+}));
+
+vi.mock("../../services/quickbooksService.js", () => ({
+	isQBConnected: vi.fn().mockResolvedValue(true),
+	getOrgRealmId: vi.fn(),
 }));
 
 vi.mock("../../services/logger.js", () => ({
@@ -103,8 +109,21 @@ vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock("../../services/tax/taxMode.js", () => ({
+	getOrgTaxContext: vi.fn(async () => ({
+		stored_mode: "manual",
+		auto_entitled: false,
+		mode: "manual",
+		registered_states: [],
+		legacy_rate: 0,
+		address: null,
+	})),
+	getEffectiveTaxMode: vi.fn(async () => "manual"),
+	dropClientTaxTotals: <T,>(p: T) => p,
+}));
+
 import { db } from "../../db.js";
-import { mirrorInvoiceVoidToQuickBooks } from "../../services/qb/qbInvoices.js";
+import { mirrorInvoiceVoidToQuickBooks, pushInvoiceDetached } from "../../services/qb/qbInvoices.js";
 import {
 	invoicePaidTotal,
 	syncBilledAmounts,
@@ -584,6 +603,12 @@ describe("invoice Revise & Resend — replacement due date (D5)", () => {
 	beforeEach(() => vi.clearAllMocks());
 
 	const DAY = 86_400_000;
+	// Terms are calendar days (setDate), so a span crossing a DST change is 23h/25h short of n×DAY.
+	const daysFromNow = (n: number) => {
+		const d = new Date();
+		d.setDate(d.getDate() + n);
+		return d.getTime();
+	};
 
 	async function reviseWith(original: Record<string, unknown>) {
 		mockFn(db.invoice.findFirst).mockResolvedValue(
@@ -620,7 +645,7 @@ describe("invoice Revise & Resend — replacement due date (D5)", () => {
 		});
 		expect(due.getTime()).toBeGreaterThan(Date.now());
 		// reissue (now) + 30 days, within a minute of wall clock
-		expect(Math.abs(due.getTime() - (Date.now() + 30 * DAY))).toBeLessThan(
+		expect(Math.abs(due.getTime() - daysFromNow(30))).toBeLessThan(
 			60_000,
 		);
 	});
@@ -645,7 +670,7 @@ describe("invoice Revise & Resend — replacement due date (D5)", () => {
 
 	it("a null original due date falls back to reissue + terms", async () => {
 		const due = await reviseWith({ due_date: null, payment_terms_days: 20 });
-		expect(Math.abs(due.getTime() - (Date.now() + 20 * DAY))).toBeLessThan(
+		expect(Math.abs(due.getTime() - daysFromNow(20))).toBeLessThan(
 			60_000,
 		);
 	});
@@ -855,6 +880,71 @@ describe("invoice Issue Adjustment", () => {
 				c[0].where.id === "inv1",
 		);
 		expect(restore[0].data.status).toBe("Issued");
+	});
+
+	describe("QuickBooks push", () => {
+		const resolveAdjustment = () =>
+			resolveDispute(
+				"invoice",
+				"inv1",
+				"disp1",
+				{
+					resolution: "IssueAdjustment",
+					adjustment_lines: [
+						{ name: "Credit: duplicate labour", quantity: -1, unit_price: 200, total: -200 },
+					],
+				},
+				"org1",
+				CTX,
+				AUTHZ,
+			);
+
+		beforeEach(() => {
+			mockFn(db.invoice.findFirst).mockResolvedValue(
+				anInvoice({ status: "Disputed", amount_paid: 0 }),
+			);
+			mockFn(db.document_dispute.findFirst).mockResolvedValue(
+				anOpenDispute({ status_at_open: "Issued" }),
+			);
+			mockFn(db.document_dispute.updateMany).mockResolvedValue({ count: 1 });
+			mockFn(db.invoice.create).mockResolvedValue({
+				id: "adj1",
+				invoice_number: "INV-1040",
+			});
+		});
+
+		it("pushes the adjustment to QuickBooks after the resolution commits", async () => {
+			const order: string[] = [];
+			mockFn(db.$transaction).mockImplementationOnce(async (fn: (tx: unknown) => unknown) => {
+				const out = await fn(db);
+				order.push("commit");
+				return out;
+			});
+			mockFn(pushInvoiceDetached).mockImplementationOnce(() => {
+				order.push("push");
+			});
+
+			await resolveAdjustment();
+
+			expect(pushInvoiceDetached).toHaveBeenCalledWith("adj1", "org1");
+			expect(order).toEqual(["commit", "push"]);
+		});
+
+		it("does not push when the resolution transaction throws", async () => {
+			mockFn(db.document_dispute.update).mockRejectedValueOnce(new Error("db down"));
+
+			await expect(resolveAdjustment()).rejects.toThrow("db down");
+
+			expect(pushInvoiceDetached).not.toHaveBeenCalled();
+		});
+
+		it("does not push when the resolution is refused", async () => {
+			mockFn(db.document_dispute.findFirst).mockResolvedValue(null);
+
+			await resolveAdjustment();
+
+			expect(pushInvoiceDetached).not.toHaveBeenCalled();
+		});
 	});
 });
 
@@ -1099,6 +1189,36 @@ describe("dispute-driven void and QuickBooks", () => {
 			"inv1",
 			"qb-78",
 		);
+	});
+
+	it("hands a repealed credit adjustment's credit memo to the void mirror", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(
+			anInvoice({
+				status: "Disputed",
+				total: -200,
+				adjusts_invoice_id: "root1",
+				qb_invoice_id: null,
+				qb_credit_memo_id: "cm-1",
+				qb_credit_applied_payment_id: "p-1",
+			}),
+		);
+		mockFn(db.document_dispute.findFirst).mockResolvedValue(anOpenDispute());
+		mockFn(db.document_dispute.updateMany).mockResolvedValue({ count: 1 });
+
+		await resolveDispute(
+			"invoice",
+			"inv1",
+			"disp1",
+			{ resolution: "Repeal", note: "written off" },
+			"org1",
+			CTX,
+			AUTHZ,
+		);
+
+		expect(mirrorInvoiceVoidToQuickBooks).toHaveBeenCalledWith("org1", "inv1", null, {
+			id: "cm-1",
+			appliedPaymentId: "p-1",
+		});
 	});
 
 	it("does not reach QuickBooks when the resolution is refused", async () => {

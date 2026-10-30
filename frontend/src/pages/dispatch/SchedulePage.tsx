@@ -7,7 +7,7 @@ export default function SchedulePage() {
 	const { data: technicians = [], error: techsError } = useActiveTechniciansQuery();
 
 	return (
-		<div className="h-full overflow-hidden -m-4 md:-m-6">
+		<div className="h-[calc(100%+2rem)] md:h-[calc(100%+3rem)] overflow-hidden -m-4 md:-m-6">
 			{(jobsError || techsError) && (
 				<p className="text-error-text px-6 py-2 text-sm">Failed to load schedule data.</p>
 			)}

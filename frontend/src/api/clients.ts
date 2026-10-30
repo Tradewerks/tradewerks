@@ -1,3 +1,4 @@
+import { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
 import type {
@@ -56,15 +57,17 @@ export const updateClient = async (id: string, data: UpdateClientInput): Promise
 };
 
 export const deleteClient = async (id: string): Promise<{ message: string; id: string }> => {
-	const response = await api.delete<ApiResponse<{ message: string; id: string }>>(
-		`/clients/${id}`
-	);
-
-	if (!response.data.success) {
-		throw new Error(response.data.error?.message || "Failed to delete client");
+	try {
+		const response = await api.delete<ApiResponse<{ message: string; id: string }>>(
+			`/clients/${id}`
+		);
+		return response.data.data || { message: "Client deleted successfully", id };
+	} catch (err) {
+		// A refusal comes back as a 400, so axios throws before the body is read.
+		throw new Error(
+			(isAxiosError(err) && err.response?.data?.error?.message) || "Failed to delete client"
+		);
 	}
-
-	return response.data.data || { message: "Client deleted successfully", id };
 };
 
 // ============================================================================

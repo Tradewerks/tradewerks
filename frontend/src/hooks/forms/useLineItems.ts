@@ -1,5 +1,10 @@
-import { useState, useCallback, useMemo, useRef } from "react";
-import type { BaseLineItem, EditableLineItem, LineItemDisposition } from "../../types/common";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import type {
+	BaseLineItem,
+	EditableLineItem,
+	InventoryLink,
+	LineItemDisposition,
+} from "../../types/common";
 
 interface UseLineItemsOptions {
 	initialItems?: BaseLineItem[] | EditableLineItem[];
@@ -8,15 +13,18 @@ interface UseLineItemsOptions {
 	defaultTaxGroupId?: string | null;
 }
 
-type SeedInput = Array<
-	Pick<BaseLineItem, "name" | "description" | "quantity" | "unit_price" | "item_type"> & {
-		source_job_id?: string | null;
-		source_visit_id?: string | null;
-		taxable?: boolean;
-		tax_group_id?: string | null;
-		inventory_item_id?: string | null;
-	}
->;
+export type LineItemSeed = Pick<
+	BaseLineItem,
+	"name" | "description" | "quantity" | "unit_price" | "item_type"
+> & {
+	source_job_id?: string | null;
+	source_visit_id?: string | null;
+	taxable?: boolean;
+	tax_group_id?: string | null;
+	inventory_item_id?: string | null;
+};
+
+type SeedInput = LineItemSeed[];
 
 interface UseLineItemsReturn {
 	lineItems: BaseLineItem[];
@@ -29,7 +37,7 @@ interface UseLineItemsReturn {
 	undoLineItemSource: (id: string) => void;
 	setLineItemInventoryItem: (
 		id: string,
-		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+		link: InventoryLink | null,
 	) => void;
 	setLineItemDisposition: (
 		id: string,
@@ -95,6 +103,25 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 	// chain in CreateInvoice / CreateQuote (→ infinite loop when modal is closed).
 	const initialItemsRef = useRef<BaseLineItem[] | EditableLineItem[]>(initialItems);
 	initialItemsRef.current = initialItems;
+
+	// The default group (and the tax mode it is gated on) resolves after first render, so the
+	// initial blank line is created unstamped. Stamp it once known, but only while untouched.
+	useEffect(() => {
+		if (mode !== "create" || !defaultTaxGroupId) return;
+		setLineItems((prev) => {
+			const isUntouchedBlank = (item: BaseLineItem) =>
+				item.taxable !== false &&
+				!item.tax_group_id &&
+				!item.name &&
+				!item.description &&
+				!item.item_type &&
+				Number(item.unit_price) === 0;
+			if (!prev.some(isUntouchedBlank)) return prev;
+			return prev.map((item) =>
+				isUntouchedBlank(item) ? { ...item, tax_group_id: defaultTaxGroupId } : item,
+			);
+		});
+	}, [mode, defaultTaxGroupId]);
 
 	const buildOriginalsMap = useCallback(
 		(items: BaseLineItem[]): Map<string, BaseLineItem> => {
@@ -197,7 +224,10 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 					item_type: s.item_type,
 					total: Number(s.quantity) * Number(s.unit_price),
 					taxable: s.taxable ?? true,
-					tax_group_id: s.tax_group_id ?? defaultTaxGroupId ?? null,
+					// An imported line's null group is real (it taxes via the client or
+					// address), so only an absent group takes the default.
+					tax_group_id:
+						s.tax_group_id !== undefined ? s.tax_group_id : (defaultTaxGroupId ?? null),
 					inventory_item_id: s.inventory_item_id ?? null,
 					...(s.source_job_id !== undefined && { source_job_id: s.source_job_id }),
 					...(s.source_visit_id !== undefined && { source_visit_id: s.source_visit_id }),
@@ -382,7 +412,7 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 	const setLineItemInventoryItem = useCallback(
 		(
 			id: string,
-			link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+			link: InventoryLink | null,
 		) => {
 			setLineItems((prev) =>
 				prev.map((item) => {
@@ -395,6 +425,8 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 						name: link.name,
 						unit_price: unitPrice,
 						total: Number(item.quantity) * Number(unitPrice),
+						// A pick is a fresh choice: it overwrites a flip the dispatcher made earlier.
+						taxable: link.taxable ?? item.taxable,
 						// Picking a part IS the classification, so an untyped line gets typed
 						// here. `material` is the safe default: both stock types behave
 						// identically downstream. An existing type is never overwritten.
@@ -412,6 +444,9 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 						(original.inventory_item_id ?? null) !== nextId,
 					...(link && {
 						[`li:${id}:name`]: original.name !== link.name,
+						...(link.taxable !== undefined && {
+							[`li:${id}:taxable`]: (original.taxable ?? true) !== link.taxable,
+						}),
 						...(link.unit_price !== null && {
 							[`li:${id}:unit_price`]:
 								Number(original.unit_price) !== link.unit_price,
@@ -464,7 +499,13 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 		(id: string, groupId: string | null, taxable: boolean) => {
 			setLineItems((prev) =>
 				prev.map((item) =>
-					item.id !== id ? item : { ...item, tax_group_id: groupId, taxable }
+					item.id !== id
+						? item
+						: {
+								...item,
+								tax_group_id: groupId,
+								taxable,
+							}
 				)
 			);
 			const original = originalLineItems.get(id);
@@ -485,7 +526,11 @@ export const useLineItems = (options: UseLineItemsOptions = {}): UseLineItemsRet
 				prev.map((item) =>
 					"isDeleted" in item && item.isDeleted
 						? item
-						: { ...item, tax_group_id: groupId, taxable }
+						: {
+								...item,
+								tax_group_id: groupId,
+								taxable,
+							}
 				)
 			);
 			setDirtyLineItemFields((prev) => {

@@ -9,7 +9,7 @@ import {
 	QUOTE_TRANSITIONS,
 } from "../lib/statusTransitions.js";
 import type { DocumentShape } from "./disputeAdapters.js";
-import { soldJobReason, SOLD_BY_QUOTE_JOBS } from "./disputeAdapters.js";
+import { quoteAdapter, soldJobReason, SOLD_BY_QUOTE_JOBS } from "./disputeAdapters.js";
 import { copyDocumentNotes, pick, REVISION_LINE_FIELDS } from "./documentNotes.js";
 
 /**
@@ -183,8 +183,11 @@ export async function createQuoteRevision(
 		}
 
 		if (!REVISABLE_STATUSES.includes(quote.status)) {
+			const label = (status: string) => quoteAdapter.statusLabels?.[status] ?? status;
+			const shown = label(quote.status);
+			const article = "AEIOU".includes(shown[0]) ? "An" : "A";
 			return {
-				err: `A ${quote.status} quote cannot be revised. Revisions may be created from: ${REVISABLE_STATUSES.join(", ")}.`,
+				err: `${article} ${shown} quote cannot be revised. Revisions may be created from: ${REVISABLE_STATUSES.map(label).join(", ")}.`,
 			};
 		}
 

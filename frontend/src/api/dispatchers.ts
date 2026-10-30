@@ -52,13 +52,13 @@ export const updateDispatcher = async (id: string, data: UpdateDispatcherInput):
 };
 
 export const deleteDispatcher = async (id: string): Promise<{ message: string; id: string }> => {
-    const response = await api.delete<ApiResponse<{ message: string; id: string }>>(`/dispatchers/${id}`);
-    
-    if (!response.data.success) {
-        throw new Error(response.data.error?.message || 'Failed to delete dispatcher');
+    try {
+        const response = await api.delete<ApiResponse<{ message: string; id: string }>>(`/dispatchers/${id}`);
+        
+        return response.data.data || { message: 'Dispatcher deleted successfully', id };
+    } catch (err) {
+        throw new Error((isAxiosError(err) && err.response?.data?.error?.message) || 'Failed to delete dispatcher');
     }
-    
-    return response.data.data || { message: 'Dispatcher deleted successfully', id };
 };
 
 export const changeDispatcherPassword = async (id: string, data: { current_password: string; new_password: string }): Promise<Dispatcher> => {

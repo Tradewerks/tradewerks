@@ -562,12 +562,8 @@ export async function acceptCorrection(orgId: string, correctionId: string, data
             where: { id: correctionId }
         });
         if (!correction) return { err: "Shift correction not found" };
-        if (correction.status !== "pending") return { err: "Correction already reviewed" };
 
-        const result = await editShift(orgId, correction.shift_id, parsed.proposed ?? correction.proposed, context);
-        if (result.err !== undefined) return { err: result.err };
-
-        const updates = await sdb.shift_correction.updateMany({
+        const claimed = await sdb.shift_correction.updateMany({
             where: { id: correction.id, status: "pending" },
             data: {
                 status: "accepted",
@@ -576,7 +572,16 @@ export async function acceptCorrection(orgId: string, correctionId: string, data
                 review_note: parsed.note ?? null,
             }
         });
-        if (updates.count === 0) return { err: "Correction already reviewed" };
+        if (claimed.count === 0) return { err: "Correction already reviewed" };
+
+        const result = await editShift(orgId, correction.shift_id, parsed.proposed ?? correction.proposed, context);
+        if (result.err !== undefined) {
+            await sdb.shift_correction.update({
+                where: { id: correction.id },
+                data: { status: "pending", reviewed_by_id: null, reviewed_at: null, review_note: null }
+            });
+            return { err: result.err };
+        }
 
         const { day, week } = await shiftDayAndWeek(orgId, result.shift.started_at);
         await logActivity({

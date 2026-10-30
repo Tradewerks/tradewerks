@@ -7,6 +7,8 @@ import ImageCarousel from "../inventory/ImageCarousel";
 
 const PHOTO_LABELS = ["Before", "After", "Other"] as const;
 type PhotoLabel = (typeof PHOTO_LABELS)[number];
+// Mirrors the photo_name max in backend/src/lib/validate/jobs.ts.
+const PHOTO_NAME_MAX = 120;
 
 // Mirrors backend/src/lib/upload.ts (noteImageUpload): jpeg/png/webp, 5MB.
 const NOTE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
@@ -62,6 +64,7 @@ export default function NotePhotoPicker({
 	const [pendingFile, setPendingFile] = useState<File | null>(null);
 	const [labelPickerOpen, setLabelPickerOpen] = useState(false);
 	const [selectedLabel, setSelectedLabel] = useState<PhotoLabel>("Before");
+	const [photoName, setPhotoName] = useState("");
 	const [isUploading, setIsUploading] = useState(false);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const [pendingUpload, setPendingUpload] = useState<{ url: string; raw_url: string } | null>(null);
@@ -85,6 +88,7 @@ export default function NotePhotoPicker({
 		setLabelPickerOpen(true);
 		setPendingFile(file);
 		setSelectedLabel("Before");
+		setPhotoName(file.name.replace(/\.[^.]+$/, "").slice(0, PHOTO_NAME_MAX));
 
 		try {
 			const res = uploadPhoto
@@ -104,7 +108,7 @@ export default function NotePhotoPicker({
 		if (!pendingFile || !pendingUpload) return;
 		onPhotosChange([
 			...photos,
-			{ photo_url: pendingUpload.raw_url, photo_label: selectedLabel, filename: pendingFile.name, preview_url: pendingUpload.url },
+			{ photo_url: pendingUpload.raw_url, photo_label: selectedLabel, photo_name: photoName.trim(), preview_url: pendingUpload.url },
 		]);
 		setPendingFile(null);
 		setLabelPickerOpen(false);
@@ -136,6 +140,9 @@ export default function NotePhotoPicker({
 							<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-bg text-primary-text border border-primary-border">
 								{p.photo_label}
 							</span>
+							{p.photo_name && (
+								<span className="max-w-[100px] truncate text-text-tertiary">{p.photo_name}</span>
+							)}
 							{onRemoveExisting && (
 								<button
 									type="button"
@@ -162,11 +169,13 @@ export default function NotePhotoPicker({
 							<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-bg text-primary-text border border-primary-border">
 								{p.photo_label}
 							</span>
-							<span className="max-w-[100px] truncate text-text-tertiary">{p.filename}</span>
+							{p.photo_name && (
+								<span className="max-w-[100px] truncate text-text-tertiary">{p.photo_name}</span>
+							)}
 							<button
 								type="button"
 								onClick={() => handleRemovePhoto(i)}
-								aria-label={`Remove ${p.filename}`}
+								aria-label={`Remove ${p.photo_name || `${p.photo_label} photo`}`}
 								className="text-text-faint hover:text-text-secondary ml-0.5 p-0.5"
 							>
 								<X size={11} />
@@ -218,7 +227,15 @@ export default function NotePhotoPicker({
 							</button>
 						</div>
 						{pendingFile && (
-							<p className="text-xs text-text-muted mb-3 truncate">{pendingFile.name}</p>
+							<input
+								type="text"
+								value={photoName}
+								onChange={(e) => setPhotoName(e.target.value)}
+								maxLength={PHOTO_NAME_MAX}
+								placeholder="Photo name (optional)"
+								aria-label="Photo name"
+								className="w-full mb-3 px-3 py-2 text-sm rounded-lg bg-surface border border-border text-text-primary placeholder:text-text-faint focus:outline-none focus:border-border-strong"
+							/>
 						)}
 						{isUploading ? (
 							<div className="flex items-center justify-center gap-2 py-6 text-text-muted text-sm">

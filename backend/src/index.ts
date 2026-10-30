@@ -14,6 +14,8 @@ import { startFollowupSchedulerInterval } from "./services/followupScheduler.js"
 import { startMaintenanceReminderInterval } from "./services/vehicleMaintenanceScheduler.js";
 import { startArrivalTrackingInterval } from "./services/arrivalTracker.js";
 import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
+import { registerTaxReviewGauge } from "./services/tax/taxMetrics.js";
+import { startTaxRateRefreshInterval } from "./services/taxRateRefreshScheduler.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
 import multer from "multer";
@@ -85,7 +87,7 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 15;
 // ============================================
 // MIDDLEWARE
 // ============================================
-import { handleCallback, QB_ENABLED } from "./services/quickbooksService.js";
+import { handleCallbackRequest, QB_ENABLED } from "./services/quickbooksService.js";
 import { handleQBWebhook } from "./services/qb/qbWebhook.js"
 import { handlePostmarkWebhook } from "./services/postmarkWebhook.js";
 import { isUserActive } from "./services/userActiveCache.js";
@@ -318,6 +320,8 @@ startFollowupSchedulerInterval();
 startMaintenanceReminderInterval();
 startArrivalTrackingInterval();
 startTrialSchedulerInterval();
+startTaxRateRefreshInterval();
+registerTaxReviewGauge();
 startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>
 	log.error(e, "Failed to rearm WrappingUp timers"),
@@ -529,15 +533,9 @@ app.get("/integrations/quickbooks/callback", async (req, res, next) => {
 	// QuickBooks temporarily disabled (see quickbooksService.QB_ENABLED).
 	if (!QB_ENABLED)
 		return res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=error`);
-	try {
-		const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
-		const realmId = req.query.realmId as string;
-		const state = req.query.state as string;
-		await handleCallback(fullUrl, state, realmId);
-		res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=connected`);
-	} catch (err) {
-		res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=error`);
-	}
+	const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+	const outcome = await handleCallbackRequest(req.query, fullUrl);
+	res.redirect(`${process.env.FRONTEND_URL}/app/quickbooks/callback?qb=${outcome}`);
 });
 app.post("/integrations/quickbooks/webhook", (req, res) => {
 	// QuickBooks temporarily disabled (see quickbooksService.QB_ENABLED).

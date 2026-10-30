@@ -25,6 +25,8 @@ import { HEADER_META } from "../../components/ui/headerActions";
 import { unitLabel } from "../../lib/units";
 import MaintenanceTab from "../../components/vehicles/maintenance/MaintenanceTab";
 import ChangeHistory from "../../components/activity/ChangeHistory";
+import { useToast } from "../../components/ui/useToast";
+import { errorMessage } from "../../util/util";
 import UntrackedStockNotice from "../../components/entitlements/UntrackedStockNotice";
 
 import { useOrgSettings } from "../../hooks/useOrg";
@@ -450,6 +452,7 @@ function StockTab({ vehicleId, stockItems, isLoading }: {
 	const [adjustOpen, setAdjustOpen] = useState(false);
 	const updateMutation = useUpdateVehicleStockItemMutation();
 	const deleteMutation = useDeleteVehicleStockItemMutation();
+	const toast = useToast();
 
 	if (isLoading) return <div className="flex justify-center py-16"><LoadSvg className="w-8 h-8" /></div>;
 
@@ -467,7 +470,15 @@ function StockTab({ vehicleId, stockItems, isLoading }: {
 			item={item}
 			onUpdateStandard={(qty_standard) => updateMutation.mutate({ vehicleId, itemId: item.id, data: { qty_standard } })}
 			onUpdateMin={(qty_min) => updateMutation.mutate({ vehicleId, itemId: item.id, data: { qty_min } })}
-			onDelete={() => deleteMutation.mutate({ vehicleId, itemId: item.id })}
+			onDelete={() =>
+				deleteMutation.mutate(
+					{ vehicleId, itemId: item.id },
+					{
+						onSuccess: () => toast.success(`Removed ${item.inventory_item.name} from stock list`),
+						onError: (e) => toast.error(errorMessage(e, "Failed to delete stock item")),
+					},
+				)
+			}
 		/>
 	);
 

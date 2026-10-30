@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
 import type {
@@ -61,15 +61,15 @@ export const updateJob = async (id: string, updates: UpdateJobInput): Promise<Jo
 };
 
 export const deleteJob = async (id: string): Promise<{ message: string; id: string }> => {
-	const response = await api.delete<ApiResponse<{ message: string; id: string }>>(
-		`/jobs/${id}`
-	);
+	try {
+		const response = await api.delete<ApiResponse<{ message: string; id: string }>>(
+			`/jobs/${id}`
+		);
 
-	if (!response.data.success) {
-		throw new Error(response.data.error?.message || "Failed to delete job");
+		return response.data.data || { message: "Job deleted successfully", id };
+	} catch (err) {
+		throw new Error((isAxiosError(err) && err.response?.data?.error?.message) || "Failed to delete job");
 	}
-
-	return response.data.data || { message: "Job deleted successfully", id };
 };
 
 // ============================================

@@ -207,7 +207,7 @@ export default function InventoryReconcilePage() {
 			: undefined;
 
 	return (
-		<div className="flex flex-col gap-3 pb-4">
+		<div className="flex flex-col gap-3">
 			<PageHeader title="Reconcile Parts" />
 
 			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

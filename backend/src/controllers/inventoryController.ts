@@ -425,6 +425,7 @@ export const createInventoryItem = async (
 					sku: parsed.sku ?? null,
 					// Blank collapses to null so "no category" is one value, not null vs "".
 					category: parsed.category?.trim() || null,
+					taxable: parsed.taxable ?? true,
 					barcode: parsed.barcode ?? null,
 					low_stock_threshold: parsed.low_stock_threshold ?? null,
 					image_urls: parsed.image_urls,
@@ -549,6 +550,7 @@ export const updateInventoryItem = async (
 			"cost",
 			"sku",
 			"category",
+			"taxable",
 			"barcode",
 			"low_stock_threshold",
 			"image_urls",
@@ -5183,6 +5185,14 @@ export async function mergeProvisionalItem(
 						data: { stock_item_id: existing.id },
 					});
 					await tx.vehicle_restock_request.updateMany({
+						where: { stock_item_id: ps.id },
+						data: { stock_item_id: existing.id },
+					});
+					await tx.vehicle_restock_line.updateMany({
+						where: { stock_item_id: ps.id },
+						data: { stock_item_id: existing.id },
+					});
+					await tx.vehicle_stock_adjustment_line.updateMany({
 						where: { stock_item_id: ps.id },
 						data: { stock_item_id: existing.id },
 					});

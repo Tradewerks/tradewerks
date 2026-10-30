@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import JobsPage from "../JobsPage";
@@ -22,7 +23,12 @@ vi.mock("../../../hooks/useClients", () => ({
 }));
 vi.mock("../../../components/jobs/CreateJob", () => ({ default: () => null }));
 vi.mock("../../../components/recurringPlans/CreateRecurringPlan", () => ({ default: () => null }));
-vi.mock("../../../components/reports/PageReportSection", () => ({ default: () => null }));
+const mockUsePageReport = vi.fn();
+vi.mock("../../../components/reports/usePageReport", () => ({
+	usePageReport: (...args: unknown[]) => mockUsePageReport(...args),
+}));
+vi.mock("../../../components/reports/PageReportButton", () => ({ default: () => null }));
+vi.mock("../../../components/reports/PageReportKpis", () => ({ default: () => null }));
 
 const job = {
 	id: "job-1",
@@ -93,5 +99,65 @@ describe("JobsPage columns (U7 / 05-F2)", () => {
 		expect(await screen.findByText("Quarterly filter swap")).toBeInTheDocument();
 		expect(screen.getByRole("columnheader", { name: "Property" })).toBeInTheDocument();
 		expect(screen.getByText("742 Evergreen Terrace")).toBeInTheDocument();
+	});
+});
+
+describe("JobsPage report (recurring plans get their own)", () => {
+	it("asks for the jobs report in the Jobs view", async () => {
+		renderAt("/dispatch/jobs");
+		await screen.findByRole("table");
+		expect(mockUsePageReport).toHaveBeenLastCalledWith("jobs", "Jobs report", { allowed: true });
+	});
+
+	it("asks for the recurring-plans report in the Templates view", async () => {
+		renderAt("/dispatch/jobs?view=templates");
+		await screen.findByRole("table");
+		expect(mockUsePageReport).toHaveBeenLastCalledWith("recurring_plans", "Recurring plans report", {
+			allowed: true,
+		});
+	});
+
+	it("disallows the plans report for a user who can't see plans", async () => {
+		useAuthStore
+			.getState()
+			.login("dispatcher", "Alex", "d1", "org", "America/Chicago", ["view_jobs"]);
+		renderAt("/dispatch/jobs?view=templates");
+		await screen.findByRole("group", { name: "View context" });
+		expect(mockUsePageReport).toHaveBeenLastCalledWith("recurring_plans", "Recurring plans report", {
+			allowed: false,
+		});
+	});
+
+	it("marks the Jobs/Plans toggle as a report-context control", async () => {
+		renderAt("/dispatch/jobs");
+		const group = await screen.findByRole("group", { name: "View context" });
+		expect(group).toHaveAttribute("data-report-context");
+	});
+
+	it("offers forward Date presets in the Plans view (a plan's date is its next visit)", async () => {
+		renderAt("/dispatch/jobs?view=templates");
+		await userEvent.click(await screen.findByRole("button", { name: /^Date/ }));
+		expect(screen.getByText("Next 30 days")).toBeInTheDocument();
+	});
+
+	it("Today shows every plan running today, whatever its next visit", async () => {
+		renderAt("/dispatch/jobs?view=templates&date=today");
+		expect(await screen.findByText("Quarterly filter swap")).toBeInTheDocument();
+	});
+
+	it("hides a plan that ended before the range", async () => {
+		state.plans = [{ ...plan, ends_at: "2026-02-01" }];
+		renderAt("/dispatch/jobs?view=templates&date=today");
+		await screen.findByRole("group", { name: "View context" });
+		expect(screen.queryByText("Quarterly filter swap")).toBeNull();
+	});
+
+	it("offers one coherent Plans date menu: past and future ranges, no Tomorrow", async () => {
+		renderAt("/dispatch/jobs?view=templates");
+		await userEvent.click(await screen.findByRole("button", { name: /^Date/ }));
+		for (const label of ["Today", "Last 30 days", "This month", "Next 30 days", "Next month"]) {
+			expect(screen.getByText(label)).toBeInTheDocument();
+		}
+		expect(screen.queryByText("Tomorrow")).toBeNull();
 	});
 });

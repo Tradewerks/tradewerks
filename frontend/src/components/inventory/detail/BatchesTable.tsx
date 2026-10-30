@@ -8,7 +8,8 @@ import EmptyState from "../../ui/EmptyState";
 import LoadSvg from "../../../assets/icons/loading.svg?react";
 import type { BatchListRow } from "../../../types/tracking";
 import { formatDate } from "../../../util/util";
-import { useDebouncedValue, QueueLabelButton } from "./trackingTableShared";
+import { QueueLabelButton } from "./trackingTableShared";
+import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 
 // Renders inside a Card in InventoryItemDetailPage's Tracking tab (no page
 // chrome of its own).
