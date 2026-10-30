@@ -13,6 +13,21 @@ export interface RememberedAccount {
 
 const MAX_ACCOUNTS = 5;
 
+// Email is the identity here, not userId: a row only pre-fills the login form, and the same
+// email comes back under a new id after a reseed or a delete and re-invite.
+const uniqueByEmail = (accounts: RememberedAccount[]) => {
+	const seen = new Set<string>();
+	return [...accounts]
+		.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+		.filter((a) => {
+			const email = a.email.toLowerCase();
+			if (seen.has(email)) return false;
+			seen.add(email);
+			return true;
+		})
+		.slice(0, MAX_ACCOUNTS);
+};
+
 interface RememberedAccountsState {
 	accounts: RememberedAccount[];
 	upsertAccount: (account: Omit<RememberedAccount, "lastUsedAt">) => void;
@@ -26,18 +41,12 @@ export const useRememberedAccountsStore = create<RememberedAccountsState>()(
 		(set) => ({
 			accounts: [],
 			upsertAccount: (account) =>
-				set((state) => {
-					const others = state.accounts.filter(
-						(a) => a.userId !== account.userId,
-					);
-					const next = [
+				set((state) => ({
+					accounts: uniqueByEmail([
 						{ ...account, lastUsedAt: Date.now() },
-						...others,
-					]
-						.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-						.slice(0, MAX_ACCOUNTS);
-					return { accounts: next };
-				}),
+						...state.accounts.filter((a) => a.userId !== account.userId),
+					]),
+				})),
 			patchAccount: (userId, patch) =>
 				set((state) => ({
 					accounts: state.accounts.map((a) =>
@@ -50,6 +59,16 @@ export const useRememberedAccountsStore = create<RememberedAccountsState>()(
 				})),
 			clearAccounts: () => set({ accounts: [] }),
 		}),
-		{ name: "remembered-accounts" },
+		{
+			name: "remembered-accounts",
+			// On every load rather than a one-shot migrate: another open tab writes back its
+			// in-memory list, which can restore rows a migration already removed.
+			merge: (persisted, current) => ({
+				...current,
+				accounts: uniqueByEmail(
+					(persisted as Partial<RememberedAccountsState>).accounts ?? [],
+				),
+			}),
+		},
 	),
 );
