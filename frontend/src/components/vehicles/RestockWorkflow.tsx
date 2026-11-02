@@ -4,6 +4,7 @@ import LoadSvg from "../../assets/icons/loading.svg?react";
 import { formatter } from "../../util/util";
 import { formatRestockDate } from "../../lib/stockUtils";
 import SegmentedToggle from "../ui/SegmentedToggle";
+import NumberInput from "../ui/NumberInput";
 import {
 	useCompleteRestockMutation,
 	useTomorrowRequirementsQuery,
@@ -20,6 +21,8 @@ interface RestockLine {
 	stockItemId: string;
 	item: VehicleStockItem;
 	qtyToRestock: number;
+	// The starting qtyToRestock. Picks the row's section, so editing never moves it.
+	suggested: number;
 	tomorrowNeed: number;
 	// Optional "scan units loaded" capture (P8-2) — existing warehouse units/lot
 	// being moved onto the vehicle for this line. Warn-don't-block: submitting
@@ -289,11 +292,11 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 					{warehouse >= 100_000 ? formatter.format(warehouse) : warehouse}
 				</span>
 				<div className="flex justify-center">
-					<input
-						type="number"
+					<NumberInput
+						inputMode="decimal"
 						min={0}
 						value={line.qtyToRestock}
-						onChange={(e) => onChange(line.stockItemId, Math.max(0, Number(e.target.value)))}
+						onValue={(n) => onChange(line.stockItemId, Math.max(0, n))}
 						aria-invalid={overLimit}
 						aria-describedby={overLimit ? advisoryId : undefined}
 						aria-label={`Quantity to add for ${invItem.name}`}
@@ -322,7 +325,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 					<button
 						type="button"
 						onClick={() => onChange(line.stockItemId, warehouse)}
-						className="text-[11px] font-semibold text-warning-text underline decoration-warning/50 hover:decoration-warning"
+						className="px-2 -mx-2 py-3 -my-3 text-[11px] font-semibold text-warning-text underline decoration-warning/50 hover:decoration-warning"
 					>
 						Use {warehouse}
 					</button>
@@ -400,8 +403,8 @@ function RestockPanel({
 	const PREP_GRID_MOBILE = "grid-cols-[1fr_48px_48px_48px_64px]";
 
 	const mobile = layout === "mobile";
-	const needs = restockLines.filter((l) => l.qtyToRestock > 0);
-	const met = restockLines.filter((l) => l.qtyToRestock === 0);
+	const needs = restockLines.filter((l) => l.suggested > 0);
+	const met = restockLines.filter((l) => l.suggested === 0);
 	const grid = mobile
 		? (subTab === "restock" ? RESTOCK_GRID_MOBILE : PREP_GRID_MOBILE)
 		: (subTab === "restock" ? RESTOCK_GRID : PREP_GRID);
@@ -548,7 +551,7 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 
 	return (
 		<>
-			<div className="fixed inset-0 z-40 bg-overlay" onClick={onCancel} />
+			<div className="fixed inset-0 z-50 bg-overlay" onClick={onCancel} />
 			<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
 				<div className="bg-base border border-border rounded-xl shadow-xl w-full max-w-md flex flex-col">
 					<div className="px-5 pt-5 pb-3 border-b border-border">
@@ -634,10 +637,12 @@ function computeRestockLines(
 		const standard = item.qty_standard !== null ? Number(item.qty_standard) : 0;
 		const needed = tomorrowNeeds.get(item.inventory_item_id) ?? 0;
 		const target = mode === "prepare" ? Math.max(standard, needed) : standard;
+		const suggested = Math.max(0, target - onHand);
 		return {
 			stockItemId: item.id,
 			item,
-			qtyToRestock: Math.max(0, target - onHand),
+			qtyToRestock: suggested,
+			suggested,
 			tomorrowNeed: needed,
 			serialUnitIds: [],
 			batchId: null,

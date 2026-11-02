@@ -104,11 +104,11 @@ describe("NotePhotoPicker (07-F9)", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Upload failed. Please try again.");
 	});
 
-	it("defaults capture to the rear camera and can be switched off", () => {
+	it("leaves capture off by default and can request the rear camera", () => {
 		const { unmount } = render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} />);
-		expect(fileInput()).toHaveAttribute("capture", "environment");
-		unmount();
-		render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} capture={false} />);
 		expect(fileInput()).not.toHaveAttribute("capture");
+		unmount();
+		render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} capture="environment" />);
+		expect(fileInput()).toHaveAttribute("capture", "environment");
 	});
 });

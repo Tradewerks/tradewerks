@@ -44,9 +44,8 @@ interface NotePhotoPickerProps {
 	existingPhotos?: JobNotePhoto[];
 	onRemoveExisting?: (id: string) => void;
 	/**
-	 * Passed through to the file input. Defaults to "environment" (rear camera on
-	 * mobile) because the technician note modal relies on it; dispatcher callers can
-	 * pass `capture={false}` to get a plain file picker.
+	 * Passed through to the file input. Off by default so iOS offers camera and
+	 * photo library; "environment" skips straight to the rear camera.
 	 */
 	capture?: "environment" | "user" | false;
 }
@@ -59,7 +58,7 @@ export default function NotePhotoPicker({
 	disabled,
 	existingPhotos,
 	onRemoveExisting,
-	capture = "environment",
+	capture = false,
 }: NotePhotoPickerProps) {
 	const [pendingFile, setPendingFile] = useState<File | null>(null);
 	const [labelPickerOpen, setLabelPickerOpen] = useState(false);

@@ -91,7 +91,7 @@ export default function TechnicianLayout() {
 	};
 
 	return (
-		<div className="flex h-screen bg-canvas text-text-primary">
+		<div className="flex h-dvh bg-canvas text-text-primary">
 			<div className="flex flex-col flex-1 overflow-hidden">
 				{/* TOP NAV */}
 				<header className="flex justify-between items-center px-4 sm:px-6 h-14 bg-base border-b border-border">
@@ -134,7 +134,7 @@ export default function TechnicianLayout() {
 						</button>
 
 						{/* Truck / vehicle icon */}
-						{usePermission("use_vehicles") && (
+						{usePermission("view_vehicles") && (
 							<button
 								onClick={() => navigate("/technician/vehicles")}
 								className="relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
@@ -171,7 +171,7 @@ export default function TechnicianLayout() {
 					</div>
 				</header>
 
-				<main className="flex-1 overflow-y-auto overscroll-contain bg-canvas">
+				<main className="flex-1 overflow-y-auto overscroll-contain bg-canvas relative">
 					<div className="p-4 pb-20 md:px-6 md:pt-6 min-h-full">
 						<ModuleRouteGuard home="/technician">
 							<Outlet />
@@ -181,7 +181,7 @@ export default function TechnicianLayout() {
 			</div>
 
 			{/* BOTTOM NAV */}
-			<nav className="flex fixed bottom-0 left-0 right-0 z-50 bg-base border-t border-border h-16">
+			<nav className="flex fixed bottom-0 left-0 right-0 z-40 bg-base border-t border-border h-16">
 				<NavLink
 					to="/technician"
 					end

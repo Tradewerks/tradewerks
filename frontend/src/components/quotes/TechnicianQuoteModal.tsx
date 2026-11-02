@@ -46,7 +46,8 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 					</div>
 					<button
 						onClick={onClose}
-						className="shrink-0 p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface transition-colors"
+						aria-label="Close"
+						className="shrink-0 p-3 -m-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface transition-colors"
 					>
 						<X size={18} />
 					</button>

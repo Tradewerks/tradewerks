@@ -189,3 +189,20 @@ input[type="number"] {
 		background-color: transparent;
 	}
 }
+
+/* iOS Safari zooms into any focused field under 16px; touch screens only, so desktop stays compact. */
+@media (pointer: coarse) {
+	input,
+	textarea,
+	select {
+		font-size: max(16px, 1em);
+	}
+}
+
+/* Disable animations and transitions for users who have prefers-reduced-motion set */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

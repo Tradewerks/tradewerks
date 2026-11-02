@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import { useFillPlanQuery, useApplyFillMutation } from "../../hooks/useVehicleStock";
 import RestockSummaryModal, { type RestockSummaryLine } from "./RestockSummaryModal";
+import NumberInput from "../ui/NumberInput";
 import type { FillPlanLine, FillResultLine } from "../../types/vehicles";
 
 function Section({ title, lines, qtys, onQty }: {
@@ -28,8 +29,8 @@ function Section({ title, lines, qtys, onQty }: {
 							<span className="text-center text-sm text-text-muted">{l.target}</span>
 							<span className={`text-center text-sm font-medium ${l.warehouse_available === 0 ? "text-error-text" : over ? "text-warning-text" : "text-text-muted"}`}>{l.warehouse_available}</span>
 							<div className="flex justify-center">
-								<input type="number" min={0} value={qty}
-									onChange={(e) => onQty(l.inventory_item_id, Math.max(0, Math.floor(Number(e.target.value))))}
+								<NumberInput inputMode="numeric" min={0} value={qty}
+									onValue={(n) => onQty(l.inventory_item_id, Math.max(0, Math.floor(n)))}
 									className={`w-14 text-center text-sm rounded border ${over ? "border-warning text-warning-text" : "border-border-input text-text-primary"} bg-base px-1 py-0.5 outline-none focus:border-primary`} />
 							</div>
 						</div>

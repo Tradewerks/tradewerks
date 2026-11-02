@@ -227,8 +227,9 @@ export default function TechnicianUserMenu() {
                             }}
                             className={`w-full flex items-center gap-2 px-3 py-2 text-sm
                         rounded-md transition-colors ${
+                            /** Disabled the animation if not supported (Safari would display both messages at the same time) */
                                 confirmingLogout
-                                    ? "bg-error text-on-primary motion-safe:animate-pulse"
+                                    ? "bg-error text-on-primary motion-safe:animate-pulse [@supports(-webkit-touch-callout:none)]:animate-none"
                                     : "text-error-text hover:bg-error-bg"
                             }`}
                         >
