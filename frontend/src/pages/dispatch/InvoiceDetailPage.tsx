@@ -1077,7 +1077,7 @@ export default function InvoiceDetailPage() {
 	// ── Render ────────────────────────────────────────────────────────────────
 
 	return (
-		<div className="text-text-primary pb-4 md:pb-6">
+		<div className="text-text-primary">
 			{/* Header, lifecycle and the tab strip are one unit: a tight stack
 			    closed by the strip's bottom border, rather than cards floating
 			    at the same weight as the body below them. */}

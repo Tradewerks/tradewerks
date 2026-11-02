@@ -199,7 +199,7 @@ const DispatcherDetailPage = () => {
 
 	return (
 		<>
-			<div className="text-text-primary space-y-6 p-6">
+			<div className="text-text-primary space-y-6">
 				{/* Hero card */}
 				<div className="flex items-start justify-between gap-4">
 					<div className="flex items-center gap-4 min-w-0">

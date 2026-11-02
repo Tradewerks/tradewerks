@@ -680,7 +680,7 @@ export default function JobVisitDetailPage() {
 				: null;
 
 	return (
-		<div className="text-text-primary pb-4 md:pb-6">
+		<div className="text-text-primary">
 			<div className="space-y-4">
 				<DetailHeader
 					title={visit.name ?? "Job Visit"}

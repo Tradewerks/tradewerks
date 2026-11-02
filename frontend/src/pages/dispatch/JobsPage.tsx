@@ -332,7 +332,7 @@ export default function JobsPage() {
 							new Date(b.scheduled_start_at).getTime()
 					);
 
-					let scheduleDisplay = "No visits scheduled";
+					let scheduleDisplay = "No visits";
 					let scheduleDate: Date | null = null;
 
 					if (j.status === "Completed") {
@@ -718,6 +718,8 @@ export default function JobsPage() {
 						}
 					}}
 					columnVisibility={viewMode === "templates" ? undefined : { property: false }}
+					// One line per job: a wrapped title plus the address line was ~105px a row.
+					columnClamp={viewMode === "jobs" ? { jobNumber: { maxWidth: "20rem" } } : undefined}
 					cellRenderers={{
 						jobNumber: (row) => {
 							const r = row as JobRow;
@@ -726,11 +728,21 @@ export default function JobsPage() {
 							const number = firstLine.replace(/^🔄\s*/, "");
 							return (
 								<div className="flex flex-col">
-									<span className="font-mono text-xs font-semibold text-primary-text">
-										{isRecurring ? "🔄 " : ""}#{number}
+									{/* Jobs view puts the number beside the title: two lines a row, not three. */}
+									<div className={viewMode === "jobs" ? "flex min-w-0 items-baseline gap-2" : "flex flex-col"}>
+										<span className="shrink-0 font-mono text-xs font-semibold text-primary-text">
+											{isRecurring ? "🔄 " : ""}#{number}
+										</span>
+										<span
+											className={`font-medium text-text-primary ${viewMode === "jobs" ? "min-w-0 truncate" : ""}`}
+											title={viewMode === "jobs" ? nameLines.join(" ") : undefined}
+										>
+											{nameLines.join(" ")}
+										</span>
+									</div>
+									<span className={`text-xs text-text-tertiary ${viewMode === "jobs" ? "truncate" : ""}`}>
+										{r.property}
 									</span>
-									<span className="font-medium text-text-primary">{nameLines.join(" ")}</span>
-									<span className="text-xs text-text-tertiary">{r.property}</span>
 								</div>
 							)
 						},

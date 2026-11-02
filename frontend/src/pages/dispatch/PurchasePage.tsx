@@ -44,32 +44,35 @@ export default function PurchasePage() {
 		setActiveTab(tab);
 	};
 
+	const fill = activeTab === "field_purchases";
+
 	return (
-		<div className="text-text-primary">
-			<PageHeader title="Purchases" />
-			{/* Tab bar */}
-			<div
-				role="tablist"
-				aria-label="Purchase sections"
-				className="flex items-center border-b border-border-subtle mb-5"
-			>
-				{visibleTabs.map((tab) => (
-					<button
-						key={tab.id}
-						id={`tab-${tab.id}`}
-						role="tab"
-						aria-selected={activeTab === tab.id}
-						aria-controls={`tabpanel-${tab.id}`}
-						onClick={() => handleTabChange(tab.id)}
-						className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
-							activeTab === tab.id
-								? "border-primary text-text-primary"
-								: "border-transparent text-text-tertiary hover:text-text-primary"
-						}`}
-					>
-						{tab.label}
-					</button>
-				))}
+		<div
+			data-page-width={fill ? "full" : undefined}
+			className={`text-text-primary ${fill ? "lg:flex lg:h-full lg:min-h-0 lg:flex-col" : ""}`}
+		>
+			<div className="lg:shrink-0">
+				<PageHeader title="Purchases">
+					<div role="tablist" aria-label="Purchase sections" className="flex items-center">
+						{visibleTabs.map((tab) => (
+							<button
+								key={tab.id}
+								id={`tab-${tab.id}`}
+								role="tab"
+								aria-selected={activeTab === tab.id}
+								aria-controls={`tabpanel-${tab.id}`}
+								onClick={() => handleTabChange(tab.id)}
+								className={`px-4 py-1.5 text-sm font-medium border-b-2 transition-colors cursor-pointer ${
+									activeTab === tab.id
+										? "border-primary text-text-primary"
+										: "border-transparent text-text-tertiary hover:text-text-primary"
+								}`}
+							>
+								{tab.label}
+							</button>
+						))}
+					</div>
+				</PageHeader>
 			</div>
 			{activeTab === "purchasing" && canViewOrders && (
 				<div
@@ -85,6 +88,7 @@ export default function PurchasePage() {
 					role="tabpanel"
 					id="tabpanel-field_purchases"
 					aria-labelledby="tab-field_purchases"
+					className="lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
 				>
 					<FieldPurchasesSection />
 				</div>

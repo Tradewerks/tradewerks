@@ -4,6 +4,7 @@ import { createSuccessResponse } from "../../types/responses.js";
 import {
 	PASSWORD_SCHEMA,
 	acceptInvite,
+	exchangeEnrollLink,
 	getSetupAvailable,
 	previewInvite,
 	setupFirstStaff,
@@ -51,6 +52,14 @@ export function registerAuth(router: Router): void {
 			req.body,
 		);
 		res.json(createSuccessResponse(await staffVerifyMfa(bearer(req), body)));
+	});
+
+	router.post("/auth/mfa/enroll/link", ...open, async (req, res) => {
+		const body = parse(
+			z.object({ token: z.string().min(20).max(200) }),
+			req.body,
+		);
+		res.json(createSuccessResponse(await exchangeEnrollLink(body.token)));
 	});
 
 	router.post("/auth/mfa/enroll/start", ...open, async (req, res) => {

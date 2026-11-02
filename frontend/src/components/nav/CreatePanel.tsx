@@ -102,7 +102,7 @@ export default function CreatePanel({ isOpen, onClose }: { isOpen: boolean; onCl
 		<button
 			key={key}
 			onClick={() => openModal(key)}
-			className="w-full flex items-center gap-4 px-4 py-3 hover:bg-surface-overlay transition-colors text-left group"
+			className="w-full flex items-center gap-4 px-4 py-3 short:py-1.5 hover:bg-surface-overlay transition-colors text-left group"
 		>
 			<div className="w-9 h-9 rounded-lg bg-primary-bg flex items-center justify-center shrink-0 group-hover:bg-primary transition-colors">
 				<Icon size={18} className="text-primary group-hover:text-on-primary transition-colors" />

@@ -82,6 +82,11 @@ export interface OrgListRow {
 	usage: UsageSummary | null;
 }
 
+export interface TierFilter {
+	key: string;
+	version?: number;
+}
+
 export interface OrgListPage {
 	rows: OrgListRow[];
 	total: number;

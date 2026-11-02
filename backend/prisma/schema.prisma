@@ -3643,6 +3643,7 @@ model mfa_credential {
   enrolled_at     DateTime?
   failed_attempts Int @default(0)
   locked_until    DateTime?
+  last_used_step  Int?     // TOTP time step last accepted; a code at or before it is a replay
   created_at      DateTime @default(now())
 
   @@unique([user_id, role])
@@ -4044,5 +4045,7 @@ model platform_staff {
   disabled_at       DateTime?
   last_login        DateTime?
   sessions_valid_after DateTime? // staff tokens issued before this are refused
+  enroll_token_hash String?   @unique // sha256 of the emailed MFA setup link token
+  enroll_expires_at DateTime?
   created_at        DateTime  @default(now())
 }

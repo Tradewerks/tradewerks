@@ -43,6 +43,8 @@ interface AdaptableTableProps {
 	sortKey?: string;
 	sortDir?: SortDir;
 	onSortChange?: (col: string) => void; 
+	// Pins the action column to the right edge so it stays reachable when the table scrolls sideways
+	stickyActions?: boolean;
 }
 
 export interface ColumnClamp {
@@ -96,6 +98,7 @@ const AdaptableTable = ({
 	sortKey,
 	sortDir,
 	onSortChange,
+	stickyActions = false,
 }: AdaptableTableProps) => {
 	const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -175,6 +178,12 @@ const AdaptableTable = ({
 	}
 
 	const sortable = (colId:string) => !!sortableColumns?.[colId];
+	// Opaque so scrolled cells pass under it; the row tint is repeated because a
+	// background on the cell would otherwise hide the hover on the row.
+	const stickyCell = (colId: string, hoverable: boolean) =>
+		stickyActions && colId === "actions"
+			? `right-0 z-[1] border-l border-border-subtle bg-base ${hoverable ? "group-hover/row:bg-surface-raised transition-colors" : ""}`
+			: "";
 
 	return (
 		<>
@@ -202,7 +211,7 @@ const AdaptableTable = ({
 												header.id
 											}
 											onClick={() => {if (onSortChange && sortable(header.column.id)) onSortChange(header.column.id)}}
-											className={`${sortable(header.column.id) ? "cursor-pointer select-none" : ""} sticky top-0 border-b font-bold text-text-tertiary ${borderColor} ${PADDING} ${alignClass(header.column.id)}`}
+											className={`${sortable(header.column.id) ? "cursor-pointer select-none" : ""} sticky top-0 border-b font-bold text-text-tertiary ${borderColor} ${PADDING} ${alignClass(header.column.id)} ${stickyCell(header.column.id, false)}`}
 										>
 											{flexRender(
 												typeof header
@@ -244,7 +253,7 @@ const AdaptableTable = ({
 						{table.getRowModel().rows.map((row) => (
 							<Fragment key={row.id} >
 								<tr
-									className={`text-left ${borderColor} ${onRowClick || renderExpanded ? 'cursor-pointer hover:bg-surface-raised transition-colors' : ''} ${renderSubRow && renderExpanded ? "[&:has(+tr:hover)]:bg-surface-raised" : ""}`}
+									className={`group/row text-left ${borderColor} ${onRowClick || renderExpanded ? 'cursor-pointer hover:bg-surface-raised transition-colors' : ''} ${renderSubRow && renderExpanded ? "[&:has(+tr:hover)]:bg-surface-raised" : ""}`}
 									onClick={() => {
 										onRowClick?.(row.original);
 										if (renderExpanded) setExpandedId((id) => (id === row.id ? null : row.id));
@@ -299,7 +308,7 @@ const AdaptableTable = ({
 													key={
 														cell.id
 													}
-													className={`border-t border-border-subtle font-normal ${PADDING} ${alignClass(cell.column.id)} ${cellClass?.[cell.column.id]?.(row.original) ?? ""}`}
+													className={`border-t border-border-subtle font-normal ${PADDING} ${alignClass(cell.column.id)} ${cellClass?.[cell.column.id]?.(row.original) ?? ""} ${stickyCell(cell.column.id, !!(onRowClick || renderExpanded))} ${stickyActions && cell.column.id === "actions" ? "sticky" : ""}`}
 												>
 													{renderExpanded && cellIndex === 0 && (
 														<ChevronRight

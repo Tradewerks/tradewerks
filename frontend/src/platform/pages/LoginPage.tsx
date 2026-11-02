@@ -19,9 +19,7 @@ export default function LoginPage() {
 	const returnTo = from?.startsWith("/platform/") ? from : "/platform/orgs";
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
-	const [next, setNext] = useState<{ stage: "mfa" | "enroll"; pendingToken: string } | null>(
-		null
-	);
+	const [next, setNext] = useState<Awaited<ReturnType<typeof platform.login>> | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	// Only a confirmed "no staff account yet" shows the link; a failed check hides it.
@@ -39,13 +37,25 @@ export default function LoginPage() {
 	}, []);
 
 	if (!isStaffTokenExpired(token)) return <Navigate to={returnTo} replace />;
+	if (next?.stage === "enroll_email")
+		return (
+			<AuthCard title="Check your email">
+				<p className="text-sm text-text-secondary">
+					Your account needs two-step sign-in set up. We emailed you a
+					setup link; it works once and expires in 30 minutes.
+				</p>
+				<button
+					type="button"
+					className="text-sm text-primary hover:underline"
+					onClick={() => setNext(null)}
+				>
+					Back to sign in
+				</button>
+			</AuthCard>
+		);
 	if (next)
 		return (
-			<MfaStep
-				stage={next.stage}
-				pendingToken={next.pendingToken}
-				returnTo={returnTo}
-			/>
+			<MfaStep stage="mfa" pendingToken={next.pendingToken} returnTo={returnTo} />
 		);
 
 	const submit = async (e: React.FormEvent) => {

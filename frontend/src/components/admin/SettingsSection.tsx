@@ -852,8 +852,8 @@ export default function SettingsSection() {
 	const VIEW_REPORTS = usePermission("view_reports");
 
 	return (
-		<div className="max-w-6xl 2xl:max-w-none">
-			<div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2 lg:items-start 2xl:grid-cols-3">
+		<div className="max-w-6xl min-[1920px]:max-w-none">
+			<div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2 lg:items-start min-[1920px]:grid-cols-3">
 				{MANAGE_ORG && (
 					<SettingRow
 						title="Organization"

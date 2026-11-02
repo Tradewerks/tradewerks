@@ -292,10 +292,10 @@ export default function AssignTechnicianPage() {
 	};
 
     return (
-        <div className="min-h-screen bg-canvas">
+        <div className="bg-canvas">
 			{/* Header Section */}
 			<div className="border-b border-border-subtle">
-				<div className="w-full px-6 pb-6">
+				<div className="w-full pb-6">
 					{/* Page Title */}
 					<div className="mb-3">
 						<h2 className="text-sm font-semibold uppercase tracking-wide text-text-tertiary">
@@ -647,7 +647,7 @@ export default function AssignTechnicianPage() {
 				{/** Technician schedule */}
 				{showDay && (
 				// Stacks above the list on narrow screens so it doesn't squeeze the rows
-				<aside aria-label="Day timeline" className="order-first px-6 pt-6 lg:order-none lg:w-96 lg:shrink-0 lg:border-l lg:border-border-subtle lg:p-6 lg:pl-4">
+				<aside aria-label="Day timeline" className="order-first px-6 pt-6 lg:order-none lg:w-96 lg:shrink-0 lg:border-l lg:border-border-subtle lg:p-6 lg:pl-4 lg:sticky lg:top-0 lg:self-start lg:max-h-[calc(100vh-3.5rem)] lg:overflow-y-auto">
 					<div className="rounded-lg border border-border-subtle bg-surface p-4">
 						<h3 className="mb-3 font-semibold text-text-primary">{technician.name}'s day</h3>
 						<div className="mb-4 flex items-center gap-1">

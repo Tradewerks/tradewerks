@@ -207,10 +207,12 @@ export default function InventoryReconcilePage() {
 			: undefined;
 
 	return (
-		<div className="flex flex-col gap-3 pb-4">
-			<PageHeader title="Reconcile Parts" />
+		<div data-page-width="full" className="flex flex-col gap-3 lg:h-full lg:min-h-0">
+			<div className="lg:shrink-0">
+				<PageHeader title="Reconcile Parts" />
+			</div>
 
-			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+			<div className="grid grid-cols-2 gap-3 lg:shrink-0 lg:grid-cols-4">
 				<StatCard
 					dense
 					label="Catalog coverage"
@@ -257,9 +259,8 @@ export default function InventoryReconcilePage() {
 				/>
 			</div>
 
-			{/* DispatchLayout scrolls the page, not this panel, so both panes take
-			    their height from here. 14rem is the measured chrome above it. */}
-			<div className="flex min-h-[24rem] flex-col overflow-hidden rounded-lg border border-border bg-base lg:h-[calc(100vh-14rem)]">
+			{/* Fill contract: the page root is h-full of the layout scroller; this box takes the rest. */}
+			<div className="flex min-h-[22rem] flex-col overflow-hidden rounded-lg border border-border bg-base lg:flex-1">
 				<ReconcileToolbar
 					filters={filters}
 					counts={counts}

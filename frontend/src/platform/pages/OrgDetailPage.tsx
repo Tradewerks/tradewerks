@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { AxiosError } from "axios";
+import Card from "../../components/ui/Card";
 import SegmentedToggle from "../../components/ui/SegmentedToggle";
 import { FormErrorBanner } from "../../components/ui/forms/FormErrorBanner";
 import { useToast } from "../../components/ui/useToast";
@@ -11,11 +12,12 @@ import CopyLink from "../components/CopyLink";
 import HistoryList from "../components/HistoryList";
 import LimitsCard from "../components/LimitsCard";
 import PlanCard from "../components/PlanCard";
+import RecordHeader from "../components/RecordHeader";
 import PlanDraftBar from "../components/PlanDraftBar";
 import RequestBanner from "../components/RequestBanner";
 import ResolveRequestDialog from "../components/ResolveRequestDialog";
 import { UsageCell } from "../components/UsageCell";
-import { card, cardTitle, chip, shortDate, versionLabel } from "../components/orgDetailUi";
+import { canvasChip, shortDate, smallButton, versionLabel } from "../components/orgDetailUi";
 import { LIMIT_KEYS, LIMIT_LABELS } from "../limits";
 import { shortDateIn } from "../../lib/trialDays";
 import { platformError } from "../api";
@@ -63,40 +65,41 @@ type DialogState = {
 function UsageCard({ detail }: { detail: OrgDetail }) {
 	const usage = detail.usage;
 	return (
-		<section className={card}>
-			<h2 className={cardTitle}>Usage &amp; seats</h2>
-			{!usage ? (
-				<p className="text-sm text-text-secondary">Usage unavailable</p>
-			) : (
-				<>
-					<dl className="grid grid-cols-2 gap-3 text-sm">
-						{LIMIT_KEYS.map((k) => (
-							<div key={k}>
-								<dt className="text-xs text-text-tertiary">
-									{LIMIT_LABELS[k]}
-								</dt>
-								<dd>
-									<UsageCell
-										meter={
-											usage
-												.meters[
-												k
-											]
-										}
-										isMeter={k.endsWith(
-											"_month"
-										)}
-									/>
-								</dd>
-							</div>
-						))}
-					</dl>
-					<p className="text-xs text-text-tertiary">
-						Since {shortDate(`${usage.period_start}T00:00:00`)}
-					</p>
-				</>
-			)}
-		</section>
+		<Card title="Usage & seats">
+			<div className="space-y-3">
+				{!usage ? (
+					<p className="text-sm text-text-secondary">Usage unavailable</p>
+				) : (
+					<>
+						<dl className="grid grid-cols-2 gap-3 text-sm">
+							{LIMIT_KEYS.map((k) => (
+								<div key={k}>
+									<dt className="text-xs text-text-tertiary">
+										{LIMIT_LABELS[k]}
+									</dt>
+									<dd>
+										<UsageCell
+											meter={
+												usage
+													.meters[
+													k
+												]
+											}
+											isMeter={k.endsWith(
+												"_month"
+											)}
+										/>
+									</dd>
+								</div>
+							))}
+						</dl>
+						<p className="text-xs text-text-tertiary">
+							Since {shortDate(`${usage.period_start}T00:00:00`)}
+						</p>
+					</>
+				)}
+			</div>
+		</Card>
 	);
 }
 
@@ -124,19 +127,21 @@ function AdminInviteRow({
 	const resend = useResendOrgInvite(orgId);
 	const expired = Date.parse(invite.expiresAt) <= Date.now();
 	return (
-		<div className="space-y-2 rounded-lg border border-border-subtle p-3 text-sm">
-			<p className="text-text-secondary">
-				Admin invite for {invite.email} {expired ? "expired" : "pending, expires"}{" "}
-				{shortDateIn(invite.expiresAt, timeZone, true)} ·{" "}
+		<div className="space-y-2 rounded-lg border border-border bg-base p-3 text-sm">
+			<div className="flex flex-wrap items-center justify-between gap-2">
+				<p className="text-text-secondary">
+					Admin invite for {invite.email} {expired ? "expired" : "pending, expires"}{" "}
+					{shortDateIn(invite.expiresAt, timeZone, true)}
+				</p>
 				<button
 					type="button"
-					className="font-medium text-primary hover:underline disabled:opacity-50"
+					className={smallButton}
 					disabled={resend.isPending}
 					onClick={() => resend.mutate(undefined)}
 				>
-					Resend
+					Resend invite
 				</button>
-			</p>
+			</div>
 			{resend.error && <FormErrorBanner message={platformError(resend.error)} />}
 			{resend.data && <CopyLink url={resend.data.inviteUrl} />}
 		</div>
@@ -146,7 +151,7 @@ function AdminInviteRow({
 function BackLink() {
 	return (
 		<Link to="/platform/orgs" className="text-sm text-primary hover:underline">
-			← Organizations
+			Back to organizations
 		</Link>
 	);
 }
@@ -247,7 +252,7 @@ export default function OrgDetailPage() {
 		setResetKey((k) => k + 1);
 	};
 	const chips: ReactNode[] = [
-		<span key="tier" className={chip}>
+		<span key="tier" className={canvasChip}>
 			{detail.breakdown
 				? `${detail.breakdown.baseTier.label} v${detail.breakdown.baseTier.version}`
 				: (versionLabel(tierList, e?.plan_version_id ?? null) ??
@@ -256,27 +261,21 @@ export default function OrgDetailPage() {
 	];
 	if (detail.resolved.trialActive && e?.trial_ends_at)
 		chips.push(
-			<span key="trial" className={chip}>
+			<span key="trial" className={canvasChip}>
 				Trial: {versionLabel(tierList, e.trial_plan_version_id) ?? "tier"}{" "}
 				until {shortDateIn(e.trial_ends_at, detail.org.timezone, true)}
 			</span>
 		);
 	if (e)
 		chips.push(
-			<span key="tpl" className={chip}>
+			<span key="tpl" className={canvasChip}>
 				{e.template_key}
 			</span>
 		);
 
 	return (
 		<div className="space-y-4">
-			<BackLink />
-			<div className="space-y-2">
-				<h1 className="text-lg font-semibold text-text-primary">
-					{detail.org.name}
-				</h1>
-				<div className="flex flex-wrap gap-2">{chips}</div>
-			</div>
+			<RecordHeader title={detail.org.name} badges={chips} />
 			{detail.adminInvite && (
 				<AdminInviteRow
 					orgId={detail.org.id}

@@ -178,8 +178,8 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 
 	return (
 		<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-			<div className="bg-base rounded-xl p-6 w-full max-w-lg border border-border-subtle max-h-[90vh] overflow-y-auto scrollbar-hide">
-				<div className="flex justify-between items-center mb-5">
+			<div className="bg-base rounded-xl w-full max-w-lg border border-border-subtle max-h-[90vh] flex flex-col overflow-hidden">
+				<div className="flex shrink-0 justify-between items-center px-6 pt-6 pb-5">
 					<div>
 						<h2 className="text-2xl font-bold text-text-primary">Receive Stock</h2>
 						<p className="text-sm text-text-tertiary mt-0.5">{item.name}</p>
@@ -195,97 +195,101 @@ export default function ReceiveStockModal({ isOpen, onClose, item }: ReceiveStoc
 
 				{/* noValidate: the quantity rules (positive, 2 dp, whole for serialized)
 				    are checked in handleSubmit with the same messages as the rest of
-				    this form, rather than the browser's generic step/min tooltip. */}
-				<form onSubmit={handleSubmit} noValidate className="space-y-4">
-					<div>
-						<label htmlFor="receive-qty" className={LABEL}>
-							Quantity
-						</label>
-						<input
-							id="receive-qty"
-							type="number"
-							min={item.is_serialized ? 1 : 0.01}
-							step={item.is_serialized ? 1 : 0.01}
-							inputMode={item.is_serialized ? "numeric" : "decimal"}
-							value={qty}
-							onChange={(e) => setQty(e.target.value)}
-							className={INPUT}
-						/>
-						{item.is_serialized && (
+				    this form, rather than the browser's generic step/min tooltip. The form
+				    is the flex column so the buttons stay inside it and still submit,
+				    while only the fields scroll. */}
+				<form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col">
+					<div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6">
+						<div>
+							<label htmlFor="receive-qty" className={LABEL}>
+								Quantity
+							</label>
+							<input
+								id="receive-qty"
+								type="number"
+								min={item.is_serialized ? 1 : 0.01}
+								step={item.is_serialized ? 1 : 0.01}
+								inputMode={item.is_serialized ? "numeric" : "decimal"}
+								value={qty}
+								onChange={(e) => setQty(e.target.value)}
+								className={INPUT}
+							/>
+							{item.is_serialized && (
+								<p className="text-xs text-text-muted mt-1">
+									{autoSerial
+										? `${serialTarget} serial number${serialTarget === 1 ? "" : "s"} will be auto-assigned.`
+										: "Enter one serial number per unit below."}
+								</p>
+							)}
+						</div>
+
+						<div>
+							<label htmlFor="receive-unit-cost" className={LABEL}>
+								Unit cost paid <span className="normal-case">(optional)</span>
+							</label>
+							<input
+								id="receive-unit-cost"
+								type="number"
+								min={0}
+								step="0.01"
+								placeholder="—"
+								value={unitCost}
+								onChange={(e) => setUnitCost(e.target.value)}
+								className={INPUT}
+							/>
 							<p className="text-xs text-text-muted mt-1">
-								{autoSerial
-									? `${serialTarget} serial number${serialTarget === 1 ? "" : "s"} will be auto-assigned.`
-									: "Enter one serial number per unit below."}
+								What the supplier billed per unit on this receipt. Leave blank if
+								unknown — it's recorded as unknown, not as zero.
+							</p>
+						</div>
+
+						<div>
+							<SupplierPicker value={supplier} onChange={setSupplier} />
+							<p className="text-xs text-text-muted mt-1">
+								Who this stock was bought from. Drives the cost origin on the
+								item's price history.
+							</p>
+						</div>
+
+						{item.is_serialized && (
+							<div className="space-y-2">
+								<label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+									<input
+										type="checkbox"
+										checked={autoSerial}
+										onChange={(e) => setAutoSerial(e.target.checked)}
+										className="h-4 w-4 rounded border-border bg-base text-primary focus:ring-primary cursor-pointer"
+									/>
+									Auto-assign serial numbers
+								</label>
+								{autoSerial ? (
+									<p className="text-xs text-text-muted">
+										Use this when units have no manufacturer serial — each gets a
+										unique scannable code automatically.
+									</p>
+								) : (
+									<SerialCaptureList
+										itemId={item.id}
+										targetCount={serialTarget}
+										value={serialValues}
+										onChange={setSerialValues}
+									/>
+								)}
+							</div>
+						)}
+
+						{item.is_batch_tracked && (
+							<BatchCaptureFields itemId={item.id} value={batchValue} onChange={setBatchValue} />
+						)}
+
+						{error && (
+							<p className="text-sm text-error-text bg-error-bg border border-error-border rounded-md px-3 py-2">
+								{error}
 							</p>
 						)}
 					</div>
 
-					<div>
-						<label htmlFor="receive-unit-cost" className={LABEL}>
-							Unit cost paid <span className="normal-case">(optional)</span>
-						</label>
-						<input
-							id="receive-unit-cost"
-							type="number"
-							min={0}
-							step="0.01"
-							placeholder="—"
-							value={unitCost}
-							onChange={(e) => setUnitCost(e.target.value)}
-							className={INPUT}
-						/>
-						<p className="text-xs text-text-muted mt-1">
-							What the supplier billed per unit on this receipt. Leave blank if
-							unknown — it's recorded as unknown, not as zero.
-						</p>
-					</div>
-
-					<div>
-						<SupplierPicker value={supplier} onChange={setSupplier} />
-						<p className="text-xs text-text-muted mt-1">
-							Who this stock was bought from. Drives the cost origin on the
-							item's price history.
-						</p>
-					</div>
-
-					{item.is_serialized && (
-						<div className="space-y-2">
-							<label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
-								<input
-									type="checkbox"
-									checked={autoSerial}
-									onChange={(e) => setAutoSerial(e.target.checked)}
-									className="h-4 w-4 rounded border-border bg-base text-primary focus:ring-primary cursor-pointer"
-								/>
-								Auto-assign serial numbers
-							</label>
-							{autoSerial ? (
-								<p className="text-xs text-text-muted">
-									Use this when units have no manufacturer serial — each gets a
-									unique scannable code automatically.
-								</p>
-							) : (
-								<SerialCaptureList
-									itemId={item.id}
-									targetCount={serialTarget}
-									value={serialValues}
-									onChange={setSerialValues}
-								/>
-							)}
-						</div>
-					)}
-
-					{item.is_batch_tracked && (
-						<BatchCaptureFields itemId={item.id} value={batchValue} onChange={setBatchValue} />
-					)}
-
-					{error && (
-						<p className="text-sm text-error-text bg-error-bg border border-error-border rounded-md px-3 py-2">
-							{error}
-						</p>
-					)}
-
-					<div className="flex gap-3 pt-2">
+					<div className="flex shrink-0 gap-3 px-6 pt-4 pb-6">
 						<button
 							type="button"
 							onClick={onClose}

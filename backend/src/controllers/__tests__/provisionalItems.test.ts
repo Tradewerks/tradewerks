@@ -193,6 +193,12 @@ describe("provisionalItems", () => {
 				vehicle_restock_request: {
 					updateMany: vi.fn(),
 				},
+				vehicle_restock_line: {
+					updateMany: vi.fn(),
+				},
+				vehicle_stock_adjustment_line: {
+					updateMany: vi.fn(),
+				},
 				stock_movement: {
 					updateMany: vi.fn(),
 				},
@@ -319,6 +325,8 @@ describe("provisionalItems", () => {
 			tx.vehicle_stock_item.delete.mockResolvedValue({});
 			tx.vehicle_stock_usage.updateMany.mockResolvedValue({ count: 1 });
 			tx.vehicle_restock_request.updateMany.mockResolvedValue({ count: 0 });
+			tx.vehicle_restock_line.updateMany.mockResolvedValue({ count: 0 });
+			tx.vehicle_stock_adjustment_line.updateMany.mockResolvedValue({ count: 0 });
 			tx.stock_movement.updateMany.mockResolvedValue({ count: 0 });
 			for (const table of LINKED_TABLES) tx[table].updateMany.mockResolvedValue({ count: 0 });
 			tx.inventory_item.delete.mockResolvedValue({});
@@ -340,6 +348,13 @@ describe("provisionalItems", () => {
 				where: { stock_item_id: "ps-1" },
 				data: { stock_item_id: "ts-1" },
 			}));
+			// restock + adjustment lines must move too, or deleting ps-1 hits P2003
+			for (const table of ["vehicle_restock_line", "vehicle_stock_adjustment_line"] as const) {
+				expect(tx[table].updateMany).toHaveBeenCalledWith(expect.objectContaining({
+					where: { stock_item_id: "ps-1" },
+					data: { stock_item_id: "ts-1" },
+				}));
+			}
 			// provisional stock row deleted (collision path)
 			expect(tx.vehicle_stock_item.delete).toHaveBeenCalledWith({ where: { id: "ps-1" } });
 		});

@@ -4,12 +4,11 @@ import { createErrorResponse, ErrorCodes } from "../types/responses.js";
 import {
     generateSecret,
     buildOtpAuthUri,
-    verifyTotp,
     generateRecoveryCodes,
-    hashRecoveryCode,
     KEY
 } from "../services/totpService.js";
-import { encryptSecret, decryptSecret } from "../services/crypto.js";
+import { encryptSecret } from "../services/crypto.js";
+import { acceptTotp, spendRecoveryCode } from "../services/mfaCode.js";
 import { issueAuthTokens } from "./authenticationController.js";
 import { verifyPendingToken } from "../services/jwtService.js";
 import { logActivity } from "../services/logger.js";
@@ -21,6 +20,24 @@ const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 
 const actorTypeFor = (role: string) =>
     role === "technician" ? "technician" : "dispatcher";
+
+// Atomic increment: parallel wrong codes must all count toward the lock.
+async function countFailedCode(credentialId: string): Promise<number> {
+    const { failed_attempts } = await db.mfa_credential.update({
+        where: { id: credentialId },
+        data: { failed_attempts: { increment: 1 } },
+        select: { failed_attempts: true },
+    });
+    if (failed_attempts >= LOCKOUT_THRESHOLD) {
+        await db.mfa_credential.update({
+            where: { id: credentialId },
+            data: { failed_attempts: 0, locked_until: new Date(Date.now() + LOCKOUT_MS) },
+        });
+    }
+    return failed_attempts;
+}
+
+const isLocked = (c: { locked_until: Date | null }) => !!c.locked_until && c.locked_until > new Date();
 
 async function resolveEmailOrg(userId: string, role: string): Promise<{ email: string; orgName: string; orgId: string | null }> {
     const user = role === "technician"
@@ -46,7 +63,7 @@ export async function setupTotp(userId: string, role: string): Promise<{ otpAuth
     await db.mfa_credential.upsert({
         where: { user_id_role: { user_id: userId, role } },
         create: { user_id: userId, role, secret: encryptSecret(secret, KEY), enabled: false },
-        update: { secret: encryptSecret(secret, KEY), enabled: false },
+        update: { secret: encryptSecret(secret, KEY), enabled: false, last_used_step: null },
     });
     const otpAuthUri = buildOtpAuthUri(secret, email, orgName);
     // Return plaintext secret once so the client can render the QR / manual entry
@@ -63,7 +80,7 @@ export async function enableTotp(userId: string, role: string, code: string, via
     if (credential.enabled) {
         return createErrorResponse(ErrorCodes.VALIDATION_ERROR, "MFA is already enabled");
     }
-    if (!verifyTotp(decryptSecret(credential.secret, KEY), code)) {
+    if (!(await acceptTotp(credential, code))) {
         return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
     }
 
@@ -108,33 +125,15 @@ export async function verifyMfa(res: Response, pendingToken: string, code?: stri
     if (!credential || !credential.enabled) {
         return createErrorResponse(ErrorCodes.INVALID_TOKEN, "MFA not enabled");
     }
-    if (credential.locked_until && credential.locked_until > new Date()) {
+    if (isLocked(credential)) {
         return createErrorResponse(ErrorCodes.TOO_MANY_REQUESTS, "Too many attempts. Try again later.");
     }
 
-    let ok = false;
-    if (code) {
-        ok = verifyTotp(decryptSecret(credential.secret, KEY), code);
-    }
-    if (!ok && backupCode) {
-        const row = await db.mfa_recovery_code.findFirst({
-            where: { user_id: pt.userId, role: pt.role, code: hashRecoveryCode(backupCode), used_at: null },
-        });
-        if (row) {
-            await db.mfa_recovery_code.update({ where: { id: row.id }, data: { used_at: new Date() } });
-            ok = true;
-        }
-    }
-
+    const ok =
+        (await acceptTotp(credential, code)) ||
+        (await spendRecoveryCode(pt.userId, pt.role, backupCode));
     if (!ok) {
-        const attempts = credential.failed_attempts + 1;
-        await db.mfa_credential.update({
-            where: { id: credential.id },
-            data: {
-                failed_attempts: attempts,
-                locked_until: attempts >= LOCKOUT_THRESHOLD ? new Date(Date.now() + LOCKOUT_MS) : null,
-            },
-        });
+        const attempts = await countFailedCode(credential.id);
         log.info({ userId: pt.userId, role: pt.role, attempts }, "MFA verify failed");
         return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
     }
@@ -156,21 +155,23 @@ export async function disableTotp(userId: string, role: string, password?: strin
     }
 
     // require password or valid TOTP code before disabling
+    const credential = await db.mfa_credential.findUnique({
+        where: { user_id_role: { user_id: userId, role } }
+    });
+    // A signed-in session must not get unlimited guesses at the factor it is removing.
+    if (credential && isLocked(credential)) {
+        return createErrorResponse(ErrorCodes.TOO_MANY_REQUESTS, "Too many attempts. Try again later.");
+    }
     let reauthed = false;
     if (password) {
-        reauthed = await bcrypt.compare(password, user.password);
+        reauthed = typeof password === "string" && await bcrypt.compare(password, user.password);
     } else if (code) {
-        const credential = await db.mfa_credential.findUnique({
-            where: { user_id_role: { user_id: userId, role } }
-        });
-        reauthed = !!credential && verifyTotp(decryptSecret(credential.secret, KEY), code);
+        reauthed = !!credential && await acceptTotp(credential, code);
     } else if (backupCode) {
-        const row = await db.mfa_recovery_code.findFirst({
-            where: { user_id: userId, role, code: hashRecoveryCode(backupCode), used_at: null },
-        });
-        reauthed = !!row;
+        reauthed = await spendRecoveryCode(userId, role, backupCode);
     }
     if (!reauthed) {
+        if (credential) await countFailedCode(credential.id);
         return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Password, code, or backup code required to disable MFA");
     }
 

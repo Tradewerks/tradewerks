@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Card from "../../components/ui/Card";
 import SegmentedToggle from "../../components/ui/SegmentedToggle";
 import { inputClass } from "./AuthCard";
 import { LIMIT_KEYS, LIMIT_LABELS } from "../limits";
@@ -9,7 +10,7 @@ import {
 	showLimit,
 	type LimitMode,
 } from "../breakdown";
-import { card, cardTitle, flash, smallButton, textButton, type OpenChange } from "./orgDetailUi";
+import { flash, smallButton, type OpenChange } from "./orgDetailUi";
 import type { LimitKey, OrgDetail } from "../types";
 
 function LimitRow({
@@ -69,7 +70,7 @@ function LimitRow({
 					{!edit && (
 						<button
 							type="button"
-							className={textButton}
+							className={smallButton}
 							onClick={startEdit}
 						>
 							Edit
@@ -126,7 +127,7 @@ function LimitRow({
 					</button>
 					<button
 						type="button"
-						className={textButton}
+						className={smallButton}
 						onClick={() => setEdit(null)}
 					>
 						Cancel
@@ -147,8 +148,7 @@ export default function LimitsCard({
 	changed: Set<string>;
 }) {
 	return (
-		<section className={card}>
-			<h2 className={cardTitle}>Limits</h2>
+		<Card title="Limits">
 			<ul className="divide-y divide-border-subtle">
 				{LIMIT_KEYS.map((k) => (
 					<LimitRow
@@ -160,6 +160,6 @@ export default function LimitsCard({
 					/>
 				))}
 			</ul>
-		</section>
+		</Card>
 	);
 }

@@ -7,7 +7,6 @@ import {
 } from "../services/emailService.js";
 import { STAFF_ROLE } from "./authService.js";
 import { newInviteToken } from "../lib/inviteToken.js";
-import { forgetStaff } from "./verifyStaffToken.js";
 
 export type StaffActor = { id: string; name: string };
 export type StaffRow = {
@@ -57,7 +56,7 @@ const NOTICE: Record<string, (actor: string, target: string) => string> = {
 	disabled: (a, t) => `${a} disabled ${t}'s back office account.`,
 	enabled: (a, t) => `${a} re-enabled ${t}'s back office account.`,
 	mfa_reset: (a, t) =>
-		`${a} reset ${t}'s two-step sign-in. ${t} sets it up again at the next sign-in.`,
+		`${a} reset ${t}'s two-step sign-in. ${t} gets an emailed setup link at the next sign-in.`,
 };
 
 async function notifyStaff(
@@ -246,13 +245,13 @@ export async function setStaffStatus(
 				sessions_valid_after: new Date(),
 				invite_token_hash: null,
 				invite_expires_at: null,
+				enroll_token_hash: null,
+				enroll_expires_at: null,
 			},
 		});
 		await audit(tx, actor, "disabled", id);
 		return s;
 	});
-	// Re-read on the next request rather than caching: the row now carries the revocation instant.
-	forgetStaff(id);
 	if (target)
 		await notifyStaff(
 			actor,
@@ -286,11 +285,15 @@ export async function resetStaffMfa(
 		});
 		await tx.platform_staff.update({
 			where: { id },
-			data: { sessions_valid_after: new Date() },
+			// A link issued before the reset is dropped; the next sign-in mails a fresh one.
+			data: {
+				sessions_valid_after: new Date(),
+				enroll_token_hash: null,
+				enroll_expires_at: null,
+			},
 		});
 		await audit(tx, actor, "mfa_reset", id);
 	});
-	forgetStaff(id);
 	await notifyStaff(actor, "mfa_reset", s);
 }
 

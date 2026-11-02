@@ -15,7 +15,7 @@ export function registerRequests(router: Router): void {
 			z.object({
 				status: z.enum(["open", "all"]).default("open"),
 				orgId: z.string().min(1).optional(),
-				page: z.coerce.number().int().min(1).default(1),
+				page: z.coerce.number().int().min(1).max(10_000).default(1),
 			}),
 			req.query,
 		);

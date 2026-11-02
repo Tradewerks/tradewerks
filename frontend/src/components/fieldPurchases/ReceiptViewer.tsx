@@ -116,7 +116,7 @@ export default function ReceiptViewer({
 				</div>
 
 				{/* Yields to the viewport while stacked; in its own xl column it has height to spare. */}
-				<div className="max-h-[min(26rem,38vh)] overflow-auto bg-base p-2 xl:max-h-[min(34rem,52vh)]">
+				<div className="max-h-[min(26rem,38vh)] overflow-auto bg-base p-2 xl:max-h-[min(34rem,52vh)] short:xl:max-h-[30vh]">
 					<img
 						src={url}
 						alt={`Receipt from ${technicianName}`}
