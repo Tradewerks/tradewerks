@@ -120,6 +120,7 @@ export interface CreateClientInput {
 	address: string;
 	coords: Coordinates;
 	is_active?: boolean;
+	is_tax_exempt?: boolean;
 	qb_customer_id?: string;
 	qb_contact_name?: string
 	qb_contact_email?: string
@@ -131,6 +132,7 @@ export interface UpdateClientInput {
 	address?: string;
 	coords?: Coordinates;
 	is_active?: boolean;
+	is_tax_exempt?: boolean;
 	address_tax_choice?: AddressTaxChoice;
 }
 
@@ -142,6 +144,7 @@ export const CreateClientSchema = z.object({
 		lon: z.number(),
 	}),
 	is_active: z.boolean().default(true),
+	is_tax_exempt: z.boolean().optional().default(false),
 });
 
 export const UpdateClientSchema = z.object({
@@ -154,6 +157,7 @@ export const UpdateClientSchema = z.object({
 		})
 		.optional(),
 	is_active: z.boolean().optional(),
+	is_tax_exempt: z.boolean().optional(),
 });
 
 // ============================================================================

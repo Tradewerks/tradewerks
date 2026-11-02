@@ -129,6 +129,7 @@ export const insertClient = async (
 					address: parsed.address,
 					coords: parsed.coords!, // fillCoords guarantees coords once address (required) is set
 					is_active: parsed.is_active ?? true,
+					is_tax_exempt: parsed.is_tax_exempt,
 					last_activity: new Date(),
 				},
 			});
@@ -161,6 +162,7 @@ export const insertClient = async (
 					name: { old: null, new: client.name },
 					address: { old: null, new: client.address },
 					is_active: { old: null, new: client.is_active },
+					is_tax_exempt: { old: null, new: client.is_tax_exempt },
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
@@ -245,6 +247,7 @@ export const updateClient = async (
 			"address",
 			"coords",
 			"is_active",
+			"is_tax_exempt",
 		] as const);
 
 		const updated = await sdb.$transaction(async (tx) => {
@@ -260,6 +263,9 @@ export const updateClient = async (
 					}),
 					...(parsed.is_active !== undefined && {
 						is_active: parsed.is_active,
+					}),
+					...(parsed.is_tax_exempt !== undefined && {
+						is_tax_exempt: parsed.is_tax_exempt,
 					}),
 					last_activity: new Date(),
 				},

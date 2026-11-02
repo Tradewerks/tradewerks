@@ -5,6 +5,7 @@ import FullPopup from "../ui/FullPopup";
 import { CreateClientSchema, type CreateClientInput } from "../../types/clients";
 import type { GeocodeResult } from "../../types/location";
 import AddressForm from "../ui/AddressForm";
+import ToggleSwitch from "../ui/ToggleSwitch";
 import { X } from "lucide-react";
 import { useQBCustomerQuery, useQBMappedCustomersQuery, useQBStatusQuery } from "../../hooks/useQuickbooks";
 import { useAllClientsQuery } from "../../hooks/useClients";
@@ -28,6 +29,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 	const [mode, setMode] = useState<"new" | "import">("new");
 	const [selectedQBId, setSelectedQBId] = useState("");
 	const [submitError, setSubmitError] = useState<string | null>(null);
+	const [isTaxExempt, setIsTaxExempt] = useState(false);
 
 	const { data: qbStatus } = useQBStatusQuery();
 	const { data: customers, isLoading: loadingCustomers } = useQBCustomerQuery(
@@ -88,6 +90,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 		setGeoData(undefined);
 		setErrors(null);
 		setSubmitError(null);
+		setIsTaxExempt(false);
 	};
 
 	const handleClose = () => {
@@ -108,6 +111,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 			address: geoData.address.trim(),
 			coords: geoData.coords,
 			is_active: selectedCustomer?.Active ?? true,
+			is_tax_exempt: isTaxExempt,
 			...(mode === "import" && selectedQBId ? { 
 				qb_customer_id: selectedQBId,
 				qb_contact_email: selectedCustomer?.PrimaryEmailAddr?.Address,
@@ -272,6 +276,22 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 									{err.message}
 								</p>
 							))}
+						</div>
+
+						<div className="flex items-center gap-3 rounded-lg border border-border-subtle px-3 py-2.5">
+							<div className="flex-1 min-w-0">
+								<p className="text-sm font-semibold text-text-primary">Tax exempt</p>
+								<p id="new-client-tax-exempt-hint" className="text-xs text-text-muted">
+									No sales tax charged
+								</p>
+							</div>
+							<ToggleSwitch
+								checked={isTaxExempt}
+								onChange={() => setIsTaxExempt((v) => !v)}
+								disabled={isLoading}
+								ariaLabel="Tax exempt"
+								ariaDescribedBy="new-client-tax-exempt-hint"
+							/>
 						</div>
 					</>
 				)}

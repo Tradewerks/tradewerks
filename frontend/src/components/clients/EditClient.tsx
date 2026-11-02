@@ -9,6 +9,7 @@ import AddressTaxChoicePanel from "../tax/AddressTaxChoicePanel";
 import { addressTaxChoiceDetails } from "../tax/addressTaxChoice";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { useToast } from "../ui/useToast";
+import ToggleSwitch from "../ui/ToggleSwitch";
 
 interface EditClientModalProps {
 	isOpen: boolean;
@@ -21,6 +22,7 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 		name: client.name,
 		address: client.address,
 		is_active: client.is_active,
+		is_tax_exempt: client.is_tax_exempt,
 	});
 	// Set by a 409: the new address would re-tax this client's kept-rate drafts.
 	const [taxRefusal, setTaxRefusal] = useState<AddressTaxChoiceDetails | null>(null);
@@ -114,16 +116,29 @@ export default function EditClientModal({ isOpen, onClose, client }: EditClientM
 					<p className="text-text-muted text-sm">Current: {client.address}</p>
 				</div>
 
-				<div className="flex items-center">
-					<input
-						type="checkbox"
-						id="client-is-active"
-						name="is_active"
-						checked={formData.is_active}
-						onChange={handleChange}
-						className="w-4 h-4 accent-primary rounded"
-					/>
-					<label htmlFor="client-is-active" className="ml-2">Active Client</label>
+				<div className="grid rounded-lg border border-border-subtle divide-y divide-border-subtle sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
+					<label className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-surface-raised">
+						<span className="flex-1 min-w-0 text-sm font-semibold text-text-primary">Active</span>
+						<ToggleSwitch
+							checked={!!formData.is_active}
+							onChange={() => setFormData((prev) => ({ ...prev, is_active: !prev.is_active }))}
+							ariaLabel="Active"
+						/>
+					</label>
+					<label className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-surface-raised">
+						<span className="flex-1 min-w-0">
+							<span className="block text-sm font-semibold text-text-primary">Tax exempt</span>
+							<span id="client-tax-exempt-hint" className="block text-xs text-text-muted">
+								No sales tax charged
+							</span>
+						</span>
+						<ToggleSwitch
+							checked={!!formData.is_tax_exempt}
+							onChange={() => setFormData((prev) => ({ ...prev, is_tax_exempt: !prev.is_tax_exempt }))}
+							ariaLabel="Tax exempt"
+							ariaDescribedBy="client-tax-exempt-hint"
+						/>
+					</label>
 				</div>
 
 				{taxRefusal && (
