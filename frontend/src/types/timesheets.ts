@@ -41,8 +41,10 @@ export interface ShiftEntry {
 export interface EditShiftInput {
 	started_at?: string;
 	ended_at?: string;
-	breaks?: { id: string; started_at: string; ended_at: string }[];
+	// No id = a new break, which carries its reason instead.
+	breaks?: { id?: string; reason?: ShiftBreak["reason"]; started_at: string; ended_at: string }[];
 	entries?: { id: string; clocked_in_at: string; clocked_out_at: string }[];
+	delete_break_ids?: string[];
 }
 
 export interface ShiftCorrection {

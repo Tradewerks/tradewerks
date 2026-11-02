@@ -1,5 +1,6 @@
 import { z, ZodError } from "zod";
 import { coordsSchema } from "../lib/validate/shared.js";
+import { PAID_BREAK_REASONS } from "../lib/validate/timesheets.js";
 import {
 	Prisma,
 	type tech_break_reason,
@@ -27,7 +28,6 @@ import type { HttpError } from "../types/responses.js";
 import { setUserActive } from "../services/userActiveCache.js";
 import { getSocket } from "../services/socketService.js";
 
-const PAID_BREAK_REASONS = new Set<string>(["Rest", "EquipmentIssue"]);
 const VALID_BREAK_REASONS = new Set<string>([
 	"Lunch",
 	"Rest",

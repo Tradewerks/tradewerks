@@ -2,7 +2,7 @@ import z, { ZodError } from "zod";
 import type { technician_shift } from "../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { localDateString, weekRangeIn, weekStartOf } from "../lib/dayRange.js";
-import { approveTimesheetSchema, editShiftSchema, reviewCorrectionSchema } from "../lib/validate/timesheets.js";
+import { approveTimesheetSchema, editShiftSchema, PAID_BREAK_REASONS, reviewCorrectionSchema } from "../lib/validate/timesheets.js";
 import { logActivity } from "../services/logger.js";
 import { deleteTimeActivity } from "../services/qb/qbTimeActivity.js";
 import { createNotification, notifyDispatchers } from "./notificationsController.js";
@@ -32,9 +32,9 @@ const logCrumbs = (day: string, note?: string) => ({
 type ShiftEdit = Exclude<Awaited<ReturnType<typeof checkShiftEdit>>, { err: string }>;
 
 function diffShiftEdit(shift: technician_shift, edit: ShiftEdit) {
-    const changes: Record<string, { old: Date | null; new: Date }> = {};
-    const track = (key: string, oldV: Date | null, newV: Date) => {
-        if (oldV?.getTime() !== newV.getTime()) changes[key] = { old: oldV, new: newV };
+    const changes: Record<string, { old: Date | null; new: Date | null }> = {};
+    const track = (key: string, oldV: Date | null, newV: Date | null) => {
+        if (oldV?.getTime() !== newV?.getTime()) changes[key] = { old: oldV, new: newV };
     };
     track("started_at", shift.started_at, edit.start);
     track("ended_at", shift.ended_at, edit.end);
@@ -42,6 +42,14 @@ function diffShiftEdit(shift: technician_shift, edit: ShiftEdit) {
         const old = edit.existingBreaks.find((x) => x.id === b.id)!;
         track(`break.${b.id}.started_at`, old.started_at, b.started_at);
         track(`break.${b.id}.ended_at`, old.ended_at, b.ended_at);
+    }
+    edit.addedBreaks.forEach((b, i) => {
+        track(`break.new${i}.started_at`, null, b.started_at);
+        track(`break.new${i}.ended_at`, null, b.ended_at);
+    });
+    for (const b of edit.existingBreaks.filter((x) => edit.deleteIds.includes(x.id))) {
+        track(`break.${b.id}.started_at`, b.started_at, null);
+        track(`break.${b.id}.ended_at`, b.ended_at, null);
     }
     for (const e of edit.entryEdits) {
         const old = edit.existingEntries.find((x) => x.id === e.id)!;
@@ -345,17 +353,30 @@ async function checkShiftEdit(
         return { err: TIMESHEET_LOCKED };
     }
 
-    const breakEdits = parsed.breaks ?? [];
+    const deleteIds = parsed.delete_break_ids ?? [];
+    const breakEdits = (parsed.breaks ?? []).filter(
+        (b): b is typeof b & { id: string } => !!b.id && !deleteIds.includes(b.id),
+    );
+    const addedBreaks = (parsed.breaks ?? [])
+        .filter((b) => !b.id)
+        .map((b) => ({ reason: b.reason!, is_paid: PAID_BREAK_REASONS.has(b.reason!), started_at: b.started_at, ended_at: b.ended_at }));
     const existingBreaks = await sdb.technician_shift_break.findMany({ where: { shift_id: shift.id } });
-    if (breakEdits.some((b) => !existingBreaks.find((x) => x.id === b.id))) {
+    if ([...breakEdits.map((b) => b.id), ...deleteIds].some((id) => !existingBreaks.find((x) => x.id === id))) {
         return { err: "Break not found on this shift" };
     }
-    const mergedBreaks = existingBreaks.map((x) => {
-        const edit = breakEdits.find((b) => b.id === x.id);
-        return { ...x, started_at: edit?.started_at ?? x.started_at, ended_at: edit?.ended_at ?? x.ended_at };
-    });
+    const mergedBreaks = [
+        ...existingBreaks.filter((b) => !deleteIds.includes(b.id)).map((x) => {
+            const edit = breakEdits.find((b) => b.id === x.id);
+            return { ...x, started_at: edit?.started_at ?? x.started_at, ended_at: edit?.ended_at ?? x.ended_at };
+        }),
+        ...addedBreaks,
+    ];
     if (mergedBreaks.some((b) => b.started_at < start || !b.ended_at || b.ended_at > end)) {
         return { err: "Breaks must fall within the shift" };
+    }
+    const sorted = [...mergedBreaks].sort((a, b) => a.started_at.getTime() - b.started_at.getTime());
+    if (sorted.some((b, i) => i > 0 && sorted[i - 1].ended_at! > b.started_at)) {
+        return { err: "Breaks can't overlap" };
     }
 
     const entryEdits = parsed.entries ?? [];
@@ -364,7 +385,7 @@ async function checkShiftEdit(
     });
     if (existingEntries.length !== entryEdits.length) return { err: "Visit time entry not found" };
 
-    return { start, end, breakEdits, existingBreaks, mergedBreaks, entryEdits, existingEntries };
+    return { start, end, breakEdits, addedBreaks, deleteIds, existingBreaks, mergedBreaks, entryEdits, existingEntries };
 }
 
 export async function editShift(
@@ -386,7 +407,7 @@ export async function editShift(
 
         const checked = await checkShiftEdit(orgId, existingShift, parsed, true);
         if (checked.err !== undefined) return { err: checked.err };
-        const { start, end, breakEdits, mergedBreaks, entryEdits } = checked;
+        const { start, end, breakEdits, addedBreaks, deleteIds, mergedBreaks, entryEdits } = checked;
 
         const hrs = (a: Date, b: Date) => parseFloat(((b.getTime() - a.getTime()) / 3_600_000).toFixed(4));
         const changes = diffShiftEdit(existingShift, checked);
@@ -400,6 +421,21 @@ export async function editShift(
                     where: { id: b.id },
                     data: { started_at: b.started_at, ended_at: b.ended_at, duration_hrs: hrs(b.started_at, b.ended_at) },
                 });
+            }
+            for (const b of addedBreaks) {
+                await tx.technician_shift_break.create({
+                    data: {
+                        ...b,
+                        tech_id: existingShift.tech_id,
+                        shift_id: existingShift.id,
+                        // Only read when an open break ends; added breaks are always closed.
+                        pre_break_status: "Available",
+                        duration_hrs: hrs(b.started_at, b.ended_at),
+                    },
+                });
+            }
+            if (deleteIds.length) {
+                await tx.technician_shift_break.deleteMany({ where: { id: { in: deleteIds }, shift_id: existingShift.id } });
             }
 
             const visitIds = new Set<string>();
