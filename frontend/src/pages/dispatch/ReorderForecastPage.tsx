@@ -50,6 +50,10 @@ const COLS = cols(
 	"buyFrom",
 );
 
+// Hidden to fit the table on a laptop, not because the buyer doesn't need them,
+// so the export still carries them.
+const DEFAULT_HIDDEN = ["sku", "category", "warehouse", "vehicles"];
+
 const SEVERITY_ORDER: ReorderSeverity[] = ["critical", "warning", "healthy", "unknown"];
 
 // Context the spreadsheet needs and the table doesn't: the unit the quantities
@@ -249,9 +253,20 @@ export default function ReorderForecastPage() {
 		return counts;
 	}, [records]);
 
-	const { hidden, toggle, reset, columnVisibility, visibleColumns } = useColumnVisibility(
+	// Off by default so the decision columns (health, buy from) fit a laptop without
+	// scrolling sideways; Columns brings them back.
+	const { hidden, toggle, reset, columnVisibility } = useColumnVisibility(
 		"reorder-forecast",
 		COLS,
+		DEFAULT_HIDDEN,
+	);
+	// Rows carry the export-only fields too, and the table renders every key it isn't told to hide.
+	const tableVisibility = useMemo(
+		() => ({
+			...columnVisibility,
+			...Object.fromEntries(EXPORT_ONLY_COLS.map((c) => [c.key, false])),
+		}),
+		[columnVisibility],
 	);
 
 	const clearAllFilters = () => {
@@ -290,7 +305,7 @@ export default function ReorderForecastPage() {
 			    band and the chart's footer — sizing a card so the axis band doesn't
 			    fit is what produced the clipped footer. */}
 			{showChart && (
-				<div className="mb-4 h-[26rem]">
+				<div className="mb-4 h-[clamp(20rem,45vh,26rem)]">
 					<ReorderPriorityChart data={records} />
 				</div>
 			)}
@@ -400,7 +415,12 @@ export default function ReorderForecastPage() {
 									report: "reorder-forecast",
 									filename: datedFilename("reorder-forecast"),
 									sheetName: "Reorder Forecast",
-									columns: [...visibleColumns, ...EXPORT_ONLY_COLS],
+									columns: [
+										...COLS.filter(
+											(c) => !hidden.has(c.key) || DEFAULT_HIDDEN.includes(c.key),
+										),
+										...EXPORT_ONLY_COLS,
+									],
 									// The same filters the table is under: the
 									// server regenerates the full filtered set
 									// rather than exporting the visible page.
@@ -458,7 +478,7 @@ export default function ReorderForecastPage() {
 							data={rows}
 							loadListener={isLoading}
 							errListener={error}
-							columnVisibility={columnVisibility}
+							columnVisibility={tableVisibility}
 							columnClamp={COLUMN_CLAMP}
 							cellClass={{
 								health: (row) => HEALTH_CELL_CLASS[row.health as string] ?? "",

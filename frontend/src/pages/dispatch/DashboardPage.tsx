@@ -486,7 +486,7 @@ export default function DashboardPage() {
 	}
 
 	return (
-		<div className="min-h-0 bg-canvas text-text-primary w-full">
+		<div data-page-width="full" className="min-h-0 bg-canvas text-text-primary w-full">
 			<div className="w-full">
 				{/* Header */}
 				<div className="mb-3 flex items-end justify-between gap-4">

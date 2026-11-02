@@ -22,6 +22,7 @@ import {
 	FolderKanban,
 	Bell,
 	Timer,
+	ChevronDown,
 } from "lucide-react";
 import SideNavItem from "../components/nav/SideNavItem";
 import GlobalSearch from "../components/nav/GlobalSearch";
@@ -39,6 +40,10 @@ import type { DispatcherNotification } from "../types/notifications";
 import { useEntitlements, useModule } from "../hooks/useEntitlements";
 import { shouldShowWelcome } from "../lib/welcomeDraft";
 import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
+
+function scrollActiveIntoView(nav: HTMLElement | null) {
+	nav?.querySelector('a[aria-current="page"]')?.scrollIntoView({ block: "nearest" });
+}
 
 export default function DispatchLayout() {
 	const navigate = useNavigate();
@@ -122,8 +127,12 @@ export default function DispatchLayout() {
 
 	useSocketQuerySync();
 
+	useEffect(() => {
+		scrollActiveIntoView(navRef.current);
+	}, [location.pathname]);
+
 	// The nav's scrollbar is hidden by design (.sidebar-nav), so overflow past the
-	// fold needs its own cue. Two observers: the nav's own box changes with the
+	// fold needs its own control. Two observers: the nav's own box changes with the
 	// viewport, while its row count changes later as permission checks resolve.
 	useEffect(() => {
 		const el = navRef.current;
@@ -134,7 +143,12 @@ export default function DispatchLayout() {
 		el.addEventListener("scroll", update, { passive: true });
 		const resize = new ResizeObserver(update);
 		resize.observe(el);
-		const mutation = new MutationObserver(update);
+		// Rows gated on permissions mount after the first paint, which can push the
+		// active row back below the fold.
+		const mutation = new MutationObserver(() => {
+			update();
+			scrollActiveIntoView(el);
+		});
 		mutation.observe(el, { childList: true });
 		return () => {
 			el.removeEventListener("scroll", update);
@@ -176,201 +190,208 @@ export default function DispatchLayout() {
 				<div
 					className={`absolute inset-y-0 left-0 flex flex-col bg-base border-r border-border overflow-hidden transition-[width] duration-200 ease-in-out ${expanded ? "w-40 lg:w-44" : "w-16"}`}
 				>
-					<nav
-						ref={navRef}
-						className="flex-1 py-2 space-y-1 overflow-y-auto overflow-x-hidden sidebar-nav"
-					>
-						<button
-							onClick={() => {
-								setIsCreatePanelOpen((o) => !o);
-								setExpanded(false);
-							}}
-							className={`group relative flex items-center h-10 rounded-md mx-2 transition-colors duration-200 w-[calc(100%-16px)] hover:cursor-pointer ${
-								isCreatePanelOpen
-									? "bg-primary-bg text-primary-text"
-									: "text-text-tertiary hover:text-text-primary hover:bg-surface-raised"
-							}`}
+					<div className="relative flex-1 min-h-0">
+						<nav
+							ref={navRef}
+							className="h-full py-2 space-y-1 short:space-y-0 overflow-y-auto overflow-x-hidden sidebar-nav"
 						>
-							<div className="w-12 flex items-center justify-center flex-shrink-0">
-								<Plus size={ICON_SIZE} />
-							</div>
-							<div
-								className={`flex-1 min-w-0 flex items-center overflow-hidden transition-[opacity,transform] duration-200 ease-in-out ${
-									expanded
-										? "opacity-100 translate-x-0"
-										: "opacity-0 -translate-x-2 pointer-events-none"
+							<button
+								onClick={() => {
+									setIsCreatePanelOpen((o) => !o);
+									setExpanded(false);
+								}}
+								className={`group relative flex items-center h-10 short:h-8 rounded-md mx-2 transition-colors duration-200 w-[calc(100%-16px)] hover:cursor-pointer ${
+									isCreatePanelOpen
+										? "bg-primary-bg text-primary-text"
+										: "text-text-tertiary hover:text-text-primary hover:bg-surface-raised"
 								}`}
 							>
-								<span className="text-sm whitespace-nowrap truncate pr-2">
-									Create
-								</span>
-							</div>
-						</button>
-						<SideNavItem
-							expanded={expanded}
-							to="/dispatch"
-							icon={<House size={ICON_SIZE} />}
-							label="Dashboard"
-						/>
-						<SideNavItem
-							expanded={expanded}
-							to="/dispatch/schedule"
-							icon={<Calendar size={ICON_SIZE} />}
-							label="Schedule"
-						/>
-						{canViewRequests && (
+								<div className="w-12 flex items-center justify-center flex-shrink-0">
+									<Plus size={ICON_SIZE} />
+								</div>
+								<div
+									className={`flex-1 min-w-0 flex items-center overflow-hidden transition-[opacity,transform] duration-200 ease-in-out ${
+										expanded
+											? "opacity-100 translate-x-0"
+											: "opacity-0 -translate-x-2 pointer-events-none"
+									}`}
+								>
+									<span className="text-sm whitespace-nowrap truncate pr-2">
+										Create
+									</span>
+								</div>
+							</button>
 							<SideNavItem
 								expanded={expanded}
-								to="/dispatch/requests"
-								icon={<Inbox size={ICON_SIZE} />}
-								label="Requests"
+								to="/dispatch"
+								icon={<House size={ICON_SIZE} />}
+								label="Dashboard"
 							/>
-						)}
-						{canViewQuotes && (
 							<SideNavItem
 								expanded={expanded}
-								to="/dispatch/quotes"
-								icon={<FileText size={ICON_SIZE} />}
-								label="Quotes"
+								to="/dispatch/schedule"
+								icon={<Calendar size={ICON_SIZE} />}
+								label="Schedule"
 							/>
-						)}
-						{canViewJobs && (
+							{canViewRequests && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/requests"
+									icon={<Inbox size={ICON_SIZE} />}
+									label="Requests"
+								/>
+							)}
+							{canViewQuotes && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/quotes"
+									icon={<FileText size={ICON_SIZE} />}
+									label="Quotes"
+								/>
+							)}
+							{canViewJobs && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/jobs"
+									icon={
+										<Briefcase
+											size={ICON_SIZE}
+										/>
+									}
+									label="Jobs"
+								/>
+							)}
+							{canViewProjects && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/projects"
+									icon={
+										<FolderKanban
+											size={ICON_SIZE}
+										/>
+									}
+									label="Projects"
+								/>
+							)}
+							{canViewInvoices && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/invoices"
+									icon={
+										<ReceiptText
+											size={ICON_SIZE}
+										/>
+									}
+									label="Invoices"
+								/>
+							)}
+							{canViewClients && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/clients"
+									icon={<Users size={ICON_SIZE} />}
+									label="Clients"
+								/>
+							)}
+							{canViewInventory && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/inventory"
+									icon={<Package size={ICON_SIZE} />}
+									label="Inventory"
+								/>
+							)}
+							{canViewPurchases && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/purchases"
+									icon={<Receipt size={ICON_SIZE} />}
+									label="Purchases"
+								/>
+							)}
+							{canViewVehicles && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/vehicles"
+									icon={<Truck size={ICON_SIZE} />}
+									label="Vehicles"
+								/>
+							)}
+							{canViewTechnicians && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/technicians"
+									icon={<Wrench size={ICON_SIZE} />}
+									label="Technicians"
+								/>
+							)}
 							<SideNavItem
 								expanded={expanded}
-								to="/dispatch/jobs"
-								icon={
-									<Briefcase
-										size={ICON_SIZE}
-									/>
-								}
-								label="Jobs"
+								to="/dispatch/map"
+								icon={<Map size={ICON_SIZE} />}
+								label="Map"
 							/>
+							{canViewReports && advancedReportingOn && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/kpi"
+									icon={<ChartColumnDecreasing
+											size={ICON_SIZE}
+										/>}
+									label="KPIs"
+								/>
+							)}
+							{canViewReports && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/reporting"
+									icon={<FileText size={ICON_SIZE} />}
+									label="Reporting"
+								/>
+							)}
+							{canViewTimesheet && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/timesheet"
+									icon={
+										<Timer size={ICON_SIZE} />
+									}
+									label="Timesheet"
+								/>
+							)}
+							{canViewFollowups && (
+								<SideNavItem
+									expanded={expanded}
+									to="/dispatch/followups"
+									icon={<Mail size={ICON_SIZE} />}
+									label="Followups"
+								/>
+							)}
+						</nav>
+						{navOverflows && (
+							<button
+								type="button"
+								aria-label="More navigation"
+								onClick={() => {
+									const el = navRef.current;
+									if (el) el.scrollBy({ top: el.clientHeight });
+								}}
+								className="absolute bottom-0 left-0 right-0 flex h-6 items-center justify-center bg-gradient-to-t from-base via-base to-transparent text-text-tertiary hover:text-text-primary hover:cursor-pointer"
+							>
+								<ChevronDown size={16} />
+							</button>
 						)}
-						{canViewProjects && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/projects"
-								icon={
-									<FolderKanban
-										size={ICON_SIZE}
-									/>
-								}
-								label="Projects"
-							/>
-						)}
-						{canViewInvoices && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/invoices"
-								icon={
-									<ReceiptText
-										size={ICON_SIZE}
-									/>
-								}
-								label="Invoices"
-							/>
-						)}
-						{canViewClients && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/clients"
-								icon={<Users size={ICON_SIZE} />}
-								label="Clients"
-							/>
-						)}
-						{canViewInventory && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/inventory"
-								icon={<Package size={ICON_SIZE} />}
-								label="Inventory"
-							/>
-						)}
-						{canViewPurchases && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/purchases"
-								icon={<Receipt size={ICON_SIZE} />}
-								label="Purchases"
-							/>
-						)}
-						{canViewVehicles && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/vehicles"
-								icon={<Truck size={ICON_SIZE} />}
-								label="Vehicles"
-							/>
-						)}
-						{canViewTechnicians && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/technicians"
-								icon={<Wrench size={ICON_SIZE} />}
-								label="Technicians"
-							/>
-						)}
-						<SideNavItem
-							expanded={expanded}
-							to="/dispatch/map"
-							icon={<Map size={ICON_SIZE} />}
-							label="Map"
-						/>
-						{canViewReports && advancedReportingOn && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/kpi"
-								icon={<ChartColumnDecreasing
-										size={ICON_SIZE}
-									/>}
-								label="KPIs"
-							/>
-						)}
-						{canViewReports && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/reporting"
-								icon={<FileText size={ICON_SIZE} />}
-								label="Reporting"
-							/>
-						)}
-						{canViewTimesheet && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/timesheet"
-								icon={
-									<Timer size={ICON_SIZE} />
-								}
-								label="Timesheet"
-							/>
-						)}
-						{canViewFollowups && (
-							<SideNavItem
-								expanded={expanded}
-								to="/dispatch/followups"
-								icon={<Mail size={ICON_SIZE} />}
-								label="Followups"
-							/>
-						)}
-						{(user?.role === "admin" || canViewAdmin) && (
+					</div>
+					{(user?.role === "admin" || canViewAdmin) && (
+						<div className="shrink-0 border-t border-border py-2">
 							<SideNavItem
 								expanded={expanded}
 								to="/dispatch/admin"
-								icon={
-									<ShieldUser
-										size={ICON_SIZE}
-									/>
-								}
+								icon={<ShieldUser size={ICON_SIZE} />}
 								label="Admin"
 							/>
-						)}
-					</nav>
-					<div
-						aria-hidden="true"
-						className={`pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-base to-transparent transition-opacity duration-200 ${
-							navOverflows ? "opacity-100" : "opacity-0"
-						}`}
-					/>
+						</div>
+					)}
 				</div>
 			</aside>
 
@@ -425,7 +446,13 @@ export default function DispatchLayout() {
 				</header>
 
 				<main className="flex-1 overflow-hidden bg-canvas">
-					<div className="p-4 md:p-6 h-full overflow-y-auto">
+					{/* Side padding grows past 1920px of content to cap reading width on big
+					    monitors; a page root with data-page-width="full" opts out. Padding,
+					    not a wrapper, so the scroller's bottom padding still lands under the
+					    page content. */}
+					<div
+						data-layout-scroller
+						className="p-4 md:py-6 md:px-[max(1.5rem,calc((100%-1920px)/2))] md:has-[[data-page-width=full]]:px-6 h-full overflow-y-auto">
 						<ModuleRouteGuard home="/dispatch">
 							<Outlet />
 						</ModuleRouteGuard>

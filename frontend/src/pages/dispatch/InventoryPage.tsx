@@ -288,9 +288,12 @@ export default function InventoryPage() {
 	}
 
 	return (
-		<div className="flex h-full text-text-primary">
+		// The page owns its scroller so the bar clears the fixed low-stock rail. It
+		// takes over the layout's vertical padding so rows scroll to the edges
+		// instead of being cut off above a dead band, and pr-2 keeps cards off the bar.
+		<div className="flex h-[calc(100%+2rem)] -my-4 md:h-[calc(100%+3rem)] md:-my-6 text-text-primary">
 			{/* Main content */}
-			<div className="flex-1 overflow-y-auto mr-7">
+			<div className="flex-1 overflow-y-auto py-4 md:py-6 pr-2 mr-7">
 				<UntrackedStockNotice module="inventory" />
 				<PageHeader title="Inventory" subtitle={<PageReportKpis report={report} />}>
 					<PageReportButton report={report} />

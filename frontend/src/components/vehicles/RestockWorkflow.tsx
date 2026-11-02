@@ -505,9 +505,11 @@ function RestockPanel({
 				</div>
 			)}
 
-			{/* Notes + Apply — separated by space, not a rule. Once the table is a
-			    bounded object, another heavy line here just adds noise. */}
-			<div className={`${mobile ? "px-4" : "px-5"} pt-5 pb-4`}>
+			{/* Notes + Apply. Desktop pins this under the table so Apply is reachable
+			    without scrolling past every line; the rule marks where rows pass under it. */}
+			<div
+				className={`${mobile ? "px-4" : "px-5 sticky bottom-0 bg-base border-t border-border"} pt-5 pb-4`}
+			>
 				<label className="block text-xs text-text-muted mb-1">Notes (optional)</label>
 				<textarea
 					value={notes}

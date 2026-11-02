@@ -19,7 +19,7 @@ export default function SideNavItem({
 			end={end}
 			className={({ isActive }) =>
 				`
-				group relative flex items-center h-10 rounded-md mx-2
+				group relative flex items-center h-10 short:h-8 scroll-mb-6 rounded-md mx-2
 				transition-colors duration-200
 				${isActive ? "bg-primary-bg text-primary-text" : "text-text-tertiary hover:text-text-primary hover:bg-surface-raised"}
 				`

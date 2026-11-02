@@ -44,14 +44,24 @@ export default function StatCard({
 
 	if (dense) {
 		return (
-			<div className={`px-3 py-2 bg-base border border-border-subtle ${radiusClass} ${className}`}>
-				<p className="flex items-center gap-1.5 text-[10px] text-text-muted uppercase tracking-wide font-semibold">
+			// Short screens: label and value share a line and the hint drops, so a strip
+			// costs one row of the cockpit height below it instead of two.
+			<div
+				className={`px-3 py-2 short:py-0.5 short:flex short:items-baseline short:gap-2 bg-base border border-border-subtle ${radiusClass} ${className}`}
+			>
+				<p className="flex items-center gap-1.5 text-[10px] text-text-muted uppercase tracking-wide font-semibold short:min-w-0 short:truncate">
 					{icon}
 					{label}
 				</p>
 				<p className="flex items-baseline gap-1.5 min-w-0">
-					<span className={`text-lg font-bold tabular-nums ${valueTone}`}>{value}</span>
-					{hint && <span className="text-[11px] text-text-muted truncate">{hint}</span>}
+					<span className={`text-lg short:leading-6 font-bold tabular-nums ${valueTone}`}>
+						{value}
+					</span>
+					{hint && (
+						<span className="text-[11px] text-text-muted truncate short:hidden">
+							{hint}
+						</span>
+					)}
 				</p>
 			</div>
 		);

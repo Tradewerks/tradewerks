@@ -885,23 +885,25 @@ export default function PurchaseReviewPanel({
 			)}
 
 			{awaitingSignoff && (
-				<div className="space-y-2 border-t border-border bg-surface px-4 py-3">
-					<p className="text-xs text-text-secondary">
+				<div className="space-y-2 border-t border-border bg-surface px-4 py-3 short:flex short:flex-wrap short:items-center short:gap-2 short:space-y-0 short:py-2">
+					<p className="text-xs text-text-secondary short:basis-full">
 						Over the org threshold, so it needs a second signature — and not from whoever approved
 						it. Nothing has moved in stock yet.
 					</p>
-					<NoteField
-						ref={noteRef}
-						open={noteOpen}
-						onOpen={() => setNoteOpen(true)}
-						onClose={() => setNoteOpen(false)}
-						value={note}
-						onChange={setNote}
-						placeholder="Why the sign-off is being refused"
-						label="Sign-off note"
-						requiredFor="refuse"
-					/>
-					<div className="flex gap-2">
+					<div className={noteOpen ? "short:basis-full" : "short:min-w-0 short:flex-1"}>
+						<NoteField
+							ref={noteRef}
+							open={noteOpen}
+							onOpen={() => setNoteOpen(true)}
+							onClose={() => setNoteOpen(false)}
+							value={note}
+							onChange={setNote}
+							placeholder="Why the sign-off is being refused"
+							label="Sign-off note"
+							requiredFor="refuse"
+						/>
+					</div>
+					<div className="flex gap-2 short:shrink-0">
 						<ActionButton
 							variant="primary"
 							fullWidth
@@ -927,28 +929,32 @@ export default function PurchaseReviewPanel({
 			)}
 
 			{(awaitingReview || awaitingPreauth) && (
-				<div className="space-y-2 border-t border-border bg-surface px-4 py-3">
+				// Short screens put the note control and the verbs on one row, since every
+				// pixel of this bar comes out of the receipt scroller above it.
+				<div className="space-y-2 border-t border-border bg-surface px-4 py-3 short:flex short:flex-wrap short:items-center short:gap-2 short:space-y-0 short:py-2">
 					{/* One slot, either state: the control keeps the verbs' own chrome
 					    so it reads as a peer of them rather than as a footnote. */}
-					<NoteField
-						ref={noteRef}
-						open={noteOpen}
-						onOpen={() => setNoteOpen(true)}
-						onClose={() => setNoteOpen(false)}
-						value={note}
-						onChange={setNote}
-						placeholder="Note for the technician"
-						label="Note for the technician"
-						requiredFor={awaitingReview ? "send back or reject" : undefined}
-					/>
+					<div className={noteOpen ? "short:basis-full" : "short:min-w-0 short:flex-1"}>
+						<NoteField
+							ref={noteRef}
+							open={noteOpen}
+							onOpen={() => setNoteOpen(true)}
+							onClose={() => setNoteOpen(false)}
+							value={note}
+							onChange={setNote}
+							placeholder="Note for the technician"
+							label="Note for the technician"
+							requiredFor={awaitingReview ? "send back or reject" : undefined}
+						/>
+					</div>
 					{armedApprove && awaitingReview && (
-						<p role="status" className="text-xs font-medium text-warning-text">
+						<p role="status" className="text-xs font-medium text-warning-text short:basis-full">
 							Press A again to approve — that records the stock and confirms the
 							customer's charge.
 						</p>
 					)}
 					{awaitingPreauth ? (
-						<div className="flex gap-2">
+						<div className="flex gap-2 short:shrink-0">
 							<ActionButton
 								variant="primary"
 								fullWidth
@@ -969,12 +975,13 @@ export default function PurchaseReviewPanel({
 							</ActionButton>
 						</div>
 					) : (
-						<div className="flex flex-wrap gap-2">
+						<div className="flex flex-wrap gap-2 short:shrink-0 short:flex-nowrap">
 							<ActionButton
 								variant="primary"
 								fullWidth
 								icon={<Check aria-hidden size={14} />}
-								title="Approve (a, twice)"
+								// Carries the helper line below, which short screens hide.
+								title="Approve (a, twice). Approving records the stock that came in. The reimbursement itself is still entered by hand in QuickBooks."
 								disabled={review.isPending}
 								onClick={() => void act("approve")}
 							>
@@ -1007,7 +1014,7 @@ export default function PurchaseReviewPanel({
 							</ActionButton>
 						</div>
 					)}
-					<p className="text-[11px] leading-snug text-text-muted">
+					<p className="text-[11px] leading-snug text-text-muted short:hidden">
 						Approving records the stock that came in. The reimbursement itself is still entered by
 						hand in QuickBooks.
 					</p>

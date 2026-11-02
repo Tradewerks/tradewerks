@@ -167,7 +167,7 @@ export default function KpiPage() {
     }, [range]);
 
     return (
-        <div className="min-h-0 bg-canvas text-text-primary w-full">
+        <div data-page-width="full" className="min-h-0 bg-canvas text-text-primary w-full">
             <div className="w-full">
                 {/* Header Section */}
                 <PageHeader title="Key Performance Indicators">
