@@ -843,7 +843,7 @@ const LineItemCard = memo(
 						</span>
 
 						{/* Total — the hero number */}
-						<div className="flex-shrink-0 w-[88px]">
+						<div className="flex-shrink-0 min-w-[88px] whitespace-nowrap">
 							<label className="block mb-0.5 text-[10px] font-medium text-text-tertiary uppercase tracking-wider text-right">
 								Total
 							</label>

@@ -307,7 +307,7 @@ const FinancialSummary = ({
 						</div>
 					</div>
 					<div className="flex items-center gap-3">
-						<span className="text-sm font-mono text-success-text/90 tabular-nums w-20 text-right">
+						<span className="text-sm font-mono text-success-text/90 tabular-nums min-w-20 whitespace-nowrap text-right">
 							-{formatCurrency(displayDiscountAmount)}
 						</span>
 						{discountRowDirty && onDiscountUndo && (
