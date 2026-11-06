@@ -498,7 +498,7 @@ export default function StockHistorySection({
 							</p>
 						</div>
 					) : (
-						<div className="max-h-[520px] overflow-y-auto">
+						<div className="max-h-[min(520px,50vh)] overflow-y-auto">
 							<DeskHeader labels={["When", "Type", "Item", "Change", "By"]} />
 							{filtered.map((adj) => (
 								<AdjRow
@@ -524,7 +524,7 @@ export default function StockHistorySection({
 					) : restockRecords.length === 0 ? (
 						<p className="text-sm text-text-muted text-center py-8">No restock records yet.</p>
 					) : (
-						<div className="max-h-[520px] overflow-y-auto">
+						<div className="max-h-[min(520px,50vh)] overflow-y-auto">
 							<DeskHeader labels={["When", "Mode", "Items", "Restocked", "By"]} />
 							{restockRecords.map((record) => (
 								<RestockRow

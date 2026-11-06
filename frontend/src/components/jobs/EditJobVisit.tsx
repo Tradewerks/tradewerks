@@ -2,6 +2,13 @@
 import type { ZodError } from "zod";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import {
+	docKeptEstimate,
+	jobKeptSource,
+	keptRateOptionLabel,
+	lineTaxPayload,
+} from "../../lib/taxEditorMode";
 import { useVehiclesQuery } from "../../hooks/useVehicles";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import TimeConstraints, { type TimeConstraintsState } from "../ui/forms/TimeConstraints";
@@ -9,15 +16,18 @@ import DatePicker from "../ui/DatePicker";
 import { UndoButton, UndoButtonTop } from "../ui/forms/UndoButton";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useDirtyTracking } from "../../hooks/forms/useDirtyTracking";
 import { createStepRouter } from "../../hooks/forms/useZodStepRouting";
 import {
 	useUpdateJobVisitMutation,
 	useAssignTechniciansToVisitMutation,
+	useJobByIdQuery,
 } from "../../hooks/useJobs";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
+import { roundingFor } from "../../lib/taxRounding";
 import {
 	CreateJobVisitSchema,
 	type CreateJobVisitInput,
@@ -71,7 +81,7 @@ const parseHHMMToDate = (hhmm: string | null | undefined, baseDate: Date): Date 
 	return d;
 };
 
-export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clientExempt }: EditJobVisitProps) {
+export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId, clientExempt }: EditJobVisitProps) {
 	const updateVisit = useUpdateJobVisitMutation();
 	const assignTechs = useAssignTechniciansToVisitMutation();
 	const { data: activeTechnicians } = useActiveTechniciansQuery();
@@ -108,25 +118,21 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 	// Dispatchers and techs should be able to freely add, edit, and remove visit line items.
 	const lineItems = useLineItems({ minItems: 0, mode: "edit" });
 
+	const { data: job } = useJobByIdQuery(jobId);
+	const clientTaxGroupId = job?.client?.tax_group_id ?? null;
+
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
 	// Destinations a `receive` can land on. Active only: retired vans are not
 	// somewhere stock can arrive.
 	const { data: vehicles = [] } = useVehiclesQuery("active");
 
 	const { data: taxGroups = [] } = useTaxGroups();
+	const autoModeLoaded = useAutoTaxMode();
+	const autoMode = autoModeLoaded === true;
+	const keptEstimate = docKeptEstimate(visit.tax_snapshot, jobKeptSource(job), autoModeLoaded);
+	const keptRateLabel = keptEstimate ? keptRateOptionLabel(keptEstimate) : null;
 
-	const lineItemsForCalc = useMemo(
-		() =>
-			lineItems.activeLineItems
-				.filter((li) => !("isDeleted" in li && li.isDeleted))
-				.map((li) => ({
-					id: li.id,
-					total: Number(li.total),
-					taxable: li.taxable ?? true,
-					tax_group_id: li.tax_group_id ?? null,
-				})),
-		[lineItems.activeLineItems],
-	);
+	const lineItemsForCalc = useLineItemsForCalc(lineItems.activeLineItems, clientTaxGroupId);
 
 	const { groupsSummary, totalTax, resolvedTotal } = useFinancialCalculations(
 		lineItems.subtotal,
@@ -136,6 +142,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 			clientExempt,
 			initialDiscountType: visit.discount_type || "amount",
 			initialDiscountValue: visit.discount_value ? Number(visit.discount_value) : 0,
+			rounding: roundingFor(visit.tax_snapshot),
 		},
 	);
 
@@ -216,7 +223,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 		[validateStep]
 	);
 
-	const { setLineItems } = lineItems;
+	const { setLineItems, resetLineItems } = lineItems;
 
 	useEffect(() => {
 		if (isModalOpen && visit) {
@@ -239,7 +246,8 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 			// minItems: 0 means no forced blank row. Dispatchers/techs add items as needed.
 			const initialLineItems: EditableLineItem[] = visit.line_items?.length
 				? visit.line_items.map((item) => ({
-						id: crypto.randomUUID(),
+						// Server id, so the tax snapshot's per-line reasons key straight onto the line.
+						id: item.id ?? crypto.randomUUID(),
 						entity_line_item_id: item.id,
 						name: item.name,
 						description: item.description || "",
@@ -259,6 +267,9 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 					}))
 				: [];
 
+			// Ids are stable server ids, so clear the previous load's dirty flags first;
+			// setLineItems below rebuilds the originals the reset empties.
+			resetLineItems();
 			setLineItems(initialLineItems);
 
 			setTimeConstraintsState({
@@ -278,7 +289,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 			setSelectedTechIds(visit.visit_techs.map((vt) => vt.tech_id));
 			setErrors(null);
 		}
-	}, [isModalOpen, visit, resetWizard, setOriginals, setLineItems]);
+	}, [isModalOpen, visit, resetWizard, setOriginals, resetLineItems, setLineItems]);
 
 	const handleTechSelection = useCallback((techId: string) => {
 		setSelectedTechIds((prev) =>
@@ -380,11 +391,10 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 					| undefined,
 				sort_order: index,
 				total: item.total,
-				tax_group_id: item.tax_group_id ?? undefined,
 				inventory_item_id: item.inventory_item_id ?? undefined,
 				disposition: item.disposition ?? null,
 				disposition_vehicle_id: item.disposition_vehicle_id ?? null,
-				taxable: item.taxable,
+				...lineTaxPayload(item),
 			}));
 
 		const candidate: CreateJobVisitInput = {
@@ -680,6 +690,8 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 							taxGroups={taxGroups}
 							clientExempt={clientExempt}
 							onTaxChange={lineItems.setLineItemTaxGroup}
+							autoMode={autoMode}
+							keptRateLabel={keptRateLabel}
 							onTaxGroupBulkSet={lineItems.setAllLineItemsTaxGroup}
 						/>
 
@@ -801,6 +813,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, clien
 		}
 	}, [
 		currentStep,
+		autoMode,
 		getValue,
 		updateField,
 		undoField,

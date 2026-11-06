@@ -161,6 +161,7 @@ export interface ProjectNotePhoto {
     note_id: string;
     photo_url: string;
     photo_label: "Before" | "After" | "Other";
+    photo_name?: string | null;
     created_at: string;
 }
 
@@ -173,10 +174,10 @@ export interface ProjectNote extends BaseNote {
 export interface CreateProjectNoteInput {
     content: string;
     notify_technician?: boolean;
-    photos?: { photo_url: string; photo_label: string }[];
+    photos?: { photo_url: string; photo_label: string; photo_name?: string | null }[];
 }
 
 export interface UpdateProjectNoteInput {
     content?: string;
-    photos?: { id?: string; photo_url: string; photo_label: string }[];
+    photos?: { id?: string; photo_url: string; photo_label: string; photo_name?: string | null }[];
 }

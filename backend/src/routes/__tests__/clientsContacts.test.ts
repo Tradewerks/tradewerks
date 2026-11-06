@@ -29,6 +29,7 @@ vi.mock("../../controllers/projectsController.js", () => ({
 import clientsContactsRouter from "../clientsContacts.js";
 import { db } from "../../db.js";
 import { getProjectsByClientId } from "../../controllers/projectsController.js";
+import { updateClient } from "../../controllers/clientsController.js";
 import { callRoute, type FakeDb } from "./harness.js";
 
 const fake = db as unknown as FakeDb;
@@ -99,5 +100,30 @@ describe("GET /clients/:clientId/changes — limit validation (review P2-11)", (
 		expect(r.body.meta).toMatchObject({ count: 0, hasMore: false, total: 0 });
 		// the paged query is the last findMany; earlier ones resolve deleted children
 		expect(fake.log.findMany.mock.calls.at(-1)![0].take).toBe(8);
+	});
+});
+
+describe("PUT /clients/:id — address tax choice refusal", () => {
+	it("answers 409 with the typed code and the kept-rate details", async () => {
+		const details = {
+			rate_label: "La Crosse, WI",
+			rate: 0.055,
+			documents: [{ kind: "invoice", id: "inv3", number: "INV-0013" }],
+		};
+		vi.mocked(updateClient).mockResolvedValue({
+			err: "The address changed on a document taxed at a kept address rate. Choose which tax to use.",
+			code: "ADDRESS_TAX_CHOICE_REQUIRED",
+			details,
+			item: undefined,
+		} as never);
+
+		const r = await callRoute(clientsContactsRouter, "put", "/clients/:id", {
+			user: { uid: "disp-1", role: "dispatcher", permissions: ["edit_clients"] },
+			params: { id: "c1" },
+			body: { address: "100 N State St" },
+		});
+
+		expect(r.status).toBe(409);
+		expect(r.body.error).toMatchObject({ code: "ADDRESS_TAX_CHOICE_REQUIRED", details });
 	});
 });

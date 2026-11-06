@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProjectsQuery, useCreateProjectMutation } from "../../hooks/useProjects";
 import { useClientByIdQuery } from "../../hooks/useClients";
-import PageReportSection from "../../components/reports/PageReportSection";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 import StatusFilter from "../../components/ui/StatusFilter";
 import SortControl from "../../components/ui/SortControl";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
@@ -115,6 +117,7 @@ export default function ProjectsPage() {
 
     // permissions
     const CREATE_PROJECTS = usePermission("create_projects");
+    const report = usePageReport("projects", "Projects report");
 
     const display = useMemo(() => {
         if (!projects) return [];
@@ -276,7 +279,8 @@ export default function ProjectsPage() {
 
     return (
         <div>
-            <PageHeader title="Projects">
+            <PageHeader title="Projects" subtitle={<PageReportKpis report={report} />}>
+                <PageReportButton report={report} />
                 {CREATE_PROJECTS && (
                     <button
                         className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:enabled:bg-primary-active rounded-md text-sm font-medium text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -287,7 +291,6 @@ export default function ProjectsPage() {
                     </button>
                 )}
             </PageHeader>
-            <PageReportSection page="projects" label="Projects report" />
             <PageControls
                 className="mb-3"
                 left={

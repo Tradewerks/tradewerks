@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowUpRight, ChevronDown } from "lucide-react";
 import type { DocumentLineage as Lineage, LineageNode } from "../../types/lineage";
 import type { LifecycleKind } from "../lifecycle/types";
+import { documentStatusLabel } from "../lifecycle/documentStatusLabel";
 
 interface DocumentLineageProps {
 	kind: LifecycleKind;
@@ -36,7 +37,7 @@ function ChainRow({
 				{node.number}
 			</span>
 			<span className="justify-self-end text-xs text-text-muted">
-				{isSelf ? "This version" : node.status}
+				{isSelf ? "This version" : documentStatusLabel(kind, node.status)}
 			</span>
 		</>
 	);

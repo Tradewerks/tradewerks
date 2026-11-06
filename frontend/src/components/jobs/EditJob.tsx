@@ -12,15 +12,29 @@ import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 import { useUpdateJobMutation } from "../../hooks/useJobs";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
+import { rateToPercentInput } from "../../lib/formatTax";
+import { formatCurrency } from "../../util/util";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import {
+	lineTaxPayload,
+	editorAutoTax,
+	flatRateHandler,
+	docKeptEstimate,
+	keptRateOptionLabel,
+} from "../../lib/taxEditorMode";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { UndoButton, UndoButtonTop } from "../ui/forms/UndoButton";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
+import { jobRounding } from "../../lib/taxRounding";
 import { useDirtyTracking } from "../../hooks/forms/useDirtyTracking";
+import AddressTaxChoicePanel from "../tax/AddressTaxChoicePanel";
+import { useAddressTaxChoice } from "../tax/useAddressTaxChoice";
 
 type Step = 1 | 2 | 3;
 
@@ -49,7 +63,18 @@ const PRIORITY_ENTRIES = (
 const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 	const updateJob = useUpdateJobMutation();
 	const { data: taxGroups = [] } = useTaxGroups();
+	const autoModeLoaded = useAutoTaxMode();
+	const autoMode = autoModeLoaded === true;
+	const keptEstimate = docKeptEstimate(
+		job.tax_snapshot,
+		job.quote?.tax_snapshot,
+		autoModeLoaded
+	);
+	const kept = keptEstimate != null;
+	const keptSnapshot = kept ? (job.tax_snapshot ?? job.quote?.tax_snapshot) : job.tax_snapshot;
+	const keptRateLabel = keptEstimate ? keptRateOptionLabel(keptEstimate) : null;
 	const clientExempt = job.client?.is_tax_exempt ?? false;
+	const clientTaxGroupId = job.client?.tax_group_id ?? null;
 	const [geoData, setGeoData] = useState<GeocodeResult>();
 	const [isLoading, setIsLoading] = useState(false);
 	const [errors, setErrors] = useState<ZodError | null>(null);
@@ -80,24 +105,14 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
+		resetLineItems,
 	} = useLineItems({
 		minItems: 1,
 		mode: "edit",
 	});
 
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
-	const lineItemsForCalc = useMemo(
-		() =>
-			activeLineItems
-				.filter((li) => !("isDeleted" in li && li.isDeleted))
-				.map((li) => ({
-					id: li.id,
-					total: Number(li.total),
-					taxable: li.taxable ?? true,
-					tax_group_id: li.tax_group_id ?? null,
-				})),
-		[activeLineItems],
-	);
+	const lineItemsForCalc = useLineItemsForCalc(activeLineItems, clientTaxGroupId);
 
 	const {
 		taxRate,
@@ -120,13 +135,29 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 		resolvedTaxAmount,
 		resolvedTotal,
 	} = useFinancialCalculations(subtotal, {
-		initialTaxRate: job.tax_rate ? Number(job.tax_rate) * 100 : 0,
+		initialTaxRate: rateToPercentInput(job.tax_rate),
 		initialDiscountType: job.discount_type || "amount",
 		initialDiscountValue: job.discount_value ? Number(job.discount_value) : 0,
 		taxGroups,
 		lineItemsForCalc,
 		clientExempt,
+		rounding: jobRounding(autoModeLoaded, job.tax_snapshot, false, kept),
 	});
+
+	const addressTax = useAddressTaxChoice({
+		docNoun: "job",
+		snapshot: keptSnapshot,
+		keptEstimate,
+		geo: geoData,
+		doc: job,
+		lines: lineItemsForCalc,
+		discountAmount,
+		discountType,
+		discountValue,
+		taxGroups,
+		rounding: jobRounding(autoModeLoaded, job.tax_snapshot, false, kept),
+	});
+	const resetAddressTax = addressTax.reset;
 
 	const validateStep1 = useCallback((): boolean => {
 		return !!(
@@ -202,7 +233,8 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 
 			const initialLineItems: EditableLineItem[] =
 				job.line_items?.map((item) => ({
-					id: crypto.randomUUID(),
+					// Server id, so the tax snapshot's per-line reasons key straight onto the line.
+					id: item.id ?? crypto.randomUUID(),
 					entity_line_item_id: item.id,
 					name: item.name,
 					description: item.description || "",
@@ -232,6 +264,9 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 				});
 			}
 
+			// Ids are stable server ids, so clear the previous load's dirty flags first;
+			// setLineItems below rebuilds the originals the reset empties.
+			resetLineItems();
 			setLineItems(initialLineItems);
 
 			if (job.address) {
@@ -244,20 +279,34 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 			}
 
 			setErrors(null);
+			resetAddressTax();
 
 			setFinancialOriginals(
-				job.tax_rate ? Number(job.tax_rate) * 100 : 0,
+				rateToPercentInput(job.tax_rate),
 				job.discount_type ?? "amount",
 				job.discount_value ? Number(job.discount_value) : 0
 			);
 		}
-	}, [isModalOpen, job, resetWizard, setLineItems, setOriginals, setFinancialOriginals]);
+	}, [
+		isModalOpen,
+		job,
+		resetWizard,
+		resetLineItems,
+		setLineItems,
+		setOriginals,
+		setFinancialOriginals,
+		resetAddressTax,
+	]);
 
 	const handleChangeAddress = (result: GeocodeResult) => {
 		setGeoData({ address: result.address, coords: result.coords });
+		addressTax.onAddressChange();
 	};
 
-	const handleClearAddress = () => setGeoData(undefined);
+	const handleClearAddress = () => {
+		setGeoData(undefined);
+		addressTax.onAddressChange();
+	};
 
 	const invokeUpdate = async () => {
 		if (isLoading) return;
@@ -274,6 +323,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 
 		const lineItemUpdates: UpdateJobLineItemInput[] = nonEmptyLineItems.map((item) => {
 			const li = item as EditableLineItem;
+			const tax = lineTaxPayload(item);
 			return {
 				id: li.entity_line_item_id,
 				name: item.name.trim(),
@@ -282,9 +332,9 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 				unit_price: Number(item.unit_price),
 				total: Number(item.total),
 				item_type: item.item_type || undefined,
-				tax_group_id: item.tax_group_id ?? undefined,
 				inventory_item_id: item.inventory_item_id ?? undefined,
-				taxable: item.taxable,
+				...tax,
+				tax_group_id: addressTax.lineGroup(tax),
 			};
 		});
 
@@ -305,6 +355,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 			discount_amount: discountAmount,
 			estimated_total: resolvedTotal,
 			line_items: lineItemUpdates.length > 0 ? lineItemUpdates : undefined,
+			address_tax_choice: addressTax.payloadChoice,
 		};
 
 		const parseResult = UpdateJobSchema.safeParse(updates);
@@ -322,8 +373,9 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 			setIsLoading(false);
 			setIsModalOpen(false);
 		} catch (error) {
-			console.error("Failed to update job:", error);
 			setIsLoading(false);
+			if (addressTax.handleError(error)) return;
+			console.error("Failed to update job:", error);
 		}
 	};
 
@@ -528,6 +580,8 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 							taxGroups={taxGroups}
 							clientExempt={clientExempt}
 							onTaxChange={setLineItemTaxGroup}
+							autoMode={autoMode}
+							keptRateLabel={keptRateLabel}
 							onTaxGroupBulkSet={setAllLineItemsTaxGroup}
 						/>
 					</div>
@@ -536,6 +590,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 			case 3:
 				return (
 					<div className="space-y-3 lg:space-y-5 xl:space-y-6 min-w-0">
+						{addressTax.ask && <AddressTaxChoicePanel {...addressTax.panelProps} />}
 						<FinancialSummary
 							subtotal={subtotal}
 							taxRate={taxRate}
@@ -545,16 +600,27 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 							discountAmount={discountAmount}
 							total={estimatedTotal}
 							isLoading={isLoading}
-							onTaxRateChange={setTaxRate}
+							onTaxRateChange={flatRateHandler(autoMode, groupsSummary.length, setTaxRate)}
 							onDiscountTypeChange={setDiscountType}
 							onDiscountValueChange={setDiscountValue}
-							totalLabel="Estimated Total"
+							totalLabel="Job Total"
 							isTaxDirty={isTaxDirty}
 							isDiscountDirty={isDiscountDirty}
 							onTaxUndo={undoTax}
 							onDiscountUndo={undoDiscount}
 							groupsSummary={groupsSummary}
 							totalTax={totalTax}
+							autoTax={editorAutoTax(
+								autoMode,
+								lineItemsForCalc,
+								discountAmount,
+								keptSnapshot,
+								addressTax.addressChangedForSummary,
+								kept,
+								keptEstimate?.rounding,
+							)}
+							keptRate={kept}
+							chosenTax={addressTax.summaryChoice}
 						/>
 
 						{job.actual_total !== null &&
@@ -566,12 +632,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 											Total:
 										</span>
 										<span className="text-primary-text font-semibold tabular-nums">
-											$
-											{Number(
-												job.actual_total
-											).toFixed(
-												2
-											)}
+											{formatCurrency(Number(job.actual_total))}
 										</span>
 									</div>
 									<div className="flex items-center justify-between text-sm lg:text-base mt-2 pt-2 border-t border-border">
@@ -594,14 +655,8 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 											estimatedTotal
 												? "+"
 												: ""}
-											$
-											{(
-												Number(
-													job.actual_total
-												) -
-												estimatedTotal
-											).toFixed(
-												2
+											{formatCurrency(
+												Number(job.actual_total) - estimatedTotal
 											)}
 										</span>
 									</div>
@@ -615,6 +670,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 		}
 	}, [
 		currentStep,
+		autoMode,
 		getValue,
 		updateField,
 		undoField,
@@ -648,6 +704,10 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 		undoDiscount,
 		groupsSummary,
 		totalTax,
+		addressTax.ask,
+		addressTax.panelProps,
+		addressTax.addressChangedForSummary,
+		addressTax.summaryChoice,
 	]);
 
 	return (
@@ -664,6 +724,7 @@ const EditJob = ({ isModalOpen, setIsModalOpen, job }: EditJobProps) => {
 			onNext={goNext}
 			onBack={goBack}
 			onSubmit={invokeUpdate}
+			canSubmit={addressTax.canSubmit}
 			canGoNext={canGoNext}
 			submitLabel="Save Changes"
 			isEditMode={true}

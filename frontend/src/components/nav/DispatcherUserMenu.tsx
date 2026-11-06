@@ -2,22 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../auth/authStore";
 import { queryClient } from "../../lib/queryClient";
-import { APP_BASE } from "../../config";
-import { LogOut, UserRound, Sun, Moon, Monitor, Palette, ChevronDown, Check, Users, UserRoundPlus, Loader2 } from "lucide-react";
+import { LogOut, UserRound, Sun, Moon, Monitor, Palette, ChevronDown, Check } from "lucide-react";
 import { useOrgSettings } from "../../hooks/useOrg";
 import { useThemeStore } from "../../stores/themeStore";
 import { useUpdateDispatcherMutation } from "../../hooks/useDispatchers";
 import { useRememberedAccountsStore } from "../../stores/rememberedAccountsStore";
 import { logoutBeacon } from "../../api/authenticate";
+import SwitchUserSection from "./SwitchUserSection";
 
 export default function DispatcherUserMenu() {
 	const { user, logout } = useAuthStore();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
-	const [switchUserOpen, setSwitchUserOpen] = useState(false);
-	const {accounts, patchAccount, removeAccount} = useRememberedAccountsStore();
-	const [accountSwitching, setAccountSwitching] = useState(false);
-	const otherAccounts = accounts.filter((a) => a.userId !== user?.userId);
+	const patchAccount = useRememberedAccountsStore((s) => s.patchAccount);
 	const wrapperRef = useRef<HTMLDivElement>(null);
 	const navigate = useNavigate();
 	const { data: org } = useOrgSettings(); // possibly add org logo to the menu in the future
@@ -130,76 +127,7 @@ export default function DispatcherUserMenu() {
                     </div>
 
 					<div className="my-.25 border-t border-subtle" />
-					<div className="p-2 flex flex-col">
-						<button
-							onClick={() => {
-								if (otherAccounts.length > 0) {
-									setSwitchUserOpen(!switchUserOpen)
-								} else {
-									setAccountSwitching(true);
-									logoutBeacon();
-									logout(true);
-									queryClient.clear();
-									navigate("/login");
-								}
-							}}
-							className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary rounded-md hover:bg-surface transition-colors"
-						>
-							<Users size={16} />
-							Switch User
-							{otherAccounts.length > 0 && (
-								<ChevronDown size={13} className={`ml-auto transition-transform duration-200 ${switchUserOpen ? "rotate-180" : ""}`} />
-							)}
-						</button>
-						{switchUserOpen && otherAccounts.length > 0 && (
-                            <div className="flex flex-col pb-0.5">
-                                {otherAccounts.map((account) => (
-									<button
-										key={account.userId}
-										onClick={() => {
-											if (account.userId === user?.userId) return; // already logged in as this user
-											setAccountSwitching(true);
-											logoutBeacon();
-											localStorage.removeItem("accessToken");
-											useAuthStore.persist.clearStorage();
-											window.location.replace(`${APP_BASE}/login?email=${encodeURIComponent(account.email)}`);
-										}}
-										className="w-full flex items-center gap-2 pl-4 pr-3 py-1.5 text-sm rounded-md text-text-primary hover:text-text-primary hover:bg-surface transition-colors"
-									>
-										<UserRound size={14} className="shrink-0" />
-										<div className="min-w-0 flex-1 text-left">
-											<span className="block truncate">{account.name}</span>
-											{account.orgName && (
-												<span className="block text-xs text-text-muted truncate">{account.orgName}</span>
-											)}
-										</div>
-										<div
-											role="button"
-											onClick={(e) => {
-												e.stopPropagation();
-												removeAccount(account.userId);
-											}}
-											className="ml-auto text-error hover:text-error-hover transition-colors hover:bg-error-bg rounded-sm w-5 h-5 flex items-center justify-center"
-										>
-											&times;
-										</div>
-									</button>
-								))}
-								<button
-									onClick={() => {
-										logoutBeacon();
-										logout(true);
-										queryClient.clear();
-										navigate("/login");
-									}}
-									className="w-full flex items-center gap-2 pl-4 pr-3 py-1.5 text-sm rounded-md text-text-primary hover:text-text-primary hover:bg-surface transition-colors"
-								>
-									<UserRoundPlus size={14} className="shrink-0" />
-									New User
-								</button>
-                            </div>
-                        )}
-					</div>
+					<SwitchUserSection />
 					<div className="my-.25 border-t border-subtle" />
 
 					<div className="p-2">
@@ -212,12 +140,6 @@ export default function DispatcherUserMenu() {
 						</button>
 					</div>
 				</div>
-			)}
-			{accountSwitching && (
-				<div className="fixed inset-0 z-[6000] flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-sm">
-					<Loader2 className="w-10 h-10 animate-spin text-primary"/>
-					<p className="text-sm text-text-primary">Switching account</p>
-				</div>	
 			)}
 		</div>
 	);

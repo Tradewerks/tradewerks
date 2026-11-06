@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, Wrench } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { useVehiclesQuery, useCreateVehicleMutation } from "../../hooks/useVehicles";
+import { useVehiclesQuery, useCreateVehicleMutation, useFleetReadinessQuery } from "../../hooks/useVehicles";
 import { useMaintenanceAlertsQuery } from "../../hooks/useVehicleStock";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import VehicleCard from "../../components/vehicles/VehicleCard";
@@ -12,8 +11,6 @@ import VehicleReadinessPanel from "../../components/vehicles/VehicleReadinessPan
 import CreateVehicle from "../../components/vehicles/CreateVehicle";
 import EditVehicle from "../../components/vehicles/EditVehicle";
 import type { Vehicle, VehicleReadiness } from "../../types/vehicles";
-import { getFleetReadiness } from "../../api/vehicles";
-import { qk } from "../../lib/queryKeys";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import BoxSvg from "../../assets/icons/box.svg?react";
 import ErrSvg from "../../assets/icons/error.svg?react";
@@ -200,12 +197,10 @@ export default function VehiclesPage() {
 	const [readinessPanelVehicleId, setReadinessPanelVehicleId] = useState<string | null>(null);
 
 	// One batched request for the whole fleet (was a per-vehicle query fan-out)
-	const { data: fleetReadiness = [] } = useQuery({
-		queryKey: qk.fleetReadiness(selectedDate),
-		queryFn: () => getFleetReadiness(selectedDate),
-		staleTime: 30_000,
-		enabled: (vehicles?.length ?? 0) > 0,
-	});
+	const { data: fleetReadiness = [] } = useFleetReadinessQuery(
+		selectedDate,
+		(vehicles?.length ?? 0) > 0,
+	);
 
 	const readinessMap = new Map<string, VehicleReadiness>(
 		fleetReadiness.map((r) => [r.vehicle_id, r]),
@@ -251,8 +246,11 @@ export default function VehiclesPage() {
 	});
 
 	return (
-		<div className="flex h-full text-text-primary">
-			<div className="flex-1 flex flex-col min-h-0 mr-7">
+		// Same shell as InventoryPage: the page owns its scroller so the bar clears the
+		// fixed alerts rail, and takes over the layout's vertical padding so the bar runs
+		// header to bottom edge. The open drawer overlays the list; it never pushes it.
+		<div className="flex h-[calc(100%+2rem)] -my-4 md:h-[calc(100%+3rem)] md:-my-6 text-text-primary">
+			<div className="flex-1 flex flex-col overflow-y-auto py-4 md:py-6 pr-2 mr-7">
 				<PageHeader title="Vehicles">
 					{MANAGE_VEHICLES && (
 						<button

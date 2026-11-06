@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 
 import * as orgApi from "../api/org";
-import type { OrgSettings, OrgSettingsUpdate } from "../api/org";
+import type { OrgSettings, OrgSettingsUpdate, OrgCosting, OrgCostingUpdate } from "../api/org";
 
 export const useOrgSettings = (): UseQueryResult<OrgSettings, Error> => {
 	return useQuery({
@@ -22,6 +22,24 @@ export const useUpdateOrgSettings = (): UseMutationResult<OrgSettings, Error, Or
 		mutationFn: orgApi.updateOrgSettings,
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["org"] });
+		},
+	});
+};
+
+export const useOrgCosting = (enabled = true): UseQueryResult<OrgCosting, Error> => {
+	return useQuery({
+		queryKey: ["org", "costing"],
+		queryFn: orgApi.getOrgCosting,
+		enabled,
+	});
+};
+
+export const useUpdateOrgCosting = (): UseMutationResult<OrgCosting, Error, OrgCostingUpdate> => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: orgApi.updateOrgCosting,
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["org", "costing"] });
 		},
 	});
 };

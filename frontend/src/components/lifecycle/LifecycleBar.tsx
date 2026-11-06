@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Check, CircleDot } from "lucide-react";
+import { Check, CircleDot, Loader2 } from "lucide-react";
 import { splitActions } from "./overflow";
 import type { LifecycleAction, LifecycleStage } from "./types";
 
@@ -66,13 +66,15 @@ function ActionButton({ action, reasonId }: { action: LifecycleAction; reasonId?
 	return (
 		<button
 			type="button"
-			onClick={blocked ? undefined : action.onSelect}
-			aria-disabled={blocked || undefined}
+			onClick={blocked || action.pending ? undefined : action.onSelect}
+			aria-disabled={blocked || action.pending || undefined}
+			aria-busy={action.pending || undefined}
 			aria-describedby={blocked && action.disabledReason ? reasonId : undefined}
-			className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out ${
-				blocked ? DISABLED_CLASSES : INTENT_CLASSES[action.intent]
-			}`}
+			className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors duration-150 ease-out ${
+				blocked && !action.pending ? DISABLED_CLASSES : INTENT_CLASSES[action.intent]
+			} ${action.pending ? "cursor-wait" : ""}`}
 		>
+			{action.pending && <Loader2 size={14} className="shrink-0 animate-spin" />}
 			{action.label}
 		</button>
 	);

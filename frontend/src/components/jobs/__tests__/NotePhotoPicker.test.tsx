@@ -62,6 +62,19 @@ describe("NotePhotoPicker (07-F9)", () => {
 		expect(await screen.findByText("Photo Type")).toBeInTheDocument();
 	});
 
+	it("pre-fills the name from the file name and attaches the edited name", async () => {
+		const onPhotosChange = vi.fn();
+		render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={onPhotosChange} />);
+		pick(fakeFile("IMG_1234.jpg", "image/jpeg", 10));
+
+		const name = await screen.findByLabelText("Photo name");
+		expect(name).toHaveValue("IMG_1234");
+		fireEvent.change(name, { target: { value: "  Condenser coil " } });
+		fireEvent.click(await screen.findByText("Attach Photo →"));
+
+		expect(onPhotosChange.mock.calls[0][0][0]).toMatchObject({ photo_label: "Before", photo_name: "Condenser coil" });
+	});
+
 	it("surfaces the server's error message when the upload fails", async () => {
 		const headers = new AxiosHeaders();
 		mutateAsync.mockRejectedValueOnce(
@@ -91,11 +104,11 @@ describe("NotePhotoPicker (07-F9)", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Upload failed. Please try again.");
 	});
 
-	it("defaults capture to the rear camera and can be switched off", () => {
+	it("leaves capture off by default and can request the rear camera", () => {
 		const { unmount } = render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} />);
-		expect(fileInput()).toHaveAttribute("capture", "environment");
-		unmount();
-		render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} capture={false} />);
 		expect(fileInput()).not.toHaveAttribute("capture");
+		unmount();
+		render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} capture="environment" />);
+		expect(fileInput()).toHaveAttribute("capture", "environment");
 	});
 });

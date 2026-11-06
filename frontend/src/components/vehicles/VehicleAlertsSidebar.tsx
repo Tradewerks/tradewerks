@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Wrench } from "lucide-react";
+import { AlertTriangle, CheckCircle, Wrench } from "lucide-react";
+import DockedPanel from "../ui/DockedPanel";
 import { useVehicleStockConflictsQuery, useMaintenanceAlertsQuery } from "../../hooks/useVehicleStock";
 import { MAINTENANCE_CATEGORY_LABELS } from "../../types/vehicles";
 import type { VehicleStockConflict, VehicleMaintenanceAlert } from "../../types/vehicles";
@@ -30,7 +31,6 @@ function AlertStatusIcon({ hasError, totalCount }: { hasError: boolean; totalCou
 }
 
 export default function VehicleAlertsSidebar() {
-	const [isCollapsed, setIsCollapsed] = useState(true);
 	const [tab, setTab] = useState<Tab>("stock");
 	const navigate = useNavigate();
 	const { data: conflicts = [] } = useVehicleStockConflictsQuery();
@@ -58,82 +58,62 @@ export default function VehicleAlertsSidebar() {
 		}`;
 
 	return (
-		<div
-			className={`
-				fixed top-16 right-0 h-[calc(100vh-4rem)] bg-base/95 backdrop-blur-sm
-				border-l border-border/50 shadow-2xl shadow-black/50
-				transition-all duration-300 ease-in-out z-40
-				${isCollapsed ? "w-12" : "w-80"}
-			`}
-		>
-			{/* Toggle button */}
-			<button
-				onClick={() => setIsCollapsed(!isCollapsed)}
-				className="absolute -left-3 top-1/2 -translate-y-1/2 bg-surface hover:cursor-pointer hover:bg-surface-raised text-text-secondary hover:text-text-primary p-1.5 rounded-full border border-border-strong shadow-lg transition-all z-50"
-			>
-				{isCollapsed ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-			</button>
-
-			{/* Expanded */}
-			{!isCollapsed && (
-				<div className="h-full flex flex-col overflow-hidden">
-					<div className="px-4 pt-4 pb-3 border-b border-border-subtle">
-						<div className="flex items-center gap-2 mb-3">
-							<AlertStatusIcon hasError={hasError} totalCount={combinedTotal} />
-							<h3 className="text-sm font-semibold text-text-primary">Vehicle Alerts</h3>
-						</div>
-
-						<div className="flex items-center gap-1 bg-surface-inset rounded-lg p-0.5">
-							<button className={tabBtn(tab === "stock")} onClick={() => setTab("stock")}>
-								Stock {stockTotal > 0 && `(${stockTotal})`}
-							</button>
-							<button className={tabBtn(tab === "maintenance")} onClick={() => setTab("maintenance")}>
-								Maintenance {maintenanceTotal > 0 && `(${maintenanceTotal})`}
-							</button>
-						</div>
-					</div>
-
-					<div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 scrollbar-thin">
-						{tab === "stock" ? (
-							stockTotal === 0 ? (
-								<EmptyState label="All stocked up" hint="No upcoming visit conflicts" />
-							) : (
-								conflicts.map((conflict) => (
-									<ConflictCard
-										key={`${conflict.visitId}-${conflict.vehicleId}`}
-										conflict={conflict}
-										onVisitClick={() => navigate(`/dispatch/jobs/${conflict.jobId}/visits/${conflict.visitId}`)}
-										onVehicleClick={() => navigate(`/dispatch/vehicles/${conflict.vehicleId}/stock`)}
-									/>
-								))
-							)
-						) : alerts.length === 0 ? (
-							<EmptyState label="Nothing due" hint="No overdue or upcoming reminders" />
-						) : (
-							alerts.map((alert) => (
-								<AlertCard
-									key={alert.reminderId}
-									alert={alert}
-									onClick={() => navigate(`/dispatch/vehicles/${alert.vehicleId}/stock?tab=maintenance`)}
-								/>
-							))
-						)}
-					</div>
-				</div>
-			)}
-
-			{/* Collapsed */}
-			{isCollapsed && (
-				<div className="flex flex-col items-center pt-4 gap-2">
+		<DockedPanel
+			label="Vehicle alerts"
+			rail={
+				<>
 					<AlertStatusIcon hasError={hasError} totalCount={combinedTotal} />
 					{combinedTotal > 0 && (
 						<span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${hasError ? "bg-error/20 text-error-text" : "bg-warning-bg text-warning-text"}`}>
 							{combinedTotal}
 						</span>
 					)}
+				</>
+			}
+		>
+			<div className="px-4 pt-4 pb-3 border-b border-border-subtle">
+				<div className="flex items-center gap-2 mb-3">
+					<AlertStatusIcon hasError={hasError} totalCount={combinedTotal} />
+					<h3 className="text-sm font-semibold text-text-primary">Vehicle Alerts</h3>
 				</div>
-			)}
-		</div>
+
+				<div className="flex items-center gap-1 bg-surface-inset rounded-lg p-0.5">
+					<button className={tabBtn(tab === "stock")} onClick={() => setTab("stock")}>
+						Stock {stockTotal > 0 && `(${stockTotal})`}
+					</button>
+					<button className={tabBtn(tab === "maintenance")} onClick={() => setTab("maintenance")}>
+						Maintenance {maintenanceTotal > 0 && `(${maintenanceTotal})`}
+					</button>
+				</div>
+			</div>
+
+			<div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 scrollbar-thin">
+				{tab === "stock" ? (
+					stockTotal === 0 ? (
+						<EmptyState label="All stocked up" hint="No upcoming visit conflicts" />
+					) : (
+						conflicts.map((conflict) => (
+							<ConflictCard
+								key={`${conflict.visitId}-${conflict.vehicleId}`}
+								conflict={conflict}
+								onVisitClick={() => navigate(`/dispatch/jobs/${conflict.jobId}/visits/${conflict.visitId}`)}
+								onVehicleClick={() => navigate(`/dispatch/vehicles/${conflict.vehicleId}/stock`)}
+							/>
+						))
+					)
+				) : alerts.length === 0 ? (
+					<EmptyState label="Nothing due" hint="No overdue or upcoming reminders" />
+				) : (
+					alerts.map((alert) => (
+						<AlertCard
+							key={alert.reminderId}
+							alert={alert}
+							onClick={() => navigate(`/dispatch/vehicles/${alert.vehicleId}/stock?tab=maintenance`)}
+						/>
+					))
+				)}
+			</div>
+		</DockedPanel>
 	);
 }
 

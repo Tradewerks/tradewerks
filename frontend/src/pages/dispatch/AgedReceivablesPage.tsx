@@ -14,6 +14,7 @@ import ReportPagination from "../../components/reports/ReportPagination";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -58,6 +59,7 @@ export default function AgedReceivablesPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(AMOUNT_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -65,8 +67,8 @@ export default function AgedReceivablesPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, page, limit: pageSize }),
-		[searchTerms, page, pageSize],
+		() => ({ searchTerms, page, limit: pageSize, ...sort }),
+		[searchTerms, page, pageSize, sort],
 	);
 
 	const summaryChart = useAgedReceivablesQuery();
@@ -76,7 +78,7 @@ export default function AgedReceivablesPage() {
 	const hasMore = data?.hasMore ?? false;
 	const totals = useMemo(() => (data?.summary ?? {}) as BucketSummary, [data]);
 
-	const filterKey = JSON.stringify([searchTerms, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -146,7 +148,7 @@ export default function AgedReceivablesPage() {
 									filename: datedFilename("aged-receivables"),
 									sheetName: "Aged Receivables",
 									columns: visibleColumns,
-									params: { searchTerms },
+									params: { searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -184,6 +186,7 @@ export default function AgedReceivablesPage() {
 				) : (
 					<>
 						<AdaptableTable
+							{...tableProps}
 							data={displayRows}
 							loadListener={isLoading}
 							errListener={error}

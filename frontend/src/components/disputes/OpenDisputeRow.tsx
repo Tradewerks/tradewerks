@@ -5,6 +5,24 @@ import type { OpenDisputeSummary } from "../../types/disputes";
 
 export const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 px-4 py-2";
 
+interface param {
+	rows ?: number
+}
+export function RowsSkeleton({rows = 3}:param) {
+	return (
+		<div className="-mx-4 -my-4 divide-y divide-border-subtle" aria-hidden="true">
+			{Array.from({ length: rows }).map((_, i) => (
+				<div key={i} className={ROW_GRID}>
+					<div className="h-3.5 w-2/3 rounded bg-surface-raised animate-pulse" />
+					<div className="h-3.5 w-16 rounded bg-surface-raised animate-pulse" />
+					<div className="h-2.5 w-1/2 rounded bg-surface-raised animate-pulse" />
+					<div className="h-2.5 w-14 justify-self-end rounded bg-surface-raised animate-pulse" />
+				</div>
+			))}
+		</div>
+	);
+}
+
 interface OpenDisputeRowProps {
 	dispute: OpenDisputeSummary;
 	/** "document" is for surfaces already scoped to one client. */

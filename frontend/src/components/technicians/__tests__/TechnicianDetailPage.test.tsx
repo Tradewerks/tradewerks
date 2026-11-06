@@ -9,6 +9,9 @@ import type { Technician } from "../../../types/technicians";
 
 const query = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const perms = vi.hoisted(() => ({ current: {} as Record<string, boolean> }));
+const purchases = vi.hoisted(() => ({
+	current: { data: [], isLoading: false, isError: false } as Record<string, unknown>,
+}));
 
 const TECH = {
 	id: "t1",
@@ -39,7 +42,7 @@ vi.mock("../../../hooks/usePermission", () => ({
 	useAnyPermission: (ps: string[]) => ps.some((p) => perms.current[p] ?? true),
 }));
 vi.mock("../../../hooks/useFieldPurchases", () => ({
-	useFieldPurchases: () => ({ data: [], isLoading: false, isError: false }),
+	useFieldPurchases: () => purchases.current,
 	useFieldPurchaseQueue: () => ({
 		data: { items: [], total: 0 },
 		isLoading: false,
@@ -80,6 +83,7 @@ function renderPage(path = "/dispatch/technicians/t1") {
 beforeEach(() => {
 	query.current = { data: TECH, isLoading: false, error: null, refetch: vi.fn() };
 	perms.current = {};
+	purchases.current = { data: [], isLoading: false, isError: false };
 });
 
 describe("TechnicianDetailsPage", () => {
@@ -170,6 +174,28 @@ describe("TechnicianDetailsPage", () => {
 		perms.current = { view_field_purchases: false };
 		renderPage("/dispatch/technicians/t1?tab=activity");
 		expect(screen.getByText("Needs the View Field Purchases permission.")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: /field purchases/ })).toBeNull();
+	});
+
+	it("pins a footer link to the technician's purchases when permitted", () => {
+		const first = TECH.name.split(" ")[0];
+		const check = () => {
+			const link = screen.getByRole("link", {
+				name: new RegExp(`Open ${first}'s field purchases`),
+			});
+			expect(link.getAttribute("href")).toContain(`q=${encodeURIComponent(TECH.name)}`);
+			expect(link.getAttribute("href")).toContain("tab=field_purchases");
+		};
+		const { unmount } = renderPage("/dispatch/technicians/t1?tab=activity");
+		check();
+		unmount();
+		purchases.current = { data: undefined, isLoading: true, isError: false };
+		const loading = renderPage("/dispatch/technicians/t1?tab=activity");
+		check();
+		loading.unmount();
+		purchases.current = { data: undefined, isLoading: false, isError: true };
+		renderPage("/dispatch/technicians/t1?tab=activity");
+		check();
 	});
 });
 

@@ -71,6 +71,7 @@ export const createInventoryItemSchema = z
 		// axis (vehicle-stock ordering, report column); tags can't serve that
 		// since one item could land in multiple buckets.
 		category: z.string().max(100).nullable().optional(),
+		taxable: z.boolean().optional(),
 		barcode: barcodeField,
 		low_stock_threshold: stockQty(z.number().min(0)).nullable().optional(),
 		image_urls: z.array(z.string().url()).default([]),
@@ -112,6 +113,7 @@ export const updateInventoryItemSchema = z.object({
 	cost: z.number().min(0).nullable().optional(),
 	sku: z.string().max(100).nullable().optional(),
 	category: z.string().max(100).nullable().optional(),
+	taxable: z.boolean().optional(),
 	barcode: barcodeField,
 	low_stock_threshold: stockQty(z.number().min(0)).nullable().optional(),
 	image_urls: z.array(z.string().url()).optional(),

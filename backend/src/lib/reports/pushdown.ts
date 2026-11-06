@@ -20,6 +20,9 @@ export interface ColumnDef {
 
 export type ColumnMap = Record<string, ColumnDef>;
 
+export const searchKeysOf = (columns: ColumnMap): string[] =>
+	Object.keys(columns).filter((k) => columns[k].searchable);
+
 export interface DefaultOrder {
 	expr: string;
 	dir: "asc" | "desc";

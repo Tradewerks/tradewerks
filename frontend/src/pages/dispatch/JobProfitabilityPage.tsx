@@ -24,6 +24,7 @@ import {
 import { formatCurrency } from "../../util/util";
 import { parseDateRangeFromParams, resolveDateRange } from "../../util/dateRangeUtils";
 import { useJobProfitabilityReportQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import type { ReportFetchParams } from "../../types/reports";
 
 type ProfitView = "Gross" | "Net";
@@ -34,6 +35,7 @@ const GROSS_COLS: ColumnOption[] = [
 	{ key: "clientName", label: "Client" },
 	{ key: "revenue", label: "Revenue" },
 	{ key: "cogs", label: "Material COGS" },
+	{ key: "costCoverage", label: "Cost Coverage" },
 	{ key: "profit", label: "Profit" },
 	{ key: "margin", label: "Margin" },
 ];
@@ -44,6 +46,7 @@ const NET_COLS: ColumnOption[] = [
 	{ key: "clientName", label: "Client" },
 	{ key: "revenue", label: "Revenue" },
 	{ key: "cogs", label: "Materials" },
+	{ key: "costCoverage", label: "Cost Coverage" },
 	{ key: "laborCost", label: "Labor" },
 	{ key: "travelCost", label: "Travel" },
 	{ key: "overheadCost", label: "Overhead" },
@@ -61,6 +64,8 @@ const NET_NUMERIC_KEYS = [
 	"profit",
 	"margin",
 ] as const;
+// Net view shows netProfit/netMargin under the gross keys; sort the server on what's shown.
+const NET_SORT_KEY: Record<string, string> = { profit: "netProfit", margin: "netMargin" };
 
 const VIEW_CONFIG = {
 	Gross: {
@@ -82,21 +87,38 @@ interface JobProfitabilityRow {
 	clientName: string | null;
 	revenue: number | null;
 	cogs: number | null;
+	costCoverage: string | null;
 	profit: number | null;
 	margin: number | null;
-	// Net mode only 
+	// Net mode only
 	laborCost?: number | null;
 	travelCost?: number | null;
 	overheadCost?: number | null;
+	laborHours?: number | null;
+	netProfit?: number | null;
+	netMargin?: number | null;
 }
 
 interface ProfitSummary {
 	totalProfit?: number;
 	jobCount?: number;
-	// Set when any of the backend's three caps was hit — consumption events,
-	// invoices scanned, or report rows. Event truncation understates material
-	// cost and so overstates profit, which is the case worth warning about.
+	totalRevenue?: number;
+	totalCogs?: number;
+	jobsMissingCostData?: number;
 	truncated?: boolean;
+	// Net only
+	totalLabor?: number;
+	totalTravel?: number;
+	totalOverhead?: number;
+	totalNetProfit?: number;
+	jobsMissingLaborCost?: number;
+	jobsMissingTravelCost?: number;
+	jobsMissingOverheadCost?: number;
+	// Org-wide and window-scoped, so these come from load, not the filtered rows.
+	overheadPool?: number | null;
+	overheadAbsorbed?: number | null;
+	absorptionVariance?: number | null;
+	overheadRateSet?: boolean;
 }
 
 const currencyOrDash = (v: unknown) => (typeof v === "number" ? formatCurrency(v) : "—");
@@ -117,6 +139,14 @@ export default function JobProfitabilityPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort: viewSort, tableProps } = useReportSort(NET_NUMERIC_KEYS);
+	const sort = useMemo(
+		() =>
+			view === "Net" && viewSort.sortKey && NET_SORT_KEY[viewSort.sortKey]
+				? { ...viewSort, sortKey: NET_SORT_KEY[viewSort.sortKey] }
+				: viewSort,
+		[view, viewSort],
+	);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -124,8 +154,8 @@ export default function JobProfitabilityPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useJobProfitabilityReportQuery(queryParams);
@@ -135,7 +165,7 @@ export default function JobProfitabilityPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = useMemo(() => (data?.summary ?? {}) as ProfitSummary, [data]);
 
-	const filterKey = JSON.stringify([view, startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([view, startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -147,17 +177,70 @@ export default function JobProfitabilityPage() {
 		setSearchParams(params, { replace: true });
 	};
 
-	const stats = useMemo(
-		() => [
+	const stats = useMemo(() => {
+		const jobs = summary.jobCount ?? 0;
+		const floorHint = (missing: number | undefined, clean: string) =>
+			missing ? `${missing} of ${jobs} jobs unknown — this total is a floor` : clean;
+
+		const common = [
+			{ label: "Jobs", value: String(jobs) },
+			{ label: "Revenue", value: currencyOrDash(summary.totalRevenue) },
 			{
-				label: "Total Profit",
-				value: currencyOrDash(summary.totalProfit),
-				hint: "Revenue less consumed material cost — labor is not costed",
+				label: view === "Gross" ? "Material COGS" : "Materials",
+				value: currencyOrDash(summary.totalCogs),
+				hint: floorHint(
+					summary.jobsMissingCostData,
+					"Every costed job priced from receipt history",
+				),
 			},
-			{ label: "Jobs", value: String(summary.jobCount ?? 0) },
-		],
-		[summary],
-	);
+		];
+
+		if (view === "Gross") {
+			return [
+				{
+					label: "Total Profit",
+					value: currencyOrDash(summary.totalProfit),
+					hint: "Revenue less consumed material cost, labor is not costed",
+				},
+				...common,
+			];
+		}
+
+		return [
+			{
+				label: "Net Profit",
+				value: currencyOrDash(summary.totalNetProfit),
+				// The share uses billing to date, so a later invoice moves past periods.
+				hint: "Costs shared by billing to date; open jobs may shift",
+			},
+			...common,
+			{
+				label: "Labor",
+				value: currencyOrDash(summary.totalLabor),
+				hint: floorHint(summary.jobsMissingLaborCost, "Every technician has a cost rate"),
+			},
+			{
+				label: "Travel",
+				value: currencyOrDash(summary.totalTravel),
+				hint: floorHint(summary.jobsMissingTravelCost, "Mileage recorded on every job"),
+			},
+			{
+				label: "Overhead",
+				value: currencyOrDash(summary.totalOverhead),
+				hint: summary.overheadRateSet
+					? floorHint(summary.jobsMissingOverheadCost, "Charged per hour worked")
+					: "No overhead rate set — add one in Admin → Settings → Costing",
+			},
+			{
+				label: "Absorption Variance",
+				value: currencyOrDash(summary.absorptionVariance),
+				hint:
+					summary.absorptionVariance == null
+						? "Pick a date range to compare absorbed overhead against the monthly pool"
+						: `${currencyOrDash(summary.overheadAbsorbed)} absorbed of ${currencyOrDash(summary.overheadPool)}`,
+			},
+		];
+	}, [summary, view]);
 
 	const { cols, headerLabels, columnAlign } = VIEW_CONFIG[view];
 
@@ -176,6 +259,7 @@ export default function JobProfitabilityPage() {
                     clientName: r.clientName ?? "—",
                     revenue: currencyOrDash(r.revenue),
                     cogs: currencyOrDash(r.cogs),
+                    costCoverage: r.costCoverage ?? "—",
                     profit: currencyOrDash(r.profit),
                     margin: percentOrDash(r.margin),
                 }))
@@ -186,12 +270,14 @@ export default function JobProfitabilityPage() {
                     clientName: r.clientName ?? "—",
                     revenue: currencyOrDash(r.revenue),
                     cogs: currencyOrDash(r.cogs),
+                    costCoverage: r.costCoverage ?? "—",
                     laborCost: currencyOrDash(r.laborCost),
                     travelCost: currencyOrDash(r.travelCost),
                     overheadCost: currencyOrDash(r.overheadCost),
-                    profit: currencyOrDash(r.profit),
-                    margin: percentOrDash(r.margin),
-                    _netRaw: r.profit,
+                    // Net view shows NET profit; r.profit is gross and stays in the
+                    // Gross branch above.
+                    profit: currencyOrDash(r.netProfit),
+                    margin: percentOrDash(r.netMargin),
                 })),
 		[rows, view],
 	);
@@ -243,7 +329,8 @@ export default function JobProfitabilityPage() {
 				</div>
 			)}
 
-			<div className="grid grid-cols-2 gap-3 mb-4">
+			{/* Gross has 4 tiles, Net has 7 — wrap rather than squeeze them onto one row. */}
+			<div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
 				{stats.map((card) => (
 					<StatCard key={card.label} {...card} />
 				))}
@@ -269,7 +356,7 @@ export default function JobProfitabilityPage() {
 									filename: datedFilename("job-profitability"),
 									sheetName: "Job Profitability",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -312,6 +399,7 @@ export default function JobProfitabilityPage() {
 							columnVisibility={columnVisibility}
 							headerLabels={headerLabels}
 							columnAlign={columnAlign}
+							{...tableProps}
 							onRowClick={(row) => navigate(`/dispatch/jobs/${row.id as string}`)}
 						/>
 						<ReportPagination

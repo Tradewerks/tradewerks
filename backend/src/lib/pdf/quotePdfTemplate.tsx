@@ -1,5 +1,6 @@
 ﻿import { Document, Page, View, Text, Image, StyleSheet } from "@react-pdf/renderer";
-import type { TaxSnapshot } from "../../services/taxEngine.js";
+import type { AnyTaxSnapshot } from "../../services/tax/snapshot.js";
+import { pdfTaxRows, taxBasisLine } from "../../services/tax/taxDisplay.js";
 import { type Numeric, type OrgPdfProps, toNum, fmt, fmtDate, fmtRatePct } from "./pdfHelpers.js";
 
 // ── PDF prop types ────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ interface QuotePdfProps {
 	discount_type?: string | null;
 	tax_amount?: Numeric;
 	tax_rate?: Numeric;
-	tax_snapshot?: TaxSnapshot | null;
+	tax_snapshot?: AnyTaxSnapshot | null;
 	total?: Numeric;
 	client?: QuotePdfClient | null;
 	line_items?: QuotePdfLineItem[] | null;
@@ -467,19 +468,18 @@ export function QuotePdfTemplate({ quote, org }: { quote: QuotePdfProps; org: Or
 						>
 							<View style={s.colName}>
 								<Text style={s.tdText}>{item.name}</Text>
-								{item.tax_group?.name && (
+								{item.taxable === false ? (
+									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 1 }}>
+										Not taxed
+									</Text>
+								) : item.tax_group?.name ? (
 									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 1 }}>
 										{item.tax_group.name}
 										{groupRateMap.has(item.tax_group.name)
 											? ` (${fmtRatePct(groupRateMap.get(item.tax_group.name)!)})`
 											: ""}
 									</Text>
-								)}
-								{item.taxable === false && !item.tax_group?.name && (
-									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 1 }}>
-										Non-taxable
-									</Text>
-								)}
+								) : null}
 							</View>
 							<View style={s.colDesc}>
 								{item.description ? (
@@ -535,30 +535,26 @@ export function QuotePdfTemplate({ quote, org }: { quote: QuotePdfProps; org: Or
 							</View>
 						) : (
 							<>
-								{(quote.tax_snapshot.groups ?? []).map((group) => {
-									const combinedRate = (group.rates ?? []).reduce(
-										(sum, r) => sum + r.rate,
-										0,
-									);
-									return (
-										<View key={group.id} style={s.totalRow}>
-											<Text style={s.totalLabel}>
-												{group.name}
-												{combinedRate > 0 ? ` (${fmtRatePct(combinedRate)})` : ""}
-											</Text>
-											<Text style={s.totalValue}>
-												{fmt((group.tax_amount_cents ?? 0) / 100)}
-											</Text>
-										</View>
-									);
-								})}
-								{(quote.tax_snapshot.groups ?? []).length > 1 && (
+								{pdfTaxRows(quote.tax_snapshot).map((row) => (
+									<View key={row.id} style={s.totalRow}>
+										<Text style={s.totalLabel}>
+											{row.showRate ? `${row.name} (${fmtRatePct(row.rate)})` : row.name}
+										</Text>
+										<Text style={s.totalValue}>{fmt(row.amountCents / 100)}</Text>
+									</View>
+								))}
+								{pdfTaxRows(quote.tax_snapshot).length > 1 && (
 									<View style={s.totalRow}>
 										<Text style={s.totalLabel}>Total Tax</Text>
 										<Text style={s.totalValueBold}>
 											{fmt((quote.tax_snapshot.total_tax_cents ?? 0) / 100)}
 										</Text>
 									</View>
+								)}
+								{taxBasisLine(quote.tax_snapshot) && (
+									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 2, textAlign: "right" }}>
+										{taxBasisLine(quote.tax_snapshot)}
+									</Text>
 								)}
 							</>
 						)

@@ -1,0 +1,16 @@
+groups:
+  - name: tax
+    rules:
+      # Spec §5. The volume floor keeps one failed call on a quiet night from paging.
+      - alert: TaxProviderFailureRateHigh
+        expr: |
+          (
+            sum(increase(hvac_tax_provider_calls_total{status="failed"}[15m]))
+              / sum(increase(hvac_tax_provider_calls_total[15m]))
+          ) > 0.2
+          and sum(increase(hvac_tax_provider_calls_total[15m])) >= 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tax rate provider failing on more than 20% of calls over 15 min"
+          description: "Drafts are falling back to stale or default rates and are flagged for tax review."

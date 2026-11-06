@@ -47,14 +47,30 @@ async function usageOf(orgId: string): Promise<UsageSummary | null> {
 	}
 }
 
-export async function listOrgs(q: string, page: number, trialEndingDays?: number) {
+export async function listOrgs(
+	q: string,
+	page: number,
+	trialEndingDays?: number,
+	tier?: { key: string; version?: number },
+) {
 	const from = new Date();
 	const where = {
 		...(q && { name: { contains: q, mode: "insensitive" as const } }),
-		...(trialEndingDays && {
+		...((trialEndingDays || tier) && {
 			entitlement: {
-				trial_plan_version_id: { not: null },
-				trial_ends_at: { gt: from, lte: new Date(from.getTime() + trialEndingDays * DAY_MS) },
+				...(trialEndingDays && {
+					trial_plan_version_id: { not: null },
+					trial_ends_at: {
+						gt: from,
+						lte: new Date(from.getTime() + trialEndingDays * DAY_MS),
+					},
+				}),
+				...(tier && {
+					plan_version: {
+						plan: { key: tier.key },
+						...(tier.version && { version: tier.version }),
+					},
+				}),
 			},
 		}),
 	};

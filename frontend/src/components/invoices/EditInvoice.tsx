@@ -11,13 +11,24 @@ import Dropdown from "../ui/Dropdown";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { errorMessage } from "../../util/util";
+import { rateToPercentInput } from "../../lib/formatTax";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import {
+	lineTaxPayload,
+	editorAutoTax,
+	flatRateHandler,
+	docKeptEstimate,
+	keptRateOptionLabel,
+} from "../../lib/taxEditorMode";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import { UndoButton } from "../ui/forms/UndoButton";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
+import { roundingFor } from "../../lib/taxRounding";
 import { useDirtyTracking } from "../../hooks/forms/useDirtyTracking";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { isEditable } from "../../types/invoices";
@@ -77,7 +88,16 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 
 	// ── Line items ────────────────────────────────────────────────────────
 	const { data: taxGroups = [] } = useTaxGroups();
+	const autoModeLoaded = useAutoTaxMode();
+	const autoMode = autoModeLoaded === true;
+	// An adjustment never inherits its job's rate (backend docKeptRate).
+	const parentSnapshot = invoice.adjusts_invoice_id ? null : invoice.parent_tax_snapshot;
+	const keptEstimate = docKeptEstimate(invoice.tax_snapshot, parentSnapshot, autoModeLoaded);
+	const kept = keptEstimate != null;
+	const keptSnapshot = kept ? (invoice.tax_snapshot ?? parentSnapshot) : invoice.tax_snapshot;
+	const keptRateLabel = keptEstimate ? keptRateOptionLabel(keptEstimate) : null;
 	const clientExempt = invoice.client?.is_tax_exempt ?? false;
+	const clientTaxGroupId = invoice.client?.tax_group_id ?? null;
 	const taxEditable = isEditable(invoice.status);
 
 	const {
@@ -96,19 +116,11 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
+		resetLineItems,
 	} = useLineItems({ minItems: 0, mode: "edit" });
 
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
-	const lineItemsForCalc = useMemo(
-		() =>
-			activeLineItems.map((item) => ({
-				id: item.id,
-				total: item.total,
-				taxable: item.taxable ?? true,
-				tax_group_id: item.tax_group_id ?? null,
-			})),
-		[activeLineItems]
-	);
+	const lineItemsForCalc = useLineItemsForCalc(activeLineItems, clientTaxGroupId);
 
 	// ── Financials ────────────────────────────────────────────────────────
 	const {
@@ -132,12 +144,13 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 		undoDiscount,
 		setOriginals: setFinancialOriginals,
 	} = useFinancialCalculations(subtotal, {
-		initialTaxRate: invoice.tax_rate ? Number(invoice.tax_rate) * 100 : 0,
+		initialTaxRate: rateToPercentInput(invoice.tax_rate),
 		initialDiscountType: invoice.discount_type || "amount",
 		initialDiscountValue: invoice.discount_value ? Number(invoice.discount_value) : 0,
 		taxGroups,
 		lineItemsForCalc,
 		clientExempt,
+		rounding: roundingFor(invoice.tax_snapshot),
 	});
 
 	// ── Wizard ────────────────────────────────────────────────────────────
@@ -175,7 +188,8 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 		// Line items — seed from existing invoice line items
 		const initialLineItems: EditableLineItem[] = (invoice.line_items ?? []).map(
 			(item) => ({
-				id: crypto.randomUUID(),
+				// Server id, so the tax snapshot's per-line reasons key straight onto the line.
+				id: item.id,
 				entity_line_item_id: item.id,
 				name: item.name,
 				description: item.description ?? "",
@@ -192,15 +206,26 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 				isDeleted: false,
 			})
 		);
+		// Ids are stable server ids, so clear the previous load's dirty flags first;
+		// setLineItems below rebuilds the originals the reset empties.
+		resetLineItems();
 		setLineItems(initialLineItems);
 
 		// Financials
 		setFinancialOriginals(
-			invoice.tax_rate ? Number(invoice.tax_rate) * 100 : 0,
+			rateToPercentInput(invoice.tax_rate),
 			invoice.discount_type ?? "amount",
 			invoice.discount_value ? Number(invoice.discount_value) : 0
 		);
-	}, [isModalOpen, invoice, resetWizard, setOriginals, setLineItems, setFinancialOriginals]);
+	}, [
+		isModalOpen,
+		invoice,
+		resetWizard,
+		setOriginals,
+		resetLineItems,
+		setLineItems,
+		setFinancialOriginals,
+	]);
 
 	// ── Auto due date from payment terms ──────────────────────────────────
 	useEffect(() => {
@@ -316,8 +341,7 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 					item_type: (item.item_type || undefined) as
 						| LineItemType
 						| undefined,
-					taxable: item.taxable,
-					tax_group_id: item.tax_group_id ?? undefined,
+					...lineTaxPayload(item),
 					inventory_item_id: item.inventory_item_id ?? undefined,
 					sort_order: index,
 					source_job_id: item.source_job_id ?? undefined,
@@ -717,6 +741,8 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 							taxGroups={taxGroups}
 							clientExempt={clientExempt}
 							onTaxChange={taxEditable ? setLineItemTaxGroup : undefined}
+							autoMode={autoMode}
+							keptRateLabel={keptRateLabel}
 							onTaxGroupBulkSet={taxEditable ? setAllLineItemsTaxGroup : undefined}
 						/>
 					</div>
@@ -803,7 +829,7 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 							clientExempt={clientExempt}
 							isLoading={isLoading}
 							mode="edit"
-							onTaxRateChange={groupsSummary.length > 0 ? undefined : setTaxRate}
+							onTaxRateChange={flatRateHandler(autoMode, groupsSummary.length, setTaxRate)}
 							onDiscountTypeChange={setDiscountType}
 							onDiscountValueChange={setDiscountValue}
 							totalLabel="Invoice Total"
@@ -811,6 +837,16 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 							isDiscountDirty={isDiscountDirty}
 							onTaxUndo={undoTax}
 							onDiscountUndo={undoDiscount}
+							autoTax={editorAutoTax(
+								autoMode,
+								lineItemsForCalc,
+								discountAmount,
+								keptSnapshot,
+								false,
+								kept,
+								keptEstimate?.rounding,
+							)}
+							keptRate={kept}
 						/>
 					</div>
 				);
@@ -820,6 +856,7 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 		}
 	}, [
 		currentStep,
+		autoMode,
 		invoice,
 		isLoading,
 		getValue,
@@ -833,6 +870,7 @@ const EditInvoice = ({ isModalOpen, setIsModalOpen, invoice }: EditInvoiceProps)
 		originalDueDate,
 		paymentTermsEntries,
 		activeLineItems,
+		lineItemsForCalc,
 		addLineItem,
 		removeLineItem,
 		updateLineItem,

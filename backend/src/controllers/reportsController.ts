@@ -8,7 +8,15 @@ import {
 } from "../lib/reports/recurringRevenue.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { centsToDollars, dollarsToCents, type TaxSnapshot } from "../services/taxEngine.js";
-import { getStockStatus, unitBasis, type UnitBasis } from "../lib/inventory.js";
+import { roundHalfUpSymmetric } from "../services/tax/rounding.js";
+import { qbAstTaxCents, roundingFor } from "../services/tax/snapshot.js";
+import {
+	getStockStatus,
+	unitBasis,
+	type UnitBasis,
+	CONSUMPTION_MOVEMENT_PREDICATE,
+	CONSUMPTION_SIGNED_QTY,
+} from "../lib/inventory.js";
 import {
 	buildSqlParts,
 	type ColumnDef,
@@ -20,8 +28,13 @@ import { round2 } from "../lib/reports/numbers.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { log } from "../services/appLogger.js";
 import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
-import { computeConsumptionCosts, ConsumptionCostRow } from "../lib/reports/costing.js";
+import {
+	computeConsumptionCosts,
+	computeJobDirectCosts,
+	ConsumptionCostRow,
+} from "../lib/reports/costing.js";
 import { buildShiftSegments } from "./timesheetController.js";
+import { truncate } from "node:fs";
 
 // Upper bound on rows pulled into memory for the in-JS report aggregations
 const REPORT_ROW_CAP = 10000;
@@ -144,6 +157,7 @@ export const getOverviewMetrics = async (
 		avgResponseTimeResult,
 		convertedQuotes,
 		totalQuotes,
+		approvedOfCreated,
 		newOneOffJobs,
 		newRecurringJobs,
 		avgJobValue,
@@ -168,6 +182,14 @@ export const getOverviewMetrics = async (
 		sdb.quote.count({
 			where: {
 				organization_id: organizationId,
+				created_at: { gte: start, lte: end },
+			},
+		}),
+		// Same cohort as totalQuotes, so the rate can't pass 100%.
+		sdb.quote.count({
+			where: {
+				organization_id: organizationId,
+				status: "Approved",
 				created_at: { gte: start, lte: end },
 			},
 		}),
@@ -207,6 +229,7 @@ export const getOverviewMetrics = async (
 		prevAvgResponseTimeResult,
 		prevConvertedQuotes,
 		prevTotalQuotes,
+		prevApprovedOfCreated,
 		prevOneOffJobs,
 		prevRecurringJobs,
 		prevAvgJobValue,
@@ -231,6 +254,13 @@ export const getOverviewMetrics = async (
 		sdb.quote.count({
 			where: {
 				organization_id: organizationId,
+				created_at: { gte: previousStart, lte: previousEnd },
+			},
+		}),
+		sdb.quote.count({
+			where: {
+				organization_id: organizationId,
+				status: "Approved",
 				created_at: { gte: previousStart, lte: previousEnd },
 			},
 		}),
@@ -278,11 +308,11 @@ export const getOverviewMetrics = async (
 
 	const convRate =
 		totalQuotes > 0
-			? Math.round((convertedQuotes / totalQuotes) * 100)
+			? Math.round((approvedOfCreated / totalQuotes) * 100)
 			: 0;
 	const prevConvRate =
 		prevTotalQuotes > 0
-			? Math.round((prevConvertedQuotes / prevTotalQuotes) * 100)
+			? Math.round((prevApprovedOfCreated / prevTotalQuotes) * 100)
 			: 0;
 
 	const avgValue = Number(avgJobValue._avg.estimated_total ?? 0);
@@ -1158,7 +1188,11 @@ const buildReorderForecast = async (
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND sm.reason IN ('parts_used', 'direct_consumption')
+						-- Evidence only, so no reversals: this is not the shared predicate.
+						AND (
+							sm.reason IN ('parts_used', 'direct_consumption')
+							OR (sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed')
+						)
 				)                                   AS "firstConsumedAt",
 				-- vehicle_stock_item has no org column of its own; scope through vehicle.
 				COALESCE((
@@ -1168,22 +1202,14 @@ const buildReorderForecast = async (
 					WHERE vsi.inventory_item_id = ii.id
 						AND v.organization_id = ${organizationId}
 				), 0)::float                        AS "vehicleQty",
-				-- Net of reversals (from_location_type = 'consumed' cancels demand that
-				-- never happened) — same netting getBatchImpact uses. updatePartsUsedQty
-				-- is the current writer of these; keep this in lockstep if new reversal
-				-- paths are added.
+				-- Net of reversals (lib/inventory.ts CONSUMPTION_*), same as the item page.
 				COALESCE((
-					SELECT SUM(
-						CASE WHEN sm.reason = 'reversal' THEN -sm.qty ELSE sm.qty END
-					)
+					SELECT SUM(${CONSUMPTION_SIGNED_QTY})
 					FROM stock_movement sm
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND (
-							sm.reason IN ('parts_used', 'direct_consumption')
-							OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
-						)
+						AND ${CONSUMPTION_MOVEMENT_PREDICATE}
 				), 0)::float                        AS "qtyConsumed",
 				-- Stamped units behind that sum (same reason set + window) — the
 				-- item's own unit column says nothing about what the ledger used.
@@ -1193,10 +1219,7 @@ const buildReorderForecast = async (
 					WHERE sm.inventory_item_id = ii.id
 						AND sm.organization_id = ${organizationId}
 						AND sm.created_at >= ${cutoff}
-						AND (
-							sm.reason IN ('parts_used', 'direct_consumption')
-							OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
-						)
+						AND ${CONSUMPTION_MOVEMENT_PREDICATE}
 				)                                   AS "consumedUnits"
 			FROM inventory_item ii
 			WHERE ii.organization_id = ${organizationId}
@@ -1346,6 +1369,7 @@ const inventoryUsageByItem = async (
 			OR: [
 				{ reason: { in: ["parts_used", "direct_consumption"] } },
 				{ reason: "reversal", from_location_type: "consumed" },
+				{ reason: "supplier_purchase", to_location_type: "consumed" },
 			],
 			...(from && to ? { created_at: { gte: from, lte: to } } : {}),
 			...(itemIds ? { inventory_item_id: { in: itemIds } } : {}),
@@ -1448,7 +1472,7 @@ export const getInventoryReport = async (
 const FLEET_ON_HAND =
 	'(SELECT COALESCE(SUM(vs.qty_on_hand), 0) FROM "vehicle_stock_item" vs WHERE vs.inventory_item_id = ii.id)';
 
-const INVENTORY_SQL_COLUMNS: ColumnMap = {
+export const INVENTORY_SQL_COLUMNS: ColumnMap = {
 	itemName: t("ii.name"),
 	sku: t("ii.sku"),
 	category: t("ii.category"),
@@ -1733,6 +1757,7 @@ export interface TaxLiabilityRow {
 }
 
 const UNCATEGORIZED_KEY = "__uncategorized__";
+const QB_AST_KEY = "__qb_ast__";
 
 export const getTaxLiabilityReport = async (
 	startDate: string | undefined,
@@ -1803,6 +1828,26 @@ export const getTaxLiabilityReport = async (
 
 	for (const invoice of invoices) {
 		const snapshot = invoice.tax_snapshot as TaxSnapshot | null;
+
+		// QuickBooks computed this invoice's tax with no jurisdiction split; our estimate's
+		// groups would report a figure the customer was never charged.
+		const qbCents = qbAstTaxCents(snapshot);
+		if (qbCents != null) {
+			// A credit against an adopted invoice carries a negative qb_tax_cents and nets in here.
+			if (qbCents !== 0) {
+				add(
+					QB_AST_KEY,
+					"QuickBooks AST",
+					"QuickBooks AST",
+					0,
+					(snapshot?.groups ?? []).reduce((sum, g) => sum + g.taxable_amount_cents, 0),
+					qbCents,
+					invoice.id,
+				);
+			}
+			continue;
+		}
+
 		const hasGroups =
 			snapshot != null &&
 			snapshot.locked_at !== "draft" &&
@@ -1830,9 +1875,16 @@ export const getTaxLiabilityReport = async (
 			continue;
 		}
 
+		const halfUp = roundingFor(snapshot) === "jurisdiction_half_up";
 		for (const group of snapshot.groups) {
 			const taxableCents = group.taxable_amount_cents;
-			const rawPerRate = group.rates.map((r) => Math.floor(taxableCents * r.rate));
+			// A half-up group was taxed one rate at a time on this same base, so recomputing
+			// each rate reproduces the stored split exactly and leaves no remainder.
+			const rawPerRate = group.rates.map((r) =>
+				halfUp
+					? roundHalfUpSymmetric(taxableCents * r.rate)
+					: Math.floor(taxableCents * r.rate),
+			);
 			const rawSum = rawPerRate.reduce((sum, n) => sum + n, 0);
 			const remainder = group.tax_amount_cents - rawSum;
 
@@ -1939,7 +1991,7 @@ export const getJobsReport = async (
 };
 
 // j = job, c = client
-const JOBS_SQL_COLUMNS: ColumnMap = {
+export const JOBS_SQL_COLUMNS: ColumnMap = {
 	jobNumber: t("j.job_number"),
 	name: t("j.name"),
 	clientName: t("c.name"),
@@ -2015,7 +2067,7 @@ const projectsBaseWhere = (
 };
 
 // p = project, c = client, md = manager_dispatcher
-const PROJECTS_SQL_COLUMNS: ColumnMap = {
+export const PROJECTS_SQL_COLUMNS: ColumnMap = {
 	projectNumber: t("p.project_number"),
 	name: t("p.name"),
 	clientName: t("c.name"),
@@ -2127,7 +2179,7 @@ export const getProjectsReportPage = async (
 
 const FTFR_INCLUDE = {
 	client: { select: { name: true } },
-	_count: { select: { visits: true } },
+	_count: { select: { visits: { where: { status: { not: "Cancelled" } } } } },
 } satisfies Prisma.jobInclude;
 
 const mapFtfrRaw = (job: Prisma.jobGetPayload<{ include: typeof FTFR_INCLUDE }>) => ({
@@ -2151,7 +2203,7 @@ export const getFirstTimeFixReport = async (
 		where: {
 			organization_id: organizationId,
 			status: "Completed",
-			visits: { some: {} },
+			visits: { some: { status: { not: "Cancelled" } } },
 			...(Object.keys(dateFilter).length && { completed_at: dateFilter }),
 		},
 		orderBy: { completed_at: "desc" },
@@ -2222,7 +2274,7 @@ export const getInvoicesReport = async (
 	return invoices.map(mapInvoiceRaw);
 };
 
-const INVOICES_SQL_COLUMNS: ColumnMap = {
+export const INVOICES_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	status: t("i.status::text"),
@@ -2399,7 +2451,7 @@ export const getRevenueLineItemsReport = async (
 	return { rows: items.map(mapRevenueLineItemRaw), truncated: items.length >= REPORT_ROW_CAP };
 };
 
-const REVENUE_LINE_ITEM_SQL_COLUMNS: ColumnMap = {
+export const REVENUE_LINE_ITEM_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	issueDate: dt("i.issue_date"),
@@ -2522,6 +2574,7 @@ export const getClientsReport = async (organizationId: string) => {
 				SUM(balance_due) AS open_balance
 			FROM invoice
 			WHERE organization_id = ${organizationId}
+			AND status NOT IN ('Draft', 'Void')
 			GROUP BY client_id
 		) inv ON inv.client_id = c.id
 		WHERE c.organization_id = ${organizationId}
@@ -3268,7 +3321,7 @@ export const getPaymentsReport = async (
 const PAYMENTS_FROM =
 	'"invoice_payment" p JOIN "invoice" i ON i.id = p.invoice_id JOIN "client" c ON c.id = i.client_id LEFT JOIN "dispatcher" disp ON disp.id = p.recorded_by_dispatcher_id LEFT JOIN "technician" tech ON tech.id = p.recorded_by_tech_id';
 
-const PAYMENTS_SQL_COLUMNS: ColumnMap = {
+export const PAYMENTS_SQL_COLUMNS: ColumnMap = {
 	invoiceNumber: t("i.invoice_number"),
 	clientName: t("c.name"),
 	method: t("p.method"),
@@ -3359,8 +3412,9 @@ const summarizeCostSource = (events: ConsumptionCostRow[]) => {
 	const pricedTotal = round2(priced.reduce((s, e) => s + e.totalCost, 0));
 	const totalCogs = priced.length === 0 ? null : pricedTotal;
 	const hasNoData = events.some(e=> e.costSource === "no_cost_data");
-	const allWac = events.every(e => e.costSource === "wac");
-	const costCoverage = allWac ? "Full"
+	// "actual" is the price actually paid, so it is exact like wac, not a fallback.
+	const allExact = events.every(e => e.costSource === "wac" || e.costSource === "actual");
+	const costCoverage = allExact ? "Full"
 		: !hasNoData ? "Estimated"
 		: priced.length > 0 ? "Partial"
 		: "No Cost Data";
@@ -3597,11 +3651,12 @@ export const getQuoteFunnelReport = async (
 	};
 };
 
-const QUOTES_SQL_COLUMNS: ColumnMap = {
+export const QUOTES_SQL_COLUMNS: ColumnMap = {
 	quoteNumber: t("q.quote_number"),
 	title: t("q.title"),
 	clientName: t("c.name"),
-	status: t("q.status::text"),
+	// Rows show Issued as "Created" (quoteRow), so search and sort run on that text too.
+	status: t("CASE WHEN q.status = 'Issued' THEN 'Created' ELSE q.status::text END"),
 	source: t("COALESCE(r.source, 'manual')"),
 	total: cur("q.total"),
 	createdAt: dt("q.created_at"),
@@ -3825,10 +3880,20 @@ const JOB_BILLING_SELECT = {
 	client: { select: { name: true } },
 } as const;
 
+// Coverage for a job that consumed nothing — distinct from "No Cost Data",
+// which means material was consumed and could not be priced.
+export const NO_MATERIALS = "No Materials";
 
-/* 
-*	 missng labor cost
-*/
+// Share of an invoice's pre-discount subtotal that survives the discount.
+// Clamped to [0,1]: a discount over subtotal would otherwise flip revenue negative.
+export const discountNetFactor = (subtotal: unknown, discountAmount: unknown) => {
+	const base = Number(subtotal ?? 0);
+	const discount = Number(discountAmount ?? 0);
+	if (!(base > 0) || !(discount > 0)) return 1;
+	return Math.max(0, 1 - discount / base);
+};
+
+
 export const getJobProfitabilityReport = async (
 	startDate: string | undefined,
 	endDate: string | undefined,
@@ -3837,11 +3902,17 @@ export const getJobProfitabilityReport = async (
 	const sdb = getScopedDb(orgId);
 	const dateFilter = buildDateFilter(startDate, endDate);
 
-	// COGS is job-lifetime on purpose: the period selects which jobs were billed,
-	// then each is costed over its whole life. Its own truncation flag comes from
-	// the 10k consumption-event cap in costing.ts and must be forwarded — dropping
-	// it understates COGS and therefore OVERSTATES profit.
 	const jobCogs = await getCogsByJobReport(undefined, undefined, orgId);
+	const directCosts = await computeJobDirectCosts(orgId);
+	// The only org-config read in this file. Decimal columns, so Number() by hand —
+	// num() returns 0 for a Decimal and would price every mile and hour at nothing.
+	const orgCfg = await sdb.organization.findFirst({
+		where: { id: orgId },
+		select: { cost_per_mile: true, monthly_overhead: true, overhead_rate_per_hour: true },
+	});
+	const perMile = Number(orgCfg?.cost_per_mile ?? 0);
+	const overheadRate =
+		orgCfg?.overhead_rate_per_hour == null ? null : Number(orgCfg.overhead_rate_per_hour);
 	const invoices = await sdb.invoice.findMany({
 		where: {
 			status: { notIn: ["Draft", "Void"] },
@@ -3849,6 +3920,14 @@ export const getJobProfitabilityReport = async (
 				OR: [{ issue_date: dateFilter }, { issue_date: null, created_at: dateFilter }],
 			}),
 		},
+		// Unordered, the cap returns an arbitrary set and the same query can report
+		// different revenue twice. Newest first, so a truncated run drops the
+		// oldest invoices; id breaks ties, which issue_date alone does not.
+		orderBy: [
+			{ issue_date: { sort: "desc", nulls: "last" } },
+			{ created_at: "desc" },
+			{ id: "asc" },
+		],
 		take: REPORT_ROW_CAP,
 		include: {
 			jobs: {
@@ -3874,27 +3953,88 @@ export const getJobProfitabilityReport = async (
 
 	type BilledJobMeta = (typeof invoices)[number]["jobs"][number]["job"];
 	const jobRevenue = new Map<string, { revenue: number; job: BilledJobMeta }>();
-	const addRevenue = (jobId: string, amount: unknown, job: BilledJobMeta) => {
+	const addRevenue = (jobId: string, amount: number, job: BilledJobMeta) => {
 		const prev = jobRevenue.get(jobId);
 		jobRevenue.set(jobId, {
-			revenue: (prev?.revenue ?? 0) + Number(amount ?? 0),
+			revenue: (prev?.revenue ?? 0) + amount,
 			job: prev?.job ?? job,
 		});
 	};
 
 	for (const i of invoices) {
-		for (const j of i.jobs) addRevenue(j.job_id, j.billed_amount, j.job);
-		for (const v of i.visits) addRevenue(v.visit.job_id, v.billed_amount, v.visit.job);
+		// billed_amount sums line items, which never carry the invoice-level
+		// discount — scale it down or the discount lands in gross profit.
+		const net = discountNetFactor(i.subtotal, i.discount_amount);
+		for (const j of i.jobs) addRevenue(j.job_id, Number(j.billed_amount ?? 0) * net, j.job);
+		for (const v of i.visits)
+			addRevenue(v.visit.job_id, Number(v.billed_amount ?? 0) * net, v.visit.job);
+	}
+
+	// Costs are job-lifetime, so a windowed view takes the share of them matching
+	// the share of lifetime revenue billed in the window.
+	const lifetimeRevenue = new Map<string, number>();
+	if (Object.keys(dateFilter).length && jobRevenue.size) {
+		const jobIds = [...jobRevenue.keys()];
+		const allInvoices = await sdb.invoice.findMany({
+			where: {
+				status: { notIn: ["Draft", "Void"] },
+				OR: [
+					{ jobs: { some: { job_id: { in: jobIds } } } },
+					{ visits: { some: { visit: { job_id: { in: jobIds } } } } },
+				],
+			},
+			select: {
+				subtotal: true,
+				discount_amount: true,
+				jobs: { select: { job_id: true, billed_amount: true } },
+				visits: { select: { billed_amount: true, visit: { select: { job_id: true } } } },
+			},
+		});
+		const addLifetime = (jobId: string, amount: number) =>
+			lifetimeRevenue.set(jobId, (lifetimeRevenue.get(jobId) ?? 0) + amount);
+		for (const i of allInvoices) {
+			const net = discountNetFactor(i.subtotal, i.discount_amount);
+			for (const j of i.jobs) addLifetime(j.job_id, Number(j.billed_amount ?? 0) * net);
+			for (const v of i.visits) addLifetime(v.visit.job_id, Number(v.billed_amount ?? 0) * net);
+		}
 	}
 
 	// Net margin
-	
+	const directByJob = new Map(directCosts.map((d) => [d.jobId, d]));
 
 	const rows = [...jobRevenue.entries()]
 		.map(([jobId, { revenue, job }]) => {
-			const cogs = round2(Number(cogsByJob.get(jobId)?.totalCogs ?? 0));
-			const profit = round2(revenue - cogs);
-			const margin = revenue > 0 ? round2((profit / revenue) * 100) : null;
+			const lifetime = lifetimeRevenue.get(jobId) ?? 0;
+			const share = lifetime > 0 ? Math.min(1, revenue / lifetime) : 1;
+
+			// A null totalCogs means events exist but none could be priced — unknown.
+			// No events at all means nothing was consumed, which is a real 0.
+			const cogRow = cogsByJob.get(jobId);
+			const cogs = cogRow && cogRow.totalCogs == null ? "-" : round2(Number(cogRow?.totalCogs ?? 0) * share);
+			const profit = cogs === "-" ? "-" : round2(revenue - cogs);
+			const margin = revenue > 0 && profit !== "-" ? round2((profit / revenue) * 100) : null;
+
+			const direct = directByJob.get(jobId);
+			const hours = (direct?.hours ?? 0) * share;
+			// Partial rating dashes too: one unrated tech on a two-tech job yields an
+			// understated figure that reads as exact, which is worse than admitting it.
+			const laborCost = direct && direct.unratedHours > 0 ? "-" : round2((direct?.laborCost ?? 0) * share);
+			// Zero miles on a visited job is likely an unrecorded drive, but dashing it
+			// blanked Net on most rows for the smallest cost — price it at 0 and flag it.
+			const travelMissing = perMile > 0 && (direct?.visitCount ?? 0) > 0 && (direct?.miles ?? 0) === 0;
+			const travelCost = round2((direct?.miles ?? 0) * perMile * share);
+			// No rate set is unknown overhead, not free overhead — unless no hours were
+			// worked, where zero is the honest answer either way.
+			const overheadCost =
+				overheadRate == null ? (hours > 0 ? "-" : 0) : round2(hours * overheadRate);
+
+			const netKnown = cogs !== "-" && laborCost !== "-" && overheadCost !== "-";
+			const netProfit = netKnown
+				? round2(revenue - cogs - laborCost - travelCost - overheadCost)
+				: "-";
+			const netMargin =
+				revenue > 0 && netProfit !== "-" ? round2((netProfit / revenue) * 100) : null;
+
 			return {
 				jobId,
 				jobNumber: job.job_number,
@@ -3902,25 +4042,588 @@ export const getJobProfitabilityReport = async (
 				clientName: job.client?.name ?? null,
 				revenue: round2(revenue),
 				cogs,
+				// Anything but Full means the COGS beside it is soft, so profit is too.
+				costCoverage: cogRow?.costCoverage ?? NO_MATERIALS,
+				// profit/margin stay GROSS: the Gross view and its tile mean gross, and
+				// the net figures ride alongside as their own keys.
 				profit,
 				margin,
+				laborHours: round2(hours),
+				laborCost,
+				travelCost,
+				_travelMissing: travelMissing,
+				overheadCost,
+				netProfit,
+				netMargin,
 			};
 		})
 		.sort((a, b) => b.revenue - a.revenue);
+
+	// Absorption variance is org-wide and window-scoped, so it cannot be derived
+	// from the rows: it needs hours from jobs with no invoiced revenue in the
+	// window too. groupBy/aggregate is the right tool here — getScopedDb hooks it
+	// and applies the two-hop visit->job->org filter for free.
+	const windowHours = Number(
+		(
+			await sdb.visit_tech_time_entry.aggregate({
+				_sum: { hours_worked: true },
+				...(Object.keys(dateFilter).length && { where: { clocked_in_at: dateFilter } }),
+			})
+		)._sum.hours_worked ?? 0,
+	);
+	const overheadAbsorbed = overheadRate == null ? null : round2(windowHours * overheadRate);
+	// A monthly pool spread over "all time" means nothing, so no window means no
+	// variance — a null beats a confident wrong number.
+	// shortcut: a partial month counts as a whole one, so the pool overstates on
+	// ragged ranges; upgrade to day-proration if anyone reads it closely.
+	// UTC, not local: getMonth() on "2026-03-01T00:00:00Z" reads February west of
+	// Greenwich, which silently doubles the pool on a single-month range.
+	const monthsSpanned =
+		startDate && endDate
+			? (new Date(endDate).getUTCFullYear() - new Date(startDate).getUTCFullYear()) * 12 +
+				(new Date(endDate).getUTCMonth() - new Date(startDate).getUTCMonth()) +
+				1
+			: null;
+	const overheadPool =
+		monthsSpanned == null ? null : round2(Number(orgCfg?.monthly_overhead ?? 0) * monthsSpanned);
+	const absorptionVariance =
+		overheadPool == null || overheadAbsorbed == null ? null : round2(overheadPool - overheadAbsorbed);
 
 	// Three independent caps can each make these figures incomplete, and all three
 	// warrant the same warning: consumption events (understates COGS -> overstates
 	// profit), invoices scanned (understates revenue), and report rows (drops jobs).
 	const rowsTruncated = rows.length > REPORT_ROW_CAP;
 	const truncated = rowsTruncated || jobCogs.truncated || invoices.length >= REPORT_ROW_CAP;
-	return { rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows, truncated };
+	return {
+		rows: rowsTruncated ? rows.slice(0, REPORT_ROW_CAP) : rows,
+		truncated,
+		overheadPool,
+		overheadAbsorbed,
+		absorptionVariance,
+		overheadRateSet: overheadRate != null,
+	};
 }
+
+// =========================================================================================================
+// Not Invoiced (Sold but unbilled)
+// =========================================================================================================
+
+export type NotInvoicedStage = "approved" | "in_progress" | "ready";
+type NotInvoicedRaw = {
+	clientId: string;
+	clientName: string;
+	stage: NotInvoicedStage;
+	kind: "job" | "quote";
+	id: string;
+	number: string;
+	title: string;
+	status: string;
+	date: Date | null;
+	value: number;
+	billed: number;
+	unbilled: number;
+}
+export type NotInvoicedItem = Omit<(NotInvoicedRaw[])[number], "clientId" | "clientName">;
+
+// Pre-tax throughout, since billed_amount is summed from pre-tax line totals.
+// Draft and Void invoices don't count as billed. Recurring plan jobs are left out:
+// scheduled billing never links their visits to invoices.
+export const getNotInvoicedReport = async (orgId: string, stage?: NotInvoicedStage) => {
+	const sdb = getScopedDb(orgId);
+
+	const rows = await sdb.$queryRaw<NotInvoicedRaw[]>`
+		WITH billed AS (
+			SELECT job_id, SUM(amt) AS billed
+			FROM (
+				SELECT ij.job_id, ij.billed_amount AS amt
+				FROM invoice_job ij
+				JOIN invoice i ON i.id = ij.invoice_id
+				WHERE i.organization_id = ${orgId}
+					AND i.status NOT IN ('Draft', 'Void')
+					AND ij.billed_amount IS NOT NULL
+				UNION ALL
+				SELECT v.job_id, iv.billed_amount
+				FROM invoice_visit iv
+				JOIN invoice i ON i.id = iv.invoice_id
+				JOIN job_visit v ON v.id = iv.visit_id
+				WHERE i.organization_id = ${orgId}
+					AND i.status NOT IN ('Draft', 'Void')
+			) b
+			GROUP BY job_id
+		),
+		jobs AS (
+			SELECT
+				j.client_id,
+				CASE WHEN j.status = 'Completed' THEN 'ready' ELSE 'in_progress' END AS stage,
+				'job' AS kind,
+				j.id,
+				j.job_number AS number,
+				j.name AS title,
+				j.status::text AS status,
+				CASE WHEN j.status = 'Completed' THEN j.completed_at ELSE j.created_at END AS date,
+				COALESCE(j.subtotal, 0) AS value,
+				COALESCE(b.billed, 0) AS billed
+			FROM job j
+			LEFT JOIN billed b ON b.job_id = j.id
+			WHERE j.organization_id = ${orgId}
+				AND j.recurring_plan_id IS NULL
+				AND j.status <> 'Cancelled'
+		),
+		quotes AS (
+			SELECT
+				q.client_id,
+				'approved' AS stage,
+				'quote' AS kind,
+				q.id,
+				q.quote_number AS number,
+				q.title,
+				q.status::text AS status,
+				q.approved_at AS date,
+				q.subtotal AS value,
+				0 AS billed
+			FROM quote q
+			WHERE q.organization_id = ${orgId}
+				AND q.status = 'Approved'
+				AND q.is_active = true
+				AND NOT EXISTS (SELECT 1 FROM job j WHERE j.quote_id = q.id)
+				AND NOT EXISTS (
+					SELECT 1 FROM job j
+					WHERE q.request_id IS NOT NULL AND j.request_id = q.request_id
+				)
+		)
+		SELECT
+			c.id   AS "clientId",
+			c.name AS "clientName",
+			x.stage, x.kind, x.id, x.number, x.title, x.status, x.date,
+			x.value::float  AS value,
+			x.billed::float AS billed,
+			GREATEST(x.value - x.billed, 0)::float AS unbilled
+		FROM (SELECT * FROM jobs UNION ALL SELECT * FROM quotes) x
+		JOIN client c ON c.id = x.client_id
+		WHERE GREATEST(x.value - x.billed, 0) > 0.005
+			${stage ? Prisma.sql`AND x.stage = ${stage}` : Prisma.empty}
+		ORDER BY c.name, x.date
+	`;
+
+	
+	const stageKey = { approved: "approved", in_progress: "inProgress", ready: "readyToBill" } as const;
+	const byClient = new Map<
+		string,
+		{
+			clientId: string;
+			clientName: string;
+			approved: number;
+			inProgress: number;
+			readyToBill: number;
+			total: number;
+			oldestDate: Date | null;
+			items: NotInvoicedItem[];
+		}
+	>();
+
+	for (const { clientId, clientName, ...item } of rows) {
+		let client = byClient.get(clientId);
+		if (!client) {
+			client = {
+				clientId,
+				clientName,
+				approved: 0,
+				inProgress: 0,
+				readyToBill: 0,
+				total: 0,
+				oldestDate: null,
+				items: [],
+			};
+			byClient.set(clientId, client);
+		}
+		const key = stageKey[item.stage];
+		client[key] = round2(client[key] + item.unbilled);
+		client.total = round2(client.total + item.unbilled);
+		if (item.date && (!client.oldestDate || item.date < client.oldestDate)) client.oldestDate = item.date;
+		client.items.push({
+			...item,
+			value: round2(item.value),
+			billed: round2(item.billed),
+			unbilled: round2(item.unbilled),
+		});
+	}
+
+	return [...byClient.values()].sort((a, b) => b.readyToBill - a.readyToBill || b.total - a.total);
+};
+
+// =========================================================================================================
+// Invoice lifecycle 
+// =========================================================================================================
+
+type InvoiceLifecycleRaw = {
+	id: string;
+	invoice_number: string;
+	status: string;
+	client_id: string;
+	client_name: string;
+	created_at: Date;
+	sent_at: Date | null;
+	due_date: Date | null;
+	paid_date: Date | null;
+	completed_at: Date | null;
+	completed_to_invoiced: number | null;
+	created_to_sent: number | null;
+	sent_to_paid: number | null;
+	created_to_paid: number | null;
+	days_late: number | null;
+}
+
+export type InvoiceLifecycleItem = {
+	id: string;
+	number: string;
+	status: string;
+	createdAt: Date;
+	sentAt: Date | null;
+	dueDate: Date | null;
+	paidDate: Date | null;
+	completedAt: Date | null;
+	completedToInvoiced: number | null;
+	createdToSent: number | null;
+	sentToPaid: number | null;
+	createdToPaid: number | null;
+	daysLate: number | null;
+};
+
+export const getInvoiceLifeCycleReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	orgId: string,
+	paymentStatus?: "open" | "paid",
+) => {
+	const statusFilter =
+		paymentStatus === "paid"
+			? Prisma.sql`AND i.status = 'Paid'`
+			: paymentStatus === "open"
+				? Prisma.sql`AND i.status <> 'Paid'`
+				: Prisma.empty;
+	const sdb = getScopedDb(orgId);
+	const df = buildDateFilter(startDate, endDate);
+
+	const rows = await sdb.$queryRaw<InvoiceLifecycleRaw[]>`
+        SELECT
+                i.id, i.invoice_number, i.status::text AS status,
+                i.client_id, c.name AS client_name,
+                iss.created_at, i.sent_at, i.due_date,
+                p.paid_date, jc.completed_at,
+                -- billed before the job finished (progress/deposit): not a delay, leave it out
+                CASE WHEN iss.created_at >= jc.completed_at
+                        THEN (EXTRACT(EPOCH FROM (iss.created_at - jc.completed_at)) / 86400)::float
+                END AS completed_to_invoiced,
+                (EXTRACT(EPOCH FROM (i.sent_at - iss.created_at)) / 86400)::float       AS created_to_sent,
+                (EXTRACT(EPOCH FROM (p.paid_date - i.sent_at)) / 86400)::float          AS sent_to_paid,
+                (EXTRACT(EPOCH FROM (p.paid_date - iss.created_at)) / 86400)::float     AS created_to_paid,
+                (COALESCE(p.paid_date, CASE WHEN i.due_date < NOW() THEN NOW() END)::date
+                        - i.due_date::date)::float AS days_late
+        FROM invoice i
+        JOIN client c ON c.id = i.client_id
+        -- issue_date, not created_at: imported/back-dated invoices are inserted later than issued
+        CROSS JOIN LATERAL (SELECT COALESCE(i.issue_date, i.created_at) AS created_at) iss
+        LEFT JOIN LATERAL (
+                SELECT MAX(ip.paid_at) AS paid_date
+                FROM invoice_payment ip
+                WHERE ip.invoice_id = i.id AND i.status = 'Paid'
+        ) p ON true
+        LEFT JOIN LATERAL (
+                SELECT MAX(j.completed_at) AS completed_at
+                FROM job j
+                WHERE j.id IN (
+                        SELECT ij.job_id FROM invoice_job ij WHERE ij.invoice_id = i.id
+                        UNION
+                        SELECT jv.job_id FROM invoice_visit iv
+                        JOIN job_visit jv ON jv.id = iv.visit_id
+                        WHERE iv.invoice_id = i.id
+                )
+        ) jc ON true
+        WHERE i.organization_id = ${orgId}
+                AND i.status NOT IN ('Draft', 'Void')
+                AND NOT EXISTS (SELECT 1 FROM document_dispute d WHERE d.adjustment_invoice_id = i.id)
+                ${df.gte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) >= ${df.gte}` : Prisma.empty}
+                ${df.lte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) <= ${df.lte}` : Prisma.empty}
+                ${statusFilter}
+        ORDER BY c.name, iss.created_at
+	`;
+
+	const byClient = new Map<string, { clientId: string; clientName: string; items: InvoiceLifecycleItem[] }>();
+	for (const r of rows) {
+		let client = byClient.get(r.client_id);
+		if (!client) {
+			client = { clientId: r.client_id, clientName: r.client_name, items: [] };
+			byClient.set(r.client_id, client);
+		}
+		client.items.push({
+			id: r.id,
+			number: r.invoice_number,
+			status: r.status,
+			createdAt: r.created_at,
+			sentAt: r.sent_at,
+			dueDate: r.due_date,
+			paidDate: r.paid_date,
+			completedAt: r.completed_at,
+			completedToInvoiced: round1(r.completed_to_invoiced),
+			createdToSent: round1(r.created_to_sent),
+			sentToPaid: round1(r.sent_to_paid),
+			createdToPaid: round1(r.created_to_paid),
+			daysLate: r.days_late,
+		});
+	}
+
+	return [...byClient.values()]
+		.map((c) => ({ ...c, ...lifecycleStats(c.items) }))
+		.sort((a, b) => (b.avgCreatedToPaid ?? -1) - (a.avgCreatedToPaid ?? -1));
+};
+
+const round1 = (n: number | null) => (n == null ? null : Math.round(n * 10) / 10);
+
+// Averages skip invoices missing either date. Shared with the registry summary so the
+// overall figures are weighted by invoice, not an average of client averages.
+export const lifecycleStats = (items: InvoiceLifecycleItem[]) => {
+	const avg = (key: keyof InvoiceLifecycleItem) => {
+		const vals = items.map((i) => i[key]).filter((v): v is number => typeof v === "number");
+		return vals.length ? round1(vals.reduce((s, v) => s + v, 0) / vals.length) : null;
+	};
+	const paidWithDue = items.filter((i) => i.paidDate && i.daysLate != null);
+	return {
+		invoiceCount: items.length,
+		openCount: items.filter((i) => i.status !== "Paid").length,
+		avgCompletedToInvoiced: avg("completedToInvoiced"),
+		avgCreatedToSent: avg("createdToSent"),
+		avgSentToPaid: avg("sentToPaid"),
+		avgCreatedToPaid: avg("createdToPaid"),
+		avgDaysLate: avg("daysLate"),
+		onTimePct: paidWithDue.length
+			? round1((paidWithDue.filter((i) => i.daysLate! <= 0).length / paidWithDue.length) * 100)
+			: null,
+	};
+};
+
+// =========================================================================================================
+// Purchases by supplier
+// =========================================================================================================
+
+export type PurchaseSource = "order" | "field";
+type PurchaseKind = "purchase" | "refund";
+
+type PurchasesBySupplierRaw = {
+	id: string;
+	number: string | null;
+	source: PurchaseSource;
+	kind: PurchaseKind;
+	status: string;
+	supplier_id: string | null;
+	supplier_name: string | null;
+	vendor_name: string | null;
+	tech_name: string | null;
+	date: Date;
+	subtotal: number;
+	tax: number;
+};
+
+export type PurchasesBySupplierItem = {
+	id: string;
+	number: string | null;
+	source: PurchaseSource;
+	kind: PurchaseKind;
+	status: string;
+	techName: string | null;
+	date: Date;
+	subtotal: number;
+	tax: number;
+};
+
+export const getPurchasesBySupplierReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	orgId: string,
+	source?: PurchaseSource,
+) => {
+	const sdb = getScopedDb(orgId);
+	const df = buildDateFilter(startDate, endDate);
+
+	const rows = await sdb.$queryRaw<PurchasesBySupplierRaw[]>`
+		WITH p as (
+			-- purchase orders 
+			SELECT po.id, po.purchase_number as number, 'order' as source, po.kind::text AS kind, po.status::text AS status,
+				po.supplier_id, s.name AS supplier_name, po.vendor_name, NULL AS tech_name,
+				COALESCE(po.purchased_at, po.created_at) AS date,
+				(CASE WHEN po.kind = 'refund' THEN -1 ELSE 1 END * po.subtotal)::float AS subtotal,
+				(CASE WHEN po.kind = 'refund' THEN -1 ELSE 1 END * po.tax_amount)::float AS tax
+			FROM purchase po 
+			LEFT JOIN supplier s ON s.id = po.supplier_id 
+			WHERE po.organization_id = ${orgId}
+				AND po.status IN ('ordered', 'partially_received', 'received')
+
+			UNION ALL 
+
+			-- field purchases 
+			SELECT fp.id, fp.receipt_number, 'field', fp.kind::text, fp.status::text,
+				fp.supplier_id, s.name, fp.vendor_name, t.name,
+				COALESCE(fp.purchased_at, fp.created_at),
+				(CASE WHEN fp.kind = 'refund' THEN -1 ELSE 1 END * fp.subtotal)::float,
+				(CASE WHEN fp.kind = 'refund' THEN -1 ELSE 1 END * fp.tax_amount)::float
+			FROM field_purchase fp 
+			LEFT JOIN supplier s ON s.id = fp.supplier_id
+			JOIN technician t ON t.id = fp.technician_id
+			WHERE fp.organization_id = ${orgId} 
+				AND fp.status = 'approved' 
+		)
+		SELECT * FROM p 
+		WHERE 1=1
+			${df.gte ? Prisma.sql`AND date >= ${df.gte}` : Prisma.empty}
+			${df.lte ? Prisma.sql`AND date <= ${df.lte}` : Prisma.empty}
+			${source ? Prisma.sql`AND source = ${source}` : Prisma.empty}
+		ORDER BY date DESC
+	`;
+
+	const bySupplier = new Map<string, {
+		supplierKey: string;
+		supplierId: string | null;
+		supplierName: string;
+		purchaseCount: number;
+		refundCount: number;
+		subtotal: number;
+		tax: number;
+		orderSpend: number;
+		fieldSpend: number;
+		lastPurchaseAt: Date;
+		items: PurchasesBySupplierItem[];
+	}>();
+	for (const r of rows) {
+		const vendor = r.vendor_name?.trim() || null;
+		// No supplier record merge on the typed vendor name
+		const key = r.supplier_id ?? (vendor ? `v:${vendor.toLowerCase()}` : "unknown");
+		let s = bySupplier.get(key);
+		if (!s) {
+			s = {
+				supplierKey: key,
+				supplierId: r.supplier_id,
+				supplierName: r.supplier_name ?? vendor ?? "Unknown vendor",
+				purchaseCount: 0,
+				refundCount: 0,
+				subtotal: 0,
+				tax: 0,
+				orderSpend: 0,
+				fieldSpend: 0,
+				lastPurchaseAt: r.date,
+				items: [],
+			};
+			bySupplier.set(key, s);
+		}
+		s.purchaseCount++;
+		if (r.kind === "refund") s.refundCount++;
+		s.subtotal += r.subtotal;
+		s.tax += r.tax;
+		if (r.source === "order") s.orderSpend += r.subtotal;
+		else s.fieldSpend += r.subtotal;
+		if (r.date > s.lastPurchaseAt) s.lastPurchaseAt = r.date;
+		s.items.push({
+			id: r.id,
+			number: r.number,
+			source: r.source,
+			kind: r.kind,
+			status: r.status,
+			techName: r.tech_name,
+			date: r.date,
+			subtotal: r.subtotal,
+			tax: r.tax,
+		});
+	}
+
+	return [...bySupplier.values()]
+		.map((s) => ({
+			...s,
+			subtotal: round2(s.subtotal),
+			tax: round2(s.tax),
+			orderSpend: round2(s.orderSpend),
+			fieldSpend: round2(s.fieldSpend),
+		}))
+		.sort((a, b) => b.subtotal - a.subtotal);
+};
+
+// =========================================================================================================
+// Sales by Product 
+// =========================================================================================================
+
+type SalesByProductRaw = {
+	itemId: string;
+	itemName: string;
+	unitsSold: number;
+	invoiceCount: number;
+	grossRevenue: number;
+	discount: number;
+	cost: number | null;
+	lastSold: Date;
+};
+
+export type SalesByProductItem = {
+	id: string;
+	itemName: string;
+	unitsSold: number;
+	invoiceCount: number;
+	grossRevenue: number;
+	discount: number;
+	netRevenue: number;
+	cost: number | null;
+	grossProfit: number | null;
+	marginPct: number | null;
+	lastSold: Date;
+};
+
+export const getSalesByProduct = async (startDate: string | undefined, endDate: string | undefined, orgId: string) => {
+	const sdb = getScopedDb(orgId);
+	const df = buildDateFilter(startDate, endDate);
+
+	const rows = await sdb.$queryRaw<SalesByProductRaw[]>`
+		SELECT
+			ii.id                                     AS "itemId",
+			ii.name                                   AS "itemName",
+			SUM(ili.quantity)::float                  AS "unitsSold",
+			COUNT(DISTINCT i.id)::int                 AS "invoiceCount",
+			SUM(ili.total)::float                     AS "grossRevenue",
+			COALESCE(SUM(ili.total / NULLIF(i.subtotal, 0) * COALESCE(i.discount_amount, 0)), 0)::float AS "discount",
+			(SUM(ili.quantity) * ii.cost)::float      AS "cost",
+			MAX(COALESCE(i.issue_date, i.created_at)) AS "lastSold"
+		FROM invoice_line_item ili
+		JOIN invoice i ON i.id = ili.invoice_id
+		JOIN inventory_item ii ON ii.id = ili.inventory_item_id
+		WHERE i.organization_id = ${orgId}
+			AND i.status NOT IN ('Draft', 'Void')
+			${df.gte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) >= ${df.gte}` : Prisma.empty}
+			${df.lte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) <= ${df.lte}` : Prisma.empty}
+		GROUP BY ii.id, ii.name, ii.cost
+		LIMIT ${REPORT_ROW_CAP}
+	`;
+
+	return { rows: rows
+		.map((r): SalesByProductItem => {
+			const netRevenue = round2(r.grossRevenue - r.discount);
+			const grossProfit = r.cost === null ? null : round2(netRevenue - r.cost);
+			return {
+				id: r.itemId,
+				itemName: r.itemName,
+				unitsSold: round2(r.unitsSold),
+				invoiceCount: r.invoiceCount,
+				grossRevenue: round2(r.grossRevenue),
+				discount: round2(r.discount),
+				netRevenue,
+				cost: r.cost === null ? null : round2(r.cost),
+				grossProfit,
+				marginPct: grossProfit === null || netRevenue === 0 ? null : round2((grossProfit / netRevenue) * 100),
+				lastSold: r.lastSold,
+			};
+		})
+		.sort((a, b) => b.netRevenue - a.netRevenue), truncated: rows.length >= REPORT_ROW_CAP}
+};
 
 // =========================================================================================================
 // Page Summary
 // =========================================================================================================
 
-export const PAGES = ["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects"] as const;
+export const PAGES = ["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects", "recurring_plans"] as const;
 export type SummaryPage = (typeof PAGES)[number];
 export const BREAKDOWNS: Record<SummaryPage, string[]> = {
 	jobs: ["status", "priority", "type"],
@@ -3930,8 +4633,9 @@ export const BREAKDOWNS: Record<SummaryPage, string[]> = {
 	clients: ["status", "tax_exempt"],
 	inventory: ["status", "qb_linked"],
 	projects: ["status", "priority", "manager"],
+	recurring_plans: ["status", "priority"],
 };
-type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration" };
+type Stat = { label: string; value: number; format: "number" | "currency" | "percent" | "duration"; note?: string };
 type Slice = { label: string; value: number; };
 interface PageSummaryResponse {
 	page: string;
@@ -3956,6 +4660,213 @@ const DISPUTED_INVOICE_STATUS = { equals: "Disputed" } satisfies Prisma.invoiceW
 export const isSummaryPage = (page: string): page is SummaryPage =>
 	(PAGES as readonly string[]).includes(page);
 
+type ScopedDb = ReturnType<typeof getScopedDb>;
+
+// Mirrors aged receivables: only issued, unpaid invoices carry a real balance.
+// Clients' Open Balance and Invoices' Outstanding both read this so they can't drift.
+const openReceivables = async (sdb: ScopedDb, orgId: string): Promise<number> => {
+	const [aging, disputed] = await Promise.all([
+		sdb.invoice.aggregate({
+			where: {
+				organization_id: orgId,
+				status: AGING_INVOICE_STATUS,
+				// not: 0, so an unapplied credit nets against the
+				// open balance instead of being invisible.
+				balance_due: { not: 0 },
+			},
+			_sum: { balance_due: true },
+		}),
+		// Disputed invoices are still owed, so they stay in the receivables
+		// total (see AGING_INVOICE_STATUS above) — added back in here.
+		sdb.invoice.aggregate({
+			where: { organization_id: orgId, status: DISPUTED_INVOICE_STATUS, balance_due: { not: 0 } },
+			_sum: { balance_due: true },
+		}),
+	]);
+	return Number(aging._sum.balance_due ?? 0) + Number(disputed._sum.balance_due ?? 0);
+};
+
+const inventoryStock = async (sdb: ScopedDb, orgId: string) => {
+	const itemWhere = { organization_id: orgId, provisional: false, is_active: true };
+	// Total comes from count(): the row list below is capped, so its length
+	// would silently understate a large catalog.
+	// Asset value counts warehouse + fleet stock and discontinued items, like
+	// the inventory report; only stock status is limited to active items.
+	const [items, itemCount, [asset]] = await Promise.all([
+		sdb.inventory_item.findMany({
+			where: itemWhere,
+			select: { id: true, quantity: true, low_stock_threshold: true },
+			take: REPORT_ROW_CAP,
+		}),
+		sdb.inventory_item.count({ where: itemWhere }),
+		sdb.$queryRaw<{ value: number; missingCost: number }[]>(Prisma.sql`
+			SELECT
+				COALESCE(SUM(ii.cost * (ii.quantity + ${Prisma.raw(FLEET_ON_HAND)})), 0)::float AS "value",
+				COUNT(*) FILTER (WHERE ii.cost IS NULL AND ii.quantity + ${Prisma.raw(FLEET_ON_HAND)} > 0)::int AS "missingCost"
+			FROM "inventory_item" ii
+			WHERE ii.organization_id = ${orgId} AND ii.provisional = false
+		`),
+	]);
+	let low = 0;
+	let out = 0;
+	let sufficient = 0;
+	for (const it of items) {
+		const status = getStockStatus(it.quantity, it.low_stock_threshold);
+		if (status === "low") low++;
+		else if (status === "out_of_stock") out++;
+		else if (status === "sufficient") sufficient++;
+	}
+	const stockStats: Stat[] = [
+		{ label: "Low",          value: low,  format: "number" },
+		{ label: "Out of Stock", value: out,  format: "number" },
+		{
+			label: "Asset Value",
+			value: asset?.value ?? 0,
+			format: "currency",
+			...(asset?.missingCost && {
+				note: `${asset.missingCost} item${asset.missingCost === 1 ? "" : "s"} without cost`,
+			}),
+		},
+	];
+	return { items, itemCount, low, out, sufficient, stockStats };
+};
+
+interface PageSnapshotResponse {
+	page: string;
+	stats: Stat[];
+}
+
+// "Right now" numbers for the list-page subtitle. Never ranged: a backlog or a
+// balance owed doesn't depend on when the rows were created.
+export const getPageSnapshot = async (orgId: string, page: string): Promise<PageSnapshotResponse> => {
+	if (!isSummaryPage(page))
+		throw httpError(400, ErrorCodes.VALIDATION_ERROR, `Unknown page: ${page}`);
+	const sdb = getScopedDb(orgId);
+	const now = new Date();
+	let stats: Stat[] = [];
+
+	switch (page) {
+		case "jobs": {
+			const [open, backlog] = await Promise.all([
+				sdb.job.count({ where: { organization_id: orgId, status: { in: ["Unscheduled", "Scheduled", "InProgress"] } } }),
+				sdb.job.aggregate({
+					where: { organization_id: orgId, status: "Unscheduled" },
+					_sum: { estimated_total: true },
+				}),
+			]);
+			stats = [
+				{ label: "Open",        value: open,                                     format: "number" },
+				{ label: "Unscheduled", value: Number(backlog._sum.estimated_total ?? 0), format: "currency" },
+			];
+			break;
+		}
+		case "quotes": {
+			const openWhere = { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES] } };
+			const [open, pipeline] = await Promise.all([
+				sdb.quote.count({ where: openWhere }),
+				sdb.quote.aggregate({ where: openWhere, _sum: { total: true } }),
+			]);
+			stats = [
+				{ label: "Open",     value: open,                             format: "number" },
+				{ label: "Pipeline", value: Number(pipeline._sum.total ?? 0), format: "currency" },
+			];
+			break;
+		}
+		case "requests": {
+			const open = await sdb.request.count({
+				where: { organization_id: orgId, status: { in: ["New", "Reviewing"] } },
+			});
+			stats = [{ label: "Open", value: open, format: "number" }];
+			break;
+		}
+		case "invoices": {
+			const [outstanding, overdue] = await Promise.all([
+				openReceivables(sdb, orgId),
+				// Same collectable rule as aged receivables: past its terms (or its
+				// creation, with no due date), positive only — a credit is never overdue.
+				sdb.invoice.aggregate({
+					where: {
+						organization_id: orgId,
+						status: AGING_INVOICE_STATUS,
+						balance_due: { gt: 0 },
+						OR: [{ due_date: { lte: now } }, { due_date: null, created_at: { lte: now } }],
+					},
+					_sum: { balance_due: true },
+				}),
+			]);
+			stats = [
+				{ label: "Outstanding", value: outstanding,                              format: "currency" },
+				{ label: "Overdue",     value: Number(overdue._sum.balance_due ?? 0),     format: "currency" },
+			];
+			break;
+		}
+		case "clients": {
+			const [total, active, openBalance, income] = await Promise.all([
+				sdb.client.count({ where: { organization_id: orgId } }),
+				sdb.client.count({ where: { organization_id: orgId, is_active: true } }),
+				openReceivables(sdb, orgId),
+				sdb.invoice.aggregate({
+					where: { organization_id: orgId, status: ISSUED_INVOICE_STATUS },
+					_sum: { total: true },
+				}),
+			]);
+			// Avg income per client = total billed spread over the whole client book
+			const avgIncome = total > 0 ? Number(income._sum.total ?? 0) / total : 0;
+			stats = [
+				{ label: "Active",       value: active,      format: "number" },
+				{ label: "Open Balance", value: openBalance, format: "currency" },
+				{ label: "Avg. Income",  value: avgIncome,   format: "currency" },
+			];
+			break;
+		}
+		case "inventory": {
+			stats = (await inventoryStock(sdb, orgId)).stockStats;
+			break;
+		}
+		case "projects": {
+			const [open, overdue] = await Promise.all([
+				sdb.project.count({ where: { organization_id: orgId, status: { in: ["Planning", "Active", "OnHold"] } } }),
+				sdb.project.count({
+					where: {
+						organization_id: orgId,
+						target_end_at: { lt: now },
+						completed_at: null,
+						status: { notIn: ["Completed", "Cancelled"] },
+					},
+				}),
+			]);
+			stats = [
+				{ label: "Open",    value: open,    format: "number" },
+				{ label: "Overdue", value: overdue, format: "number" },
+			];
+			break;
+		}
+		case "recurring_plans": {
+			const endingSoonBy = new Date(now.getTime() + 30 * 86_400_000);
+			const [active, paused, endingSoon] = await Promise.all([
+				sdb.recurring_plan.count({ where: { organization_id: orgId, status: "Active" } }),
+				sdb.recurring_plan.count({ where: { organization_id: orgId, status: "Paused" } }),
+				// Overdue (end passed, still live) counts too — it needs attention most.
+				sdb.recurring_plan.count({
+					where: {
+						organization_id: orgId,
+						status: { in: ["Active", "Paused"] },
+						ends_at: { lte: endingSoonBy },
+					},
+				}),
+			]);
+			stats = [
+				{ label: "Active",      value: active,     format: "number" },
+				{ label: "Paused",      value: paused,     format: "number" },
+				{ label: "Ending Soon", value: endingSoon, format: "number" },
+			];
+			break;
+		}
+	}
+
+	return { page, stats };
+};
+
 export const getPageSummary = async (orgId: string, page:string, startDate?: string, endDate?: string, groupBy?: string): Promise<PageSummaryResponse> => {
 	if (!isSummaryPage(page))
 		throw httpError(400, ErrorCodes.VALIDATION_ERROR, `Unknown page: ${page}`);
@@ -3972,14 +4883,8 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 	
 	switch (page) {
 		case "jobs": {
-			const OPEN_STATUSES = ["Unscheduled", "Scheduled", "InProgress"] as const;
-			const [total, open, backlog, revenue] = await Promise.all([
+			const [total, revenue] = await Promise.all([
 				sdb.job.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.job.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES] }, ...createdWhere }}),
-				sdb.job.aggregate({
-					where: { organization_id: orgId, status: "Unscheduled", ...createdWhere },
-					_sum: { estimated_total: true },
-				}),
 				sdb.job_visit.aggregate({
 					// Revenue is scoped by completion date, not job creation.
 					where: { status: "Completed", ...(dated ? { actual_end_at: dated } : {}) },
@@ -4007,9 +4912,7 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",         value: total,                                        format: "number" },
-				{ label: "Open",          value: open,                                         format: "number" },
-				{ label: "Unscheduled",   value: Number(backlog._sum.estimated_total ?? 0),    format: "currency" },
-				{ label: "Revenue",       value: Number(revenue._sum.total ?? 0),              format: "currency" },
+				{ label: "Revenue",      value: Number(revenue._sum.total ?? 0),              format: "currency" },
 			];
 			break;
 		}
@@ -4017,14 +4920,9 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			const createdRangeSql = Prisma.sql`
 				${dated?.gte ? Prisma.sql`AND created_at >= ${dated.gte}` : Prisma.empty}
 				${dated?.lte ? Prisma.sql`AND created_at <= ${dated.lte}` : Prisma.empty}`;
-			const [total, open, pipeline, approved, rows] = await Promise.all([
+			const [total, approved, rows] = await Promise.all([
 				sdb.quote.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.quote.count({ where: { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES]}, ...createdWhere }}),
 				sdb.quote.aggregate({
-					where: { organization_id: orgId, status: { in: [...QUOTE_OPEN_STATUSES]}, ...createdWhere },
-					_sum: { total: true }
-				}),
-				sdb.quote.aggregate({ 
 					where: { organization_id: orgId, status: "Approved", ...createdWhere},
 					_sum: { total: true },
 				}),
@@ -4049,18 +4947,14 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",    	 	  value: total,                            format: "number" },
-				{ label: "Open",     	 	  value: open,                             format: "number" },
-				{ label: "Pipeline", 	 	  value: Number(pipeline._sum.total ?? 0), format: "currency" },
 				{ label: "Approved", 	 	  value: Number(approved._sum.total ?? 0), format: "currency" },
-				{ label: "Avg. Approve Time", value: Number(avgDays), 	  		  	   format: "duration"}
+				{ label: "Approve Time",      value: Number(avgDays), 	  		  	   format: "duration"}
 			];
 			break;
 		} 
 		case "requests": {
-			const OPEN_STATUSES = ["New", "Reviewing"] as const;
-			const [total, open, converted, estimatedValue] = await Promise.all([
+			const [total, converted, estimatedValue] = await Promise.all([
 				sdb.request.count({ where: { organization_id: orgId, ...createdWhere }}),
-				sdb.request.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES]}, ...createdWhere}}),
 				sdb.request.count({ where: { organization_id: orgId, status: "ConvertedToJob", ...createdWhere }}),
 				sdb.request.aggregate({
 					where: { organization_id: orgId, ...createdWhere },
@@ -4078,7 +4972,6 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",      value: total,                                        format: "number" },
-				{ label: "Open",       value: open,                                         format: "number" },
 				{ label: "Converted",  value: converted,                                    format: "number" },
 				{ label: "Est. Value", value: Number(estimatedValue._sum.estimated_value ?? 0),   format: "currency" },
 			];
@@ -4141,42 +5034,7 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			break;
 		}
 		case "clients": {
-			const [total, added, active, agingBalance, disputedBalance, income] = await Promise.all([
-				sdb.client.count({ where: { organization_id: orgId } }),
-				sdb.client.count({ where: { organization_id: orgId, ...createdWhere } }),
-				sdb.client.count({ where: { organization_id: orgId, is_active: true } }),
-				// Mirrors aged receivables: only issued, unpaid invoices carry a real balance.
-				sdb.invoice.aggregate({
-					where: {
-						organization_id: orgId,
-						status: AGING_INVOICE_STATUS,
-						// not: 0, so an unapplied credit nets against the
-						// client's open balance instead of being invisible.
-						balance_due: { not: 0 },
-					},
-					_sum: { balance_due: true },
-				}),
-				// Disputed invoices are still owed, so they stay in the receivables
-				// total (see AGING_INVOICE_STATUS above) — added back in below.
-				sdb.invoice.aggregate({
-					where: {
-						organization_id: orgId,
-						status: DISPUTED_INVOICE_STATUS,
-						// not: 0, so an unapplied credit nets against the
-						// client's open balance instead of being invisible.
-						balance_due: { not: 0 },
-					},
-					_sum: { balance_due: true },
-				}),
-				sdb.invoice.aggregate({
-					where: { organization_id: orgId, status: ISSUED_INVOICE_STATUS },
-					_sum: { total: true },
-				}),
-			]);
-			const openBalance =
-				Number(agingBalance._sum.balance_due ?? 0) + Number(disputedBalance._sum.balance_due ?? 0);
-			// Avg income per client = total billed spread over the whole client book
-			const avgIncome = total > 0 ? Number(income._sum.total ?? 0) / total : 0;
+			const added = await sdb.client.count({ where: { organization_id: orgId, ...createdWhere } });
 			if (grouping === "tax_exempt") {
 				const g = await sdb.client.groupBy({ by: ["is_tax_exempt"], where: { organization_id: orgId }, _count: { _all: true } });
 				breakdown = g.map((r) => ({ label: r.is_tax_exempt ? "Exempt" : "Taxable", value: r._count._all }));
@@ -4187,39 +5045,13 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				breakdownLabel = "By Status";
 			}
 			stats = [
-				{ label: "Total",        value: total,                                     format: "number" },
 				{ label: "New",          value: added,                                     format: "number" },
-				{ label: "Active",       value: active,                                    format: "number" },
-				{ label: "Open Balance", value: openBalance,                                     format: "currency" },
-				{ label: "Avg. Income",   value: avgIncome,                                 format: "currency" },
 			];
 			break;
 		}
 		case "inventory": {
-			const itemWhere = { organization_id: orgId, provisional: false, is_active: true };
-			// Total comes from count(): the row list below is capped, so its length
-			// would silently understate a large catalog.
-			const [items, itemCount] = await Promise.all([
-				sdb.inventory_item.findMany({
-					where: itemWhere,
-					select: { id: true, quantity: true, low_stock_threshold: true, cost: true },
-					take: REPORT_ROW_CAP,
-				}),
-				sdb.inventory_item.count({ where: itemWhere }),
-			]);
-			let low = 0;
-			let out = 0;
-			let sufficient = 0;
-			let assetValue = 0;
-			for (const it of items) {
-				// Coerced for consistency with the other Decimal-derived reads in this
-				// loop (getStockStatus below also expects a plain number).
-				assetValue += Number(it.quantity) * Number(it.cost ?? 0);
-				const status = getStockStatus(it.quantity, it.low_stock_threshold);
-				if (status === "low") low++;
-				else if (status === "out_of_stock") out++;
-				else if (status === "sufficient") sufficient++;
-			}
+			// No period here: the whole report is a stock snapshot.
+			const { items, itemCount, low, out, sufficient, stockStats } = await inventoryStock(sdb, orgId);
 			if (grouping === "qb_linked") {
 				const realmId = await getOrgRealmId(orgId);
 				const mappings = realmId
@@ -4247,27 +5079,34 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 				];
 				breakdownLabel = "By Stock Status";
 			}
-			stats = [
-				{ label: "Total Items",  value: itemCount,    format: "number" },
-				{ label: "Low",          value: low,          format: "number" },
-				{ label: "Out of Stock", value: out,          format: "number" },
-				{ label: "Asset Value",  value: assetValue,   format: "currency" },
-			];
+			stats = [{ label: "Total Items", value: itemCount, format: "number" }, ...stockStats];
+			break;
+		}
+		case "recurring_plans": {
+			// The Plans list's Date filter keeps plans IN EFFECT during the range
+			// (started by its end, not ended before its start), so the report ranges
+			// the same way and drilled bars land on the same set.
+			const inRange: Prisma.recurring_planWhereInput = {
+				...(dated?.lte ? { starts_at: { lte: dated.lte } } : {}),
+				...(dated?.gte ? { OR: [{ ends_at: null }, { ends_at: { gte: dated.gte } }] } : {}),
+			};
+			const planWhere = { organization_id: orgId, ...inRange };
+			const total = await sdb.recurring_plan.count({ where: planWhere });
+			if (grouping === "priority") {
+				const g = await sdb.recurring_plan.groupBy({ by: ["priority"], where: planWhere, _count: { _all: true } });
+				breakdown = g.map((r) => ({ label: r.priority, value: r._count._all }));
+				breakdownLabel = "By Priority";
+			} else {
+				const g = await sdb.recurring_plan.groupBy({ by: ["status"], where: planWhere, _count: { _all: true } });
+				breakdown = g.map((r) => ({ label: r.status, value: r._count._all }));
+				breakdownLabel = "By Status";
+			}
+			stats = [{ label: "Total", value: total, format: "number" }];
 			break;
 		}
 		case "projects": {
-			const OPEN_STATUSES = ["Planning", "Active", "OnHold"] as const;
-			const [total, open, overdue, budget, committed] = await Promise.all([
+			const [total, budget, committed] = await Promise.all([
 				sdb.project.count({ where: { organization_id: orgId, ...createdWhere } }),
-				sdb.project.count({ where: { organization_id: orgId, status: { in: [...OPEN_STATUSES] }, ...createdWhere } }),
-				sdb.project.count({
-					where: {
-						organization_id: orgId,
-						target_end_at: { lt: now },
-						completed_at: null,
-						status: { notIn: ["Completed", "Cancelled"] },
-					},
-				}),
 				sdb.project.aggregate({ where: { organization_id: orgId, ...createdWhere }, _sum: { budget: true } }),
 				sdb.$queryRaw<{ committed: Prisma.Decimal | null }[]>(Prisma.sql`
 						SELECT SUM(COALESCE(j.actual_total, j.estimated_total)) AS committed
@@ -4313,8 +5152,6 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 			}
 			stats = [
 				{ label: "Total",			value: total,                                						 format: "number" },
-				{ label: "Open",			value: open,                                 						format: "number" },
-				{ label: "Overdue",		 value: overdue,                              						format: "number" },
 				{ label: "Budget",		   value: Number(budget._sum.budget ?? 0),      	format: "currency" },
 				{ label: "Committed", 	value: Number(committed[0]?.committed ?? 0), format: "currency" },
 			];

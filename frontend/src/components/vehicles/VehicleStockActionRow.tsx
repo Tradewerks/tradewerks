@@ -54,7 +54,7 @@ export default function VehicleStockActionRow({
 
 	return (
 		<div className="px-4 py-2.5 border-b border-border-subtle space-y-2">
-			<div className="flex items-center gap-2">
+			<div className="flex gap-2 items-stretch">
 				{canStock && selfServe && (
 					<button type="button" onClick={onFill} className={PRIMARY}>
 						↑ Fill to Standard
@@ -77,9 +77,9 @@ export default function VehicleStockActionRow({
 						onClick={onScan}
 						title="Scan barcode"
 						aria-label="Scan barcode"
-						className="flex-shrink-0 h-8 w-8 flex items-center justify-center rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
+						className="flex-shrink-0 p-2 flex items-center justify-center rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
 					>
-						<Barcode size={14} />
+						<Barcode size={16} />
 					</button>
 				)}
 			</div>

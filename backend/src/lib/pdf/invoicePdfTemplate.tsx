@@ -1,5 +1,7 @@
 import { Document, Page, View, Text, Image, StyleSheet } from "@react-pdf/renderer";
-import type { TaxSnapshot } from "../../services/taxEngine.js";
+import type { AnyTaxSnapshot } from "../../services/tax/snapshot.js";
+import { pdfTaxRows, taxBasisLine } from "../../services/tax/taxDisplay.js";
+import { qbAstTaxCents } from "../../services/tax/snapshot.js";
 import { type Numeric, type OrgPdfProps, toNum, fmt, fmtDate, fmtRatePct } from "./pdfHelpers.js";
 
 // ── PDF prop types ────────────────────────────────────────────────────────────
@@ -53,7 +55,7 @@ interface InvoicePdfProps {
 	discount_type?: string | null;
 	tax_amount?: Numeric;
 	tax_rate?: Numeric;
-	tax_snapshot?: TaxSnapshot | null;
+	tax_snapshot?: AnyTaxSnapshot | null;
 	total?: Numeric;
 	amount_paid?: Numeric;
 	balance_due?: Numeric;
@@ -488,7 +490,12 @@ export function InvoicePdfTemplate({ invoice, org }: { invoice: InvoicePdfProps;
 	// Map group name → combined rate for line item subtitles; falls back gracefully when
 	// no snapshot exists (draft docs or legacy records).
 	const groupRateMap = new Map<string, number>();
-	for (const group of invoice.tax_snapshot?.groups ?? []) {
+	// An adopted invoice's groups are our estimate; the customer sees only QuickBooks' figure.
+	const qbTax = qbAstTaxCents(invoice.tax_snapshot) != null;
+	// Exempt reads as "Tax Exempt" like any other invoice, unless QuickBooks charged tax anyway:
+	// that row must stay so the total adds up.
+	const qbExempt = qbTax && invoice.tax_snapshot?.client_exempt === true && taxAmount === 0;
+	for (const group of qbTax ? [] : (invoice.tax_snapshot?.groups ?? [])) {
 		const combined = (group.rates ?? []).reduce((sum, r) => sum + r.rate, 0);
 		if (combined > 0) groupRateMap.set(group.name, combined);
 	}
@@ -626,19 +633,18 @@ export function InvoicePdfTemplate({ invoice, org }: { invoice: InvoicePdfProps;
 						>
 							<View style={s.colName}>
 								<Text style={s.tdText}>{item.name}</Text>
-								{item.tax_group?.name && (
+								{item.taxable === false ? (
+									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 1 }}>
+										Not taxed
+									</Text>
+								) : item.tax_group?.name ? (
 									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 1 }}>
 										{item.tax_group.name}
 										{groupRateMap.has(item.tax_group.name)
 											? ` (${fmtRatePct(groupRateMap.get(item.tax_group.name)!)})`
 											: ""}
 									</Text>
-								)}
-								{item.taxable === false && !item.tax_group?.name && (
-									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 1 }}>
-										Non-taxable
-									</Text>
-								)}
+								) : null}
 							</View>
 							<View style={s.colDesc}>
 								{item.description ? (
@@ -686,7 +692,12 @@ export function InvoicePdfTemplate({ invoice, org }: { invoice: InvoicePdfProps;
 						</View>
 					)}
 
-					{invoice.tax_snapshot != null ? (
+					{qbTax && !qbExempt ? (
+						<View style={s.totalRow}>
+							<Text style={s.totalLabel}>Sales tax</Text>
+							<Text style={s.totalValue}>{fmt(taxAmount)}</Text>
+						</View>
+					) : invoice.tax_snapshot != null ? (
 						invoice.tax_snapshot.client_exempt ? (
 							<View style={s.totalRow}>
 								<Text style={s.totalLabel}>Tax</Text>
@@ -694,30 +705,26 @@ export function InvoicePdfTemplate({ invoice, org }: { invoice: InvoicePdfProps;
 							</View>
 						) : (
 							<>
-								{(invoice.tax_snapshot.groups ?? []).map((group) => {
-									const combinedRate = (group.rates ?? []).reduce(
-										(sum, r) => sum + r.rate,
-										0,
-									);
-									return (
-										<View key={group.id} style={s.totalRow}>
-											<Text style={s.totalLabel}>
-												{group.name}
-												{combinedRate > 0 ? ` (${fmtRatePct(combinedRate)})` : ""}
-											</Text>
-											<Text style={s.totalValue}>
-												{fmt((group.tax_amount_cents ?? 0) / 100)}
-											</Text>
-										</View>
-									);
-								})}
-								{(invoice.tax_snapshot.groups ?? []).length > 1 && (
+								{pdfTaxRows(invoice.tax_snapshot).map((row) => (
+									<View key={row.id} style={s.totalRow}>
+										<Text style={s.totalLabel}>
+											{row.showRate ? `${row.name} (${fmtRatePct(row.rate)})` : row.name}
+										</Text>
+										<Text style={s.totalValue}>{fmt(row.amountCents / 100)}</Text>
+									</View>
+								))}
+								{pdfTaxRows(invoice.tax_snapshot).length > 1 && (
 									<View style={s.totalRow}>
 										<Text style={s.totalLabel}>Total Tax</Text>
 										<Text style={s.totalValueBold}>
 											{fmt((invoice.tax_snapshot.total_tax_cents ?? 0) / 100)}
 										</Text>
 									</View>
+								)}
+								{taxBasisLine(invoice.tax_snapshot) && (
+									<Text style={{ fontSize: 7, color: "#9ca3af", marginTop: 2, textAlign: "right" }}>
+										{taxBasisLine(invoice.tax_snapshot)}
+									</Text>
 								)}
 							</>
 						)

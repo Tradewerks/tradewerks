@@ -239,6 +239,8 @@ export interface RecurringPlanLineItem {
 	isDeleted?: boolean; // Frontend only - soft delete marker
 	/** Catalog link, when the line was picked from inventory rather than typed. */
 	inventory_item_id?: string | null;
+	taxable?: boolean;
+	tax_group_id?: string | null;
 	/** Inherited by every visit this template generates. */
 	disposition?: LineItemDisposition | null;
 	disposition_vehicle_id?: string | null;
@@ -413,6 +415,8 @@ export const CreateRecurringPlanSchema = z
 					item_type: z.enum(LineItemTypeValues).optional().nullable(),
 					sort_order: z.number().int().min(0).optional(),
 					inventory_item_id: z.string().uuid().nullable().optional(),
+					taxable: z.boolean().optional(),
+					tax_group_id: z.string().uuid().nullable().optional(),
 					disposition: z.enum(LineItemDispositionValues).nullable().optional(),
 					disposition_vehicle_id: z.string().uuid().nullable().optional(),
 				})
@@ -609,6 +613,8 @@ export const UpdateRecurringPlanSchema = z
 					item_type: z.enum(LineItemTypeValues).optional().nullable(),
 					sort_order: z.number().int().min(0).optional(),
 					inventory_item_id: z.string().uuid().nullable().optional(),
+					taxable: z.boolean().optional(),
+					tax_group_id: z.string().uuid().nullable().optional(),
 					disposition: z.enum(LineItemDispositionValues).nullable().optional(),
 					disposition_vehicle_id: z.string().uuid().nullable().optional(),
 				})
@@ -760,6 +766,8 @@ export const UpdateRecurringPlanLineItemsSchema = z.object({
 				item_type: z.enum(LineItemTypeValues).optional().nullable(),
 				sort_order: z.number().int().min(0).optional(),
 				inventory_item_id: z.string().uuid().nullable().optional(),
+				taxable: z.boolean().optional(),
+				tax_group_id: z.string().uuid().nullable().optional(),
 				disposition: z.enum(LineItemDispositionValues).nullable().optional(),
 				disposition_vehicle_id: z.string().uuid().nullable().optional(),
 			})
@@ -936,4 +944,28 @@ export function formatScheduleConstraints(rule: RecurringRule): string {
 	}
 
 	return `${arrivalStr}, ${finishStr}`;
+}
+
+export type TaxEstimate =
+	| {
+			status: "estimate";
+			subtotal_cents: number;
+			tax_cents: number;
+			total_cents: number;
+			place: string;
+	  }
+	| { status: "exempt" }
+	| { status: "unknown" };
+
+export interface RecurringTaxEstimateInput {
+	client_id: string;
+	address: string;
+	coords?: Coordinates | null;
+	line_items: {
+		quantity: number;
+		unit_price: number;
+		taxable: boolean;
+		tax_group_id: string | null;
+	}[];
+	plan_id?: string;
 }

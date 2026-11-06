@@ -760,7 +760,7 @@ router.post("/:id/maintenance/reminders", requireAnyPermission("manage_vehicles"
 	}
 });
 
-router.patch("/:id/maintenance/reminders/:reminderId", requirePermission("manage_vehicles"), async (req, res, next) => {
+router.patch("/:id/maintenance/reminders/:reminderId", requireAnyPermission("manage_vehicles", "use_vehicles"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const id = req.params.id as string;

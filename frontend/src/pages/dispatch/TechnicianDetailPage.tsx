@@ -190,6 +190,7 @@ export default function TechnicianDetailsPage() {
 			delete: confirm("delete", async () => {
 				try {
 					await deleteTechnician.mutateAsync(technician.id);
+					toast.success(`${technician.name} deleted`);
 					navigate("/dispatch/technicians", { replace: true });
 				} catch (e) {
 					toast.error(
@@ -217,7 +218,7 @@ export default function TechnicianDetailsPage() {
 		: NO_PERMISSION;
 
 	return (
-		<div className="pb-4 text-text-primary md:pb-6">
+		<div className="text-text-primary">
 			<div className="space-y-4">
 				{/* DetailHeader has no leading slot, so the avatar sits beside it. */}
 				<div className="flex items-start gap-4">

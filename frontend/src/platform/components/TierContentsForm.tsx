@@ -9,7 +9,7 @@ import { toggled } from "../../lib/toggled";
 import type { CatalogModule, TierContents } from "../types";
 
 const input =
-	"h-8 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-tertiary";
+	"h-8 w-full rounded-md border border-border bg-base px-2 text-sm text-text-primary placeholder:text-text-tertiary";
 const heading = "text-xs font-medium uppercase tracking-wide text-text-tertiary";
 
 export default function TierContentsForm({
@@ -97,7 +97,7 @@ export default function TierContentsForm({
 				</div>
 			}
 		>
-			<div className="space-y-4">
+			<div className="space-y-4 p-5">
 				{error && <FormErrorBanner message={error} />}
 				{mode === "create" && (
 					<div className="grid grid-cols-2 gap-3">

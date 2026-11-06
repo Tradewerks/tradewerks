@@ -24,7 +24,10 @@ import { type BaseLineItem, type Priority, PriorityValues } from "../../types/co
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import { errorMessage } from "../../util/util";
+import { rateToPercentInput } from "../../lib/formatTax";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import { defaultGroupForMode, editorAutoTax, flatRateHandler } from "../../lib/taxEditorMode";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import FinancialSummary from "../ui/forms/FinancialSummary";
 import {
@@ -34,9 +37,10 @@ import {
 } from "../ui/forms/TemplateSearch";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 import { useTaxGroups, useDefaultTaxGroup } from "../../hooks/useTaxGroups";
-import { QuoteStatusColors } from "../../types/quotes";
+import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
 
 type Step = 1 | 2 | 3;
 
@@ -97,10 +101,13 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 
 	const { data: taxGroups = [] } = useTaxGroups();
 	const { data: defaultTaxGroup } = useDefaultTaxGroup();
+	const autoModeState = useAutoTaxMode();
+	const autoMode = autoModeState === true;
 	const clientExempt = useMemo(
 		() => clients?.find((c) => c.id === clientId)?.is_tax_exempt ?? false,
 		[clients, clientId]
 	);
+	const clientTaxGroupId = clients?.find((c) => c.id === clientId)?.tax_group_id ?? null;
 
 	const {
 		activeLineItems,
@@ -116,19 +123,10 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 		setLineItemInventoryItem,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
-	} = useLineItems({ minItems: 1, mode: "create", defaultTaxGroupId: defaultTaxGroup?.id ?? null });
+	} = useLineItems({ minItems: 1, mode: "create", defaultTaxGroupId: defaultGroupForMode(autoModeState, defaultTaxGroup?.id) });
 
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
-	const lineItemsForCalc = useMemo(
-		() =>
-			activeLineItems.map((item) => ({
-				id: item.id,
-				total: item.total,
-				taxable: item.taxable ?? true,
-				tax_group_id: item.tax_group_id ?? null,
-			})),
-		[activeLineItems]
-	);
+	const lineItemsForCalc = useLineItemsForCalc(activeLineItems, clientTaxGroupId);
 
 	const {
 		taxRate,
@@ -147,7 +145,12 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 		resolvedTotal,
 		reset: resetFinancials,
 		setOriginals: setFinancialOriginals,
-	} = useFinancialCalculations(subtotal, { taxGroups, lineItemsForCalc, clientExempt });
+	} = useFinancialCalculations(subtotal, {
+		taxGroups,
+		lineItemsForCalc,
+		clientExempt,
+		rounding: "jurisdiction_half_up",
+	});
 
 	const {
 		currentStep,
@@ -281,7 +284,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 			}
 
 			setFinancialOriginals(
-				(source.tax_rate ?? 0) * 100,
+				rateToPercentInput(source.tax_rate),
 				source.discount_type ?? "amount",
 				source.discount_value ?? 0
 			);
@@ -305,7 +308,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 					? q.description.slice(0, 80) +
 						(q.description.length > 80 ? "…" : "")
 					: undefined,
-				badge: q.status,
+				badge: QuoteStatusLabels[q.status] ?? q.status,
 				badgeColor: QuoteStatusColors[
 					q.status as keyof typeof QuoteStatusColors
 				],
@@ -351,7 +354,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 				}
 				if (payload.tax_rate !== undefined) {
 					setFinancialOriginals(
-						payload.tax_rate * 100,
+						rateToPercentInput(payload.tax_rate),
 						payload.discount_type || "amount",
 						payload.discount_value || 0
 					);
@@ -385,6 +388,9 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 				// Draft restore above reads this back — without it here a
 				// saved-and-reopened quote silently loses every catalog link.
 				inventory_item_id: item.inventory_item_id ?? null,
+				// Restore reads these; without them a non-taxable line reopens taxable.
+				taxable: item.taxable ?? true,
+				tax_group_id: item.tax_group_id ?? null,
 			})),
 			tax_rate: taxRate / 100,
 			tax_amount: taxAmount,
@@ -761,6 +767,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 							clientExempt={clientExempt}
 							onTaxChange={setLineItemTaxGroup}
 							onTaxGroupBulkSet={setAllLineItemsTaxGroup}
+							autoMode={autoMode}
 						/>
 					</div>
 				);
@@ -781,10 +788,10 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 							clientExempt={clientExempt}
 							isLoading={isLoading}
 							mode="create"
-							onTaxRateChange={groupsSummary.length > 0 ? undefined : (v) => {
+							onTaxRateChange={flatRateHandler(autoMode, groupsSummary.length, (v) => {
 								setTaxRate(v);
 								markDirty();
-							}}
+							})}
 							onDiscountTypeChange={(v) => {
 								setDiscountType(v);
 								markDirty();
@@ -794,6 +801,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 								markDirty();
 							}}
 							totalLabel="Total"
+							autoTax={editorAutoTax(autoMode, lineItemsForCalc, discountAmount)}
 						/>
 						<div className="grid grid-cols-2 gap-2 lg:gap-3 min-w-0">
 							<div className="min-w-0">
@@ -839,6 +847,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 		}
 	}, [
 		isSourceSearchOpen,
+		autoMode,
 		sourceMode,
 		draftResults,
 		handleSelectDraft,
@@ -857,6 +866,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 		geoData,
 		errors,
 		activeLineItems,
+		lineItemsForCalc,
 		addLineItem,
 		removeLineItem,
 		updateLineItem,

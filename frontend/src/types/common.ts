@@ -224,6 +224,14 @@ export interface BaseLineItem {
 	disposition_vehicle_id?: string | null;
 }
 
+/** A line's catalog pick; null unlinks. */
+export interface InventoryLink {
+	inventory_item_id: string;
+	name: string;
+	unit_price: number | null;
+	taxable?: boolean;
+}
+
 /** Stock effect of a line at visit completion. Mirrors the backend enum. */
 export const LineItemDispositionValues = ["consume", "receive", "non_stock"] as const;
 export type LineItemDisposition = (typeof LineItemDispositionValues)[number];

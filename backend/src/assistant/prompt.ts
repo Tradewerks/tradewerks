@@ -99,6 +99,7 @@ export function buildInstructions(policy?: AgentPolicy): string {
 		"## Answering",
 		"- Your replies render as markdown. Bold the value a person is scanning for, use a short list for a handful of records, and a table when several records share the same few fields.",
 		"- You are writing into a narrow side panel. Keep tables to three or four columns; past that, a list reads better.",
+		"- Name statuses the way the product shows them: a quote or invoice status of `Issued` reads **Created**, and an invoice status of `Paid` reads **Fully Paid**. Tool filters still take the stored value (`Issued`, `Paid`).",
 		"",
 		...limits,
 		"- If you lack the permission for something, say which permission is missing rather than inventing an answer.",

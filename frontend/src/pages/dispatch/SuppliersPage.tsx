@@ -233,6 +233,7 @@ export default function SuppliersPage() {
 						headerLabels={HEADER_LABELS}
 						columnAlign={COLUMN_ALIGN}
 						columnClamp={COLUMN_CLAMP}
+						stickyActions
 						onRowClick={(row) =>
 							navigate(`/dispatch/inventory/suppliers/${(row._supplier as Supplier).id}`)
 						}

@@ -7,6 +7,8 @@ import {
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
 import { requirePermission, requireAnyPermission } from '../lib/requirePermissions.js';
+import { acknowledgeTaxReviewRoute } from './tax.js';
+import { isAddressTaxChoiceRefusal } from '../lib/addressTaxChoice.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 import {
     getAllJobs,
@@ -91,6 +93,11 @@ router.patch("/:id", requirePermission("edit_jobs"), async (req, res, next) => {
         const context = getUserContext(req);
         const result = await updateJob(req, orgId, context);
 
+        if (isAddressTaxChoiceRefusal(result)) {
+            return res
+                .status(409)
+                .json(createErrorResponse(result.code, result.err, result.details));
+        }
         if (result.err) {
             return res
                 .status(400)
@@ -107,6 +114,12 @@ router.patch("/:id", requirePermission("edit_jobs"), async (req, res, next) => {
         next(err);
     }
 });
+
+router.post(
+	"/:id/tax-review/acknowledge",
+	requirePermission("edit_jobs"),
+	acknowledgeTaxReviewRoute("job"),
+);
 
 router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) => {
     try {

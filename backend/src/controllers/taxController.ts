@@ -17,7 +17,7 @@ import type { Prisma } from "../../generated/prisma/client.js";
 export type TaxOkResult<T> = { ok: true; item: T };
 export type TaxErrResult = {
 	ok: false;
-	code: "NOT_FOUND" | "CONFLICT" | "VALIDATION" | "INTERNAL";
+	code: "NOT_FOUND" | "CONFLICT" | "VALIDATION" | "INTERNAL" | "NOT_IN_PLAN";
 	message: string;
 };
 export type TaxResult<T> = TaxOkResult<T> | TaxErrResult;

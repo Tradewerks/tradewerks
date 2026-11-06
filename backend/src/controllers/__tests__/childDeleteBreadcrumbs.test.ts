@@ -14,7 +14,7 @@ vi.mock("../../services/quickbooksService.js", () => ({
 	isQBConnected: vi.fn(async () => false),
 	getOrgRealmId: vi.fn(async () => null),
 }));
-vi.mock("../../services/qb/qbInvoices.js", () => ({ pushInvoice: vi.fn(), voidQBInvoice: vi.fn() }));
+vi.mock("../../services/qb/qbInvoices.js", () => ({ pushInvoiceDetached: vi.fn(), voidQBInvoice: vi.fn() }));
 vi.mock("../../services/qb/qbPayments.js", () => ({ pushPaymentToQB: vi.fn(), deleteQBPayment: vi.fn() }));
 vi.mock("../../services/qb/qbSyncLog.js", () => ({ logExternalSync: vi.fn() }));
 vi.mock("../../services/invoiceService.js", () => ({
@@ -28,6 +28,7 @@ vi.mock("../../services/invoiceService.js", () => ({
 vi.mock("../../lib/recomputeDocumentTotals.js", () => ({
 	recomputeDocumentTotals: vi.fn(async () => undefined),
 	lockDocumentTaxSnapshot: vi.fn(),
+	holdsKeptRate: vi.fn(async () => false),
 }));
 vi.mock("../../services/wasabiService.js", () => ({
 	uploadFile: vi.fn(),

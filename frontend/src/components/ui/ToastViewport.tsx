@@ -51,8 +51,9 @@ export default function ToastViewport({ inset = "default" }: { inset?: "default"
 		<div
 			role="status"
 			aria-live="polite"
-			className={`fixed z-50 flex flex-col gap-2 left-4 right-4 sm:left-auto sm:w-full sm:max-w-sm ${
-				inset === "above-nav" ? "bottom-20" : "bottom-4"
+			// pointer-events-none: the stack's empty area must never block the page under it.
+			className={`fixed z-[7000] flex flex-col gap-2 pointer-events-none left-4 right-4 top-4 sm:top-auto sm:left-auto sm:w-full sm:max-w-sm ${
+				inset === "above-nav" ? "sm:bottom-20" : "sm:bottom-4"
 			}`}
 		>
 			{toasts.map((toast) => {
@@ -61,7 +62,7 @@ export default function ToastViewport({ inset = "default" }: { inset?: "default"
 					<div
 						key={toast.id}
 						className={`bg-surface border rounded-lg shadow-lg px-4 py-3 flex gap-3 transition duration-200 ease-out starting:opacity-0 starting:translate-y-2 motion-reduce:transition-none ${
-							toast.leaving ? "opacity-0 translate-x-4 pointer-events-none" : ""
+							toast.leaving ? "opacity-0 translate-x-4" : "pointer-events-auto"
 						} ${borderClass}`}
 					>
 						{toast.icon ?? (

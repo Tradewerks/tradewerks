@@ -519,8 +519,10 @@ export default function PartsUsedSection({
 			await updateVisit.mutateAsync({
 				id: visitId,
 				data: {
-					line_items: updatedItems.map((li) => ({
+					// Lines arrive in sort_order; omitting it would reset every line to 0.
+					line_items: updatedItems.map((li, idx) => ({
 						id: li.id,
+						sort_order: idx,
 						name: li.name,
 						description: li.description ?? null,
 						quantity: Number(li.quantity),

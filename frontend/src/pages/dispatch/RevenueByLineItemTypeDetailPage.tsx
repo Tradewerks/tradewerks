@@ -15,6 +15,7 @@ import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { formatCurrency } from "../../util/util";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -38,6 +39,7 @@ const COLS: ColumnOption[] = [
 ];
 
 const NUMERIC_KEYS = ["quantity", "unitPrice", "total"] as const;
+const DATE_KEYS = ["issueDate"];
 
 const HEADER_LABELS = buildHeaderLabels(COLS);
 const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
@@ -64,6 +66,7 @@ export default function RevenueByLineItemTypeDetailPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -78,8 +81,8 @@ export default function RevenueByLineItemTypeDetailPage() {
 	);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, conditions, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, conditions, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, conditions, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, conditions, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useRevenueLineItemsQuery(queryParams);
@@ -89,7 +92,7 @@ export default function RevenueByLineItemTypeDetailPage() {
 	// Set only by the in-memory fallback path when the backend row cap was hit.
 	const truncated = data?.summary?.truncated === true;
 
-	const filterKey = JSON.stringify([startDate, endDate, searchTerms, itemType, pageSize]);
+	const filterKey = JSON.stringify([startDate, endDate, searchTerms, itemType, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -167,7 +170,7 @@ export default function RevenueByLineItemTypeDetailPage() {
 									filename: datedFilename(`revenue-${itemType}`),
 									sheetName: `Revenue — ${label}`,
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms, conditions },
+									params: { startDate, endDate, searchTerms, conditions, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -213,6 +216,7 @@ export default function RevenueByLineItemTypeDetailPage() {
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
 							onRowClick={(row) => navigate(`/dispatch/invoices/${row._invoiceId as string}`)}
+							{...tableProps}
 						/>
 						<ReportPagination
 							page={page}

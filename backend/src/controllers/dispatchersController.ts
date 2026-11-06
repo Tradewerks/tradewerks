@@ -251,6 +251,7 @@ export const updateDispatcher = async (
 
 export const deleteDispatcher = async (id: string, organization_id: string, context?: UserContext) => {
     try {
+        if (context?.dispatcherId === id) return { err: "You can't delete your own account"}
         const sdb = getScopedDb(organization_id);
         const user = await sdb.dispatcher.findFirst({
             where: { id },
@@ -258,6 +259,9 @@ export const deleteDispatcher = async (id: string, organization_id: string, cont
 
         if (!user) {
             return { err: "Dispatcher not found" };
+        }
+        if (user.role === "admin") {
+            return { err: "The organization admin can't be deleted"}
         }
 
         await sdb.$transaction(async (tx) => {

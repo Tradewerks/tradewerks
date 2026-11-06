@@ -9,7 +9,13 @@ vi.mock("../quickbooksService.js", () => ({
 
 vi.mock("../qb/qbQuery.js", () => ({
 	qbQueryAll: vi.fn(),
+	getAccountId: vi.fn().mockResolvedValue("exp-1"),
 }));
+
+const { sdbMock } = vi.hoisted(() => ({
+	sdbMock: { inventory_item: { findFirst: vi.fn() } },
+}));
+vi.mock("../../lib/context.js", () => ({ getScopedDb: vi.fn(() => sdbMock) }));
 
 vi.mock("../../db.js", () => {
 	const tx = {
@@ -32,8 +38,9 @@ vi.mock("../stockMovements.js", () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { importQBItem } from "../qb/qbItems.js";
+import { importQBItem, pushItem } from "../qb/qbItems.js";
 import { qbFetch } from "../quickbooksService.js";
+import { qbQueryAll } from "../qb/qbQuery.js";
 import { recordMovements } from "../stockMovements.js";
 import { db } from "../../db.js";
 
@@ -114,5 +121,70 @@ describe("importQBItem — opening quantity", () => {
 
 		expect(item.quantity).toBe(0);
 		expect(mockRecordMovements).not.toHaveBeenCalled();
+	});
+});
+
+describe("pushItem — item taxability", () => {
+	const mockDbMappings = db as unknown as {
+		item_external_mapping: { create: ReturnType<typeof vi.fn> };
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDbMappings.item_external_mapping.create = vi.fn().mockResolvedValue({});
+		vi.mocked(qbQueryAll).mockImplementation(async (_org: string, entity: string) =>
+			entity === "Account" ? ([{ Id: "inc-1", AccountSubType: "ServiceFeeIncome" }] as never) : [],
+		);
+		mockQbFetch.mockResolvedValue({ Item: { Id: "qb-new" } });
+	});
+
+	const createBody = () =>
+		mockQbFetch.mock.calls.find((c) => c[1] === "POST" && c[2] === "/item")?.[3] as
+			| Record<string, unknown>
+			| undefined;
+
+	it("creates a non-taxable inventory item as Taxable: false, with no tax classification", async () => {
+		sdbMock.inventory_item.findFirst.mockResolvedValue({
+			id: "item-1",
+			name: "Duct cleaning",
+			unit_price: "90.00",
+			taxable: false,
+		});
+
+		await pushItem("org-1", "item-1");
+
+		expect(createBody()).toMatchObject({ Name: "Duct cleaning", Taxable: false });
+		expect(createBody()).not.toHaveProperty("TaxClassificationRef");
+	});
+
+	it("creates a taxable inventory item as Taxable: true", async () => {
+		sdbMock.inventory_item.findFirst.mockResolvedValue({
+			id: "item-2",
+			name: "Air filter",
+			unit_price: null,
+			taxable: true,
+		});
+
+		await pushItem("org-1", "item-2");
+
+		expect(createBody()).toMatchObject({ Name: "Air filter", Taxable: true });
+		expect(createBody()).not.toHaveProperty("TaxClassificationRef");
+	});
+
+	it("leaves an existing QuickBooks item untouched", async () => {
+		vi.mocked(qbQueryAll).mockImplementation(async (_org: string, entity: string) =>
+			entity === "Item"
+				? ([{ Id: "qb-9", Name: "Air filter", SyncToken: "0", ExpenseAccountRef: { value: "e" } }] as never)
+				: [],
+		);
+		sdbMock.inventory_item.findFirst.mockResolvedValue({
+			id: "item-2",
+			name: "Air filter",
+			unit_price: null,
+			taxable: false,
+		});
+
+		expect(await pushItem("org-1", "item-2")).toBe("qb-9");
+		expect(createBody()).toBeUndefined();
 	});
 });

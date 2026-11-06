@@ -11,6 +11,10 @@ export interface JobUpdatedEvent {
 	organizationId: string;
 }
 
+export interface ProjectUpdatedEvent {
+	projectId: string;
+}
+
 export interface JobNoteCreatedEvent {
 	organizationId: string;
 }

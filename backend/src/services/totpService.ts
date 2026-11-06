@@ -80,10 +80,6 @@ function hotp(secret: Buffer, counter: bigint): string {
     return code.toString().padStart(DIGITS, "0");
 }
 
-function totpAt(secret: Buffer, time: number): string {
-    return hotp(secret, BigInt(Math.floor(time / STEP)));
-}
-
 export function generateSecret(): string {
     return base32Encode(crypto.randomBytes(20)).replace(/=+$/, ""); // 160 bits
 }
@@ -94,16 +90,18 @@ export function buildOtpAuthUri(secret: string, email: string, orgName: string):
     return `otpauth://totp/${issuer}:${account}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=${DIGITS}&period=${STEP}`;
 }
 
-export function verifyTotp(secret: string, token: string): boolean {
-    if (!/^\d{6}$/.test(token)) return false;
-    const now = Math.floor(Date.now() / 1000);
+// Returns the matched time step so the caller can refuse a replay of the same code.
+export function matchTotpStep(secret: string, token: string): number | null {
+    if (!/^\d{6}$/.test(token)) return null;
+    const key = base32Decode(secret);
+    const current = Math.floor(Date.now() / 1000 / STEP);
     for (let w = -WINDOW; w <= WINDOW; w++) {
-        const time = now + w * STEP;
-        if (crypto.timingSafeEqual(Buffer.from(totpAt(base32Decode(secret), time)), Buffer.from(token))) {
-            return true;
+        const step = current + w;
+        if (crypto.timingSafeEqual(Buffer.from(hotp(key, BigInt(step))), Buffer.from(token))) {
+            return step;
         }
     }
-    return false;
+    return null;
 }
 
 /*export function encryptSecret(secret: string): string {

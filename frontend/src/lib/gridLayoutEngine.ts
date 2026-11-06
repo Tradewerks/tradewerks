@@ -22,8 +22,8 @@ export interface WidgetConstraints {
     maxH?: number;
 }
 
-// Resolved at render time based on containerWidth. Entries sorted largest breakpoint first.
-// The first entry whose `atWidth` is <= containerWidth wins. Omit to use flat min/max values.
+// Resolved at render time based on containerWidth. The smallest `atWidth` that is >= containerWidth
+// wins, in any order. Omit to use flat min/max values.
 export type ResponsiveConstraints = Array<{ atWidth: number } & WidgetConstraints>;
 
 export interface CatalogEntry extends WidgetConstraints {
@@ -44,7 +44,7 @@ export function resolveConstraints(
     const responsive = w.responsiveConstraints;
     if (responsive) {
         const match = [...responsive]
-            .sort((a, b) => b.atWidth - a.atWidth)
+            .sort((a, b) => a.atWidth - b.atWidth)
             .find(r => containerWidth <= r.atWidth);
         if (match) {
             const { atWidth: _, ...constraints } = match;
@@ -102,6 +102,18 @@ export function addWidget(catalog: WidgetCatalog, id: string, currentLayout: Lay
         minW: def.minW,
         minH: def.minH,
     }];
+}
+
+// Every widget full width, one per row, in top-to-bottom then left-to-right order.
+export function stackLayout(layout: Layout, cols: number): Layout {
+    let y = 0;
+    return [...layout]
+        .sort((a, b) => a.y - b.y || a.x - b.x)
+        .map(item => {
+            const placed = { ...item, x: 0, y, w: cols };
+            y += item.h;
+            return placed;
+        });
 }
 
 export function removeWidget(id: string, currentLayout: Layout): Layout {
@@ -296,12 +308,23 @@ function layoutSignature(layout: Layout): string {
         .join("|");
 }
 
-function placeWithoutOverlap(layout: Layout, cols: number): Layout {
+type PlaceOrder = (a: LayoutItem, b: LayoutItem) => number;
+const byPosition: PlaceOrder = (a, b) => a.y - b.y || a.x - b.x;
+// The search only makes single-widget moves, so a bad starting order gets it stuck.
+// Starting from a few orders and keeping the best avoids most of those dead ends.
+const START_ORDERS: PlaceOrder[] = [
+    byPosition,
+    (a, b) => b.h - a.h || byPosition(a, b),
+    (a, b) => b.w * b.h - a.w * a.h || byPosition(a, b),
+    (a, b) => b.w - a.w || byPosition(a, b),
+];
+
+function placeWithoutOverlap(layout: Layout, cols: number, order: PlaceOrder = byPosition): Layout {
     const placed: LayoutItem[] = [];
     const fits = (x: number, y: number, w: number, h: number) =>
         x + w <= cols &&
         !placed.some(o => o.x < x + w && o.x + o.w > x && o.y < y + h && o.y + o.h > y);
-    const ordered = [...layout].sort((a, b) => a.y - b.y || a.x - b.x);
+    const ordered = [...layout].sort(order);
     for (const widget of ordered) {
         const w = Math.min(widget.w, cols);
         const h = widget.h;
@@ -316,8 +339,20 @@ function placeWithoutOverlap(layout: Layout, cols: number): Layout {
 }
 
 export function fitLayout(catalog: WidgetCatalog, layout: Layout, cols = COLS.lg, beamWidth = 6, patience = 2, maxRounds = 60): Layout {
+    if (layout.length === 0) return layout;
+    let best = layout;
+    let bestScore = -Infinity;
+    for (const order of START_ORDERS) {
+        const start = compactLayout(placeWithoutOverlap(layout, cols, order));
+        const fitted = beamSearch(catalog, start, cols, beamWidth, patience, maxRounds);
+        const score = evaluate(fitted, cols);
+        if (score > bestScore) { best = fitted; bestScore = score; }
+    }
+    return best;
+}
+
+function beamSearch(catalog: WidgetCatalog, start: Layout, cols: number, beamWidth: number, patience: number, maxRounds: number): Layout {
     const TOP_TIER_CAP = 24;
-    const start = compactLayout(placeWithoutOverlap(layout, cols));
     let beam: Layout[] = [start];
     let best = start;
     let bestScore = evaluate(start, cols);

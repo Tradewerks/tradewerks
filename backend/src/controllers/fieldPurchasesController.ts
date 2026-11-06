@@ -2379,7 +2379,7 @@ async function syncBilledLines(
 					visit_line_item_id: true,
 					visit_line_item: { select: { visit_id: true } },
 					allocation: { select: { job_visit_id: true } },
-					inventory_item: { select: { name: true, unit_price: true } },
+					inventory_item: { select: { name: true, unit_price: true, taxable: true } },
 				},
 				orderBy: { sort_order: "asc" },
 			},
@@ -2452,7 +2452,14 @@ async function syncBilledLines(
 			continue;
 		}
 		const created = await tx.job_visit_line_item.create({
-			data: { ...data, visit_id: visitId, source: "field_addition", item_type: "material" },
+			data: {
+				...data,
+				// New lines only: a standing line keeps whatever the dispatcher set.
+				...(line.inventory_item && { taxable: line.inventory_item.taxable }),
+				visit_id: visitId,
+				source: "field_addition",
+				item_type: "material",
+			},
 		});
 		await tx.field_purchase_line.update({
 			where: { id: line.id },

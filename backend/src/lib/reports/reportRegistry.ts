@@ -28,11 +28,32 @@ import {
 	getProjectsReportPage,
 	getCogsByItemReport,
 	getCogsByJobReport,
-	getJobProfitabilityReport
+	getJobProfitabilityReport,
+	NO_MATERIALS,
+	JOBS_SQL_COLUMNS,
+	INVOICES_SQL_COLUMNS,
+	INVENTORY_SQL_COLUMNS,
+	QUOTES_SQL_COLUMNS,
+	PAYMENTS_SQL_COLUMNS,
+	REVENUE_LINE_ITEM_SQL_COLUMNS,
+	PROJECTS_SQL_COLUMNS,
+	getNotInvoicedReport,
+	getInvoiceLifeCycleReport,
+	lifecycleStats,
+	type InvoiceLifecycleItem,
+	getPurchasesBySupplierReport,
+	PurchasesBySupplierItem,
+	getSalesByProduct,
+	type SalesByProductItem,
+	NotInvoicedItem,
+	NotInvoicedStage,
+	PurchaseSource,
 } from "../../controllers/reportsController.js";
 import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
 import { unitDisplay, unitWord } from "../units.js";
+import { searchKeysOf } from "./pushdown.js";
+import { quoteAdapter } from "../../services/disputeAdapters.js";
 
 // Catalog of eery report and a key to each report
 export interface ReportQuery {
@@ -40,6 +61,9 @@ export interface ReportQuery {
 	endDate?: string;
 	includeInactive?: boolean;
 	lookbackDays?: number;
+	paymentStatus?: "open" | "paid";
+	stage?: NotInvoicedStage;
+	source?: PurchaseSource;
 }
 
 export interface ReportDefinition {
@@ -54,9 +78,9 @@ export interface ReportDefinition {
 	 * exportServerSchema. Omitted means `filterRows` falls back to every key
 	 * except "id", which makes UUIDs and currency figures searchable.
 	 *
-	 * ⚠️ Only valid on a definition with NO `loadPage`: a loadPage report pushes
-	 * search into SQL, where searchability is already per-column, so setting both
-	 * makes page-1 search diverge from export search. Enforced below.
+	 * Required with `loadPage`: derive it via `searchKeysOf(<SQL column map>)`
+	 * so export and the in-memory fallback search the same columns SQL does.
+	 * Enforced below.
 	 */
 	searchKeys?: string[];
 	loadPage?: (
@@ -243,7 +267,7 @@ const quoteRow = (q: QuoteRaw): ReportRow => ({
 	quoteNumber: q.quoteNumber,
 	title: q.title,
 	clientName: q.clientName,
-	status: q.status,
+	status: quoteAdapter.statusLabels?.[q.status] ?? q.status,
 	source: q.source,
 	total: q.total,
 	createdAt: fmtDate(q.createdAt),
@@ -264,6 +288,7 @@ const paymentRow = (p: PaymentRaw): ReportRow => ({
 	note: p.note || "—",
 	amount: p.amount,
 	paidAt: fmtDate(p.paidAt),
+	_paidAtIso: new Date(p.paidAt).toISOString(),
 	qbSynced: p.qbSynced ? "Synced" : "Not synced",
 });
 
@@ -488,6 +513,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		}),
 		loadPage: async (orgId, q, params) =>
 			mapPage(await getJobsReportPage(q.startDate, q.endDate, orgId, params), jobRow),
+		searchKeys: searchKeysOf(JOBS_SQL_COLUMNS),
 	},
 	"first-time-fix": {
 		load: async (orgId, q) => ({
@@ -507,6 +533,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		}),
 		loadPage: async (orgId, q, params) =>
 			mapPage(await getInvoicesReportPage(q.startDate, q.endDate, orgId, params), invoiceRow),
+		searchKeys: searchKeysOf(INVOICES_SQL_COLUMNS),
 	},
 	clients: {
 		load: async (orgId, q) => {
@@ -545,6 +572,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				),
 				inventoryRow,
 			),
+		searchKeys: searchKeysOf(INVENTORY_SQL_COLUMNS),
 	},
 	quotes: {
 		load: async (orgId, q) => {
@@ -573,6 +601,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				summary,
 			};
 		},
+		searchKeys: searchKeysOf(QUOTES_SQL_COLUMNS),
 	},
 	payments: {
 		load: async (orgId, q) => ({
@@ -600,6 +629,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 					.sort((a, b) => b.amount - a.amount),
 			};
 		},
+		searchKeys: searchKeysOf(PAYMENTS_SQL_COLUMNS),
 	},
 	"tax-liability": {
 		load: async (orgId, q) => ({
@@ -732,6 +762,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 				await getRevenueLineItemsReportPage(q.startDate, q.endDate, orgId, params),
 				revenueLineItemRow,
 			),
+		searchKeys: searchKeysOf(REVENUE_LINE_ITEM_SQL_COLUMNS),
 	},
 	projects: {
 		load: async (orgId, q) => ({
@@ -739,6 +770,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		}),
 		loadPage: async (orgId, q, params) => 
 			mapPage(await getProjectsReportPage(q.startDate, q.endDate, orgId, params), projectRow),
+		searchKeys: searchKeysOf(PROJECTS_SQL_COLUMNS),
 	},
 	"cogs-by-job": {
 		load: async (orgId, q) => {
@@ -764,28 +796,192 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 	},
 	"job-profitability": {
 		load: async (orgId, q) => {
-			const { rows, truncated } = await getJobProfitabilityReport(q.startDate, q.endDate, orgId);
-			return { rows, summary: { truncated } };
+			const { rows, ...summary } = await getJobProfitabilityReport(q.startDate, q.endDate, orgId);
+			// Absorption figures are org-wide and window-scoped, so they come from
+			// load, not filteredSummary — which only ever sees the filtered rows.
+			return { rows, summary };
 		},
-		filteredSummary: (rows) => ({
-			totalProfit: round2(rows.reduce((s, r) => s + num(r.profit), 0)),
-			jobCount: rows.length,
-		}),
+		filteredSummary: (rows) => {
+			const totalRevenue = round2(rows.reduce((s, r) => s + num(r.revenue), 0));
+			const totalCogs = round2(rows.reduce((s, r) => s + num(r.cogs), 0));
+			const totalLabor = round2(rows.reduce((s, r) => s + num(r.laborCost), 0));
+			const totalTravel = round2(rows.reduce((s, r) => s + num(r.travelCost), 0));
+			const totalOverhead = round2(rows.reduce((s, r) => s + num(r.overheadCost), 0));
+			return {
+				// Derived, not summed from the profit column: num("-") is 0, so an
+				// uncosted row used to contribute full revenue and no cost, and the
+				// tiles came out short by exactly that row's revenue. Deriving makes
+				// them reconcile however many cells read "-"; the gap counts below are
+				// what tell the reader the total is a floor.
+				totalProfit: round2(totalRevenue - totalCogs),
+				jobCount: rows.length,
+				totalRevenue,
+				totalCogs,
+				totalLabor,
+				totalTravel,
+				totalOverhead,
+				totalNetProfit: round2(totalRevenue - totalCogs - totalLabor - totalTravel - totalOverhead),
+				// A job that consumed nothing is fully costed at 0 — not a gap.
+				jobsMissingCostData: rows.filter(
+					(r) => r.costCoverage !== "Full" && r.costCoverage !== NO_MATERIALS,
+				).length,
+				// Tracked separately from jobsMissingCostData, which means materials
+				// only — summarizeCostSource is shared with the cogs-by-job report and
+				// widening it would move that report's numbers too.
+				jobsMissingLaborCost: rows.filter((r) => r.laborCost === "-").length,
+				jobsMissingOverheadCost: rows.filter((r) => r.overheadCost === "-").length,
+				jobsMissingTravelCost: rows.filter((r) => r._travelMissing === true).length,
+			};
+		},
 		// Rows key on jobId, so the default "every key but id" fallback makes job
 		// UUIDs searchable and a search for "500" match a revenue figure. This is
 		// not new policy — it makes the in-memory path obey the same "only text
 		// columns are searchable" rule the SQL path already has.
 		searchKeys: ["jobNumber", "jobName", "clientName"],
-	}
+	},
+	"not-invoiced": {
+		load: async (orgId, q) => ({
+			rows: (await getNotInvoicedReport(orgId, q.stage)).map(({ clientId, ...r }) => ({
+				id: clientId,
+				...r,
+			})),
+		}),
+		filteredSummary: (rows) => {
+			const clientCount = rows.length;
+			const totalInProgress = round2(rows.reduce((s, r) => s + num(r.inProgress), 0));
+			const totalApproved = round2(rows.reduce((s, r) => s + num(r.approved), 0));
+			const totalReady = round2(rows.reduce((s, r) => s + num(r.readyToBill), 0));
+			const items = rows.flatMap((r) => r.items) as NotInvoicedItem[];
+			const agedBuckets = ["0-30", "31-60", "61-90", "90+"].map((bucket) => ({ bucket, in_progress: 0, approved: 0, ready: 0, total: 0 }));
+			for (const i of items) {
+				if (!i.date) continue;
+				const age = Math.floor((Date.now() - new Date(i.date).getTime()) / 86_400_000);
+				const bucket = agedBuckets[age <= 30 ? 0 : age <= 60 ? 1 : age <= 90 ? 2 : 3];
+				bucket.total += num(i.unbilled);
+				bucket[i.stage] += num(i.unbilled);
+			} 
+			agedBuckets.forEach((b) => { b.total = round2(b.total); b.in_progress = round2(b.in_progress); b.approved = round2(b.approved); b.ready = round2(b.ready); });
+			return { clientCount, totalInProgress, totalApproved, totalReady, agedBuckets };
+		},
+		searchKeys: ["clientName"],
+	},
+	"not-invoiced-items": {
+		load: async (orgId, q) => ({
+			rows: (await getNotInvoicedReport(orgId, q.stage))
+				.flatMap((r) =>
+					r.items.map((i) => ({
+						...i,
+						id: `${i.kind}:${i.id}`,
+						clientName: r.clientName,
+						status: i.status.replace(/([a-z])([A-Z])/g, "$1 $2"),
+						stage: { approved: "Approved", in_progress: "In progress", ready: "Ready to bill" }[i.stage],
+					})),
+				)
+				// oldest first, undated last
+				.sort((a, b) => (a.date?.getTime() ?? Infinity) - (b.date?.getTime() ?? Infinity)),
+		}),
+		searchKeys: ["clientName"],
+	},
+	"invoice-lifecycle": {
+		load: async (orgId, q) => ({
+			rows: (await getInvoiceLifeCycleReport(q.startDate, q.endDate, orgId, q.paymentStatus)).map(({ clientId, ...r }) => ({
+				id: clientId,
+				...r,
+			})),
+		}),
+		filteredSummary: (rows) => {
+			const { invoiceCount, avgCreatedToPaid, onTimePct } = lifecycleStats(
+				rows.flatMap((r) => r.items as InvoiceLifecycleItem[]),
+			);
+			const items = rows.flatMap((r) => r.items) as InvoiceLifecycleItem[];
+			const timeBuckets = ["Early", "On time", "1-15", "16-30", "31-60", "60+"].map((bucket) => ({ bucket, paid: 0, open: 0 }));
+			for (const i of items) {
+					const d = i.daysLate;
+					if (d == null) continue;
+					const bucket = d < 0 ? "Early" : d === 0 ? "On time" : d <= 15 ? "1-15" : d <= 30 ? "16-30" : d <= 60 ? "31-60" : "60+";
+					timeBuckets.find((b) => b.bucket === bucket)![i.paidDate ? "paid" : "open"] += 1;
+			}
+			return { clientCount: rows.length, invoiceCount, avgCreatedToPaid, onTimePct, timeBuckets };
+		},
+		searchKeys: ["clientName"],
+	},
+	"invoice-lifecycle-items": {
+		load: async (orgId, q) => ({
+			rows: (await getInvoiceLifeCycleReport(q.startDate, q.endDate, orgId, q.paymentStatus))
+				.flatMap((r) =>
+					r.items.map((i) => ({
+						...i,
+						clientName: r.clientName,
+						status: i.status.replace(/([a-z])([A-Z])/g, "$1 $2"),
+					})),
+				)
+				.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+		}),
+		searchKeys: ["clientName"],
+	},
+	"purchases-by-supplier": {
+		load: async (orgId, q) => ({
+			rows: (await getPurchasesBySupplierReport(q.startDate, q.endDate, orgId, q.source)).map(({ supplierKey, ...r}) => ({
+				id: supplierKey,
+				...r,
+			}))
+		}),
+		filteredSummary: (rows) => {
+			const supplierCount = rows.length;
+			const items = rows.flatMap((r) => r.items as PurchasesBySupplierItem[]);
+			const purchaseCount = items.length;
+			const netSpend = round2(items.reduce((s, i) => s + i.subtotal, 0));
+			const fieldSpend = items.filter((i) => i.source === "field").reduce((s, i) => s + i.subtotal, 0);
+			const fieldSharePct = netSpend ? round2((fieldSpend / netSpend) * 100) : null;
+			return { supplierCount, purchaseCount, netSpend, fieldSharePct };
+		},
+		searchKeys: ["supplierName"]
+	},
+	"purchases-by-supplier-items": {
+		load: async (orgId, q) => ({
+			rows: (await getPurchasesBySupplierReport(q.startDate, q.endDate, orgId, q.source))
+				.flatMap((r) =>
+					r.items.map((i) => ({
+						...i,
+						id: `${i.source}:${i.id}`,
+						supplierName: r.supplierName,
+						status: i.status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+						source: `${i.source === "order" ? "Order" : "Field"}${i.kind === "refund" ? " refund" : ""}`,
+					})),
+				)
+				.sort((a, b) => b.date.getTime() - a.date.getTime()),
+		}),
+		searchKeys: ["supplierName"],
+	},
+	"sales-by-product": {
+		load: async (orgId, q) => {
+			const { rows, truncated } = await getSalesByProduct(q.startDate, q.endDate, orgId);
+			return { rows, summary: { truncated } };
+		},
+		filteredSummary: (rows) => {
+			const items = rows as SalesByProductItem[];
+			const netRevenue = round2(items.reduce((s, i) => s + i.netRevenue, 0));
+			const costed = items.filter((i) => i.grossProfit !== null);
+			const costedNet = costed.reduce((s, i) => s + i.netRevenue, 0);
+			const grossProfit = round2(costed.reduce((s, i) => s + (i.grossProfit ?? 0), 0));
+			return {
+				productCount: items.length,
+				unitsSold: round2(items.reduce((s, i) => s + i.unitsSold, 0)),
+				netRevenue,
+				grossProfit,
+				marginPct: costedNet ? round2((grossProfit / costedNet) * 100) : null,
+			};
+		},
+		searchKeys: ["itemName"],
+	},
 };
 
-// A loadPage report resolves search in SQL, so an in-memory searchKeys list would
-// only apply to the fallback path and silently diverge from it. Fail at import
-// rather than serve two different search behaviours for one report.
+// Export and the in-memory fallback search by searchKeys; without it they search
+// every key (amounts, dates, _ fields) while SQL searches text columns only.
 for (const [key, def] of Object.entries(REPORT_DEFINITIONS)) {
-	if (def.searchKeys && def.loadPage)
+	if (def.loadPage && !def.searchKeys)
 		throw new Error(
-			`report "${key}" sets both searchKeys and loadPage — searchKeys is only valid on reports without a SQL pushdown path`,
+			`report "${key}" has loadPage but no searchKeys — set searchKeys: searchKeysOf(<its SQL column map>)`,
 		);
 }
 

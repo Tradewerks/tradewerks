@@ -201,6 +201,7 @@ export default function TechnicianDashboardPage() {
 				photos: photos.map((p) => ({
 					photo_url: p.photo_url,
 					photo_label: p.photo_label,
+					photo_name: p.photo_name,
 				})),
 			},
 		});
@@ -406,13 +407,14 @@ export default function TechnicianDashboardPage() {
 							}}
 							disabled={goOfflineMutation.isPending}
 							className={`flex-1 flex items-center justify-center gap-2 min-h-[44px] py-3 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+								/** Disabled the animation if not supported (Safari would display both messages at the same time) */
 								confirmingEndShift
-									? "bg-error/10 border border-error/50 text-error-text motion-safe:animate-pulse"
+									? "bg-error/10 border border-error/50 text-error-text motion-safe:animate-pulse [@supports(-webkit-touch-callout:none)]:animate-none"
 									: "bg-base border border-border-subtle text-text-tertiary hover:bg-surface hover:text-text-primary"
 							}`}
 						>
 							<LogOut size={15} />
-							{goOfflineMutation.isPending ? "Ending…" : confirmingEndShift ? "Confirm End Shift" : "End Shift"}
+							{goOfflineMutation.isPending ? "Ending…" : confirmingEndShift ? "Confirm?" : "End Shift"}
 						</button>
 					)}
 				</div>

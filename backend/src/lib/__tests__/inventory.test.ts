@@ -180,11 +180,19 @@ describe("unitBasis", () => {
 describe("CONSUMPTION_MOVEMENT_PREDICATE / CONSUMPTION_SIGNED_QTY", () => {
 	const flat = (sql: Prisma.Sql) => sql.sql.replace(/\s+/g, " ").trim();
 
-	test("selects parts_used + direct_consumption and consumed-sourced reversals, on alias sm", () => {
+	test("selects parts_used + direct_consumption, consumed-sourced reversals and consumed field purchases, on alias sm", () => {
 		expect(flat(CONSUMPTION_MOVEMENT_PREDICATE)).toBe(
-			"( sm.reason IN ('parts_used', 'direct_consumption') OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed') )",
+			"( sm.reason IN ('parts_used', 'direct_consumption') OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed') OR (sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed') )",
 		);
 		expect(CONSUMPTION_MOVEMENT_PREDICATE.values).toEqual([]);
+	});
+
+	// A supplier_purchase that stocks a warehouse or vehicle is a receipt, not
+	// consumption — only the to_location_type = 'consumed' shape is demand.
+	test("matches a consumed field purchase but not one that stocks a location", () => {
+		const sql = flat(CONSUMPTION_MOVEMENT_PREDICATE);
+		expect(sql).toContain("sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed'");
+		expect(sql).not.toContain("sm.reason IN ('parts_used', 'direct_consumption', 'supplier_purchase')");
 	});
 
 	test("signs reversals negative so SUM() nets them", () => {

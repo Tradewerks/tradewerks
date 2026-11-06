@@ -140,6 +140,8 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	subscription_changed: "manage_organization",
 	upgrade_request_resolved: "manage_organization",
 	trial_ending: "manage_organization",
+	tax_rate_changed: "manage_taxes",
+	qb_tax_code_needed: "manage_taxes",
 	timesheet_issue_reported: "view_timesheet",
 };
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { FileSpreadsheet, Loader2 } from "lucide-react";
+import { usePermission } from "../../hooks/usePermission";
 
 interface ExportExcelButtonProps {
 	onExport: () => Promise<void>;
@@ -9,6 +10,7 @@ interface ExportExcelButtonProps {
 export default function ExportExcelButton({ onExport, disabled }: ExportExcelButtonProps) {
 	const [isExporting, setIsExporting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const canExport = usePermission("export_reports");
 
 	const handleClick = async () => {
 		if (isExporting) return;
@@ -23,6 +25,8 @@ export default function ExportExcelButton({ onExport, disabled }: ExportExcelBut
 			setIsExporting(false);
 		}
 	};
+
+	if (!canExport) return null;
 
 	return (
 		<div className="relative">

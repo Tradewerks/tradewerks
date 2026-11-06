@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Built via vi.hoisted (not a plain module-scope require, which vitest's ESM mock
 // factories can't resolve) so both the db.js and lib/context.js mocks below share
@@ -323,6 +323,22 @@ describe("createAdjustmentInvoice", () => {
 		expect(days).toBe(30);
 	});
 
+	it("issues a charge adjustment with no taxability check after the lock", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(original);
+		mockFn(db.invoice.create).mockResolvedValue({ id: "adj1", invoice_number: "INV-1040" });
+
+		await expect(
+			createAdjustmentInvoice(
+				db as never,
+				original as never,
+				[{ name: "Correction: call-out fee", quantity: 1, unit_price: 50, total: 50 }],
+				"org1",
+				{ dispatcherId: "d1" },
+			),
+		).resolves.toBeDefined();
+		expect(lockInvoiceTaxSnapshot).toHaveBeenCalled();
+	});
+
 	it("refuses to adjust an adjustment", async () => {
 		const adjustment = { ...original, adjusts_invoice_id: "inv0" };
 		mockFn(db.invoice.findFirst).mockResolvedValue(adjustment);
@@ -602,4 +618,181 @@ describe("createAdjustmentInvoice keeps line references inside the organization"
 		).rejects.toThrow(/unknown inventory item/);
 		expect(db.invoice.create).not.toHaveBeenCalled();
 	});
+});
+
+// An invoice whose tax was adopted from QuickBooks AST bills QuickBooks' figure, not our estimate,
+// so a credit against it has to unwind QuickBooks' tax or the ceiling and the residual both drift.
+describe("createAdjustmentInvoice against a QuickBooks-adopted invoice", () => {
+	afterEach(() => {
+		mockFn(db.invoice.findFirst).mockReset();
+		mockFn(db.invoice.update).mockReset();
+		mockFn(db.invoice.aggregate).mockReset();
+		mockFn(db.invoice.aggregate).mockImplementation(async () => ({ _sum: { total: 0 } }));
+	});
+
+	const snapshot = (over: Record<string, unknown>) => ({
+		version: 2,
+		groups: [],
+		discount_cents: 0,
+		taxable_amount_cents: 0,
+		effective_rate: 0.0881,
+		source: null,
+		rounding: "jurisdiction_half_up",
+		locked_at: "2026-10-20T00:00:00.000Z",
+		...over,
+	});
+
+	it("fully credits an adopted invoice without refusal or residual", async () => {
+		const adopted = {
+			...original,
+			subtotal: 500,
+			total: 500,
+			tax_amount: 0,
+			tax_source: "qb_ast",
+			tax_snapshot: snapshot({
+				subtotal_cents: 50000,
+				total_tax_cents: 4405,
+				source: "qb_ast",
+				qb_tax_cents: 0,
+				qb_fingerprint: "fp1",
+			}),
+		};
+		// What lockInvoiceTaxSnapshot leaves on the adjustment: our estimate, -44.05 of tax.
+		const adjRow: Record<string, unknown> = {
+			id: "adj1",
+			subtotal: -500,
+			tax_amount: -44.05,
+			total: -544.05,
+			balance_due: -544.05,
+			amount_paid: 0,
+			tax_snapshot: snapshot({ subtotal_cents: -50000, total_tax_cents: -4405 }),
+		};
+
+		await expect(
+			arrangeAndRun(adopted, adjRow, null, -500),
+		).resolves.toBe("adj1");
+
+		expect(adjRow.total).toBe(-500);
+		expect(adjRow.balance_due).toBe(-500);
+		expect(adjRow.tax_amount).toBe(0);
+		expect(adjRow.tax_source).toBe("qb_ast");
+		expect(adjRow.tax_snapshot).toMatchObject({
+			source: "qb_ast",
+			qb_tax_cents: 0,
+			// Line-level tax stays our estimate, exactly as adoption leaves it on the original.
+			total_tax_cents: -4405,
+		});
+	});
+
+	// Credits carry no discount, so a true full credit of a discounted invoice matches its net,
+	// not its gross subtotal.
+	it("closes a discounted adopted invoice exactly on QuickBooks' tax", async () => {
+		// $500 less $50 discount, our tax 39.65, QuickBooks' 41.00: total 491.00.
+		const adopted = {
+			...original,
+			subtotal: 500,
+			discount_amount: 50,
+			total: 491,
+			tax_amount: 41,
+			tax_source: "qb_ast",
+			tax_snapshot: snapshot({
+				subtotal_cents: 50000,
+				discount_cents: 5000,
+				total_tax_cents: 3965,
+				source: "qb_ast",
+				qb_tax_cents: 4100,
+				qb_fingerprint: "fp1",
+			}),
+		};
+		// An earlier half credit already unwound 20.50 of QuickBooks' tax; this is the rest.
+		const prior = { subtotal: -225, discount_amount: 0, tax_amount: -20.5, total: -245.5 };
+		const adjRow: Record<string, unknown> = {
+			id: "adj1",
+			subtotal: -225,
+			tax_amount: -19.83,
+			total: -244.83,
+			balance_due: -244.83,
+			amount_paid: 0,
+			tax_snapshot: snapshot({ subtotal_cents: -22500, total_tax_cents: -1983 }),
+		};
+
+		await expect(arrangeAndRun(adopted, adjRow, prior, -225)).resolves.toBe("adj1");
+
+		// Proportional scaling would give -20.51 here and leave a cent of QuickBooks' tax behind.
+		expect(adjRow.tax_amount).toBe(-20.5);
+		expect(adjRow.total).toBe(-245.5);
+		expect((adjRow.tax_snapshot as { qb_tax_cents: number }).qb_tax_cents).toBe(-2050);
+	});
+
+	it("a charge adjustment against an adopted invoice keeps its resolver source", async () => {
+		const adopted = {
+			...original,
+			subtotal: 500,
+			total: 541,
+			tax_amount: 41,
+			tax_source: "qb_ast",
+			tax_snapshot: snapshot({
+				subtotal_cents: 50000,
+				total_tax_cents: 3965,
+				source: "qb_ast",
+				qb_tax_cents: 4100,
+				qb_fingerprint: "fp1",
+			}),
+		};
+		const adjRow: Record<string, unknown> = {
+			id: "adj1",
+			subtotal: 100,
+			tax_amount: 8.81,
+			total: 108.81,
+			balance_due: 108.81,
+			amount_paid: 0,
+			tax_source: "resolver",
+			tax_snapshot: snapshot({
+				subtotal_cents: 10000,
+				total_tax_cents: 881,
+				source: "resolver",
+			}),
+		};
+
+		await expect(arrangeAndRun(adopted, adjRow, null, 100)).resolves.toBe("adj1");
+
+		expect(adjRow.tax_source).toBe("resolver");
+		expect(adjRow.tax_amount).toBe(8.81);
+		expect(adjRow.tax_snapshot).toMatchObject({ source: "resolver" });
+		expect(adjRow.tax_snapshot).not.toHaveProperty("qb_tax_cents");
+	});
+
+	/** Stateful mocks: the ceiling must read the total the rescale wrote, as it would in Postgres. */
+	function arrangeAndRun(
+		adopted: Record<string, unknown>,
+		adjRow: Record<string, unknown>,
+		prior: { subtotal: number; discount_amount: number; tax_amount: number; total: number } | null,
+		creditAmount: number,
+	) {
+		mockFn(db.invoice.findFirst).mockImplementation(async (args: { where: { id: string } }) =>
+			args.where.id === "inv1" ? adopted : adjRow,
+		);
+		mockFn(db.invoice.update).mockImplementation(async (args: { data: object }) =>
+			Object.assign(adjRow, args.data),
+		);
+		mockFn(db.invoice.aggregate).mockImplementation(async (args: { _sum: object }) =>
+			"total" in args._sum
+				? { _sum: { total: Number(adjRow.total) + (prior?.total ?? 0) } }
+				: {
+						_sum: {
+							subtotal: prior?.subtotal ?? null,
+							discount_amount: prior?.discount_amount ?? null,
+							tax_amount: prior?.tax_amount ?? null,
+						},
+					},
+		);
+		mockFn(db.invoice.create).mockResolvedValue({ id: "adj1", invoice_number: "INV-1040" });
+		return createAdjustmentInvoice(
+			db as never,
+			adopted as never,
+			[{ name: "Credit", quantity: -1, unit_price: -creditAmount, total: creditAmount }],
+			"org1",
+			{ dispatcherId: "d1" },
+		);
+	}
 });

@@ -1,5 +1,6 @@
 import z from "zod";
 import type { Coordinates } from "./location";
+import type { AddressTaxChoice } from "./tax";
 import type { RequestSummary, QuoteSummary, JobSummary } from "./common";
 
 // ============================================================================
@@ -119,6 +120,7 @@ export interface CreateClientInput {
 	address: string;
 	coords: Coordinates;
 	is_active?: boolean;
+	is_tax_exempt?: boolean;
 	qb_customer_id?: string;
 	qb_contact_name?: string
 	qb_contact_email?: string
@@ -130,20 +132,23 @@ export interface UpdateClientInput {
 	address?: string;
 	coords?: Coordinates;
 	is_active?: boolean;
+	is_tax_exempt?: boolean;
+	address_tax_choice?: AddressTaxChoice;
 }
 
 export const CreateClientSchema = z.object({
-	name: z.string().min(1, "Client name is required"),
+	name: z.string().min(1, "Client name is required").max(128, "Client name must be 128 characters or fewer"),
 	address: z.string().min(1, "Address is required"),
 	coords: z.object({
 		lat: z.number(),
 		lon: z.number(),
 	}),
 	is_active: z.boolean().default(true),
+	is_tax_exempt: z.boolean().optional().default(false),
 });
 
 export const UpdateClientSchema = z.object({
-	name: z.string().min(1, "Client name is required").optional(),
+	name: z.string().min(1, "Client name is required").max(128, "Client name must be 128 characters or fewer").optional(),
 	address: z.string().min(1, "Address is required").optional(),
 	coords: z
 		.object({
@@ -152,6 +157,7 @@ export const UpdateClientSchema = z.object({
 		})
 		.optional(),
 	is_active: z.boolean().optional(),
+	is_tax_exempt: z.boolean().optional(),
 });
 
 // ============================================================================

@@ -67,6 +67,7 @@ export default function WorkPerformedSection({
 				photos: photos.map((p) => ({
 					photo_url: p.photo_url,
 					photo_label: p.photo_label,
+					photo_name: p.photo_name,
 				})),
 			},
 		});

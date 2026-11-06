@@ -42,7 +42,6 @@ import orgEntitlementsRouter from "../orgEntitlements.js";
 import { callRoute } from "./harness.js";
 import platformRouter from "../platform/index.js";
 import { signStaffToken } from "../../platform/staffToken.js";
-import { setStaffActive } from "../../platform/verifyStaffToken.js";
 import { emitToOrg } from "../../services/socketService.js";
 const mockDb = db as any;
 
@@ -376,7 +375,7 @@ describe("customer: list, withdraw, tiers", () => {
 });
 
 const staffAuth = () => {
-	setStaffActive("s-1", true);
+	mockDb.platform_staff.findFirst.mockResolvedValue({ id: "s-1" });
 	return {
 		authorization: `Bearer ${signStaffToken({ id: "s-1", email: "s@t.test", name: "Ops" })}`,
 	};

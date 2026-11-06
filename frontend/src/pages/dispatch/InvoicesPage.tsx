@@ -3,7 +3,7 @@ import { useAllInvoicesQuery } from "../../hooks/useInvoices";
 import { useClientByIdQuery } from "../../hooks/useClients";
 import { InvoiceStatusValues, InvoiceStatusColors, InvoiceStatusLabels, type InvoiceStatus, isOverdue } from "../../types/invoices";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, MoreVertical, FileText, Upload } from "lucide-react";
+import { Plus, MoreVertical, FileText, Upload, AlertCircle } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { formatDate, formatCurrency } from "../../util/util";
 import CreateInvoice from "../../components/invoices/CreateInvoice";
@@ -17,9 +17,13 @@ import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRange
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
-import PageReportSection from "../../components/reports/PageReportSection";
+import { useQBStatusQuery } from "../../hooks/useQuickbooks";
+import PageReportButton from "../../components/reports/PageReportButton";
+import PageReportKpis from "../../components/reports/PageReportKpis";
+import { usePageReport } from "../../components/reports/usePageReport";
 import type { SortDir } from "../../util/sortUtil";
 import { withDir, compareByOrder, compareDateNullsLast, compareString, compareNumber } from "../../util/sortUtil";
+import { isCurrentQbRealm } from "../../lib/qbRealm";
 
 const invoiceStatusOptions = InvoiceStatusValues.map((s) => ({
 	value: s,
@@ -67,11 +71,14 @@ export default function InvoicesPage() {
 	const dateParamTo = queryParams.get("dateTo");
 	const sortParam = queryParams.get("sort");
 	const dirParam = queryParams.get("dir");
+	const taxMismatchOnly = queryParams.get("qb") === "tax_mismatch";
 
 	//permissions
 	const CREATE_INVOICE = usePermission("create_invoices");
+	const report = usePageReport("invoices", "Invoices report");
 
 	const { data: filterClient } = useClientByIdQuery(clientFilter ?? "");
+	const { data: qbStatus } = useQBStatusQuery();
 
 	// Open create modal if navigated to /new (legacy link compat)
 	useEffect(() => {
@@ -97,6 +104,14 @@ export default function InvoicesPage() {
 		if (!invoices) return 0;
 		return invoices.filter(isOverdue).length;
 	}, [invoices]);
+
+	const taxMismatchCount = useMemo(() => {
+		if (!invoices) return 0;
+		return invoices.filter(
+			(i) =>
+				i.qb_sync_status === "tax_mismatch" && isCurrentQbRealm(i.account_id, qbStatus),
+		).length;
+	}, [invoices, qbStatus]);
 
 	const display = useMemo(() => {
 		const _dp = new URLSearchParams();
@@ -142,6 +157,9 @@ export default function InvoicesPage() {
 					_rawDueDate: inv.due_date ? new Date(inv.due_date) : null,
 					_isOverdue: overdue,
 					_clientId: inv.client_id,
+					_qbTaxMismatch:
+						inv.qb_sync_status === "tax_mismatch" &&
+						isCurrentQbRealm(inv.account_id, qbStatus),
 					_issueDate: inv.issue_date
 						? new Date(inv.issue_date)
 						: null,
@@ -149,6 +167,7 @@ export default function InvoicesPage() {
 			}) ?? [];
 
 		if (clientFilter) data = data.filter((item) => item._clientId === clientFilter);
+		if (taxMismatchOnly) data = data.filter((item) => item._qbTaxMismatch);
 		if (statusFilter.length > 0) data = data.filter((item) => statusFilter.includes(item._rawStatus));
 		if (dateRange.option !== "all")
 			data = data.filter((item) => matchesDateRange(item._issueDate, dateRange));
@@ -214,7 +233,7 @@ export default function InvoicesPage() {
 			data
 				.sort(comparator)
 		);
-	}, [invoices, searchInput, termsKey, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam]);
+	}, [invoices, searchInput, termsKey, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam, taxMismatchOnly, qbStatus]);
 
 	const removeClientFilter = () => {
 		const newParams = new URLSearchParams(location.search);
@@ -231,6 +250,14 @@ export default function InvoicesPage() {
 		next.delete("date");
 		next.delete("dateFrom");
 		next.delete("dateTo");
+		next.delete("qb");
+		navigate(`/dispatch/invoices${next.toString() ? `?${next.toString()}` : ""}`);
+	};
+
+	const setTaxMismatchOnly = (on: boolean) => {
+		const next = new URLSearchParams(location.search);
+		if (on) next.set("qb", "tax_mismatch");
+		else next.delete("qb");
 		navigate(`/dispatch/invoices${next.toString() ? `?${next.toString()}` : ""}`);
 	};
 
@@ -268,7 +295,7 @@ export default function InvoicesPage() {
 		);
 	}, [invoices]);
 
-	const hasActiveFilters = clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
+	const hasActiveFilters = taxMismatchOnly || clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
 
 	return (
 		<div className="text-text-primary">
@@ -278,7 +305,8 @@ export default function InvoicesPage() {
 				setIsModalOpen={setIsCreateModalOpen}
 			/>
 
-			<PageHeader title="Invoices">
+			<PageHeader title="Invoices" subtitle={<PageReportKpis report={report} />}>
+				<PageReportButton report={report} />
 				<button
 					title={!CREATE_INVOICE ? "You don't have permission to perform this action" : ""}
 					disabled={!CREATE_INVOICE}
@@ -325,7 +353,6 @@ export default function InvoicesPage() {
 				</div>
 			</PageHeader>
 
-			<PageReportSection page="invoices" label="Invoices report" />
 
 			{/* Summary Cards */}
 			<div className="grid grid-cols-3 gap-3 mb-4">
@@ -372,6 +399,30 @@ export default function InvoicesPage() {
 				</div>
 			</div>
 
+			{/* Pushes that QuickBooks re-taxed are otherwise only visible one
+			    invoice at a time. */}
+			{taxMismatchCount > 0 && !taxMismatchOnly && (
+				<div
+					role="status"
+					className="mb-3 flex items-center gap-2 rounded-lg border border-warning-border bg-warning-bg px-4 py-2.5 text-sm text-warning-text"
+				>
+					<AlertCircle size={16} className="flex-shrink-0" />
+					<span className="flex-1">
+						{taxMismatchCount === 1
+							? "1 invoice has"
+							: `${taxMismatchCount} invoices have`}{" "}
+						a different tax amount in QuickBooks and can't be sent from there.
+					</span>
+					<button
+						type="button"
+						onClick={() => setTaxMismatchOnly(true)}
+						className="font-medium underline underline-offset-2 hover:text-text-primary"
+					>
+						Show {taxMismatchCount === 1 ? "it" : "them"}
+					</button>
+				</div>
+			)}
+
 				<PageControls
 				className="mb-3"
 				left={
@@ -411,6 +462,13 @@ export default function InvoicesPage() {
 			{/* Filter Bar */}
 			<FilterChips
 				filters={[
+					taxMismatchOnly
+						? {
+								label: "QuickBooks tax differs",
+								color: "orange" as const,
+								onRemove: () => setTaxMismatchOnly(false),
+							}
+						: null,
 					clientFilter && filterClient
 						? { label: `Client: ${filterClient.name}`, color: "blue" as const, onRemove: removeClientFilter }
 						: null,
@@ -483,10 +541,17 @@ export default function InvoicesPage() {
 								const colors =
 									InvoiceStatusColors[row._rawStatus as InvoiceStatus];
 								return (
-									<div
-										className={`w-fit px-2 py-1 rounded-full border text-sm font-medium text-nowrap ${colors}`}
-									>
-										{row.status as string}
+									<div className="flex items-center gap-1.5">
+										<div
+											className={`w-fit px-2 py-1 rounded-full border text-sm font-medium text-nowrap ${colors}`}
+										>
+											{row.status as string}
+										</div>
+										{row._qbTaxMismatch === true && (
+											<span title="QuickBooks tax differs" className="flex-shrink-0 text-warning-text">
+												<AlertCircle size={15} aria-label="QuickBooks tax differs" />
+											</span>
+										)}
 									</div>
 								);
 							},

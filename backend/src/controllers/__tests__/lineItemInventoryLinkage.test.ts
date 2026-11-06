@@ -102,6 +102,8 @@ function setup(existingLines: ExistingLine[], catalogIds: string[] = []) {
 			}),
 		},
 		job: { update: vi.fn().mockResolvedValue(undefined) },
+		// New lines read their inventory item's default tax category.
+		inventory_item: { findMany: vi.fn().mockResolvedValue([]) },
 		job_visit_line_item: {
 			delete: vi.fn().mockResolvedValue(undefined),
 			update: vi.fn().mockResolvedValue(undefined),
@@ -276,5 +278,47 @@ describe("updateJobVisit — cross-org catalog ids", () => {
 
 		expect(result.err).toContain("unknown inventory item");
 		expect(tx.job_visit_line_item.create).not.toHaveBeenCalled();
+	});
+});
+
+describe("updateJobVisit — line taxability on existing lines", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	it("an existing catalog line that omits taxable keeps its stored value; a new one takes the item default", async () => {
+		const inv = "e5555555-5555-4555-8555-555555555555";
+		const lineId = "cccccccc-3333-4333-8333-cccccccccccc";
+		const tx = setup([{ id: lineId, fulfillment_status: "planned", inventory_item_id: inv }], [inv]);
+		tx.inventory_item.findMany.mockResolvedValue([{ id: inv, taxable: false }]);
+
+		await updateJobVisit(
+			makeRequest({
+				line_items: [line({ id: lineId, inventory_item_id: inv }), line({ inventory_item_id: inv })],
+			}),
+			ORG,
+		);
+
+		const updateData = (
+			tx.job_visit_line_item.update.mock.calls[0]![0] as { data: Record<string, unknown> }
+		).data;
+		expect(updateData).not.toHaveProperty("tax_category");
+		expect(updateData).not.toHaveProperty("taxable");
+		expect(tx.job_visit_line_item.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ taxable: false }),
+			}),
+		);
+	});
+
+	// The technician parts editor full-replaces lines without tax_group_id.
+	it("an existing line that omits tax_group_id keeps its group", async () => {
+		const lineId = "dddddddd-4444-4444-8444-dddddddddddd";
+		const tx = setup([{ id: lineId, fulfillment_status: null, inventory_item_id: null }]);
+
+		await updateJobVisit(makeRequest({ line_items: [line({ id: lineId })] }), ORG);
+
+		const updateData = (
+			tx.job_visit_line_item.update.mock.calls[0]![0] as { data: Record<string, unknown> }
+		).data;
+		expect(updateData).not.toHaveProperty("tax_group_id");
 	});
 });

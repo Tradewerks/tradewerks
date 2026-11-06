@@ -87,7 +87,7 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
     if (!payment) {
         throw httpError(404, ErrorCodes.NOT_FOUND, "Payment not found");
     }
-    if (payment.qb_payment_id) {
+    if (payment.qb_payment_id && payment.account_id === accountId) {
         return;
     }
     if (!payment.invoice) {
@@ -96,15 +96,15 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
     if (!payment.invoice.qb_invoice_id || payment.invoice.account_id !== accountId) {
         await pushInvoice(payment.invoice.id, organizationId);
         const updatedPayment = await sdb.invoice_payment.findFirst({
-            where: { id: paymentId, account_id: accountId },
-            include: { 
+            where: { id: paymentId },
+            include: {
                 invoice: {
-                    include: { 
+                    include: {
                         client: {
-                            include: { client_external_mapping: true }
+                            include: { client_external_mapping: { where: { provider: "quickbooks", account_id: accountId } } }
                         }
                     }
-                } 
+                }
             },
         });
         if (!updatedPayment) {
@@ -256,8 +256,22 @@ export async function handleInboundPaymentEvent(
         } 
 
         // Create
-        const linkedInvoiceId = payment.Line?.flatMap(l => l.LinkedTxn ?? [])
-                                .find(t => t.TxnType === "Invoice")?.TxnId;
+        // The payment we post to apply a credit is always $0; a mixed cash + credit payment has
+        // TotalAmt > 0 and must still be recorded.
+        const linked = payment.Line?.flatMap(l => l.LinkedTxn ?? []) ?? [];
+        if (payment.TotalAmt === 0) {
+            await logExternalSync({
+                provider: "quickbooks",
+                external_id: qbPaymentId,
+                entity_type: "payment",
+                action: "webhook_skipped_credit_application",
+                payload: { message: "Payment applies a credit memo" },
+                organization_id: orgId,
+            });
+            return;
+        }
+
+        const linkedInvoiceId = linked.find(t => t.TxnType === "Invoice")?.TxnId;
         if (!linkedInvoiceId) {
             await logExternalSync({
                 provider: "quickbooks",

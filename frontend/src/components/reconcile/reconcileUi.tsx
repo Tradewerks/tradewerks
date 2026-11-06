@@ -13,6 +13,7 @@ import { RECORD_LINK } from "../fieldPurchases/fieldPurchaseFormat";
 import { purchaseHref } from "../fieldPurchases/queueFilters";
 import { FIELD_PURCHASE_STATUS_LABELS } from "../../types/fieldPurchases";
 import { useAnyPermission } from "../../hooks/usePermission";
+import { errorMessage } from "../../util/util";
 
 /**
  * How much to trust a suggestion, in one glance. An exact hit is safe to accept
@@ -117,7 +118,7 @@ export function ActionError({ error }: { error: unknown }) {
 			className="mt-2 flex items-start gap-1.5 rounded border border-error-border bg-error-bg px-2 py-1.5 text-xs text-error-text"
 		>
 			<AlertTriangle size={12} className="mt-px flex-shrink-0" />
-			{error.message}
+			{errorMessage(error, "Something went wrong")}
 		</div>
 	);
 }

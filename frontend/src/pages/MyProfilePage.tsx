@@ -107,7 +107,7 @@ export default function MyProfilePage() {
 			/>
 
 			{/* Tab bar */}
-			<div role="tablist" aria-label="Profile sections" className="flex items-center border-b border-border-subtle">
+			<div role="tablist" aria-label="Profile sections" className="flex items-center border-b border-border-subtle overflow-x-auto overflow-y-hidden shrink-0 whitespace-nowrap">
 				{TABS.map((tab) => (
 					<button
 						key={tab.id}

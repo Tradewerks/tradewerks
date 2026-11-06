@@ -1,6 +1,7 @@
 ﻿import type { ClientDetailsProps } from "../components/clients/ClientDetailsCard";
 import type { BaseNote, PricingBreakdown } from "./common";
 import type { DocumentLineage } from "./lineage";
+import type { TaxProvenance, TaxSnapshot } from "./tax";
 
 // ============================================================================
 // INVOICE STATUS
@@ -244,7 +245,7 @@ export interface InvoiceVisit {
 // MAIN INVOICE TYPE
 // ============================================================================
 
-export interface Invoice extends PricingBreakdown {
+export interface Invoice extends PricingBreakdown, TaxProvenance {
 	id: string;
 	invoice_number: string;
 	client_id: string;
@@ -273,6 +274,8 @@ export interface Invoice extends PricingBreakdown {
 	revised_invoice?: InvoiceChainRef | null;
 	adjusts_invoice_id?: string | null;
 	adjusts_invoice?: InvoiceChainRef | null;
+	/** First linked job's snapshot (detail GET): a kept rate the invoice inherits when it has none. */
+	parent_tax_snapshot?: TaxSnapshot | null;
 	adjustments?: InvoiceChainRef[];
 	/** Resolved chain, attached by getInvoiceById. Absent on list payloads. */
 	lineage?: DocumentLineage | null;
@@ -287,8 +290,10 @@ export interface Invoice extends PricingBreakdown {
 	created_by_dispatcher_id?: string | null;
 
 	// QuickBooks
-	qb_sync_status?: "not_synced" | "synced" | "failed";
+	qb_sync_status?: "not_synced" | "synced" | "failed" | "tax_mismatch";
+	qb_tax_amount?: number | string | null;
 	qb_invoice_id?: string | null;
+	qb_credit_memo_id?: string | null;
 	account_id?: string | null;
 
 	// Relations

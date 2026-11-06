@@ -133,6 +133,12 @@ async function main() {
 			// purchase. Set below John Smith's 750 per-transaction ceiling so a single
 			// purchase can be under his own limit and still need a second signer.
 			field_purchase_second_signoff_threshold: 500.0,
+			// Cost inputs for the Job Profitability net view. Without these the whole
+			// Net column set is dashes, which is why they live here and not in a
+			// scratch script — the corpus has been lost to a container reset before.
+			monthly_overhead: 9500.0,
+			cost_per_mile: 0.67,
+			overhead_rate_per_hour: 18.5,
 		},
 	});
 
@@ -142,7 +148,10 @@ async function main() {
 		"quotes", "recurring_plans", "projects", "inventory", "fleet", "vehicle_stock",
 		"purchasing", "field_purchases", "followups", "disputes",
 	];
-	const PRO_MODULES = [...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto", "ai_assistant"];
+	const PRO_MODULES = [
+		...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto",
+		"ai_assistant",
+	];
 	await db.plan.createMany({
 		data: [
 			{ key: "starter", label: "Starter", assignable: true, is_signup_default: true },
@@ -332,6 +341,8 @@ async function main() {
 				hire_date: new Date("2015-03-12"),
 				coords: { lat: 43.8014, lon: -91.2396 },
 				hourly_rate: 95.00,
+				// Deliberately NO cost_rate: this is the job-profitability "labor unknown"
+				// fixture. Give him one and the dash branch stops being exercised.
 				last_login: new Date(),
 				organization_role_id: technicianRole.id,
 			},
@@ -350,6 +361,7 @@ async function main() {
 				hire_date: new Date("2020-07-01"),
 				coords: { lat: 43.8129, lon: -91.2559 },
 				hourly_rate: 75.00,
+				cost_rate: 42.00,
 				organization_role_id: technicianRole.id,
 			},
 		}),
@@ -366,6 +378,7 @@ async function main() {
 				hire_date: new Date("2022-04-18"),
 				coords: { lat: 43.8014, lon: -91.2396 },
 				hourly_rate: 65.00,
+				cost_rate: 38.00,
 				organization_role_id: technicianRole.id,
 			},
 		}),
@@ -412,6 +425,7 @@ async function main() {
 				category: "Refrigerants",
 				unit: "cylinder",
 				is_batch_tracked: true,
+				taxable: false,
 			},
 		}),
 		db.inventory_item.create({
@@ -2073,6 +2087,10 @@ async function main() {
 			scheduled_end_at: dateAt(yesterday, 12),
 			actual_start_at: dateAt(yesterday, 9, 15),
 			actual_end_at: dateAt(yesterday, 11, 30),
+			// Outbound + return, as the Drive transition and goOffline would write
+			// them. Travel cost is dashes on every job without these.
+			estimated_drive_miles: 14.2,
+			estimated_return_drive_miles: 16.8,
 			status: "Completed",
 			subtotal: 485.0,
 			tax_rate: 0.0825,
@@ -2128,6 +2146,9 @@ async function main() {
 			scheduled_start_at: dateAt(today, 7),
 			scheduled_end_at: dateAt(today, 17),
 			actual_start_at: actualAt(today, 7, 10, 45),
+			// Outbound only — still on site, so no return leg yet. This is the normal
+			// mid-day shape, not an omission.
+			estimated_drive_miles: 22.4,
 			status: "OnSite",
 			subtotal: 6800.0,
 			tax_rate: 0.0825,
@@ -4696,6 +4717,13 @@ async function main() {
 	await db.visit_tech_time_entry.createMany({
 		data: [
 			{ visit_id: visit1.id, tech_id: tech2.id, clocked_in_at: dateAt(yesterday, 9, 15), clocked_out_at: dateAt(yesterday, 11, 30), hours_worked: 2.25 },
+			// Second rated tech on the same visit: the only fixture that proves job
+			// labor sums across technicians rather than taking one rate.
+			{ visit_id: visit1.id, tech_id: tech3.id, clocked_in_at: dateAt(yesterday, 10), clocked_out_at: dateAt(yesterday, 11, 30), hours_worked: 1.5 },
+			// tech1 has no cost_rate, so J-0002 labor reads "-" — the unknown fixture.
+			// It must sit on a job with a NON-Draft invoice or the row never renders:
+			// the report builds rows from invoiced revenue and skips Draft/Void.
+			{ visit_id: visit2.id, tech_id: tech1.id, clocked_in_at: dateAt(today, 7, 10), clocked_out_at: dateAt(today, 10, 40), hours_worked: 3.5 },
 			{ visit_id: recurringVisit1.id, tech_id: tech1.id, clocked_in_at: dateAt(occurrencePastStart, 8, 5), clocked_out_at: dateAt(occurrencePastStart, 11, 50), hours_worked: 3.75 },
 		],
 	});

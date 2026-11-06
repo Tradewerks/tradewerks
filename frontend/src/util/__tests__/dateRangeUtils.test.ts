@@ -7,6 +7,7 @@ process.env.TZ = "America/New_York";
 const {
 	resolveDateRange,
 	matchesDateRange,
+	overlapsDateRange,
 	parseDateRangeFromParams,
 	serializeDateRange,
 	formatTriggerLabel,
@@ -220,5 +221,30 @@ describe("URL round trip", () => {
 	it("toLocalDate maps a UTC-midnight date to the same calendar day in local time", () => {
 		const d = toLocalDate(new Date("2026-01-01")); // UTC midnight = Dec 31 19:00 in New York
 		expect(ymd(d)).toEqual([2026, 1, 1]);
+	});
+});
+
+describe("overlapsDateRange (a span in effect during the range)", () => {
+	const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12);
+	const custom = (from: Date, to: Date) => ({ option: "custom" as const, startDate: from, endDate: to });
+
+	it("matches everything for All", () => {
+		expect(overlapsDateRange(day(2026, 1, 1), day(2026, 1, 2), { option: "all" })).toBe(true);
+	});
+
+	it("matches an open-ended span that started before the range", () => {
+		expect(overlapsDateRange(day(2026, 1, 1), null, custom(day(2026, 3, 1), day(2026, 3, 31)))).toBe(true);
+	});
+
+	it("matches a span that ends inside the range", () => {
+		expect(overlapsDateRange(day(2026, 1, 1), day(2026, 3, 10), custom(day(2026, 3, 1), day(2026, 3, 31)))).toBe(true);
+	});
+
+	it("excludes a span that ended before the range", () => {
+		expect(overlapsDateRange(day(2026, 1, 1), day(2026, 2, 27), custom(day(2026, 3, 1), day(2026, 3, 31)))).toBe(false);
+	});
+
+	it("excludes a span that starts after the range", () => {
+		expect(overlapsDateRange(day(2026, 4, 2), null, custom(day(2026, 3, 1), day(2026, 3, 31)))).toBe(false);
 	});
 });

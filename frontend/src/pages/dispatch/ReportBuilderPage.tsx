@@ -136,8 +136,8 @@ function Builder({ source, name, reportId, initialConfig }: BuilderProps) {
 						join: initialConfig.join,
 						conditions: sanitizeConditions(initialConfig.conditions),
 					}
-				: loadConfig(source.id),
-		[initialConfig, source.id],
+				: loadConfig(builderKey),
+		[initialConfig, builderKey],
 	);
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [dateRange, setDateRange] = useState<DateRangeValue>(() =>

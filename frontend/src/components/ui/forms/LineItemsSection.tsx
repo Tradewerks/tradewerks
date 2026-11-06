@@ -1,10 +1,12 @@
 ﻿import { Plus, Download } from "lucide-react";
 import { useState } from "react";
 import LineItemCard, { type SourceJob } from "./LineItemCard";
-import type { BaseLineItem, LineItemDisposition } from "../../../types/common";
+import type { BaseLineItem, InventoryLink, LineItemDisposition } from "../../../types/common";
 import type { InventoryItem } from "../../../types/inventory";
 import type { TaxGroup } from "../../../types/tax";
-import { formatTaxGroupLabel } from "../../../types/tax";
+import { parseTaxChoice } from "../../../lib/taxEditorMode";
+import TaxChoiceOptions from "./TaxChoiceOptions";
+import { formatCurrency } from "../../../util/util";
 
 interface LineItemsSectionProps {
 	lineItems: BaseLineItem[];
@@ -45,13 +47,15 @@ interface LineItemsSectionProps {
 	// Without it the picker stays hidden and material lines fall back to freetext.
 	onLinkInventory?: (
 		id: string,
-		link: { inventory_item_id: string; name: string; unit_price: number | null } | null,
+		link: InventoryLink | null,
 	) => void;
 	// Tax
 	taxGroups?: TaxGroup[];
 	clientExempt?: boolean;
 	onTaxChange?: (id: string, groupId: string | null, taxable: boolean) => void;
 	onTaxGroupBulkSet?: (groupId: string | null, taxable: boolean) => void;
+	autoMode?: boolean;
+	keptRateLabel?: string | null;
 }
 
 const LineItemsSection = ({
@@ -83,6 +87,8 @@ const LineItemsSection = ({
 	clientExempt = false,
 	onTaxChange,
 	onTaxGroupBulkSet,
+	autoMode = false,
+	keptRateLabel = null,
 }: LineItemsSectionProps) => {
 	const canRemove = lineItems.length > minItems;
 	const [bulkSelectKey, setBulkSelectKey] = useState(0);
@@ -115,15 +121,15 @@ const LineItemsSection = ({
 							</button>
 						)}
 						{/* Bulk tax group selector — hidden when exempt or no groups configured */}
-						{!clientExempt && taxGroups.length > 0 && onTaxGroupBulkSet && (
+						{!clientExempt &&
+							(autoMode || !!keptRateLabel || taxGroups.length > 0) &&
+							onTaxGroupBulkSet && (
 							<div className="flex items-center gap-1.5 flex-shrink-0">
 								<span className="text-xs text-text-tertiary">Tax:</span>
 								<select
 									key={bulkSelectKey}
 									onChange={(e) => {
-										const val = e.target.value;
-										if (val === "none") onTaxGroupBulkSet(null, false);
-										else onTaxGroupBulkSet(val, true);
+										onTaxGroupBulkSet(...parseTaxChoice(e.target.value));
 										setBulkSelectKey((k) => k + 1);
 									}}
 									defaultValue=""
@@ -134,24 +140,18 @@ const LineItemsSection = ({
 									<option value="" disabled hidden>
 										Apply to all…
 									</option>
-									<option value="none">
-										No Tax
-									</option>
-									{taxGroups.map((group) => (
-										<option
-											key={group.id}
-											value={group.id}
-										>
-											{formatTaxGroupLabel(group)}
-										</option>
-									))}
+									<TaxChoiceOptions
+										taxGroups={taxGroups}
+										autoMode={autoMode}
+										keptRateLabel={keptRateLabel}
+									/>
 								</select>
 							</div>
 						)}
 						<div className="text-xs lg:text-sm text-text-tertiary flex-shrink-0">
 							Subtotal:{" "}
 							<span className="text-text-primary font-semibold">
-								${subtotal.toFixed(2)}
+								{formatCurrency(subtotal)}
 							</span>
 						</div>
 					</div>
@@ -185,6 +185,8 @@ const LineItemsSection = ({
 						taxGroups={taxGroups}
 						clientExempt={clientExempt}
 						onTaxChange={onTaxChange}
+						autoMode={autoMode}
+						keptRateLabel={keptRateLabel}
 					/>
 				))}
 			</div>

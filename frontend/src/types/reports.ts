@@ -36,6 +36,9 @@ export interface ReportFetchParams {
 	limit?: number;
 	include_inactive?: boolean;
 	lookbackDays?: number;
+	paymentStatus?: "open" | "paid";
+	stage?: NotInvoicedStage;
+	source?: "order" | "field";
 }
 
 // ============================================================================
@@ -495,6 +498,154 @@ export interface ClientDiscountSummary {
 }
 
 // ============================================================================
+// NOT INVOICED (SOLD BUT UNBILLED)
+// ============================================================================
+
+export type NotInvoicedStage = "approved" | "in_progress" | "ready";
+
+// Amounts are pre-tax, matching invoice billed_amount.
+export interface NotInvoicedItem {
+	stage: NotInvoicedStage;
+	kind: "job" | "quote";
+	id: string;
+	number: string;
+	title: string;
+	status: string;
+	date: string | null;
+	value: number;
+	billed: number;
+	unbilled: number;
+}
+
+export interface NotInvoicedRow {
+	id: string;
+	clientName: string;
+	approved: number;
+	inProgress: number;
+	readyToBill: number;
+	total: number;
+	oldestDate: string | null;
+	items: NotInvoicedItem[];
+}
+
+export interface NotInvoicedSummary {
+	clientCount: number;
+	totalApproved: number;
+	totalInProgress: number;
+	totalReady: number;
+	agedBuckets: { bucket: string; in_progress: number; approved: number; ready: number, total: number }[]
+}
+
+// ============================================================================
+// INVOICE LIFECYCLE
+// ============================================================================
+
+// Durations are in days; null when either date is missing. Negative daysLate = paid early.
+export interface InvoiceLifecycleItem {
+	id: string;
+	number: string;
+	status: string;
+	createdAt: string;
+	sentAt: string | null;
+	dueDate: string | null;
+	paidDate: string | null;
+	completedAt: string | null;
+	completedToInvoiced: number | null;
+	createdToSent: number | null;
+	sentToPaid: number | null;
+	createdToPaid: number | null;
+	daysLate: number | null;
+}
+
+export interface InvoiceLifecycleRow {
+	id: string;
+	clientName: string;
+	invoiceCount: number;
+	openCount: number;
+	avgCompletedToInvoiced: number | null;
+	avgCreatedToSent: number | null;
+	avgSentToPaid: number | null;
+	avgCreatedToPaid: number | null;
+	avgDaysLate: number | null;
+	onTimePct: number | null;
+	items: InvoiceLifecycleItem[];
+}
+
+export interface InvoiceLifecycleSummary {
+	clientCount: number;
+	invoiceCount: number;
+	avgCreatedToPaid: number | null;
+	onTimePct: number | null;
+	timeBuckets: { bucket: string; paid: number; open: number }[];
+}
+
+// ============================================================================
+// PURCHASES BY SUPPLIER
+// ============================================================================
+
+// Money is pre-tax; refunds come back negative.
+export interface PurchasesBySupplierItem {
+	id: string;
+	number: string | null;
+	source: "order" | "field";
+	kind: "purchase" | "refund";
+	status: string;
+	techName: string | null;
+	date: string;
+	subtotal: number;
+	tax: number;
+}
+
+export interface PurchasesBySupplierRow {
+	id: string; // supplier id, "v:<vendor name>" or "unknown"
+	supplierId: string | null;
+	supplierName: string;
+	purchaseCount: number;
+	refundCount: number;
+	subtotal: number;
+	tax: number;
+	orderSpend: number;
+	fieldSpend: number;
+	lastPurchaseAt: string;
+	items: PurchasesBySupplierItem[];
+}
+
+export interface PurchasesBySupplierSummary {
+	supplierCount: number;
+	purchaseCount: number;
+	netSpend: number;
+	fieldSharePct: number | null;
+}
+
+// ============================================================================
+// SALES BY PRODUCT
+// ============================================================================
+
+// Pre-tax. Cost is today's inventory cost; null when the item has none.
+export interface SalesByProductRow {
+	id: string;
+	itemName: string;
+	unitsSold: number;
+	invoiceCount: number;
+	grossRevenue: number;
+	discount: number;
+	netRevenue: number;
+	cost: number | null;
+	grossProfit: number | null;
+	marginPct: number | null;
+	lastSold: string;
+}
+
+export interface SalesByProductSummary {
+	productCount: number;
+	unitsSold: number;
+	netRevenue: number;
+	grossProfit: number;
+	marginPct: number | null;
+	truncated?: boolean;
+}
+
+// ============================================================================
 // FIELD-ADDED REVENUE (TECH UPSELL)
 // ============================================================================
 
@@ -765,7 +916,12 @@ export interface CreateFavoriteInput {
 // ===========================================================================
 export interface PageSummaryResponse {
 	page: string;
-	stats: { label: string; value: number; format: "number" | "currency" | "percent" | "duration" }[];
+	stats: { label: string; value: number; format: "number" | "currency" | "percent" | "duration"; note?: string }[];
 	breakdown: { label: string; value: number; }[];
 	breakdownLabel: string;
+}
+
+export interface PageSnapshotResponse {
+	page: string;
+	stats: PageSummaryResponse["stats"];
 }

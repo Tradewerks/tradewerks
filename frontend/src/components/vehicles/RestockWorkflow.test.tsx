@@ -228,6 +228,22 @@ describe("RestockWorkflow — mobile field layout", () => {
 	});
 });
 
+describe("RestockWorkflow — editing quantities", () => {
+	test("a row keeps its section and focus while its qty passes through 0", async () => {
+		const short = { ...plainStockItem, id: "si-short", inventory_item_id: "inv-short", qty_on_hand: 0, inventory_item: { ...plainStockItem.inventory_item, id: "inv-short", name: "Wire Nuts" } };
+		renderWorkflow([short, metBatchStockItem]);
+
+		const input = await screen.findByLabelText("Quantity to add for Wire Nuts");
+		await userEvent.clear(input);
+		expect(input).toHaveDisplayValue("");
+		await userEvent.type(input, "5");
+
+		expect(input).toHaveFocus();
+		expect(input).toHaveValue(5);
+		expect(screen.getByText("Already met").nextSibling).toHaveTextContent("1");
+	});
+});
+
 describe("RestockWorkflow — tracking capture (P8-2)", () => {
 	test("renders the existing-unit picker collapsed for a serialized line needing restock", async () => {
 		renderWorkflow([serializedStockItem]);

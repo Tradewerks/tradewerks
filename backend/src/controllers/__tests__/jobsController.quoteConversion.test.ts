@@ -12,6 +12,7 @@ const { mockDb } = vi.hoisted(() => {
 		job: { create: vi.fn(), findUnique: vi.fn() },
 		job_line_item: { createMany: vi.fn() },
 		technician: { findMany: vi.fn() },
+		tax_group: { count: vi.fn(async () => 1) },
 		$transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(mockDb)),
 		$extends,
 	};
@@ -40,6 +41,19 @@ vi.mock("../../services/appLogger.js", () => ({
 
 vi.mock("../../services/socketService.js", () => ({
 	getSocket: vi.fn(() => ({ emit: vi.fn() })),
+}));
+
+const { taxMode, recomputeJobTotals } = vi.hoisted(() => ({
+	taxMode: vi.fn(async () => "manual"),
+	recomputeJobTotals: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock("../../services/tax/taxMode.js", () => ({
+	getEffectiveTaxMode: taxMode,
+	dropClientTaxTotals: <T,>(p: T) => p,
+}));
+vi.mock("../../lib/recomputeDocumentTotals.js", () => ({
+	recomputeJobTotals,
+	holdsKeptRate: vi.fn(async () => false),
 }));
 
 import type { Request } from "express";
@@ -173,5 +187,63 @@ describe("converting a quote to a job", () => {
 			where: { id: QUOTE },
 			data: { status: "Approved" },
 		});
+	});
+
+	it("carries each quote line's taxable flag and tax group onto the job", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(
+			aQuote({
+				line_items: [
+					{
+						name: "Labor",
+						description: null,
+						quantity: 1,
+						unit_price: 100,
+						total: 100,
+						item_type: "labor",
+						inventory_item_id: null,
+						taxable: false,
+						tax_group_id: "11111111-1111-4111-8111-111111111111",
+					},
+				],
+			}),
+		);
+
+		await convert();
+
+		const line = mockFn(db.job_line_item.createMany).mock.calls[0][0].data[0];
+		expect(line).toMatchObject({
+			taxable: false,
+			tax_group_id: "11111111-1111-4111-8111-111111111111",
+		});
+		for (const k of ["tax_category", "taxability_source", "work_class"]) {
+			expect(line).not.toHaveProperty(k);
+		}
+		expect(mockFn(db.job.create).mock.calls[0][0].data).not.toHaveProperty("work_class");
+		expect(recomputeJobTotals).not.toHaveBeenCalled();
+	});
+
+	it("recomputes the new job server-side in auto mode", async () => {
+		taxMode.mockResolvedValueOnce("auto");
+		mockFn(db.quote.findUnique).mockResolvedValue(
+			aQuote({
+				line_items: [
+					{
+						name: "Labor",
+						description: null,
+						quantity: 1,
+						unit_price: 100,
+						total: 100,
+						item_type: "labor",
+						inventory_item_id: null,
+						taxable: true,
+						tax_group_id: null,
+					},
+				],
+			}),
+		);
+
+		await convert();
+
+		expect(recomputeJobTotals).toHaveBeenCalledWith("j1", "org1", mockDb);
 	});
 });

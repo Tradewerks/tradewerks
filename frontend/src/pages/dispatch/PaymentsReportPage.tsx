@@ -15,6 +15,7 @@ import ReportPagination from "../../components/reports/ReportPagination";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -37,8 +38,11 @@ const COLS: ColumnOption[] = [
 	{ key: "note", label: "Note" },
 ];
 
+const NUMERIC_KEYS = ["amount"];
+const DATE_KEYS = ["paidAt"];
+
 const HEADER_LABELS = buildHeaderLabels(COLS);
-const COLUMN_ALIGN = buildColumnAlign(COLS, ["amount"]);
+const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
 
 interface PaymentsSummary {
 	totalCollected?: number;
@@ -60,6 +64,7 @@ export default function PaymentsReportPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -67,8 +72,8 @@ export default function PaymentsReportPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = usePaymentsReportQuery(queryParams);
@@ -77,7 +82,7 @@ export default function PaymentsReportPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = useMemo(() => (data?.summary ?? {}) as PaymentsSummary, [data]);
 
-	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -172,7 +177,7 @@ export default function PaymentsReportPage() {
 									filename: datedFilename("payments-collected"),
 									sheetName: "Payments",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -218,6 +223,7 @@ export default function PaymentsReportPage() {
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
 							onRowClick={(row) => navigate(`/dispatch/invoices/${row._invoiceId as string}`)}
+							{...tableProps}
 						/>
 						<ReportPagination
 							page={page}

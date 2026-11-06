@@ -54,13 +54,15 @@ export const updateTechnician = async (id: string, data: UpdateTechnicianInput):
 };
 
 export const deleteTechnician = async (id: string): Promise<{ message: string; id: string }> => {
-	const response = await api.delete<ApiResponse<{ message: string; id: string }>>(`/technicians/${id}`);
+	try {
+		const response = await api.delete<ApiResponse<{ message: string; id: string }>>(`/technicians/${id}`);
 
-	if (!response.data.success) {
-		throw new Error(response.data.error?.message || 'Failed to delete technician');
+		return response.data.data || { message: 'Technician deleted successfully', id };
+	} catch (err) {
+		throw new Error(
+			(isAxiosError(err) && err.response?.data?.error?.message) || "Failed to delete technician"
+		);
 	}
-
-	return response.data.data || { message: 'Technician deleted successfully', id };
 };
 
 export const setTechnicianCurrentVehicle = async (technicianId: string, vehicleId: string | null): Promise<void> => {

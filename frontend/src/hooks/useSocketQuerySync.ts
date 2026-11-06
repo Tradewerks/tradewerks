@@ -16,6 +16,7 @@ import type {
 	JobVisitCreatedEvent,
 	JobVisitUpdatedEvent,
 	JobVisitDeletedEvent,
+	ProjectUpdatedEvent,
 	VisitStatusEvent,
 } from "../types/socketEvents";
 
@@ -64,6 +65,13 @@ export function useSocketQuerySync(): void {
 		};
 		const onJobNoteCreated = (_event: JobNoteCreatedEvent) => {
 			qc.invalidateQueries({ queryKey: JOB_VISITS_KEY });
+		};
+		// Attach/detach moves a job between projects, so jobs refetch too.
+		const onProjectUpdated = (event: ProjectUpdatedEvent) => {
+			qc.invalidateQueries({ queryKey: ["projects"] });
+			qc.invalidateQueries({ queryKey: ["project", event.projectId] });
+			qc.invalidateQueries({ queryKey: ["clientProjects"] });
+			qc.invalidateQueries({ queryKey: ["jobs"] });
 		};
 		/**
 		 * Every field-purchase transition. `fieldPurchases.all` is the prefix for the
@@ -129,6 +137,7 @@ export function useSocketQuerySync(): void {
 		socket.on("job_visit:created", onJobVisitCreatedOrDeleted);
 		socket.on("job_visit:deleted", onJobVisitCreatedOrDeleted);
 		socket.on("job_note:created", onJobNoteCreated);
+		socket.on("project:updated", onProjectUpdated);
 		socket.on("field_purchase:submitted", onFieldPurchaseChanged);
 		socket.on("field_purchase:reviewed", onFieldPurchaseChanged);
 		socket.on("field_purchase:preauth_requested", onFieldPurchaseChanged);
@@ -148,6 +157,7 @@ export function useSocketQuerySync(): void {
 			socket.off("job_visit:created", onJobVisitCreatedOrDeleted);
 			socket.off("job_visit:deleted", onJobVisitCreatedOrDeleted);
 			socket.off("job_note:created", onJobNoteCreated);
+			socket.off("project:updated", onProjectUpdated);
 			socket.off("field_purchase:submitted", onFieldPurchaseChanged);
 			socket.off("field_purchase:reviewed", onFieldPurchaseChanged);
 			socket.off("field_purchase:preauth_requested", onFieldPurchaseChanged);

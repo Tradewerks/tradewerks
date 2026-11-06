@@ -35,7 +35,7 @@ export default function QuickBooksSection() {
     }
 
     return (
-        <div className="rounded-lg border border-border-subtle bg-base px-5 py-5">
+        <div className="rounded-lg border border-border-subtle bg-base px-5 py-5 mb-5">
             <QBConnectionCard />
             {qbStatus?.connected && (
                 <div className="mt-4">

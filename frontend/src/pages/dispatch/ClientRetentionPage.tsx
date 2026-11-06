@@ -14,6 +14,7 @@ import ReportPagination from "../../components/reports/ReportPagination";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -35,6 +36,7 @@ const COLS: ColumnOption[] = [
 ];
 
 const NUMERIC_KEYS = ["lifetimeRevenue", "jobCount"] as const;
+const DATE_KEYS = ["lastActivity"];
 
 const HEADER_LABELS = buildHeaderLabels(COLS);
 const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
@@ -52,6 +54,7 @@ export default function ClientRetentionPage() {
 
 	const [lookbackDays, setLookbackDays] = useState(180);
 	const [page, setPage] = useState(0);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 	const [pageSize, setPageSize] = useState(50);
 
 	const searchTerms = useMemo(() => {
@@ -60,8 +63,8 @@ export default function ClientRetentionPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, lookbackDays, page, limit: pageSize }),
-		[searchTerms, lookbackDays, page, pageSize],
+		() => ({ searchTerms, lookbackDays, page, limit: pageSize, ...sort }),
+		[searchTerms, lookbackDays, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useClientRetentionQuery(queryParams);
@@ -69,7 +72,7 @@ export default function ClientRetentionPage() {
 	const total = data?.total ?? 0;
 	const hasMore = data?.hasMore ?? false;
 
-	const filterKey = JSON.stringify([searchTerms, lookbackDays, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, lookbackDays, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -137,7 +140,7 @@ export default function ClientRetentionPage() {
 									filename: datedFilename("client-retention"),
 									sheetName: "Client Retention",
 									columns: visibleColumns,
-									params: { searchTerms, lookbackDays },
+									params: { searchTerms, lookbackDays, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -175,6 +178,7 @@ export default function ClientRetentionPage() {
 				) : (
 					<>
 						<AdaptableTable
+							{...tableProps}
 							data={displayRows}
 							loadListener={isLoading}
 							errListener={error}

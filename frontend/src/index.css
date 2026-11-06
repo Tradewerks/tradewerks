@@ -5,6 +5,10 @@
 @source not "./pages/LandingPage.tsx";
 @import "./styles/theme.css";
 
+/* Laptop height tier. Keys on CSS px, so browser zoom engages it too. Desktop
+   widths only: phones are under 800px tall too, and keep their own layout. */
+@custom-variant short (@media (min-width: 64rem) and (max-height: 799.98px));
+
 /* Tailwind 4 preflight leaves buttons at cursor:default. Inline/utility cursors
    (e.g. grab on draggable cards) still win over this base layer. */
 @layer base {
@@ -40,11 +44,8 @@ body {
 	overscroll-behavior: none;
 }
 
-/* Scrollbar */
 * {
 	font-family: "Inter";
-	scrollbar-width: thin;
-	scrollbar-color: var(--color-border) transparent;
 }
 
 /* Keyboard focus ring — visible only for keyboard/switch-device navigation,
@@ -54,19 +55,50 @@ body {
 	outline-offset: 2px;
 }
 
-::-webkit-scrollbar {
-	width: 6px;
-	height: 6px;
+/* Scrollbars. Chromium drops every ::-webkit-scrollbar rule on an element that
+   sets scrollbar-width or scrollbar-color, so the standard properties are kept to
+   browsers without the pseudo-elements (Firefox). The transparent border insets
+   the thumb from the edge and from the content beside it while the full track
+   width stays grabbable. Two sizes: page and panel scrollers get the default,
+   lists nested inside a panel opt into .scrollbar-thin. */
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--color-border) transparent;
+	}
 }
-::-webkit-scrollbar-track {
+::-webkit-scrollbar {
+	width: 12px;
+	height: 12px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
 	background: transparent;
 }
+::-webkit-scrollbar-button {
+	display: none;
+}
 ::-webkit-scrollbar-thumb {
-	background: var(--color-border);
-	border-radius: 3px;
+	background-color: var(--color-border);
+	background-clip: padding-box;
+	border: 3px solid transparent;
+	border-radius: 9999px;
+	min-height: 32px;
 }
 ::-webkit-scrollbar-thumb:hover {
-	background: var(--color-border-strong);
+	background-color: var(--color-border-strong);
+}
+::-webkit-scrollbar-thumb:active {
+	background-color: var(--color-text-faint);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+	border-width: 2px;
+	min-height: 24px;
 }
 
 /* Side nav — hide the scrollbar so it never consumes layout width and shifts
@@ -80,12 +112,14 @@ body {
 }
 
 /* Hover-reveal scrollbar — thumb hidden until container is hovered */
-.scrollbar-on-hover {
-	scrollbar-color: transparent transparent;
-	transition: scrollbar-color 0.2s ease;
-}
-.scrollbar-on-hover:hover {
-	scrollbar-color: var(--color-border) transparent;
+@supports not selector(::-webkit-scrollbar) {
+	.scrollbar-on-hover {
+		scrollbar-color: transparent transparent;
+		transition: scrollbar-color 0.2s ease;
+	}
+	.scrollbar-on-hover:hover {
+		scrollbar-color: var(--color-border) transparent;
+	}
 }
 .scrollbar-on-hover::-webkit-scrollbar-thumb {
 	background-color: transparent;
@@ -96,10 +130,12 @@ body {
 }
 
 /* Hide scrollbar entirely while keeping scroll behavior */
-.scrollbar-hide::-webkit-scrollbar {
+.scrollbar-hide::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
 	display: none;
 }
-.scrollbar-hide {
+.scrollbar-hide,
+.scrollbar-none {
 	-ms-overflow-style: none;
 	scrollbar-width: none;
 }
@@ -188,4 +224,21 @@ input[type="number"] {
 	to {
 		background-color: transparent;
 	}
+}
+
+/* iOS Safari zooms into any focused field under 16px; touch screens only, so desktop stays compact. */
+@media (pointer: coarse) {
+	input,
+	textarea,
+	select {
+		font-size: max(16px, 1em);
+	}
+}
+
+/* Disable animations and transitions for users who have prefers-reduced-motion set */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }

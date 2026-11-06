@@ -17,7 +17,9 @@ import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRange
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
-import PageReportSection from "../../components/reports/PageReportSection"
+import PageReportButton from "../../components/reports/PageReportButton"
+import PageReportKpis from "../../components/reports/PageReportKpis"
+import { usePageReport } from "../../components/reports/usePageReport"
 import SortControl from "../../components/ui/SortControl";
 import type { SortDir } from "../../util/sortUtil";
 import {
@@ -86,6 +88,7 @@ export default function QuotesPage() {
 
 	// permissions
 	const CREATE_QUOTE = usePermission("create_quotes");
+	const report = usePageReport("quotes", "Quotes report");
 
 	const { data: filterClient } = useClientByIdQuery(clientFilter);
 	const { data: filterRequest } = useRequestByIdQuery(requestFilter);
@@ -229,7 +232,8 @@ export default function QuotesPage() {
 
 	return (
 		<div className="text-text-primary">
-			<PageHeader title="Quotes">
+			<PageHeader title="Quotes" subtitle={<PageReportKpis report={report} />}>
+				<PageReportButton report={report} />
 				<button
 					title={!CREATE_QUOTE ? "You don't have permission to perform this action" : ""}
 					disabled={!CREATE_QUOTE}
@@ -243,7 +247,6 @@ export default function QuotesPage() {
 					New Quote
 				</button>
 			</PageHeader>
-			<PageReportSection page="quotes" label="Quotes report" />
 			<PageControls
 				className="mb-3"
 				left={

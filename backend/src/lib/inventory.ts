@@ -335,6 +335,10 @@ export function mergeUnitBases(bases: UnitBasis[]): UnitBasis {
  * and must be subtracted, not ignored — otherwise the item page says 5 were
  * used while the reorder forecast (which already nets) says 2.
  *
+ * A `supplier_purchase` landing straight on `consumed` is a field purchase used
+ * on the job it was bought for: real demand that never entered stock, so it has
+ * no receipt to be consumed against.
+ *
  * Both fragments expect the `stock_movement` table to be aliased **`sm`** in
  * the surrounding query. Embed them in a `$queryRaw` tagged template directly:
  *
@@ -347,6 +351,7 @@ export function mergeUnitBases(bases: UnitBasis[]): UnitBasis {
 export const CONSUMPTION_MOVEMENT_PREDICATE = Prisma.sql`(
 	sm.reason IN ('parts_used', 'direct_consumption')
 	OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed')
+	OR (sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed')
 )`;
 
 /** Signed qty for a row matched by {@link CONSUMPTION_MOVEMENT_PREDICATE}: reversals subtract. */

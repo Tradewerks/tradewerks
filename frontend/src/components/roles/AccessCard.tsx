@@ -185,6 +185,42 @@ const AccessCard = ({ user, tier, readOnly = false }: AccessCardProps) => {
 	}
 
 	const canEdit = !readOnly && MANAGE_ROLES && !!user.organization_role && user.role !== "admin";
+	// Areas with nothing granted are hidden, except while editing so they can be granted.
+	const data = editing ? tempRows : rows.filter((r) => r._perms.some((p) => p.held));
+
+	const pills = (r: PermRow) => (
+		<div className="flex flex-wrap gap-1.5">
+			{r._perms.map((p) => (
+				<span
+					key={p.id}
+					title={p.id}
+					aria-label={`${p.label}: ${p.held ? "granted" : "not granted"}${
+						editing && draft.has(p.id) !== savedPerms.has(p.id)
+							? " (unsaved change)"
+							: ""
+					}`}
+					className={`px-2.5 py-0.5 rounded-full border text-xs font-semibold leading-relaxed whitespace-nowrap ${
+						p.held
+							? "bg-primary-bg text-primary-text border-primary-border"
+							: "bg-transparent text-text-faint border-border border-dashed"
+					}
+						${editing ? "hover:cursor-pointer" : ""}
+						${
+							editing && draft.has(p.id) !== savedPerms.has(p.id)
+								? "ring-2 ring-warning ring-offset-1 ring-offset-base"
+								: ""
+						}
+					`}
+					onClick={() => {
+						if (!editing) return;
+						togglePerm(p.id);
+					}}
+				>
+					{p.label}
+				</span>
+			))}
+		</div>
+	);
 
 	return (
 		<>
@@ -224,7 +260,7 @@ const AccessCard = ({ user, tier, readOnly = false }: AccessCardProps) => {
 					) : undefined
 				}
 			>
-				<div>
+				<div className="@container">
 					<p className="text-xs text-text-muted mb-3">
 						{user.role === "admin" ? (
 							<>Full access comes from the Admin role directly, not from an organization role.</>
@@ -248,48 +284,25 @@ const AccessCard = ({ user, tier, readOnly = false }: AccessCardProps) => {
 							{saveError}
 						</div>
 					)}
-					<AdaptableTable
-						data={editing ? tempRows : rows}
-						cellRenderers={{
-							access: (row) => {
-								const r = row as PermRow;
-								return (
-									<div className="flex flex-wrap gap-1.5">
-										{r._perms.map((p) => (
-											<span
-												key={p.id}
-												title={p.id}
-												aria-label={`${p.label}: ${p.held ? "granted" : "not granted"}${
-													editing && draft.has(p.id) !== savedPerms.has(p.id)
-														? " (unsaved change)"
-														: ""
-												}`}
-												className={`px-2.5 py-0.5 rounded-full border text-xs font-semibold leading-relaxed whitespace-nowrap ${
-													p.held
-														? "bg-primary-bg text-primary-text border-primary-border"
-														: "bg-transparent text-text-faint border-border border-dashed"
-												}
-													${editing ? "hover:cursor-pointer" : ""}
-													${
-														editing && draft.has(p.id) !== savedPerms.has(p.id)
-															? "ring-2 ring-warning ring-offset-1 ring-offset-base"
-															: ""
-													}
-												`}
-												onClick={() => {
-													if (!editing) return;
-													togglePerm(p.id);
-												}}
-											>
-												{p.label}
-											</span>
-										))}
-									</div>
-								);
-							},
-						}}
-						columnAlign={{ granted: "right" }}
-					/>
+					{/* Narrow cards stack each area above its pills; the table needs ~420px. */}
+					<ul className="@md:hidden divide-y divide-border-subtle">
+						{data.map((r) => (
+							<li key={r.area} className="py-3">
+								<div className="flex items-baseline justify-between mb-2">
+									<span className="text-sm font-semibold text-text-primary">{r.area}</span>
+									<span className="text-xs text-text-tertiary tabular-nums">{r.granted}</span>
+								</div>
+								{pills(r)}
+							</li>
+						))}
+					</ul>
+					<div className="hidden @md:block">
+						<AdaptableTable
+							data={data}
+							cellRenderers={{ access: (row) => pills(row as PermRow) }}
+							columnAlign={{ granted: "right" }}
+						/>
+					</div>
 				</div>
 			</Card>
 

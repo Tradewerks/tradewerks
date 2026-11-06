@@ -103,7 +103,7 @@ export default function ProfitAndLossPage() {
 							Connect QuickBooks to view your Profit &amp; Loss statement.
 						</p>
 						<Link
-							to="/dispatch/admin"
+							to="/dispatch/admin?tab=integrations"
 							className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-primary hover:bg-primary-hover text-on-primary text-sm font-medium transition-colors"
 						>
 							Go to Integrations

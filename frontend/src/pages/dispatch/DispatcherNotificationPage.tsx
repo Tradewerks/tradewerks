@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import {
 	Bell, Clock, CheckCheck, Wrench, MailOpen, Settings, ShoppingCart, Receipt, PenLine, KeyRound,
-	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard, ClockAlert,
+	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard, ClockAlert, Percent, Unlink,
 } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useDispatcherNotificationsQuery, useMarkDispatcherNotificationReadMutation, useMarkAllDispatcherNotificationsReadMutation } from "../../hooks/useNotifications";
@@ -52,6 +52,8 @@ function NotificationIcon({ type }: { type: DispatcherNotificationType }): React
         case "quote_declined": return <ThumbsDown size={18} className={`${cls} text-error-text`} />;
         case "usage_limit_warning": return <Gauge size={18} className={`${cls} text-warning-text`} />;
         case "subscription_changed": return <CreditCard size={18} className={`${cls} text-text-secondary`} />;
+        case "tax_rate_changed": return <Percent size={18} className={`${cls} text-warning-text`} />;
+        case "qb_tax_code_needed": return <Unlink size={18} className={`${cls} text-warning-text`} />;
         case "trial_ending":
         case "upgrade_request_resolved": return <CreditCard size={18} className={`${cls} text-primary-text`} />;
         case "timesheet_issue_reported": return <ClockAlert size={18} className={`${cls} text-warning-text`} />;

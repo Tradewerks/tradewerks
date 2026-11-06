@@ -19,6 +19,8 @@ export function isJobTerminal(status: string): boolean {
 export interface JobActionContext {
 	status: JobStatus;
 	visitCount: number;
+	/** Job-level line items, billable without a visit. */
+	lineItemCount: number;
 	/** Visits that are neither Completed nor Cancelled. Feeds the page's stat tile. */
 	openVisitCount: number;
 	canEdit: boolean;
@@ -50,8 +52,8 @@ export function jobActions(ctx: JobActionContext): LifecycleAction[] {
 		? NO_PERMISSION
 		: ctx.status === "Cancelled"
 			? notApplicable("This job was cancelled.")
-			: ctx.visitCount === 0
-				? "This job has no visits yet, so there is nothing to invoice."
+			: ctx.visitCount === 0 && ctx.lineItemCount === 0
+				? "This job has no visits or line items yet, so there is nothing to invoice."
 				: null;
 
 	const cancelReason = !ctx.canEdit

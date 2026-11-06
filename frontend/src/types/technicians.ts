@@ -132,6 +132,8 @@ export interface Technician {
 	created_job_notes?: unknown[];
 	last_edited_job_notes?: unknown[];
 	role_id: string | null;
+	// Decimal serializes as a string. Only present for manage_technicians holders.
+	cost_rate?: string | null;
 	organization_role: { id: string; name: string } | null;
 	permissions: string[];
 	theme: "dark" | "light" | "system";
@@ -146,6 +148,7 @@ export interface CreateTechnicianInput {
 	title: string;
 	description?: string;
 	organization_role_id?: string | null;
+	cost_rate?: number | null;
 	status?: TechnicianStatus;
 	hire_date?: Date;
 	coords?: {
@@ -162,6 +165,7 @@ export interface UpdateTechnicianInput {
 	title?: string;
 	description?: string;
 	status?: TechnicianStatus;
+	cost_rate?: number | null;
 	hire_date?: Date;
 	last_login?: Date;
 	theme?: "dark" | "light" | "system";
@@ -179,6 +183,7 @@ export const CreateTechnicianSchema = z.object({
 	title: z.string().min(1, "Title is required"),
 	description: z.string().default(""),
 	organization_role_id: z.string().uuid("Invalid role ID").nullable().optional(),
+	cost_rate: z.number().min(0, "Cost rate cannot be negative").nullable().optional(),
 	status: z.enum(TechnicianStatusValues).default("Offline"),
 	hire_date: z.coerce
 		.date()
@@ -201,6 +206,7 @@ export const UpdateTechnicianSchema = z
 		title: z.string().min(1, "Title is required").optional(),
 		description: z.string().optional(),
 		status: z.enum(TechnicianStatusValues).optional(),
+		cost_rate: z.number().min(0, "Cost rate cannot be negative").nullable().optional(),
 		hire_date: z.coerce.date().optional(),
 		last_login: z.coerce.date().optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
@@ -214,6 +220,7 @@ export const UpdateTechnicianSchema = z
 			data.title !== undefined ||
 			data.description !== undefined ||
 			data.status !== undefined ||
+			data.cost_rate !== undefined ||
 			data.hire_date !== undefined ||
 			data.last_login !== undefined ||
 			data.theme !== undefined,

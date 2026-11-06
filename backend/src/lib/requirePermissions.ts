@@ -70,6 +70,14 @@ function resolvePerms(req: Request): string[] | null {
 	return Array.isArray(req.user?.permissions) ? (req.user.permissions as string[]) : [];
 }
 
+// Does the caller hold this permission on its own, ignoring any "or self" escape?
+// requirePermissionOrSelf lets a user through on identity alone, so a route that
+// also carries privileged fields needs this to tell the two cases apart.
+export const hasPermission = (req: Request, permission: string): boolean => {
+	const perms = resolvePerms(req);
+	return perms === null || perms.includes(permission);
+};
+
 export const requirePermission = (permission: string) => (req: Request, res: Response, next: NextFunction) => {
     const perms = resolvePerms(req);
     if (perms === null) return next();
