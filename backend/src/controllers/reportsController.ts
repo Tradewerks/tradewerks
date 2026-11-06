@@ -34,6 +34,7 @@ import {
 	ConsumptionCostRow,
 } from "../lib/reports/costing.js";
 import { buildShiftSegments } from "./timesheetController.js";
+import { truncate } from "node:fs";
 
 // Upper bound on rows pulled into memory for the in-JS report aggregations
 const REPORT_ROW_CAP = 10000;
@@ -4102,6 +4103,521 @@ export const getJobProfitabilityReport = async (
 		overheadRateSet: overheadRate != null,
 	};
 }
+
+// =========================================================================================================
+// Not Invoiced (Sold but unbilled)
+// =========================================================================================================
+
+export type NotInvoicedStage = "approved" | "in_progress" | "ready";
+type NotInvoicedRaw = {
+	clientId: string;
+	clientName: string;
+	stage: NotInvoicedStage;
+	kind: "job" | "quote";
+	id: string;
+	number: string;
+	title: string;
+	status: string;
+	date: Date | null;
+	value: number;
+	billed: number;
+	unbilled: number;
+}
+export type NotInvoicedItem = Omit<(NotInvoicedRaw[])[number], "clientId" | "clientName">;
+
+// Pre-tax throughout, since billed_amount is summed from pre-tax line totals.
+// Draft and Void invoices don't count as billed. Recurring plan jobs are left out:
+// scheduled billing never links their visits to invoices.
+export const getNotInvoicedReport = async (orgId: string, stage?: NotInvoicedStage) => {
+	const sdb = getScopedDb(orgId);
+
+	const rows = await sdb.$queryRaw<NotInvoicedRaw[]>`
+		WITH billed AS (
+			SELECT job_id, SUM(amt) AS billed
+			FROM (
+				SELECT ij.job_id, ij.billed_amount AS amt
+				FROM invoice_job ij
+				JOIN invoice i ON i.id = ij.invoice_id
+				WHERE i.organization_id = ${orgId}
+					AND i.status NOT IN ('Draft', 'Void')
+					AND ij.billed_amount IS NOT NULL
+				UNION ALL
+				SELECT v.job_id, iv.billed_amount
+				FROM invoice_visit iv
+				JOIN invoice i ON i.id = iv.invoice_id
+				JOIN job_visit v ON v.id = iv.visit_id
+				WHERE i.organization_id = ${orgId}
+					AND i.status NOT IN ('Draft', 'Void')
+			) b
+			GROUP BY job_id
+		),
+		jobs AS (
+			SELECT
+				j.client_id,
+				CASE WHEN j.status = 'Completed' THEN 'ready' ELSE 'in_progress' END AS stage,
+				'job' AS kind,
+				j.id,
+				j.job_number AS number,
+				j.name AS title,
+				j.status::text AS status,
+				CASE WHEN j.status = 'Completed' THEN j.completed_at ELSE j.created_at END AS date,
+				COALESCE(j.subtotal, 0) AS value,
+				COALESCE(b.billed, 0) AS billed
+			FROM job j
+			LEFT JOIN billed b ON b.job_id = j.id
+			WHERE j.organization_id = ${orgId}
+				AND j.recurring_plan_id IS NULL
+				AND j.status <> 'Cancelled'
+		),
+		quotes AS (
+			SELECT
+				q.client_id,
+				'approved' AS stage,
+				'quote' AS kind,
+				q.id,
+				q.quote_number AS number,
+				q.title,
+				q.status::text AS status,
+				q.approved_at AS date,
+				q.subtotal AS value,
+				0 AS billed
+			FROM quote q
+			WHERE q.organization_id = ${orgId}
+				AND q.status = 'Approved'
+				AND q.is_active = true
+				AND NOT EXISTS (SELECT 1 FROM job j WHERE j.quote_id = q.id)
+				AND NOT EXISTS (
+					SELECT 1 FROM job j
+					WHERE q.request_id IS NOT NULL AND j.request_id = q.request_id
+				)
+		)
+		SELECT
+			c.id   AS "clientId",
+			c.name AS "clientName",
+			x.stage, x.kind, x.id, x.number, x.title, x.status, x.date,
+			x.value::float  AS value,
+			x.billed::float AS billed,
+			GREATEST(x.value - x.billed, 0)::float AS unbilled
+		FROM (SELECT * FROM jobs UNION ALL SELECT * FROM quotes) x
+		JOIN client c ON c.id = x.client_id
+		WHERE GREATEST(x.value - x.billed, 0) > 0.005
+			${stage ? Prisma.sql`AND x.stage = ${stage}` : Prisma.empty}
+		ORDER BY c.name, x.date
+	`;
+
+	
+	const stageKey = { approved: "approved", in_progress: "inProgress", ready: "readyToBill" } as const;
+	const byClient = new Map<
+		string,
+		{
+			clientId: string;
+			clientName: string;
+			approved: number;
+			inProgress: number;
+			readyToBill: number;
+			total: number;
+			oldestDate: Date | null;
+			items: NotInvoicedItem[];
+		}
+	>();
+
+	for (const { clientId, clientName, ...item } of rows) {
+		let client = byClient.get(clientId);
+		if (!client) {
+			client = {
+				clientId,
+				clientName,
+				approved: 0,
+				inProgress: 0,
+				readyToBill: 0,
+				total: 0,
+				oldestDate: null,
+				items: [],
+			};
+			byClient.set(clientId, client);
+		}
+		const key = stageKey[item.stage];
+		client[key] = round2(client[key] + item.unbilled);
+		client.total = round2(client.total + item.unbilled);
+		if (item.date && (!client.oldestDate || item.date < client.oldestDate)) client.oldestDate = item.date;
+		client.items.push({
+			...item,
+			value: round2(item.value),
+			billed: round2(item.billed),
+			unbilled: round2(item.unbilled),
+		});
+	}
+
+	return [...byClient.values()].sort((a, b) => b.readyToBill - a.readyToBill || b.total - a.total);
+};
+
+// =========================================================================================================
+// Invoice lifecycle 
+// =========================================================================================================
+
+type InvoiceLifecycleRaw = {
+	id: string;
+	invoice_number: string;
+	status: string;
+	client_id: string;
+	client_name: string;
+	created_at: Date;
+	sent_at: Date | null;
+	due_date: Date | null;
+	paid_date: Date | null;
+	completed_at: Date | null;
+	completed_to_invoiced: number | null;
+	created_to_sent: number | null;
+	sent_to_paid: number | null;
+	created_to_paid: number | null;
+	days_late: number | null;
+}
+
+export type InvoiceLifecycleItem = {
+	id: string;
+	number: string;
+	status: string;
+	createdAt: Date;
+	sentAt: Date | null;
+	dueDate: Date | null;
+	paidDate: Date | null;
+	completedAt: Date | null;
+	completedToInvoiced: number | null;
+	createdToSent: number | null;
+	sentToPaid: number | null;
+	createdToPaid: number | null;
+	daysLate: number | null;
+};
+
+export const getInvoiceLifeCycleReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	orgId: string,
+	paymentStatus?: "open" | "paid",
+) => {
+	const statusFilter =
+		paymentStatus === "paid"
+			? Prisma.sql`AND i.status = 'Paid'`
+			: paymentStatus === "open"
+				? Prisma.sql`AND i.status <> 'Paid'`
+				: Prisma.empty;
+	const sdb = getScopedDb(orgId);
+	const df = buildDateFilter(startDate, endDate);
+
+	const rows = await sdb.$queryRaw<InvoiceLifecycleRaw[]>`
+        SELECT
+                i.id, i.invoice_number, i.status::text AS status,
+                i.client_id, c.name AS client_name,
+                iss.created_at, i.sent_at, i.due_date,
+                p.paid_date, jc.completed_at,
+                -- billed before the job finished (progress/deposit): not a delay, leave it out
+                CASE WHEN iss.created_at >= jc.completed_at
+                        THEN (EXTRACT(EPOCH FROM (iss.created_at - jc.completed_at)) / 86400)::float
+                END AS completed_to_invoiced,
+                (EXTRACT(EPOCH FROM (i.sent_at - iss.created_at)) / 86400)::float       AS created_to_sent,
+                (EXTRACT(EPOCH FROM (p.paid_date - i.sent_at)) / 86400)::float          AS sent_to_paid,
+                (EXTRACT(EPOCH FROM (p.paid_date - iss.created_at)) / 86400)::float     AS created_to_paid,
+                (COALESCE(p.paid_date, CASE WHEN i.due_date < NOW() THEN NOW() END)::date
+                        - i.due_date::date)::float AS days_late
+        FROM invoice i
+        JOIN client c ON c.id = i.client_id
+        -- issue_date, not created_at: imported/back-dated invoices are inserted later than issued
+        CROSS JOIN LATERAL (SELECT COALESCE(i.issue_date, i.created_at) AS created_at) iss
+        LEFT JOIN LATERAL (
+                SELECT MAX(ip.paid_at) AS paid_date
+                FROM invoice_payment ip
+                WHERE ip.invoice_id = i.id AND i.status = 'Paid'
+        ) p ON true
+        LEFT JOIN LATERAL (
+                SELECT MAX(j.completed_at) AS completed_at
+                FROM job j
+                WHERE j.id IN (
+                        SELECT ij.job_id FROM invoice_job ij WHERE ij.invoice_id = i.id
+                        UNION
+                        SELECT jv.job_id FROM invoice_visit iv
+                        JOIN job_visit jv ON jv.id = iv.visit_id
+                        WHERE iv.invoice_id = i.id
+                )
+        ) jc ON true
+        WHERE i.organization_id = ${orgId}
+                AND i.status NOT IN ('Draft', 'Void')
+                AND NOT EXISTS (SELECT 1 FROM document_dispute d WHERE d.adjustment_invoice_id = i.id)
+                ${df.gte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) >= ${df.gte}` : Prisma.empty}
+                ${df.lte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) <= ${df.lte}` : Prisma.empty}
+                ${statusFilter}
+        ORDER BY c.name, iss.created_at
+	`;
+
+	const byClient = new Map<string, { clientId: string; clientName: string; items: InvoiceLifecycleItem[] }>();
+	for (const r of rows) {
+		let client = byClient.get(r.client_id);
+		if (!client) {
+			client = { clientId: r.client_id, clientName: r.client_name, items: [] };
+			byClient.set(r.client_id, client);
+		}
+		client.items.push({
+			id: r.id,
+			number: r.invoice_number,
+			status: r.status,
+			createdAt: r.created_at,
+			sentAt: r.sent_at,
+			dueDate: r.due_date,
+			paidDate: r.paid_date,
+			completedAt: r.completed_at,
+			completedToInvoiced: round1(r.completed_to_invoiced),
+			createdToSent: round1(r.created_to_sent),
+			sentToPaid: round1(r.sent_to_paid),
+			createdToPaid: round1(r.created_to_paid),
+			daysLate: r.days_late,
+		});
+	}
+
+	return [...byClient.values()]
+		.map((c) => ({ ...c, ...lifecycleStats(c.items) }))
+		.sort((a, b) => (b.avgCreatedToPaid ?? -1) - (a.avgCreatedToPaid ?? -1));
+};
+
+const round1 = (n: number | null) => (n == null ? null : Math.round(n * 10) / 10);
+
+// Averages skip invoices missing either date. Shared with the registry summary so the
+// overall figures are weighted by invoice, not an average of client averages.
+export const lifecycleStats = (items: InvoiceLifecycleItem[]) => {
+	const avg = (key: keyof InvoiceLifecycleItem) => {
+		const vals = items.map((i) => i[key]).filter((v): v is number => typeof v === "number");
+		return vals.length ? round1(vals.reduce((s, v) => s + v, 0) / vals.length) : null;
+	};
+	const paidWithDue = items.filter((i) => i.paidDate && i.daysLate != null);
+	return {
+		invoiceCount: items.length,
+		openCount: items.filter((i) => i.status !== "Paid").length,
+		avgCompletedToInvoiced: avg("completedToInvoiced"),
+		avgCreatedToSent: avg("createdToSent"),
+		avgSentToPaid: avg("sentToPaid"),
+		avgCreatedToPaid: avg("createdToPaid"),
+		avgDaysLate: avg("daysLate"),
+		onTimePct: paidWithDue.length
+			? round1((paidWithDue.filter((i) => i.daysLate! <= 0).length / paidWithDue.length) * 100)
+			: null,
+	};
+};
+
+// =========================================================================================================
+// Purchases by supplier
+// =========================================================================================================
+
+export type PurchaseSource = "order" | "field";
+type PurchaseKind = "purchase" | "refund";
+
+type PurchasesBySupplierRaw = {
+	id: string;
+	number: string | null;
+	source: PurchaseSource;
+	kind: PurchaseKind;
+	status: string;
+	supplier_id: string | null;
+	supplier_name: string | null;
+	vendor_name: string | null;
+	tech_name: string | null;
+	date: Date;
+	subtotal: number;
+	tax: number;
+};
+
+export type PurchasesBySupplierItem = {
+	id: string;
+	number: string | null;
+	source: PurchaseSource;
+	kind: PurchaseKind;
+	status: string;
+	techName: string | null;
+	date: Date;
+	subtotal: number;
+	tax: number;
+};
+
+export const getPurchasesBySupplierReport = async (
+	startDate: string | undefined,
+	endDate: string | undefined,
+	orgId: string,
+	source?: PurchaseSource,
+) => {
+	const sdb = getScopedDb(orgId);
+	const df = buildDateFilter(startDate, endDate);
+
+	const rows = await sdb.$queryRaw<PurchasesBySupplierRaw[]>`
+		WITH p as (
+			-- purchase orders 
+			SELECT po.id, po.purchase_number as number, 'order' as source, po.kind::text AS kind, po.status::text AS status,
+				po.supplier_id, s.name AS supplier_name, po.vendor_name, NULL AS tech_name,
+				COALESCE(po.purchased_at, po.created_at) AS date,
+				(CASE WHEN po.kind = 'refund' THEN -1 ELSE 1 END * po.subtotal)::float AS subtotal,
+				(CASE WHEN po.kind = 'refund' THEN -1 ELSE 1 END * po.tax_amount)::float AS tax
+			FROM purchase po 
+			LEFT JOIN supplier s ON s.id = po.supplier_id 
+			WHERE po.organization_id = ${orgId}
+				AND po.status IN ('ordered', 'partially_received', 'received')
+
+			UNION ALL 
+
+			-- field purchases 
+			SELECT fp.id, fp.receipt_number, 'field', fp.kind::text, fp.status::text,
+				fp.supplier_id, s.name, fp.vendor_name, t.name,
+				COALESCE(fp.purchased_at, fp.created_at),
+				(CASE WHEN fp.kind = 'refund' THEN -1 ELSE 1 END * fp.subtotal)::float,
+				(CASE WHEN fp.kind = 'refund' THEN -1 ELSE 1 END * fp.tax_amount)::float
+			FROM field_purchase fp 
+			LEFT JOIN supplier s ON s.id = fp.supplier_id
+			JOIN technician t ON t.id = fp.technician_id
+			WHERE fp.organization_id = ${orgId} 
+				AND fp.status = 'approved' 
+		)
+		SELECT * FROM p 
+		WHERE 1=1
+			${df.gte ? Prisma.sql`AND date >= ${df.gte}` : Prisma.empty}
+			${df.lte ? Prisma.sql`AND date <= ${df.lte}` : Prisma.empty}
+			${source ? Prisma.sql`AND source = ${source}` : Prisma.empty}
+		ORDER BY date DESC
+	`;
+
+	const bySupplier = new Map<string, {
+		supplierKey: string;
+		supplierId: string | null;
+		supplierName: string;
+		purchaseCount: number;
+		refundCount: number;
+		subtotal: number;
+		tax: number;
+		orderSpend: number;
+		fieldSpend: number;
+		lastPurchaseAt: Date;
+		items: PurchasesBySupplierItem[];
+	}>();
+	for (const r of rows) {
+		const vendor = r.vendor_name?.trim() || null;
+		// No supplier record merge on the typed vendor name
+		const key = r.supplier_id ?? (vendor ? `v:${vendor.toLowerCase()}` : "unknown");
+		let s = bySupplier.get(key);
+		if (!s) {
+			s = {
+				supplierKey: key,
+				supplierId: r.supplier_id,
+				supplierName: r.supplier_name ?? vendor ?? "Unknown vendor",
+				purchaseCount: 0,
+				refundCount: 0,
+				subtotal: 0,
+				tax: 0,
+				orderSpend: 0,
+				fieldSpend: 0,
+				lastPurchaseAt: r.date,
+				items: [],
+			};
+			bySupplier.set(key, s);
+		}
+		s.purchaseCount++;
+		if (r.kind === "refund") s.refundCount++;
+		s.subtotal += r.subtotal;
+		s.tax += r.tax;
+		if (r.source === "order") s.orderSpend += r.subtotal;
+		else s.fieldSpend += r.subtotal;
+		if (r.date > s.lastPurchaseAt) s.lastPurchaseAt = r.date;
+		s.items.push({
+			id: r.id,
+			number: r.number,
+			source: r.source,
+			kind: r.kind,
+			status: r.status,
+			techName: r.tech_name,
+			date: r.date,
+			subtotal: r.subtotal,
+			tax: r.tax,
+		});
+	}
+
+	return [...bySupplier.values()]
+		.map((s) => ({
+			...s,
+			subtotal: round2(s.subtotal),
+			tax: round2(s.tax),
+			orderSpend: round2(s.orderSpend),
+			fieldSpend: round2(s.fieldSpend),
+		}))
+		.sort((a, b) => b.subtotal - a.subtotal);
+};
+
+// =========================================================================================================
+// Sales by Product 
+// =========================================================================================================
+
+type SalesByProductRaw = {
+	itemId: string;
+	itemName: string;
+	unitsSold: number;
+	invoiceCount: number;
+	grossRevenue: number;
+	discount: number;
+	cost: number | null;
+	lastSold: Date;
+};
+
+export type SalesByProductItem = {
+	id: string;
+	itemName: string;
+	unitsSold: number;
+	invoiceCount: number;
+	grossRevenue: number;
+	discount: number;
+	netRevenue: number;
+	cost: number | null;
+	grossProfit: number | null;
+	marginPct: number | null;
+	lastSold: Date;
+};
+
+export const getSalesByProduct = async (startDate: string | undefined, endDate: string | undefined, orgId: string) => {
+	const sdb = getScopedDb(orgId);
+	const df = buildDateFilter(startDate, endDate);
+
+	const rows = await sdb.$queryRaw<SalesByProductRaw[]>`
+		SELECT
+			ii.id                                     AS "itemId",
+			ii.name                                   AS "itemName",
+			SUM(ili.quantity)::float                  AS "unitsSold",
+			COUNT(DISTINCT i.id)::int                 AS "invoiceCount",
+			SUM(ili.total)::float                     AS "grossRevenue",
+			COALESCE(SUM(ili.total / NULLIF(i.subtotal, 0) * COALESCE(i.discount_amount, 0)), 0)::float AS "discount",
+			(SUM(ili.quantity) * ii.cost)::float      AS "cost",
+			MAX(COALESCE(i.issue_date, i.created_at)) AS "lastSold"
+		FROM invoice_line_item ili
+		JOIN invoice i ON i.id = ili.invoice_id
+		JOIN inventory_item ii ON ii.id = ili.inventory_item_id
+		WHERE i.organization_id = ${orgId}
+			AND i.status NOT IN ('Draft', 'Void')
+			${df.gte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) >= ${df.gte}` : Prisma.empty}
+			${df.lte ? Prisma.sql`AND COALESCE(i.issue_date, i.created_at) <= ${df.lte}` : Prisma.empty}
+		GROUP BY ii.id, ii.name, ii.cost
+		LIMIT ${REPORT_ROW_CAP}
+	`;
+
+	return { rows: rows
+		.map((r): SalesByProductItem => {
+			const netRevenue = round2(r.grossRevenue - r.discount);
+			const grossProfit = r.cost === null ? null : round2(netRevenue - r.cost);
+			return {
+				id: r.itemId,
+				itemName: r.itemName,
+				unitsSold: round2(r.unitsSold),
+				invoiceCount: r.invoiceCount,
+				grossRevenue: round2(r.grossRevenue),
+				discount: round2(r.discount),
+				netRevenue,
+				cost: r.cost === null ? null : round2(r.cost),
+				grossProfit,
+				marginPct: grossProfit === null || netRevenue === 0 ? null : round2((grossProfit / netRevenue) * 100),
+				lastSold: r.lastSold,
+			};
+		})
+		.sort((a, b) => b.netRevenue - a.netRevenue), truncated: rows.length >= REPORT_ROW_CAP}
+};
 
 // =========================================================================================================
 // Page Summary

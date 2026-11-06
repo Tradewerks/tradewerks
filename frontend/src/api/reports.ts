@@ -35,6 +35,9 @@ const buildReportParams = (p: ReportFetchParams): Record<string, string> => {
 	if (p.limit != null) q.limit = String(p.limit);
 	if (p.include_inactive) q.include_inactive = "true";
 	if (p.lookbackDays != null) q.lookbackDays = String(p.lookbackDays);
+	if (p.paymentStatus) q.paymentStatus = p.paymentStatus;
+	if (p.stage) q.stage = p.stage;
+	if (p.source) q.source = p.source;
 	return q;
 };
 
@@ -275,6 +278,34 @@ export const getClientDiscountsReport = (params: ReportFetchParams = {}): Promis
 		"/reports/clients/discounts",
 		params,
 		"Failed to fetch client discounts report",
+	);
+
+export const getNotInvoicedReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
+	fetchPaginated(
+		"/reports/clients/not-invoiced",
+		params,
+		"Failed to fetch not invoiced report",
+	);
+
+export const getInvoiceLifecycleReport = (params: ReportFetchParams = {}): Promise<Paginated> =>
+	fetchPaginated(
+		"/reports/clients/invoice-lifecycle",
+		params,
+		"Failed to fetch invoice lifecycle report",
+	);
+
+export const getPurchasesBySupplierReport = (params: ReportFetchParams = {}): Promise<Paginated> => 
+	fetchPaginated(
+		"/reports/purchases-by-supplier",
+		params,
+		"Failed to fetch purchases by supplier report"
+	);
+
+export const getSalesByProductReport = (params: ReportFetchParams = {}): Promise<Paginated> => 
+	fetchPaginated(
+		"/reports/sales-by-product",
+		params,
+		"Failed to fetch sales by product report"
 	);
 
 export const getFieldAddedRevenueReport = (params: ReportFetchParams = {}): Promise<Paginated> =>

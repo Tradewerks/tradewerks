@@ -49,6 +49,9 @@ const buildReportQuery = (q: Record<string, unknown>): ReportQuery => {
 		endDate: typeof q.endDate === "string" ? q.endDate : undefined,
 		includeInactive: q.include_inactive === "true" ? true : undefined,
 		lookbackDays: Number.isFinite(lookback) && lookback > 0 ? lookback : undefined,
+		paymentStatus: q.paymentStatus === "open" || q.paymentStatus === "paid" ? q.paymentStatus : undefined,
+		stage: q.stage === "approved" || q.stage === "in_progress" || q.stage === "ready" ? q.stage : undefined,
+		source: q.source === "order" || q.source === "field" ? q.source : undefined,
 	};
 };
 
@@ -410,6 +413,63 @@ router.get("/clients/discounts", requirePermission("view_reports"), async (req, 
 	}
 });
 
+router.get("/clients/not-invoiced", requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const { data, meta } = await handlePaginatedReport(
+			"not-invoiced",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.get("/clients/invoice-lifecycle", requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const { data, meta } = await handlePaginatedReport(
+			"invoice-lifecycle",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch (err) {
+		next(err);
+	}
+});
+
+router.get("/purchases-by-supplier", requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const { data, meta } = await handlePaginatedReport(
+			"purchases-by-supplier",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch (err) {
+		next(err);
+	}
+})
+
+router.get("/sales-by-product", requirePermission("view_reports"), async (req, res, next) => {
+	try {
+		const orgId = req.user!.organization_id as string;
+		const { data, meta } = await handlePaginatedReport(
+			"sales-by-product",
+			orgId,
+			req.query as Record<string, unknown>,
+		);
+		res.json(createSuccessResponse(data, meta));
+	} catch (err) {
+		next(err);
+	}
+});
+
+
 router.get("/payments", requirePermission("view_reports"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
@@ -652,6 +712,9 @@ router.post("/export/server", requirePermission("export_reports"), async (req, r
 			endDate: rest.endDate,
 			includeInactive: rest.includeInactive,
 			lookbackDays: rest.lookbackDays,
+			paymentStatus: rest.paymentStatus,
+			stage: rest.stage,
+			source: rest.source,
 		});
 		const filtered = filterRows(rows, {
 			search: rest.search,

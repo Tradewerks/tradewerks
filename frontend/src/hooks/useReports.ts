@@ -183,6 +183,18 @@ export const useClientLifetimeValueQuery = (params: ReportFetchParams) =>
 export const useClientDiscountsQuery = (params: ReportFetchParams) =>
 	usePaginatedReport(["client-discounts"], reportsApi.getClientDiscountsReport, params);
 
+export const useNotInvoicedQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["not-invoiced"], reportsApi.getNotInvoicedReport, params);
+
+export const useInvoiceLifecycleQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["invoice-lifecycle"], reportsApi.getInvoiceLifecycleReport, params);
+
+export const usePurchasesBySupplierQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["purchases-by-supplier"], reportsApi.getPurchasesBySupplierReport, params);
+
+export const useSalesByProductQuery = (params: ReportFetchParams) =>
+	usePaginatedReport(["sales-by-product"], reportsApi.getSalesByProductReport, params);
+
 export const useFieldAddedRevenueQuery = (params: ReportFetchParams) =>
 	usePaginatedReport(["field-added-revenue"], reportsApi.getFieldAddedRevenueReport, params);
 

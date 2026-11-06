@@ -99,6 +99,10 @@ const DispatcherNotificationPage = lazy(() => import("./pages/dispatch/Dispatche
 const TimesheetPage = lazy(() => import("./pages/dispatch/Timesheet"));
 const TechnicianTimesheetPage = lazy(() => import("./pages/technician/TechnicianTimesheetPage"));
 const PlatformRoutes = lazy(() => import("./platform/PlatformRoutes"));
+const NotInvoicedPage = lazy(() => import("./pages/dispatch/NotInvoicedPage"));
+const InvoiceLifecyclePage = lazy(() => import("./pages/dispatch/InvoiceLifecyclePage"));
+const PurchasesBySupplierPage = lazy(() => import("./pages/dispatch/PurchasesBySupplierPage"));
+const SalesByProductPage = lazy(() => import("./pages/dispatch/SalesByProductPage"));
 
 function RequireAuth({ children }: { children: JSX.Element }) {
 	const { user, logout } = useAuthStore();
@@ -194,6 +198,10 @@ export default function AppRoutes() {
 				<Route path="reporting/client-retention" element={<RequirePermission permission="view_reports"><ClientRetentionPage /></RequirePermission>} />
 				<Route path="reporting/client-lifetime-value" element={<RequirePermission permission="view_reports"><ClientLifetimeValuePage /></RequirePermission>} />
 				<Route path="reporting/client-discounts" element={<RequirePermission permission="view_reports"><ClientDiscountsPage /></RequirePermission>} />
+				<Route path="reporting/not-invoiced" element={<RequirePermission permission="view_reports"><NotInvoicedPage /></RequirePermission>} />
+				<Route path="reporting/invoice-lifecycle" element={<RequirePermission permission="view_reports"><InvoiceLifecyclePage /></RequirePermission>} />
+				<Route path="reporting/purchases-by-supplier" element={<RequirePermission permission="view_reports"><PurchasesBySupplierPage /></RequirePermission>} />
+				<Route path="reporting/sales-by-product" element={<RequirePermission permission="view_reports"><SalesByProductPage /></RequirePermission>} />
 				<Route path="reporting/profit-and-loss" element={<RequirePermission permission="view_reports"><ProfitAndLossPage /></RequirePermission>} />
 				<Route path="reporting/job-profitability" element={<RequirePermission permission="view_reports"><JobProfitabilityPage /></RequirePermission>} />
 				<Route path="reporting/qb/:reportType" element={<RequirePermission permission="view_reports"><QBReportPage /></RequirePermission>} />

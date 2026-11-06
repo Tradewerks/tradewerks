@@ -119,7 +119,17 @@ const REPORT_CATEGORIES: ReportCategory[] = [
 				title: "Job Profitability",
 				description: "Revenue, cost, and profit by job",
 				to: "/dispatch/reporting/job-profitability",
-			}
+			},
+			{
+				title: "Purchases By Supplier",
+				description: "Pre-tax spend per supplier, orders and field purchases",
+				to: "/dispatch/reporting/purchases-by-supplier",
+			},
+			{
+				title: "Sales By Product",
+				description: "Units, revenue and margin per inventory item",
+				to: "/dispatch/reporting/sales-by-product",
+			},
 		],
 	},
 	{
@@ -191,6 +201,16 @@ const REPORT_CATEGORIES: ReportCategory[] = [
 				description:
 					"Clients by total discount received",
 				to: "/dispatch/reporting/client-discounts",
+			},
+			{
+				title: "Not Invoiced",
+				description: "Approved, in-progress and completed work not yet billed",
+				to: "/dispatch/reporting/not-invoiced",
+			},
+			{
+				title: "Invoice Lifecycle",
+				description: "How long invoices take to send and get paid, by client",
+				to: "/dispatch/reporting/invoice-lifecycle",
 			},
 		],
 	},

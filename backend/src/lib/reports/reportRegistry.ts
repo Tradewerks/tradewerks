@@ -36,7 +36,18 @@ import {
 	QUOTES_SQL_COLUMNS,
 	PAYMENTS_SQL_COLUMNS,
 	REVENUE_LINE_ITEM_SQL_COLUMNS,
-	PROJECTS_SQL_COLUMNS
+	PROJECTS_SQL_COLUMNS,
+	getNotInvoicedReport,
+	getInvoiceLifeCycleReport,
+	lifecycleStats,
+	type InvoiceLifecycleItem,
+	getPurchasesBySupplierReport,
+	PurchasesBySupplierItem,
+	getSalesByProduct,
+	type SalesByProductItem,
+	NotInvoicedItem,
+	NotInvoicedStage,
+	PurchaseSource,
 } from "../../controllers/reportsController.js";
 import type { PaginateParams, ReportRow } from "./filterEngine.js";
 import { num, round2 } from "./numbers.js";
@@ -50,6 +61,9 @@ export interface ReportQuery {
 	endDate?: string;
 	includeInactive?: boolean;
 	lookbackDays?: number;
+	paymentStatus?: "open" | "paid";
+	stage?: NotInvoicedStage;
+	source?: PurchaseSource;
 }
 
 export interface ReportDefinition {
@@ -824,7 +838,142 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
 		// not new policy — it makes the in-memory path obey the same "only text
 		// columns are searchable" rule the SQL path already has.
 		searchKeys: ["jobNumber", "jobName", "clientName"],
-	}
+	},
+	"not-invoiced": {
+		load: async (orgId, q) => ({
+			rows: (await getNotInvoicedReport(orgId, q.stage)).map(({ clientId, ...r }) => ({
+				id: clientId,
+				...r,
+			})),
+		}),
+		filteredSummary: (rows) => {
+			const clientCount = rows.length;
+			const totalInProgress = round2(rows.reduce((s, r) => s + num(r.inProgress), 0));
+			const totalApproved = round2(rows.reduce((s, r) => s + num(r.approved), 0));
+			const totalReady = round2(rows.reduce((s, r) => s + num(r.readyToBill), 0));
+			const items = rows.flatMap((r) => r.items) as NotInvoicedItem[];
+			const agedBuckets = ["0-30", "31-60", "61-90", "90+"].map((bucket) => ({ bucket, in_progress: 0, approved: 0, ready: 0, total: 0 }));
+			for (const i of items) {
+				if (!i.date) continue;
+				const age = Math.floor((Date.now() - new Date(i.date).getTime()) / 86_400_000);
+				const bucket = agedBuckets[age <= 30 ? 0 : age <= 60 ? 1 : age <= 90 ? 2 : 3];
+				bucket.total += num(i.unbilled);
+				bucket[i.stage] += num(i.unbilled);
+			} 
+			agedBuckets.forEach((b) => { b.total = round2(b.total); b.in_progress = round2(b.in_progress); b.approved = round2(b.approved); b.ready = round2(b.ready); });
+			return { clientCount, totalInProgress, totalApproved, totalReady, agedBuckets };
+		},
+		searchKeys: ["clientName"],
+	},
+	"not-invoiced-items": {
+		load: async (orgId, q) => ({
+			rows: (await getNotInvoicedReport(orgId, q.stage))
+				.flatMap((r) =>
+					r.items.map((i) => ({
+						...i,
+						id: `${i.kind}:${i.id}`,
+						clientName: r.clientName,
+						status: i.status.replace(/([a-z])([A-Z])/g, "$1 $2"),
+						stage: { approved: "Approved", in_progress: "In progress", ready: "Ready to bill" }[i.stage],
+					})),
+				)
+				// oldest first, undated last
+				.sort((a, b) => (a.date?.getTime() ?? Infinity) - (b.date?.getTime() ?? Infinity)),
+		}),
+		searchKeys: ["clientName"],
+	},
+	"invoice-lifecycle": {
+		load: async (orgId, q) => ({
+			rows: (await getInvoiceLifeCycleReport(q.startDate, q.endDate, orgId, q.paymentStatus)).map(({ clientId, ...r }) => ({
+				id: clientId,
+				...r,
+			})),
+		}),
+		filteredSummary: (rows) => {
+			const { invoiceCount, avgCreatedToPaid, onTimePct } = lifecycleStats(
+				rows.flatMap((r) => r.items as InvoiceLifecycleItem[]),
+			);
+			const items = rows.flatMap((r) => r.items) as InvoiceLifecycleItem[];
+			const timeBuckets = ["Early", "On time", "1-15", "16-30", "31-60", "60+"].map((bucket) => ({ bucket, paid: 0, open: 0 }));
+			for (const i of items) {
+					const d = i.daysLate;
+					if (d == null) continue;
+					const bucket = d < 0 ? "Early" : d === 0 ? "On time" : d <= 15 ? "1-15" : d <= 30 ? "16-30" : d <= 60 ? "31-60" : "60+";
+					timeBuckets.find((b) => b.bucket === bucket)![i.paidDate ? "paid" : "open"] += 1;
+			}
+			return { clientCount: rows.length, invoiceCount, avgCreatedToPaid, onTimePct, timeBuckets };
+		},
+		searchKeys: ["clientName"],
+	},
+	"invoice-lifecycle-items": {
+		load: async (orgId, q) => ({
+			rows: (await getInvoiceLifeCycleReport(q.startDate, q.endDate, orgId, q.paymentStatus))
+				.flatMap((r) =>
+					r.items.map((i) => ({
+						...i,
+						clientName: r.clientName,
+						status: i.status.replace(/([a-z])([A-Z])/g, "$1 $2"),
+					})),
+				)
+				.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+		}),
+		searchKeys: ["clientName"],
+	},
+	"purchases-by-supplier": {
+		load: async (orgId, q) => ({
+			rows: (await getPurchasesBySupplierReport(q.startDate, q.endDate, orgId, q.source)).map(({ supplierKey, ...r}) => ({
+				id: supplierKey,
+				...r,
+			}))
+		}),
+		filteredSummary: (rows) => {
+			const supplierCount = rows.length;
+			const items = rows.flatMap((r) => r.items as PurchasesBySupplierItem[]);
+			const purchaseCount = items.length;
+			const netSpend = round2(items.reduce((s, i) => s + i.subtotal, 0));
+			const fieldSpend = items.filter((i) => i.source === "field").reduce((s, i) => s + i.subtotal, 0);
+			const fieldSharePct = netSpend ? round2((fieldSpend / netSpend) * 100) : null;
+			return { supplierCount, purchaseCount, netSpend, fieldSharePct };
+		},
+		searchKeys: ["supplierName"]
+	},
+	"purchases-by-supplier-items": {
+		load: async (orgId, q) => ({
+			rows: (await getPurchasesBySupplierReport(q.startDate, q.endDate, orgId, q.source))
+				.flatMap((r) =>
+					r.items.map((i) => ({
+						...i,
+						id: `${i.source}:${i.id}`,
+						supplierName: r.supplierName,
+						status: i.status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+						source: `${i.source === "order" ? "Order" : "Field"}${i.kind === "refund" ? " refund" : ""}`,
+					})),
+				)
+				.sort((a, b) => b.date.getTime() - a.date.getTime()),
+		}),
+		searchKeys: ["supplierName"],
+	},
+	"sales-by-product": {
+		load: async (orgId, q) => {
+			const { rows, truncated } = await getSalesByProduct(q.startDate, q.endDate, orgId);
+			return { rows, summary: { truncated } };
+		},
+		filteredSummary: (rows) => {
+			const items = rows as SalesByProductItem[];
+			const netRevenue = round2(items.reduce((s, i) => s + i.netRevenue, 0));
+			const costed = items.filter((i) => i.grossProfit !== null);
+			const costedNet = costed.reduce((s, i) => s + i.netRevenue, 0);
+			const grossProfit = round2(costed.reduce((s, i) => s + (i.grossProfit ?? 0), 0));
+			return {
+				productCount: items.length,
+				unitsSold: round2(items.reduce((s, i) => s + i.unitsSold, 0)),
+				netRevenue,
+				grossProfit,
+				marginPct: costedNet ? round2((grossProfit / costedNet) * 100) : null,
+			};
+		},
+		searchKeys: ["itemName"],
+	},
 };
 
 // Export and the in-memory fallback search by searchKeys; without it they search
