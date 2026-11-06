@@ -457,6 +457,7 @@ export default function JobDetailPage() {
 	const actions = jobActions({
 		status: job.status,
 		visitCount: visits.length,
+		lineItemCount: job.line_items?.length ?? 0,
 		openVisitCount,
 		canEdit: EDIT_JOB,
 		canCreateVisit: CREATE_JOB,
@@ -1410,7 +1411,9 @@ export default function JobDetailPage() {
 							isLoading={invoicesLoading}
 							scope={{ kind: "job", jobId: jobId! }}
 							scopeTotal={mergedSubtotal ?? 0}
-							canCreate={CREATE_INVOICE}
+							createDisabledReason={
+								actions.find((a) => a.id === "invoice")?.disabledReason ?? null
+							}
 							onCreate={() =>
 								setIsCreateInvoiceOpen(true)
 							}

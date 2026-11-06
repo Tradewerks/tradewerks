@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { Plus, Receipt, TriangleAlert } from "lucide-react";
 import Card from "../ui/Card";
 import { HEADER_BTN_SECONDARY, HEADER_BTN_SECONDARY_INERT } from "../ui/headerActions";
-import { NO_PERMISSION } from "../lifecycle/actionBuilder";
 import {
 	InvoiceStatusColors,
 	InvoiceStatusLabels,
@@ -28,7 +27,8 @@ interface LinkedInvoicesCardProps {
 	scope: LinkedInvoicesScope;
 	/** The parent's line-item total — the denominator for the billing verdict. */
 	scopeTotal: number;
-	canCreate: boolean;
+	/** Why Create Invoice is blocked, or null when allowed. Same gate as the page's own button. */
+	createDisabledReason: string | null;
 	onCreate: () => void;
 	tz?: string;
 }
@@ -106,11 +106,12 @@ export default function LinkedInvoicesCard({
 	isError,
 	scope,
 	scopeTotal,
-	canCreate,
+	createDisabledReason,
 	onCreate,
 	tz,
 }: LinkedInvoicesCardProps) {
 	const reasonId = useId();
+	const canCreate = createDisabledReason == null;
 	const scopeWord = scope.kind === "visit" ? "this visit" : "this job";
 	const verdict = deriveVerdict(invoices, scope, scopeTotal);
 
@@ -132,7 +133,7 @@ export default function LinkedInvoicesCard({
 			</button>
 			{!canCreate && (
 				<span id={reasonId} className="sr-only">
-					{NO_PERMISSION}
+					{createDisabledReason}
 				</span>
 			)}
 		</>

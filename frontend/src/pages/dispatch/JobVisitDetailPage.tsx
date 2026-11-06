@@ -50,6 +50,7 @@ import {
 	isVisitNonTerminalOffRamp,
 } from "../../components/lifecycle/visitActions";
 import { placeActions } from "../../components/lifecycle/placement";
+import { NO_PERMISSION } from "../../components/lifecycle/actionBuilder";
 import type { LifecycleStage } from "../../components/lifecycle/types";
 import { HEADER_PILL } from "../../components/documents/DocumentLineage";
 import { snapshotSource } from "../../types/tax";
@@ -810,7 +811,7 @@ export default function JobVisitDetailPage() {
 								visitId: visitId!,
 							}}
 							scopeTotal={visitTotal}
-							canCreate={CREATE_INVOICE}
+							createDisabledReason={CREATE_INVOICE ? null : NO_PERMISSION}
 							onCreate={() =>
 								setIsCreateInvoiceOpen(true)
 							}
