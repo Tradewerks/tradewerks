@@ -26,6 +26,8 @@ import type {
 	RevenueByLineItemTypeSummary,
 	ReportFetchParams,
 } from "../../types/reports";
+import { useReportSort } from "../../hooks/useReportSort";
+import { compareNumber, compareString, withDir } from "../../util/sortUtil";
 
 const COLS: ColumnOption[] = [
 	{ key: "label", label: "Type" },
@@ -62,16 +64,33 @@ export default function RevenueByLineItemTypePage() {
 		COLS,
 	);
 
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS);
+	const { sortKey, sortDir } = tableProps;
+
 	const displayRows = useMemo(
 		() =>
-			rows.map((r) => ({
+			(sortKey
+				? [...rows].sort(
+						withDir(
+							(a, b) =>
+								sortKey === "label"
+									? compareString(a.label, b.label)
+									: compareNumber(
+											Number(a[sortKey as keyof RevenueByLineItemTypeRow]),
+											Number(b[sortKey as keyof RevenueByLineItemTypeRow]),
+										),
+							sortDir,
+						),
+					)
+				: rows
+			).map((r) => ({
 				id: r.id,
 				label: r.label,
 				revenue: formatCurrency(Number(r.revenue)),
 				lineCount: r.lineCount,
 				pctOfTotal: `${r.pctOfTotal}%`,
 			})),
-		[rows],
+		[rows, sortKey, sortDir],
 	);
 
 	// The backend sums invoice_line_item.total, which is before any invoice-level
@@ -122,7 +141,7 @@ export default function RevenueByLineItemTypePage() {
 									filename: datedFilename("revenue-by-line-item-type"),
 									sheetName: "Revenue by Line Item Type",
 									columns: visibleColumns,
-									params: { startDate, endDate },
+									params: { startDate, endDate, ...sort },
 								})
 							}
 							disabled={(summary?.totalRevenue ?? 0) === 0}
@@ -152,6 +171,7 @@ export default function RevenueByLineItemTypePage() {
 							columnVisibility={columnVisibility}
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
+							{...tableProps}
 							onRowClick={(row) =>
 								navigate(
 									`/dispatch/reporting/revenue-by-line-item-type/${row.id as string}?${searchParams.toString()}`,

@@ -24,6 +24,7 @@ import {
 import { formatCurrency } from "../../util/util";
 import { parseDateRangeFromParams, resolveDateRange } from "../../util/dateRangeUtils";
 import { useJobProfitabilityReportQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import type { ReportFetchParams } from "../../types/reports";
 
 type ProfitView = "Gross" | "Net";
@@ -63,6 +64,8 @@ const NET_NUMERIC_KEYS = [
 	"profit",
 	"margin",
 ] as const;
+// Net view shows netProfit/netMargin under the gross keys; sort the server on what's shown.
+const NET_SORT_KEY: Record<string, string> = { profit: "netProfit", margin: "netMargin" };
 
 const VIEW_CONFIG = {
 	Gross: {
@@ -136,6 +139,14 @@ export default function JobProfitabilityPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort: viewSort, tableProps } = useReportSort(NET_NUMERIC_KEYS);
+	const sort = useMemo(
+		() =>
+			view === "Net" && viewSort.sortKey && NET_SORT_KEY[viewSort.sortKey]
+				? { ...viewSort, sortKey: NET_SORT_KEY[viewSort.sortKey] }
+				: viewSort,
+		[view, viewSort],
+	);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -143,8 +154,8 @@ export default function JobProfitabilityPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useJobProfitabilityReportQuery(queryParams);
@@ -154,7 +165,7 @@ export default function JobProfitabilityPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = useMemo(() => (data?.summary ?? {}) as ProfitSummary, [data]);
 
-	const filterKey = JSON.stringify([view, startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([view, startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -345,7 +356,7 @@ export default function JobProfitabilityPage() {
 									filename: datedFilename("job-profitability"),
 									sheetName: "Job Profitability",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -388,6 +399,7 @@ export default function JobProfitabilityPage() {
 							columnVisibility={columnVisibility}
 							headerLabels={headerLabels}
 							columnAlign={columnAlign}
+							{...tableProps}
 							onRowClick={(row) => navigate(`/dispatch/jobs/${row.id as string}`)}
 						/>
 						<ReportPagination

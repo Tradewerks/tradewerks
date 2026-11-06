@@ -67,6 +67,27 @@ export function compareNumber(a?: number | null, b?: number | null): number {
     return (a ?? 0) - (b ?? 0);
 }
 
+/** Sorts rows in place by `key`; nulls last in both directions. */
+export const sortRows = <T extends Record<string, unknown>>(
+    rows: T[],
+    key: string,
+    dir: SortDir,
+    dateKeys: readonly string[],
+) => {
+    const cmp = withDir((x: unknown, y: unknown) =>
+        dateKeys.includes(key)
+            ? compareDate(x as string, y as string)
+            : typeof x === "number"
+              ? compareNumber(x, y as number)
+              : compareString(String(x), String(y)), dir);
+    return rows.sort((a, b) => {
+        const x = a[key];
+        const y = b[key];
+        if (x == null || y == null) return Number(x == null) - Number(y == null);
+        return cmp(x, y);
+    });
+};
+
 export function withDir<T>(
     cmp: (a: T, b : T) => number,
     dir: SortDir,

@@ -101,6 +101,8 @@ const AdaptableTable = ({
 	stickyActions = false,
 }: AdaptableTableProps) => {
 	const [expandedId, setExpandedId] = useState<string | null>(null);
+	if (onSortChange && !sortableColumns) 
+		sortableColumns = columnVisibility;
 
 	const alignClass = (colId: string) => {
 		if (!columnAlign) return "";
@@ -211,7 +213,7 @@ const AdaptableTable = ({
 												header.id
 											}
 											onClick={() => {if (onSortChange && sortable(header.column.id)) onSortChange(header.column.id)}}
-											className={`${sortable(header.column.id) ? "cursor-pointer select-none" : ""} sticky top-0 border-b font-bold text-text-tertiary ${borderColor} ${PADDING} ${alignClass(header.column.id)} ${stickyCell(header.column.id, false)}`}
+											className={`${sortable(header.column.id) ? "cursor-pointer select-none" : ""} sticky top-0 border-b font-bold text-text-tertiary whitespace-nowrap ${borderColor} ${PADDING} ${alignClass(header.column.id)} ${stickyCell(header.column.id, false)}`}
 										>
 											{flexRender(
 												typeof header

@@ -24,6 +24,7 @@ import {
 import { formatCurrency } from "../../util/util";
 import { parseDateRangeFromParams, resolveDateRange } from "../../util/dateRangeUtils";
 import { useClientDiscountsQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import type {
 	ClientDiscountRow,
 	ClientDiscountSummary,
@@ -58,6 +59,7 @@ export default function ClientDiscountsPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS);
 
 	const dateRange = parseDateRangeFromParams(searchParams, "period");
 	const resolved = resolveDateRange(dateRange);
@@ -70,8 +72,8 @@ export default function ClientDiscountsPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, startDate, endDate, page, limit: pageSize }),
-		[searchTerms, startDate, endDate, page, pageSize],
+		() => ({ searchTerms, startDate, endDate, page, limit: pageSize, ...sort }),
+		[searchTerms, startDate, endDate, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useClientDiscountsQuery(queryParams);
@@ -80,7 +82,7 @@ export default function ClientDiscountsPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = data?.summary as ClientDiscountSummary | undefined;
 
-	const filterKey = JSON.stringify([searchTerms, startDate, endDate, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, startDate, endDate, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -161,7 +163,7 @@ export default function ClientDiscountsPage() {
 									filename: datedFilename("client-discounts"),
 									sheetName: "Client Discounts",
 									columns: visibleColumns,
-									params: { searchTerms, startDate, endDate },
+									params: { searchTerms, startDate, endDate, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -204,6 +206,7 @@ export default function ClientDiscountsPage() {
 							columnVisibility={columnVisibility}
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
+							{...tableProps}
 							onRowClick={(row) => navigate(`/dispatch/clients/${row.id as string}`)}
 						/>
 						<ReportPagination

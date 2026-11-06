@@ -16,6 +16,7 @@ import Card from "../../components/ui/Card";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -41,8 +42,11 @@ const COLS: ColumnOption[] = [
 	{ key: "daysToApprove", label: "Days to Approve" },
 ];
 
+const NUMERIC_KEYS = ["total", "daysToApprove"];
+const DATE_KEYS = ["createdAt", "sentAt", "viewedAt", "approvedAt"];
+
 const HEADER_LABELS = buildHeaderLabels(COLS);
-const COLUMN_ALIGN = buildColumnAlign(COLS, ["total", "daysToApprove"]);
+const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
 
 type QuoteSummary = Pick<
 	QuoteFunnelResponse,
@@ -61,6 +65,7 @@ export default function QuoteFunnelPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -68,8 +73,8 @@ export default function QuoteFunnelPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useQuoteFunnelQuery(queryParams);
@@ -78,7 +83,7 @@ export default function QuoteFunnelPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = data?.summary as QuoteSummary | undefined;
 
-	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -210,7 +215,7 @@ export default function QuoteFunnelPage() {
 									filename: datedFilename("quote-funnel"),
 									sheetName: "Quotes",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -253,6 +258,7 @@ export default function QuoteFunnelPage() {
 							columnVisibility={columnVisibility}
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
+							{...tableProps}
 						/>
 						<ReportPagination
 							page={page}

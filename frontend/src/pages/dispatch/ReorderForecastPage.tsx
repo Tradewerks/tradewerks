@@ -16,6 +16,7 @@ import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { useColumnVisibility, type ColumnOption } from "../../hooks/useColumnVisibility";
 import { camelCaseToRegular } from "../../util/util";
 import { useReorderForecastQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import {
@@ -53,6 +54,19 @@ const COLS = cols(
 // Hidden to fit the table on a laptop, not because the buyer doesn't need them,
 // so the export still carries them.
 const DEFAULT_HIDDEN = ["sku", "category", "warehouse", "vehicles"];
+
+const NUMERIC_KEYS = [
+	"onHand",
+	"warehouse",
+	"vehicles",
+	"reorderPoint",
+	"avgDailyUsage",
+	"daysOfStock",
+];
+// projectedStockout's raw "~Nov 5, 2026" doesn't parse server-side; daysOfStock gives the same order.
+const SORTABLE_COLUMNS = Object.fromEntries(
+	COLS.filter((c) => c.key !== "projectedStockout").map((c) => [c.key, true]),
+);
 
 const SEVERITY_ORDER: ReorderSeverity[] = ["critical", "warning", "healthy", "unknown"];
 
@@ -166,6 +180,7 @@ export default function ReorderForecastPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS);
 
 	// Severity lives in the URL alongside `search` so a dispatcher can hand
 	// someone "the critical list" as a link. Comma-separated; unknown values are
@@ -219,8 +234,8 @@ export default function ReorderForecastPage() {
 	);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, conditions, page, limit: pageSize }),
-		[searchTerms, conditions, page, pageSize],
+		() => ({ searchTerms, conditions, page, limit: pageSize, ...sort }),
+		[searchTerms, conditions, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useReorderForecastQuery(queryParams);
@@ -234,7 +249,7 @@ export default function ReorderForecastPage() {
 	const records = useMemo(() => (data?.summary?.chartRows ?? []) as ReorderForecastRow[], [data]);
 	const truncated = data?.summary?.truncated === true;
 
-	const filterKey = JSON.stringify([searchTerms, conditions, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, conditions, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -424,7 +439,7 @@ export default function ReorderForecastPage() {
 									// The same filters the table is under: the
 									// server regenerates the full filtered set
 									// rather than exporting the visible page.
-									params: { searchTerms, conditions },
+									params: { searchTerms, conditions, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -480,6 +495,8 @@ export default function ReorderForecastPage() {
 							errListener={error}
 							columnVisibility={tableVisibility}
 							columnClamp={COLUMN_CLAMP}
+							sortableColumns={SORTABLE_COLUMNS}
+							{...tableProps}
 							cellClass={{
 								health: (row) => HEALTH_CELL_CLASS[row.health as string] ?? "",
 							}}

@@ -17,6 +17,8 @@ import { formatDate, formatTime, camelCaseToRegular } from "../../util/util";
 import { useTimesheetsReportQuery } from "../../hooks/useReports";
 import { exportReport } from "../../api/reports";
 import { datedFilename } from "../../util/download";
+import { useReportSort } from "../../hooks/useReportSort";
+import { compareDate, compareNumber, compareString, withDir } from "../../util/sortUtil";
 
 const fmtHours = (h: number) => h.toFixed(1);
 
@@ -54,6 +56,11 @@ export default function TimesheetsReportPage() {
 
 	const records = useMemo(() => data ?? [], [data]);
 
+	const summarySort = useReportSort().tableProps;
+	const detailSort = useReportSort().tableProps;
+	const { sortKey: summaryKey, sortDir: summaryDir } = summarySort;
+	const { sortKey: detailKey, sortDir: detailDir } = detailSort;
+
 	// ── Summary ──────────────────────────────────────────────────────────
 	const { summaryRows, summaryStats } = useMemo(() => {
 		const dateFiltered = records.filter((r) =>
@@ -72,32 +79,44 @@ export default function TimesheetsReportPage() {
 			activeTerms.every((term) => name.toLowerCase().includes(term.toLowerCase())),
 		);
 
-		const built = surviving
-			.map(([name, recs]) => {
-				const grossHours = recs.reduce((s, r) => s + r.grossHours, 0);
-				const breakHours = recs.reduce((s, r) => s + r.breakHours, 0);
-				const payableHours = recs.reduce((s, r) => s + r.payableHours, 0);
-				return {
-					name,
-					payableHours,
-					row: {
-						id: name,
-						technician: name,
-						shifts: recs.length,
-						grossHours: fmtHours(grossHours),
-						breakHours: fmtHours(breakHours),
-						payableHours: fmtHours(payableHours),
-					},
-				};
-			})
-			.sort((a, b) => b.payableHours - a.payableHours);
+		type SummaryRaw = {
+			technician: string;
+			shifts: number;
+			grossHours: number;
+			breakHours: number;
+			payableHours: number;
+		};
+		const key = (summaryKey || "payableHours") as keyof SummaryRaw;
+		const built: SummaryRaw[] = surviving
+			.map(([name, recs]) => ({
+				technician: name,
+				shifts: recs.length,
+				grossHours: recs.reduce((s, r) => s + r.grossHours, 0),
+				breakHours: recs.reduce((s, r) => s + r.breakHours, 0),
+				payableHours: recs.reduce((s, r) => s + r.payableHours, 0),
+			}))
+			.sort(
+				withDir(
+					(a, b) =>
+						key === "technician"
+							? compareString(a.technician, b.technician)
+							: compareNumber(a[key] as number, b[key] as number),
+					summaryKey ? summaryDir : "desc",
+				),
+			);
 
 		const survivingRecords = surviving.flatMap(([, recs]) => recs);
 		const payableHours = survivingRecords.reduce((s, r) => s + r.payableHours, 0);
 		const shifts = survivingRecords.length;
 
 		return {
-			summaryRows: built.map((b) => b.row),
+			summaryRows: built.map((b) => ({
+				id: b.technician,
+				...b,
+				grossHours: fmtHours(b.grossHours),
+				breakHours: fmtHours(b.breakHours),
+				payableHours: fmtHours(b.payableHours),
+			})),
 			summaryStats: [
 				{
 					label: "Total Payable Hours",
@@ -111,7 +130,7 @@ export default function TimesheetsReportPage() {
 				},
 			] as StatCard[],
 		};
-	}, [records, dateRange, searchInput, terms]);
+	}, [records, dateRange, searchInput, terms, summaryKey, summaryDir]);
 
 	// ── Detail ───────────────────────────────────────────────────────────
 	const { detailRows, detailStats } = useMemo(() => {
@@ -129,7 +148,14 @@ export default function TimesheetsReportPage() {
 					formatDate(r.startedAt).toLowerCase().includes(term.toLowerCase()),
 				),
 			)
-			.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+			.sort(
+				withDir((a, b) => {
+					if (detailKey === "end") return compareDate(a.endedAt, b.endedAt);
+					if (detailKey === "grossHours" || detailKey === "breakHours" || detailKey === "payableHours")
+						return compareNumber(a[detailKey], b[detailKey]);
+					return compareDate(a.startedAt, b.startedAt);
+				}, detailKey ? detailDir : "desc"),
+			);
 
 		const detailRows = filtered.map((r) => ({
 			id: r.shiftId,
@@ -155,7 +181,7 @@ export default function TimesheetsReportPage() {
 				},
 			] as StatCard[],
 		};
-	}, [records, isSummaryView, techParam, dateRange, searchInput, terms]);
+	}, [records, isSummaryView, techParam, dateRange, searchInput, terms, detailKey, detailDir]);
 
 	const columnDefs = isSummaryView ? SUMMARY_COLS : DETAIL_COLS;
 	const { hidden, toggle, reset, columnVisibility, visibleColumns } = useColumnVisibility(
@@ -301,6 +327,7 @@ export default function TimesheetsReportPage() {
 						loadListener={isLoading}
 						errListener={error}
 						columnVisibility={columnVisibility}
+						{...(isSummaryView ? summarySort : detailSort)}
 						onRowClick={
 							isSummaryView
 								? (row) => handleTechClick(row.id as string)

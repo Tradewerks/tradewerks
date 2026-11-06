@@ -16,6 +16,7 @@ import FieldAddedRevenueTrendChart from "../../components/reports/FieldAddedReve
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -51,6 +52,7 @@ export default function FieldAddedRevenuePage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS);
 
 	const dateRange = parseDateRangeFromParams(searchParams, "period");
 	const resolved = resolveDateRange(dateRange);
@@ -63,8 +65,8 @@ export default function FieldAddedRevenuePage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, startDate, endDate, page, limit: pageSize }),
-		[searchTerms, startDate, endDate, page, pageSize],
+		() => ({ searchTerms, startDate, endDate, page, limit: pageSize, ...sort }),
+		[searchTerms, startDate, endDate, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useFieldAddedRevenueQuery(queryParams);
@@ -73,7 +75,7 @@ export default function FieldAddedRevenuePage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = data?.summary as FieldAddedRevenueSummary | undefined;
 
-	const filterKey = JSON.stringify([searchTerms, startDate, endDate, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, startDate, endDate, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -162,7 +164,7 @@ export default function FieldAddedRevenuePage() {
 									filename: datedFilename("field-added-revenue"),
 									sheetName: "Field-Added Revenue",
 									columns: visibleColumns,
-									params: { searchTerms, startDate, endDate },
+									params: { searchTerms, startDate, endDate, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -198,6 +200,7 @@ export default function FieldAddedRevenuePage() {
 				) : (
 					<>
 						<AdaptableTable
+							{...tableProps}
 							data={displayRows}
 							loadListener={isLoading}
 							errListener={error}

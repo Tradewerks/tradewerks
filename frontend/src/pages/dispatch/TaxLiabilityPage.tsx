@@ -24,6 +24,7 @@ import { formatCurrency } from "../../util/util";
 import { formatRatePercentLabel } from "../../lib/formatTax";
 import { parseDateRangeFromParams, resolveDateRange } from "../../util/dateRangeUtils";
 import { useTaxLiabilityReportQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import type { ReportFetchParams } from "../../types/reports";
 
 const COLS: ColumnOption[] = [
@@ -36,7 +37,8 @@ const COLS: ColumnOption[] = [
 ];
 
 const HEADER_LABELS = buildHeaderLabels(COLS);
-const COLUMN_ALIGN = buildColumnAlign(COLS, ["rate", "taxableBase", "taxCollected", "invoiceCount"]);
+const NUMERIC_KEYS = ["rate", "taxableBase", "taxCollected", "invoiceCount"];
+const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
 
 interface TaxSummary {
 	taxableBase?: number;
@@ -56,6 +58,7 @@ export default function TaxLiabilityPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -63,8 +66,8 @@ export default function TaxLiabilityPage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useTaxLiabilityReportQuery(queryParams);
@@ -73,7 +76,7 @@ export default function TaxLiabilityPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = useMemo(() => (data?.summary ?? {}) as TaxSummary, [data]);
 
-	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -139,7 +142,7 @@ export default function TaxLiabilityPage() {
 									filename: datedFilename("tax-liability"),
 									sheetName: "Tax Liability",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -183,6 +186,7 @@ export default function TaxLiabilityPage() {
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
 							footerRow={footerRow}
+							{...tableProps}
 						/>
 						<ReportPagination
 							page={page}
