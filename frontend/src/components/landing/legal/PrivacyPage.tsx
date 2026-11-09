@@ -10,7 +10,10 @@ const PROCESSORS = [
 	["Postmark", "Sending account, quote, invoice and follow-up emails"],
 	["Mapbox", "Maps, address search and drive-distance calculations"],
 	["OpenAI", "Powering the AI assistant and AI-assisted inventory import"],
-	["Mindee", "Reading totals and line items from receipt photos"],
+	[
+		"Amazon Web Services (Textract)",
+		"Reading totals and line items from receipt photos. We have opted out of AWS storing or using receipt content to improve its services",
+	],
 	["Grafana Cloud", "Application logs and performance monitoring"],
 	["Google and Microsoft", "Single sign-on, when you choose to use it"],
 	["Intuit QuickBooks", "Accounting sync, when your organization connects it"],

@@ -2567,6 +2567,12 @@ model field_purchase {
   // { field: 0..1 } for the header fields. Below OCR_LOW_CONFIDENCE the tech's UI
   // marks the field for attention - it never relaxes the mandatory verification.
   ocr_field_confidence Json @default("{}")
+  // OcrFlagSet from the read that produced this row. Null means no chips: legacy
+  // rows, skipped reads and failed reads - which the submit gate must not block on.
+  ocr_field_flags Json?
+  // { field: { state: "confirmed" | "edited", at } } - the technician's resolutions,
+  // reset whenever the receipt is read again because they answered the old read.
+  ocr_field_review Json @default("{}")
   // Snapshot of the extracted lines. Editing replaces the whole line set, so this
   // is the only thing left to diff the tech's corrections against at submit.
   ocr_lines        Json?
@@ -2574,6 +2580,13 @@ model field_purchase {
   ocr_error        String?   @db.Text
   ocr_line_count   Int?
   ocr_corrections  Int?
+  // Set by every write that marks a read pending. `updated_at` cannot stand in: any
+  // edit made during the read moves it. The sweeper re-runs a read pending past
+  // OCR_STALE_MS from here (partial index on it WHERE ocr_status = 'pending', added
+  // by hand in the migration) and compares-and-sets it to claim the row.
+  ocr_started_at   DateTime?
+  // Reads started for the current image; the sweeper gives up at OCR_MAX_ATTEMPTS.
+  ocr_attempts     Int       @default(0)
 
   // Deterministic check results as [{ code, message }], recomputed at submit.
   // Advisory: a flag routes dispatcher attention, it never rejects a purchase.

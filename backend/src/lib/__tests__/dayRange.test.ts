@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { utcDayRange, localDateString, localTimeOnDay } from "../dayRange.js";
+import { utcDayRange, localDateString, localTimeOnDay, wallClockToInstant } from "../dayRange.js";
 
 describe("utcDayRange", () => {
 	it("keeps UTC behaviour byte-identical when no timezone is asked for", () => {
@@ -89,5 +89,25 @@ describe("localTimeOnDay", () => {
 	it("works with UTC", () => {
 		const d = localTimeOnDay(new Date("2026-10-01T23:00:00Z"), "08:05", "UTC");
 		expect(d.toISOString()).toBe("2026-10-01T08:05:00.000Z");
+	});
+});
+
+describe("wallClockToInstant", () => {
+	it("reads a date-only receipt as local midnight, so it stays on its own day", () => {
+		const at = wallClockToInstant(new Date("2023-04-27T00:00:00Z"), "America/Chicago");
+		expect(at.toISOString()).toBe("2023-04-27T05:00:00.000Z");
+		expect(localDateString(at, "America/Chicago")).toBe("2023-04-27");
+	});
+
+	it("keeps the printed time and seconds, across DST", () => {
+		expect(
+			wallClockToInstant(new Date("2026-01-15T14:15:30Z"), "America/Chicago").toISOString(),
+		).toBe("2026-01-15T20:15:30.000Z");
+	});
+
+	it("leaves the value alone with no zone or UTC", () => {
+		const wall = new Date("2026-03-01T09:00:00Z");
+		expect(wallClockToInstant(wall, null)).toBe(wall);
+		expect(wallClockToInstant(wall, "UTC")).toBe(wall);
 	});
 });

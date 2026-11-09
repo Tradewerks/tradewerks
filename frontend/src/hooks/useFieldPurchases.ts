@@ -3,6 +3,7 @@ import { useMutation, useQueryClient, type UseMutationResult, type UseQueryResul
 import { moduleQuery } from "./moduleQuery";
 import { invalidate, qk } from "../lib/queryKeys";
 import * as api from "../api/fieldPurchases";
+import { isOcrReadStalled } from "../util/ocrRead";
 import type {
 	CreatePurchaseInput,
 	FieldPurchasePage,
@@ -340,8 +341,11 @@ export const useFieldPurchase = (
 		queryKey: qk.fieldPurchases.detail(id ?? ""),
 		queryFn: () => api.getPurchase(id!),
 		enabled: !!id,
-		refetchInterval: (query) =>
-			query.state.data?.purchase.ocr_status === "pending" ? 3000 : false,
+		// Not past the stale cutoff: that read is dead, and the page offers a retry.
+		refetchInterval: (query) => {
+			const p = query.state.data?.purchase;
+			return p?.ocr_status === "pending" && !isOcrReadStalled(p) ? 3000 : false;
+		},
 	});
 
 /**

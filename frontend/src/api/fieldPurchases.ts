@@ -380,6 +380,14 @@ export const retryOcr = async (id: string): Promise<void> => {
 
 const submitSheetSchema = z.object({
 	vendor_name: z.string().max(120).nullable().optional(),
+	receipt_number: z.string().max(64).nullable().optional(),
+	// null withdraws a review the server holds; the server stamps `at`.
+	field_reviews: z
+		.partialRecord(
+			z.enum(["vendor_name", "receipt_number", "purchased_at", "subtotal", "tax_amount", "total"]),
+			z.enum(["confirmed", "edited"]).nullable(),
+		)
+		.optional(),
 	purchased_at: z.string().optional(),
 	tax_amount: money.optional(),
 	total: money.optional(),

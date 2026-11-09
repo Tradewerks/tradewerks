@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 // Single source of truth for how wide technician content sits on desktop.
 // Mobile is unaffected: both tiers are max-w-lg until lg.
@@ -17,11 +17,17 @@ const WIDTH = {
 export default function TechPage({
 	width = "narrow",
 	className = "",
+	style,
 	children,
 }: {
 	width?: keyof typeof WIDTH;
 	className?: string;
+	style?: CSSProperties;
 	children: ReactNode;
 }) {
-	return <div className={`mx-auto w-full ${WIDTH[width]} ${className}`}>{children}</div>;
+	return (
+		<div className={`mx-auto w-full ${WIDTH[width]} ${className}`} style={style}>
+			{children}
+		</div>
+	);
 }

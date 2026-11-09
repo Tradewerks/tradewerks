@@ -12,6 +12,7 @@ import {
 import { useRetryOcr, useUploadReceipt } from "../../../hooks/useFieldPurchases";
 import { useToast } from "../../ui/useToast";
 import { errorMessage } from "../../../util/util";
+import { useOcrReadState } from "../../../util/ocrRead";
 import { captureFrom } from "./receiptCapture";
 import ReceiptScanner from "./ReceiptScanner";
 import ReceiptLightbox from "../../fieldPurchases/ReceiptLightbox";
@@ -47,8 +48,12 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 	// The dispatch viewer resets the same way on a url change.
 	useEffect(() => setRotation(0), [shown]);
 	const hasGeo = purchase.has_geo;
-	const reading = purchase.ocr_status === "pending";
-	const readFailed = purchase.ocr_status === "failed";
+	// A read pending past the server's cutoff died mid-flight (restart, deploy):
+	// offered the same retry as a failed one rather than spinning forever.
+	const readState = useOcrReadState(purchase);
+	const reading = readState === "reading";
+	const readStalled = readState === "stalled";
+	const readFailed = purchase.ocr_status === "failed" || readStalled;
 
 	async function onRetryOcr() {
 		try {
@@ -81,7 +86,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 						) : (
 							<MapPinOff aria-hidden size={12} />
 						)}
-						{hasGeo ? "Location recorded" : "No location"}
+						{hasGeo ? "Location recorded" : "No location recorded"}
 					</span>
 				)}
 			</div>
@@ -104,8 +109,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 							className="h-40 w-full object-cover object-top"
 						/>
 						<span className="absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 rounded-md bg-overlay px-2 py-1 text-xs font-medium text-text-primary">
-							<Maximize2 aria-hidden size={12} /> Tap to
-							read
+							<Maximize2 aria-hidden size={12} /> View
 						</span>
 					</button>
 					{viewing && (
@@ -143,9 +147,8 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 					purchase.ocr_line_count != null && (
 						<p className="mb-3 inline-flex items-center gap-1.5 text-xs text-text-muted">
 							<ScanLine aria-hidden size={12} /> Read{" "}
-							{purchase.ocr_line_count} line
-							{purchase.ocr_line_count === 1 ? "" : "s"} —
-							check each one against the paper.
+							{purchase.ocr_line_count} item
+							{purchase.ocr_line_count === 1 ? "" : "s"} from the photo.
 						</p>
 					)}
 				{hasReceipt && purchase.ocr_status === "skipped" && purchase.ocr_error && (
@@ -157,8 +160,9 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 				{hasReceipt && readFailed && editable && (
 					<div className="mb-3 flex items-center justify-between gap-2 rounded-md bg-warning-bg px-2.5 py-2">
 						<p className="text-xs text-warning-text">
-							Could not read the {copy.noun} — enter the
-							lines by hand.
+							{readStalled
+								? `Reading the ${copy.noun} failed.`
+								: `Couldn't read the ${copy.noun}. Enter the items by hand.`}
 						</p>
 						<button
 							type="button"

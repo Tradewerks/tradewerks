@@ -35,7 +35,7 @@ export default function LimitBreachNotice({
 		>
 			<p className="flex items-center gap-1.5 text-xs font-semibold text-warning-text">
 				<AlertTriangle size={12} aria-hidden className="flex-shrink-0" />
-				Over a limit — dispatch has to approve it
+				Over your limit — needs dispatch pre-approval
 			</p>
 			<ul className="mt-2 space-y-2">
 				{breaches.map((b) => {

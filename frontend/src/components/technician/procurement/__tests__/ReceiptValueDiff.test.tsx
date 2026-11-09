@@ -13,7 +13,12 @@ import ReceiptValueDiff from "../ReceiptValueDiff";
 describe("ReceiptValueDiff", () => {
 	test("says nothing when the receipt was never read for this field", () => {
 		const { container } = render(
-			<ReceiptValueDiff label="Vendor" entered="Ferguson" receipt={null} onUse={vi.fn()} />,
+			<ReceiptValueDiff
+				label="Vendor"
+				entered="Ferguson"
+				receipt={null}
+				onUse={vi.fn()}
+			/>
 		);
 		expect(container.textContent).toBe("");
 	});
@@ -25,7 +30,7 @@ describe("ReceiptValueDiff", () => {
 				entered=" Ferguson "
 				receipt="Ferguson"
 				onUse={vi.fn()}
-			/>,
+			/>
 		);
 		expect(container.textContent).toBe("");
 	});
@@ -37,7 +42,7 @@ describe("ReceiptValueDiff", () => {
 				entered="Fergusen"
 				receipt="Ferguson HVAC Supply"
 				onUse={vi.fn()}
-			/>,
+			/>
 		);
 		expect(screen.getByText(/Ferguson HVAC Supply/)).toBeTruthy();
 	});
@@ -51,7 +56,7 @@ describe("ReceiptValueDiff", () => {
 				entered="Fergusen"
 				receipt="Ferguson HVAC Supply"
 				onUse={onUse}
-			/>,
+			/>
 		);
 
 		expect(onUse).not.toHaveBeenCalled();
@@ -61,17 +66,95 @@ describe("ReceiptValueDiff", () => {
 
 	// Flagged on the entry path, not only in the dispatcher's panel after submit:
 	// the technician is the one holding the paper.
-	test("marks a field the provider was unsure of, agreement or not", () => {
+	test("shows a chip for a flagged field and Looks right resolves it", async () => {
+		const onConfirm = vi.fn();
+		const user = userEvent.setup();
 		render(
 			<ReceiptValueDiff
 				label="Tax"
+				field="tax_amount"
 				entered="4.27"
 				receipt="4.27"
-				confidence={0.62}
+				flag={{ kind: "unsure", confidence: 0.62, rule: null }}
+				onConfirm={onConfirm}
 				onUse={vi.fn()}
-			/>,
+			/>
 		);
-		expect(screen.getByText(/low confidence/i)).toBeTruthy();
+		expect(screen.getByText("Unsure")).toBeTruthy();
+		await user.click(screen.getByRole("button", { name: /looks right.*tax/i }));
+		expect(onConfirm).toHaveBeenCalled();
+	});
+
+	test("a resolved field keeps its chip but loses the button", () => {
+		render(
+			<ReceiptValueDiff
+				label="Tax"
+				field="tax_amount"
+				entered="4.27"
+				receipt="4.27"
+				flag={{ kind: "unsure", confidence: 0.62, rule: null }}
+				review="confirmed"
+				onConfirm={vi.fn()}
+				onUse={vi.fn()}
+			/>
+		);
+		// The technician's own screen: "by tech" would be speaking about them to them.
+		expect(screen.getByText("Checked")).toBeTruthy();
+		expect(screen.queryByText("Checked by tech")).toBeNull();
+		expect(screen.queryByRole("button", { name: /looks right/i })).toBeNull();
+		expect(screen.queryByText(/low confidence/i)).toBeNull();
+	});
+
+	test("Looks right stays on a field the technician can confirm but not change", () => {
+		const onConfirm = vi.fn();
+		render(
+			<ReceiptValueDiff
+				label="Vendor"
+				field="vendor_name"
+				entered="Ferguson"
+				receipt="Ferguson"
+				flag={{ kind: "unsure", confidence: 0.6, rule: null }}
+				editable={false}
+				confirmable
+				onConfirm={onConfirm}
+				onUse={vi.fn()}
+			/>
+		);
+		expect(screen.getByRole("button", { name: /looks right/i })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /use the receipt/i })).toBeNull();
+	});
+
+	test("not_found is a chip only, never a Looks right", () => {
+		render(
+			<ReceiptValueDiff
+				label="Tax"
+				field="tax_amount"
+				entered=""
+				receipt={null}
+				flag={{ kind: "not_found", confidence: null, rule: null }}
+				onConfirm={vi.fn()}
+				onUse={vi.fn()}
+			/>
+		);
+		expect(screen.getByText("Not found")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /looks right/i })).toBeNull();
+	});
+
+	test("no Looks right on a purchase that can no longer be edited", () => {
+		render(
+			<ReceiptValueDiff
+				label="Tax"
+				field="tax_amount"
+				entered="4.27"
+				receipt="4.27"
+				flag={{ kind: "unsure", confidence: 0.62, rule: null }}
+				editable={false}
+				onConfirm={vi.fn()}
+				onUse={vi.fn()}
+			/>
+		);
+		expect(screen.getByText("Unsure")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /looks right/i })).toBeNull();
 	});
 
 	/**
@@ -87,7 +170,7 @@ describe("ReceiptValueDiff", () => {
 				receipt="Ferguson HVAC Supply"
 				editable={false}
 				onUse={vi.fn()}
-			/>,
+			/>
 		);
 		// Still says what the receipt read - that is a fact about the record.
 		expect(screen.getByText(/Ferguson HVAC Supply/)).toBeTruthy();
@@ -106,21 +189,39 @@ describe("ReceiptValueDiff", () => {
 				receipt="24.90"
 				numeric
 				onUse={vi.fn()}
-			/>,
+			/>
 		);
 		expect(container.textContent).toBe("");
 	});
 
 	test("still flags money that really is different", () => {
 		render(
-			<ReceiptValueDiff label="total" entered="24.90" receipt="80.00" numeric onUse={vi.fn()} />,
+			<ReceiptValueDiff
+				label="total"
+				entered="24.90"
+				receipt="80.00"
+				numeric
+				onUse={vi.fn()}
+			/>
 		);
-		expect(screen.getByRole("button", { name: /use the receipt's total/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /use the receipt's total/i })
+		).toBeTruthy();
 	});
 
 	test("treats a blank money field as something the receipt can fill", () => {
-		render(<ReceiptValueDiff label="total" entered="" receipt="80.00" numeric onUse={vi.fn()} />);
-		expect(screen.getByRole("button", { name: /use the receipt's total/i })).toBeTruthy();
+		render(
+			<ReceiptValueDiff
+				label="total"
+				entered=""
+				receipt="80.00"
+				numeric
+				onUse={vi.fn()}
+			/>
+		);
+		expect(
+			screen.getByRole("button", { name: /use the receipt's total/i })
+		).toBeTruthy();
 	});
 
 	/**
@@ -149,18 +250,5 @@ describe("ReceiptValueDiff", () => {
 
 		await user.click(screen.getByRole("button", { name: /use the receipt's vendor/i }));
 		expect(document.activeElement).toBe(document.getElementById("vendor-input"));
-	});
-
-	test("stays quiet about a field the provider was sure of", () => {
-		render(
-			<ReceiptValueDiff
-				label="Tax"
-				entered="4.27"
-				receipt="4.27"
-				confidence={0.98}
-				onUse={vi.fn()}
-			/>,
-		);
-		expect(screen.queryByText(/low confidence/i)).toBeNull();
 	});
 });

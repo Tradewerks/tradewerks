@@ -15,6 +15,8 @@ import {
 import { provisionOrganization } from "../src/services/provisionOrganization.js";
 import { hashInviteToken } from "../src/lib/inviteToken.js";
 import { DAY_MS } from "../src/lib/dayRange.js";
+import { buildOcrFlags } from "../src/services/receiptOcr/flags.js";
+import { mapTextract, retainable } from "../src/services/receiptOcr/textract.js";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const db = new PrismaClient({ adapter });
@@ -60,6 +62,57 @@ function daysFromNow(offset: number): Date {
 	const chicagoDateStr = now.toLocaleDateString("en-CA", { timeZone: ORG_TIMEZONE }); // "YYYY-MM-DD"
 	const [y, mo, d] = chicagoDateStr.split("-").map(Number);
 	return new Date(Date.UTC(y, mo - 1, d + offset, 18, 0, 0));
+}
+
+interface SeedOcrHeader {
+	vendor: string;
+	vendorConf: number;
+	receiptNo: string | null;
+	/** Printed as on the paper, month first. */
+	date: string;
+	dateConf: number;
+	subtotal: number;
+	tax: number;
+	/** Null leaves the TOTAL line off the paper, so the total is calculated. */
+	total: number | null;
+	totalConf?: number;
+	taxConf?: number;
+}
+
+/**
+ * A small Textract-shaped payload plus the flags the app would have stored for it,
+ * computed by the real mapper so a seeded row cannot disagree with what a live read
+ * of the same payload would show.
+ */
+function seedTextractOcr(h: SeedOcrHeader) {
+	const field = (type: string, text: string, confidence: number) => ({
+		Type: { Text: type, Confidence: 99 },
+		ValueDetection: { Text: text, Confidence: confidence },
+		PageNumber: 1,
+	});
+	const money = (n: number) => `$${n.toFixed(2)}`;
+	const raw = retainable({
+		DocumentMetadata: { Pages: 1 },
+		ExpenseDocuments: [
+			{
+				ExpenseIndex: 1,
+				SummaryFields: [
+					field("VENDOR_NAME", h.vendor, h.vendorConf * 100),
+					...(h.receiptNo ? [field("INVOICE_RECEIPT_ID", h.receiptNo, 92)] : []),
+					field("INVOICE_RECEIPT_DATE", h.date, h.dateConf * 100),
+					field("SUBTOTAL", money(h.subtotal), 96),
+					field("TAX", money(h.tax), (h.taxConf ?? 0.94) * 100),
+					...(h.total != null ? [field("TOTAL", money(h.total), (h.totalConf ?? 0.98) * 100)] : []),
+				],
+				LineItemGroups: [],
+			},
+		],
+	});
+	return {
+		ocr_provider: "textract",
+		ocr_raw: raw as object,
+		ocr_field_flags: buildOcrFlags(mapTextract(raw)) as unknown as object,
+	};
 }
 
 function firstOfMonth(monthOffset: number): Date {
@@ -5422,8 +5475,19 @@ async function main() {
 			capture_accuracy_m: 12,
 			submitted_at: hrsAgo(5),
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "FERGUSON #418",
+				vendorConf: 0.98,
+				receiptNo: "418-77302",
+				date: "11/06/2026",
+				dateConf: 0.96,
+				subtotal: 117.15,
+				tax: 9.67,
+				total: 126.82,
+				totalConf: 0.99,
+				taxConf: 0.7,
+			}),
+			ocr_field_review: { tax_amount: { state: "confirmed", at: new Date().toISOString() } },
 			ocr_field_confidence: { vendor_name: 0.98, purchased_at: 0.96, total: 0.99, tax_amount: 0.87 },
 			ocr_lines: ocrSnapshot(cleanLines),
 			ocr_completed_at: hrsAgo(6),
@@ -5483,8 +5547,18 @@ async function main() {
 			captured_at: hrsAgo(4),
 			submitted_at: hrsAgo(3),
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "FERGUSON #418",
+				vendorConf: 0.95,
+				receiptNo: null,
+				date: "11/06/2026",
+				dateConf: 0.62,
+				subtotal: 351.0,
+				tax: 28.96,
+				total: 402.0,
+				totalConf: 0.41,
+				taxConf: 0.55,
+			}),
 			ocr_field_confidence: { vendor_name: 0.95, purchased_at: 0.62, total: 0.41, tax_amount: 0.55 },
 			ocr_lines: ocrSnapshot(flaggedLines),
 			ocr_completed_at: hrsAgo(4),
@@ -5582,8 +5656,18 @@ async function main() {
 			reviewed_by_id: dispatcher2.id,
 			review_note: "Looks right to me — over threshold, needs Alex as well.",
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "Copeland Distribution",
+				vendorConf: 0.99,
+				receiptNo: "CD-55120",
+				date: "11/06/2026",
+				dateConf: 0.97,
+				subtotal: 565.0,
+				tax: 46.61,
+				total: 611.61,
+				totalConf: 0.98,
+				taxConf: 0.93,
+			}),
 			ocr_field_confidence: { vendor_name: 0.99, purchased_at: 0.97, total: 0.98, tax_amount: 0.93 },
 			ocr_lines: ocrSnapshot(signoffLines),
 			ocr_completed_at: daysFromNow(-1),
@@ -5680,7 +5764,7 @@ async function main() {
 			// The provider answered and found nothing, which is a failure; `skipped`
 			// above is the no-provider-configured success path.
 			ocr_status: "failed",
-			ocr_provider: "mindee",
+			ocr_provider: "textract",
 			ocr_error: "Provider returned no line items for this document",
 			flags: [GEO_MISSING],
 			created_at: daysFromNow(-6),
@@ -5772,8 +5856,19 @@ async function main() {
 			captured_at: hrsAgo(7),
 			submitted_at: hrsAgo(6),
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "Copeland Distribution",
+				vendorConf: 0.91,
+				receiptNo: "CD-55188",
+				date: "11/06/2026",
+				dateConf: 0.88,
+				subtotal: 132.75,
+				tax: 10.95,
+				total: null,
+				totalConf: 0.94,
+				taxConf: 0.72,
+			}),
+			ocr_field_review: { tax_amount: { state: "edited", at: new Date().toISOString() } },
 			ocr_field_confidence: { vendor_name: 0.91, purchased_at: 0.88, total: 0.94, tax_amount: 0.72 },
 			ocr_lines: ocrSnapshot(mariaLines),
 			ocr_completed_at: hrsAgo(7),
@@ -5911,7 +6006,7 @@ async function main() {
 
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.created", actor_type: "technician", actor_id: tech1.id, detail: {}, at: hrsAgo(6) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.receipt_captured", actor_type: "technician", actor_id: tech1.id, detail: { ocr_status: "pending" }, at: hrsAgo(6) },
-			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.ocr_completed", actor_type: "system", detail: { provider: "mindee", line_count: 3 }, at: hrsAgo(6) },
+			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.ocr_completed", actor_type: "system", detail: { provider: "textract", line_count: 3 }, at: hrsAgo(6) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.lines_replaced", actor_type: "technician", actor_id: tech1.id, detail: { corrections: 1 }, at: hrsAgo(5) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.lines_verified", actor_type: "technician", actor_id: tech1.id, detail: { count: 3 }, at: hrsAgo(5) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.submitted", actor_type: "technician", actor_id: tech1.id, detail: { total: "126.82" }, at: hrsAgo(5) },

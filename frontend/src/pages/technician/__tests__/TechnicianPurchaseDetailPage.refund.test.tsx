@@ -159,10 +159,12 @@ beforeEach(() => vi.clearAllMocks());
 describe("a refund sheet", () => {
 	it("speaks in credit, not spend", () => {
 		renderSheet(sheet());
-		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("New refund");
+		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+			"Refund · Counter Supply"
+		);
 		expect(screen.getByText("Credit slip details")).toBeInTheDocument();
 		expect(screen.getByText("Credit total")).toBeInTheDocument();
-		expect(screen.getByText("When you returned it")).toBeInTheDocument();
+		expect(screen.getByText("Return date")).toBeInTheDocument();
 		expect(screen.getByText("Jobs credited")).toBeInTheDocument();
 		expect(
 			screen.getByRole("button", { name: /Send refund to dispatch/ })
@@ -173,7 +175,7 @@ describe("a refund sheet", () => {
 
 	it("shows the amount as coming back", () => {
 		renderSheet(sheet());
-		expect(screen.getByRole("heading", { level: 1 }).parentElement).toHaveTextContent(
+		expect(screen.getByRole("heading", { level: 1 }).closest("header")).toHaveTextContent(
 			"−$40.00"
 		);
 	});
@@ -199,7 +201,7 @@ describe("a refund sheet", () => {
 
 	it("offers no other jobs to credit", () => {
 		renderSheet(sheet());
-		expect(screen.queryByText("Also bought for another job?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Split with another job")).not.toBeInTheDocument();
 		expect(
 			screen.getByText("Dispatch takes this off the customer's bill.")
 		).toBeInTheDocument();
@@ -223,22 +225,21 @@ describe("a refund sheet", () => {
 		renderSheet(sheet());
 		await userEvent.click(screen.getByRole("button", { name: "Discard this refund" }));
 		expect(
-			screen.getByText(/The original purchase is not affected/)
+			screen.getByText(/The original purchase isn't affected/)
 		).toBeInTheDocument();
 	});
 
 	it.each([
-		[{ status: "pending_review" }, "Refund · With dispatch"],
-		[{ status: "queried" }, "Refund · Needs a change from you"],
-		[{ status: "approved" }, "Refund · Credit on its way"],
-		[
-			{ status: "approved", refund_settled_at: "2026-09-05T00:00:00Z" },
-			"Refund · Credit received",
-		],
-		[{ status: "rejected" }, "Refund · Not credited"],
-	] as const)("titles %o as %s", (over, title) => {
+		[{ status: "pending_review" }, "With dispatch"],
+		[{ status: "queried" }, "Needs a change from you"],
+		[{ status: "approved" }, "Credit on its way"],
+		[{ status: "approved", refund_settled_at: "2026-09-05T00:00:00Z" }, "Credit received"],
+		[{ status: "rejected" }, "Not credited"],
+	] as const)("states %o as %s under the title", (over, status) => {
 		renderSheet(sheet(over as Partial<FieldPurchase>));
-		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(title);
+		const heading = screen.getByRole("heading", { level: 1 });
+		expect(heading).toHaveTextContent("Refund · Counter Supply");
+		expect(heading.closest("header")).toHaveTextContent(status);
 	});
 });
 
@@ -341,7 +342,6 @@ describe("jobs this covers", () => {
 		const row = screen.getByRole("link", { name: /Job J-1042/ });
 		expect(row).toHaveAttribute("href", "/technician/visits/visit-a");
 		expect(row).toHaveTextContent("Condenser swap");
-		expect(screen.getByText("Tap to open the visit")).toBeInTheDocument();
 	});
 
 	it("names a job without a name by its number, never its id", () => {
@@ -352,9 +352,7 @@ describe("jobs this covers", () => {
 	it("is not a link when there is no visit to open", () => {
 		renderSheet(withVisit({ job_visit_id: null, job_visit: null }));
 		expect(screen.queryByRole("link", { name: /Job J-1042/ })).not.toBeInTheDocument();
-		expect(screen.getByText("No visit to open")).toBeInTheDocument();
-		// No hint to tap when there is nothing to open.
-		expect(screen.queryByText("Tap to open the visit")).not.toBeInTheDocument();
+		expect(screen.getByText("No visit")).toBeInTheDocument();
 	});
 
 	it("asks before leaving edits that were not sent", async () => {
@@ -377,11 +375,10 @@ describe("a purchase sheet", () => {
 		renderSheet(
 			sheet({ kind: "purchase", parent: undefined, parent_purchase_id: null })
 		);
-		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-			"New field purchase"
-		);
+		// Named by where it was bought, never "New field purchase".
+		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Counter Supply");
 		expect(screen.getByText("Total paid")).toBeInTheDocument();
-		expect(screen.getByText("Also bought for another job?")).toBeInTheDocument();
+		expect(screen.getByText("Split with another job")).toBeInTheDocument();
 	});
 });
 
@@ -410,7 +407,7 @@ describe("notices above the sheet", () => {
 			})
 		);
 		expect(screen.queryByText(/waiting on the credit/)).not.toBeInTheDocument();
-		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+		expect(screen.getByRole("heading", { level: 1 }).closest("header")).toHaveTextContent(
 			"Credit on its way"
 		);
 	});
@@ -427,7 +424,7 @@ describe("notices above the sheet", () => {
 				],
 			})
 		);
-		expect(screen.getByText("Dispatch will check")).toBeInTheDocument();
+		expect(screen.getByText("Flagged for dispatch review")).toBeInTheDocument();
 		expect(screen.getByText("No location on the photo")).toBeInTheDocument();
 	});
 });

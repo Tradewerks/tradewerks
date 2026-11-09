@@ -16,6 +16,7 @@ import { startArrivalTrackingInterval } from "./services/arrivalTracker.js";
 import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { registerTaxReviewGauge } from "./services/tax/taxMetrics.js";
 import { startTaxRateRefreshInterval } from "./services/taxRateRefreshScheduler.js";
+import { startReceiptOcrSweeper } from "./services/receiptOcrSweeper.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
 import multer from "multer";
@@ -321,6 +322,7 @@ startMaintenanceReminderInterval();
 startArrivalTrackingInterval();
 startTrialSchedulerInterval();
 startTaxRateRefreshInterval();
+startReceiptOcrSweeper();
 registerTaxReviewGauge();
 startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>

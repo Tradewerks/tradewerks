@@ -1,7 +1,7 @@
 import { log } from "../appLogger.js";
 import { extractFixture } from "./fixture.js";
-import { extractWithMindee } from "./mindee.js";
 import type { ReceiptOcrProvider } from "./normalize.js";
+import { extractWithTextract } from "./textract.js";
 
 /**
  * Provider selection. The parsing contract and its helpers live in
@@ -35,16 +35,20 @@ export function getReceiptOcrProvider(): ReceiptOcrProvider | null {
 		return { name: "fixture", extract: extractFixture };
 	}
 
-	if (configured === "mindee") {
-		const apiKey = process.env.MINDEE_API_KEY;
-		// Mindee V2 has no shared model IDs: the operator creates a Receipt model in
-		// their own console, and the UUID it mints is what names the schema to read.
-		const modelId = process.env.MINDEE_MODEL_ID;
-		if (!apiKey || !modelId) {
-			log.warn("RECEIPT_OCR_PROVIDER=mindee needs MINDEE_API_KEY and MINDEE_MODEL_ID - OCR disabled");
+	if (configured === "textract") {
+		const region = process.env.TEXTRACT_REGION;
+		const accessKeyId = process.env.TEXTRACT_ACCESS_KEY_ID;
+		const secretAccessKey = process.env.TEXTRACT_SECRET_ACCESS_KEY;
+		// Its own keys rather than the AWS default chain: object storage is Wasabi,
+		// and an ambient AWS_* credential is not one this provider should pick up.
+		if (!region || !accessKeyId || !secretAccessKey) {
+			log.warn(
+				"RECEIPT_OCR_PROVIDER=textract needs TEXTRACT_REGION, TEXTRACT_ACCESS_KEY_ID and TEXTRACT_SECRET_ACCESS_KEY - OCR disabled",
+			);
 			return null;
 		}
-		return { name: "mindee", extract: (file) => extractWithMindee(file, { apiKey, modelId }) };
+		const cfg = { region, accessKeyId, secretAccessKey };
+		return { name: "textract", extract: (file) => extractWithTextract(file, cfg) };
 	}
 
 	log.warn({ configured }, "Unknown RECEIPT_OCR_PROVIDER - OCR disabled");

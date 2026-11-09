@@ -1,5 +1,6 @@
-import { AlertTriangle, ScanLine } from "lucide-react";
-import { OCR_LOW_CONFIDENCE } from "../../../types/fieldPurchases";
+import { Check, ScanLine } from "lucide-react";
+import type { OcrFieldFlag, OcrFieldKey } from "../../../types/fieldPurchases";
+import { OcrFieldChip } from "../../fieldPurchases/OcrFieldChip";
 
 interface Props {
 	/** The field's own name, for the button that takes the receipt's answer. */
@@ -8,13 +9,25 @@ interface Props {
 	entered: string;
 	/** What the receipt read, same formatting. Null where it read nothing. */
 	receipt: string | null;
-	onUse: (value: string) => void;
-	/** The provider's score for this field, where it reported one. */
-	confidence?: number | null;
+	/** Absent where there is nothing to take, such as a field with no input. */
+	onUse?: (value: string) => void;
+	/** Which header field this is, for the chip's wording. */
+	field?: OcrFieldKey;
+	/** What the scan thought of this field, where it had a doubt. */
+	flag?: OcrFieldFlag;
+	review?: "confirmed" | "edited" | null;
+	/** "Looks right": the tech checked the photo and the value stands. */
+	onConfirm?: () => void;
 	/** Compare as money rather than as text. See `differs` below. */
 	numeric?: boolean;
 	/** False past submit: the reading is still worth showing, taking it is not. */
 	editable?: boolean;
+	/**
+	 * Whether "Looks right" is offered; defaults to `editable`. Apart from it for a
+	 * field locked on an open sheet, such as a refund's vendor: it cannot be changed,
+	 * but a flag on it still has to be answered before submit.
+	 */
+	confirmable?: boolean;
 	/** The input this fills, so focus lands there when the button unmounts itself. */
 	controlId?: string;
 }
@@ -49,38 +62,75 @@ export default function ReceiptValueDiff({
 	entered,
 	receipt,
 	onUse,
-	confidence,
+	field,
+	flag,
+	review,
+	onConfirm,
 	numeric = false,
 	editable = true,
+	confirmable = editable,
 	controlId,
 }: Props) {
 	const differs = receipt != null && valuesDiffer(entered, receipt, numeric);
-	const unsure = confidence != null && confidence < OCR_LOW_CONFIDENCE;
-	if (!differs && !unsure) return null;
+	const chip = flag && field ? { field, flag } : null;
+	// not_found is a fact, not a doubt, so it never asks for a press.
+	const canConfirm =
+		chip != null &&
+		confirmable &&
+		!review &&
+		onConfirm != null &&
+		(chip.flag.kind === "unsure" || chip.flag.kind === "calculated");
+	if (!differs && !chip) return null;
 
 	// Pressing it is what removes it, so focus would fall to <body> and drop a
 	// keyboard user back at the top of the page.
 	const use = (value: string) => {
-		onUse(value);
+		onUse?.(value);
 		if (controlId) document.getElementById(controlId)?.focus();
 	};
 
 	return (
 		<span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-			{unsure && (
-				<span className="inline-flex items-center gap-1 text-warning-text">
-					<AlertTriangle aria-hidden size={11} /> low confidence
-				</span>
+			{chip && (
+				<OcrFieldChip
+					field={chip.field}
+					flag={chip.flag}
+					review={review}
+					audience="technician"
+				/>
+			)}
+			{canConfirm && (
+				<button
+					type="button"
+					aria-label={`Looks right: ${label.toLowerCase()}`}
+					onClick={onConfirm}
+					// 40px of tap target without growing the label row: the padding is
+					// the target, the negative margin gives the height back. The pill
+					// inside is what reads as the button.
+					className="group -my-2 inline-flex min-h-10 items-center rounded-md focus-visible:outline-none"
+				>
+					<span className="inline-flex h-6 items-center gap-1 rounded-md border border-primary/50 bg-primary/10 px-2 text-xs font-medium text-primary shadow-sm transition-colors duration-150 ease-out group-hover:border-primary group-hover:bg-primary/20 group-active:bg-primary/30 group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-offset-1 group-focus-visible:outline-primary">
+						<Check aria-hidden size={12} strokeWidth={2.5} />
+						Looks right
+					</span>
+				</button>
 			)}
 			{differs && (
 				<span className="inline-flex flex-wrap items-center gap-x-1 gap-y-0.5">
-					<ScanLine aria-hidden size={11} className="flex-shrink-0 text-text-muted" />
+					<ScanLine
+						aria-hidden
+						size={11}
+						className="flex-shrink-0 text-text-muted"
+					/>
 					<span className="text-text-muted">
-						receipt reads <span className="text-text-secondary">{receipt}</span>
+						receipt reads{" "}
+						<span className="text-text-secondary">
+							{receipt}
+						</span>
 					</span>
 					{/* Past submit the reading is still a fact about the record, but
 					    taking it would edit a disabled field and dirty a locked sheet. */}
-					{editable && (
+					{editable && onUse && (
 						<button
 							type="button"
 							aria-label={`Use the receipt's ${label.toLowerCase()}`}

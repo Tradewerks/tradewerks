@@ -4,7 +4,7 @@ import { OcrBanner } from "./PurchaseReviewPanel";
 import type { FieldPurchase } from "../../types/fieldPurchases";
 
 const skipped = (ocr_error: string | null) =>
-	({ ocr_status: "skipped", ocr_error, ocr_provider: "mindee" }) as unknown as FieldPurchase;
+	({ ocr_status: "skipped", ocr_error, ocr_provider: "textract" }) as unknown as FieldPurchase;
 
 describe("OcrBanner for a skipped read", () => {
 	it("blames the missing reader when none is configured", () => {

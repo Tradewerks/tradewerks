@@ -126,7 +126,35 @@ export const taxDocumentsNeedsReview = meter.createObservableGauge(
 	{ description: "Unlocked documents flagged for tax review, by document type" },
 );
 
-export const httpMetricsMiddleware = (req: Request, res: Response, next: NextFunction) => {
+// ── Receipt OCR ─────────────────────────────────────────────────────────────
+// Provider health (alert on failure ratio > 20% over 15 min, or oldest pending > 5 min),
+// read time, and which field cutoffs are noisy. Never label by org, purchase or
+// anything read off a receipt: cardinality, and receipts are PII.
+
+export const receiptOcrReads = meter.createCounter("hvac_receipt_ocr_reads", {
+	description: "Receipt OCR reads by provider and outcome",
+});
+
+export const receiptOcrDuration = meter.createHistogram("hvac_receipt_ocr_duration_seconds", {
+	description: "Receipt OCR provider call time in seconds, including any wait for a provider slot",
+	unit: "s",
+	advice: { explicitBucketBoundaries: [1, 2, 3, 5, 8, 13, 20] },
+});
+
+export const receiptOcrFieldFlags = meter.createCounter("hvac_receipt_ocr_field_flags", {
+	description: "Header fields a read asked the technician to check, by field and kind",
+});
+
+export const receiptOcrPending = meter.createObservableGauge("hvac_receipt_ocr_pending", {
+	description: "Field purchases whose receipt read is pending",
+});
+
+export const receiptOcrOldestPendingAge = meter.createObservableGauge(
+	"hvac_receipt_ocr_oldest_pending_age_seconds",
+	{ description: "Age of the oldest pending receipt read in seconds", unit: "s" },
+);
+
+export const httpMetricsMiddleware =(req: Request, res: Response, next: NextFunction) => {
 	const start = performance.now();
 	res.on("finish", () => {
 		const route = req.route?.path

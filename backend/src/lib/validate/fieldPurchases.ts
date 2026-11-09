@@ -1,4 +1,5 @@
 import z from "zod";
+import { OCR_HEADER_FIELDS } from "../../services/receiptOcr/normalize.js";
 import { isStorableStockQty, STOCK_QTY_MESSAGE } from "./shared.js";
 
 /**
@@ -149,7 +150,13 @@ export const createPurchaseSchema = z.object({
 
 export const RECEIPT_NUMBER_MAX = 64;
 
+/** `null` withdraws a review; the server stamps `at`, never the client. */
+const fieldReviewsSchema = z
+	.partialRecord(z.enum(OCR_HEADER_FIELDS), z.enum(["confirmed", "edited"]).nullable())
+	.optional();
+
 export const updatePurchaseSchema = z.object({
+	field_reviews: fieldReviewsSchema,
 	reason: nullableText(NOTE_MAX),
 	vendor_name: nullableText(VENDOR_NAME_MAX),
 	supplier_id: z.string().uuid().nullable().optional(),
@@ -177,7 +184,9 @@ export const replaceLinesSchema = z.object({
  * Every field is optional: a purchase saved piecemeal submits with an empty body.
  */
 export const submitPurchaseSchema = z.object({
+	field_reviews: fieldReviewsSchema,
 	vendor_name: nullableText(VENDOR_NAME_MAX),
+	receipt_number: nullableText(RECEIPT_NUMBER_MAX),
 	purchased_at: z.coerce.date().optional(),
 	tax_amount: money("Tax amount").optional(),
 	total: money("Total").optional(),

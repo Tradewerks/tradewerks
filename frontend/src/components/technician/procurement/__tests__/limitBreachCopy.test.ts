@@ -21,7 +21,7 @@ describe("describeBreach", () => {
 		const copy = describeBreach(perJob("230.00"), 500, [{ job_id: "job-a", amount: 50 }]);
 
 		expect(copy.spent).toBe("$180.00 already spent on this job");
-		expect(copy.action).toBe("Come down $30.00");
+		expect(copy.action).toBe("$30.00 over");
 	});
 
 	it("falls back to the receipt total when no share is known", () => {
@@ -40,7 +40,7 @@ describe("describeBreach", () => {
 		);
 
 		expect(copy.spent).toBe("$420.00 already spent this week");
-		expect(copy.action).toBe("Come down $120.00");
+		expect(copy.action).toBe("$120.00 over");
 	});
 
 	it("says nothing about spend for per_transaction", () => {
@@ -50,7 +50,7 @@ describe("describeBreach", () => {
 		);
 
 		expect(copy.spent).toBeNull();
-		expect(copy.action).toBe("Come down $400.00");
+		expect(copy.action).toBe("$400.00 over");
 	});
 
 	// Both sides arrive as decimal strings, so a cent can go the wrong way. The

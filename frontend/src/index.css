@@ -166,6 +166,16 @@ input.bg-surface-inset {
 	background-color: var(--color-surface-inset);
 	color: var(--color-text-primary);
 }
+/* Native controls draw their own parts (the date/time picker icon and popup, select
+   arrows) from color-scheme, not from our tokens, so without this a dark sheet gets a
+   black calendar icon on a near-black field. Scoped to form controls so it doesn't
+   repaint scrollbars or anything else the UA draws. */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+	color-scheme: dark;
+}
+
 /* Native checkbox adjacent span — same Chrome injection fix via CSS var. */
 .bg-base label > input + span {
 	color: var(--color-text-secondary);
