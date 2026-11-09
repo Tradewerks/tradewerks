@@ -4,7 +4,8 @@ import type { ReportCategoryId } from "./reports";
 import type { DispatcherNotificationType } from "./notifications";
 
 export type ReportLayoutEntry = { order: string[]; hidden: string[] };
-export type ReportLayout = Partial<Record<ReportCategoryId, ReportLayoutEntry>>;
+export type ReportLayoutId = ReportCategoryId | "favorite";
+export type ReportLayout = Partial<Record<ReportLayoutId, ReportLayoutEntry>>;
 
 // ============================================================================
 // INTERFACES
