@@ -172,13 +172,11 @@ export const updateDispatcher = async (
         }
 
         const changes = buildChanges(existing, parsed, [
-            "organization_id",
             "name",
             "email",
             "phone",
             "title",
             "description",
-            "role",
             "last_login",
             "theme",
         ] as const);
