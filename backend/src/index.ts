@@ -36,6 +36,7 @@ import {
 	prometheusExporter,
 } from "./services/metricsService.js";
 import pinoHttp from "pino-http";
+import { httpLogRedact } from "./lib/httpLogRedact.js";
 import http from "http";
 import { Server } from "socket.io";
 import { initSocket } from "./services/socketService.js";
@@ -283,8 +284,8 @@ app.use(
 		},
 	}),
 );
-// Bearer tokens (staff tokens act on every org) must not reach stdout or Loki.
-app.use(pinoHttp({ logger: log, redact: ["req.headers.authorization", "req.headers.cookie"] }));
+// Tokens, cookies and query strings must not reach stdout or Loki.
+app.use(pinoHttp({ logger: log, redact: httpLogRedact }));
 app.use(httpMetricsMiddleware);
 
 // Expose Prometheus metrics at /metrics
