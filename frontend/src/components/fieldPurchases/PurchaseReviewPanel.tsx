@@ -39,13 +39,18 @@ import { useSuppliers } from "../../hooks/useSuppliers";
 import { normalizeSupplierName } from "../../lib/suppliers";
 import FilterableSelect, { type FilterableOption } from "../ui/forms/FilterableSelect";
 import SupplierFormModal from "../suppliers/SupplierFormModal";
+import { OcrCheckSummary } from "./OcrCheckSummary";
+import { OcrFieldChip } from "./OcrFieldChip";
+import { OcrLineMark } from "./OcrLineMark";
+import { needsCheck } from "./ocrFlagCopy";
+import { dispositionSentence } from "./dispositionSummary";
 import {
 	DISPOSITION_LABELS,
 	FIELD_PURCHASE_STATUS_LABELS,
 	FLAG_META,
 	isPrePurchase,
-	OCR_LOW_CONFIDENCE,
 	type FieldPurchase,
+	type OcrFieldKey,
 	type FieldPurchaseLine,
 } from "../../types/fieldPurchases";
 
@@ -158,11 +163,6 @@ const statusTone = (p: FieldPurchase) =>
 			: p.status === "queried"
 				? "warning"
 				: "primary";
-
-/** A field the reader was unsure about is worth a second pair of eyes, not silence. */
-function lowConfidence(confidence: number | undefined): boolean {
-	return confidence !== undefined && confidence < OCR_LOW_CONFIDENCE;
-}
 
 /** The pane before there is a purchase in it — nothing picked, loading, or broken. */
 function PanelPlaceholder({
@@ -500,7 +500,15 @@ export default function PurchaseReviewPanel({
 			a.job?.job_number ? `#${a.job.job_number}` : (a.job?.name ?? "Job"),
 		])
 	);
-	const confidence = p.ocr_field_confidence ?? {};
+	const flags = p.ocr_field_flags;
+	const ocrReview = p.ocr_field_review ?? {};
+	const chip = (field: OcrFieldKey) => {
+		const flag = flags?.fields[field];
+		return flag ? (
+			<OcrFieldChip field={field} flag={flag} review={ocrReview[field]?.state ?? null} />
+		) : null;
+	};
+	const lineCutoff = flags?.line_cutoff ?? null;
 
 	return (
 		<>
@@ -563,7 +571,14 @@ export default function PurchaseReviewPanel({
 					</div>
 
 					<div className="flex min-w-0 flex-1 flex-col">
-						<div className="grid grid-cols-2 gap-x-4 gap-y-2.5 border-b border-border px-4 py-3 sm:grid-cols-3">
+						<div
+							className={`grid grid-cols-2 gap-x-4 gap-y-2.5 border-b border-border px-4 py-3 ${prePurchase ? "sm:grid-cols-3" : ""}`}
+						>
+							{!prePurchase && needsCheck(flags, ocrReview).length > 0 && (
+								<div className="col-span-full">
+									<OcrCheckSummary flags={flags} review={ocrReview} />
+								</div>
+							)}
 							{prePurchase ? (
 								<>
 									<MetaCell
@@ -590,7 +605,16 @@ export default function PurchaseReviewPanel({
 										value={
 											<span className="flex items-center gap-1">
 												{p.vendor_name || "Not recorded"}
-												{lowConfidence(confidence.vendor_name) && <LowConfidenceMark />}
+												{chip("vendor_name")}
+											</span>
+										}
+									/>
+									<MetaCell
+										label="Receipt #"
+										value={
+											<span className="flex items-center gap-1">
+												{p.receipt_number || "Not recorded"}
+												{chip("receipt_number")}
 											</span>
 										}
 									/>
@@ -599,7 +623,7 @@ export default function PurchaseReviewPanel({
 										value={
 											<span className="flex items-center gap-1">
 												{p.purchased_at ? new Date(p.purchased_at).toLocaleString() : "Not recorded"}
-												{lowConfidence(confidence.purchased_at) && <LowConfidenceMark />}
+												{chip("purchased_at")}
 											</span>
 										}
 									/>
@@ -610,7 +634,7 @@ export default function PurchaseReviewPanel({
 								</>
 							)}
 							{p.reason && (
-								<div className="col-span-2 min-w-0 sm:col-span-3">
+								<div className="col-span-full min-w-0">
 									<span className={`block ${COL_LABEL}`}>Reason given</span>
 									<span className="block text-sm text-text-secondary">{p.reason}</span>
 								</div>
@@ -630,17 +654,17 @@ export default function PurchaseReviewPanel({
 									    row's own and the wrapper's, not children of the list. */}
 									<div className="border-b border-border px-4 py-3 text-sm">
 										<dl className="space-y-1">
-											<MoneyRow label="Subtotal" value={money(p.subtotal)} />
+											<MoneyRow label="Subtotal" value={money(p.subtotal)} chip={chip("subtotal")} />
 											<MoneyRow
 												label="Tax"
 												value={money(p.tax_amount)}
-												mark={lowConfidence(confidence.tax_amount)}
+												chip={chip("tax_amount")}
 											/>
 											<MoneyRow
 												label="Total"
 												value={money(p.total)}
 												strong
-												mark={lowConfidence(confidence.total)}
+												chip={chip("total")}
 											/>
 											<MoneyRow label="Allocated to jobs" value={money(allocated)} divider />
 										</dl>
@@ -654,6 +678,21 @@ export default function PurchaseReviewPanel({
 									</div>
 
 									<SectionBar>Lines</SectionBar>
+									{/* The whole receipt's answer before the per-line column, in
+									    the same words the technician's sheet used to give it. */}
+									{!isRefund && p.lines.length > 1 && (
+										<p className="border-b border-border px-4 py-1.5 text-xs text-text-secondary">
+											<span className="text-text-muted">
+												Stock &amp; billing ·{" "}
+											</span>
+											{dispositionSentence(
+												p.lines.map((l) => ({
+													disposition: l.disposition ?? null,
+													vehicleName: l.disposition_vehicle?.name ?? null,
+												}))
+											)}
+										</p>
+									)}
 									<div className="overflow-x-auto border-b border-border">
 										<table className="w-full text-sm">
 											<thead>
@@ -681,9 +720,11 @@ export default function PurchaseReviewPanel({
 															    lines as it needs and the marks follow its last word. */}
 															<span className="break-words">
 																{l.description}{" "}
-																{lowConfidence(
-																	l.ocr_confidence == null ? undefined : Number(l.ocr_confidence)
-																) && <LowConfidenceMark />}
+																{lineCutoff != null &&
+																	l.ocr_confidence != null &&
+																	Number(l.ocr_confidence) < lineCutoff && (
+																		<OcrLineMark confidence={Number(l.ocr_confidence)} />
+																	)}
 																{!l.verified_at && (
 																	<span
 																		title="The technician never confirmed this line"
@@ -1189,13 +1230,13 @@ function MoneyRow({
 	label,
 	value,
 	strong,
-	mark,
+	chip,
 	divider,
 }: {
 	label: string;
 	value: string;
 	strong?: boolean;
-	mark?: boolean;
+	chip?: ReactNode;
 	divider?: boolean;
 }) {
 	return (
@@ -1206,23 +1247,10 @@ function MoneyRow({
 			<dd
 				className={`flex items-center gap-1 tabular-nums ${strong ? "font-semibold text-text-primary" : "text-text-secondary"}`}
 			>
-				{mark && <LowConfidenceMark />}
+				{chip}
 				{value}
 			</dd>
 		</div>
-	);
-}
-
-function LowConfidenceMark() {
-	return (
-		<span
-			// A dot with no role reads as decoration, and aria-label on one is
-			// discarded outright — role="img" is what makes the label carry.
-			role="img"
-			title={`The receipt reader was under ${Math.round(OCR_LOW_CONFIDENCE * 100)}% sure of this — check it against the photo`}
-			className="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-warning align-middle"
-			aria-label="Low confidence"
-		/>
 	);
 }
 

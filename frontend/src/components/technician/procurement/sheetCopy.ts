@@ -13,7 +13,8 @@ import {
 export interface SheetCopy {
 	/** The paper itself, mid-sentence: "the {noun}". */
 	noun: string;
-	newTitle: string;
+	/** The heading when the vendor is not known yet. */
+	untitled: string;
 	receiptTitle: string;
 	photograph: string;
 	photoRequired: string;
@@ -38,51 +39,49 @@ export interface SheetCopy {
 
 const PURCHASE: SheetCopy = {
 	noun: "receipt",
-	newTitle: "New field purchase",
+	untitled: "Field purchase",
 	receiptTitle: "Receipt",
 	photograph: "Photograph receipt",
-	photoRequired:
-		"A photo is required before you can submit — it is the only record of the purchase.",
+	photoRequired: "Required to submit — it's the only record of the purchase.",
 	noPhoto: "No receipt yet.",
 	detailsTitle: "Receipt details",
 	totalLabel: "Total paid",
-	dateLabel: "When it was bought",
-	linesTitle: "What you bought",
+	dateLabel: "Purchase date",
+	linesTitle: "Items",
 	linePlaceholder: "Part as it reads on the receipt",
 	reconcileVerb: "paid",
 	jobsTitle: "Jobs this covers",
 	submitLabel: "Submit for review",
 	submitted: "Submitted for review",
 	blockedNoPhoto: "Photograph the receipt first",
-	blockedNoLines: "Add what you bought first",
+	blockedNoLines: "Add the items first",
 	discardTitle: "Discard this draft?",
-	discardBody: "The photo and every line on it go with it. There is no undo.",
+	discardBody: "The photo and all items will be deleted. This can't be undone.",
 	discardLabel: "Discard this draft",
 	discardFailed: "Could not discard the draft",
 };
 
 const REFUND: SheetCopy = {
 	noun: "credit slip",
-	newTitle: "New refund",
+	untitled: "Refund",
 	receiptTitle: "Credit slip",
-	photograph: "Photograph the credit slip",
-	photoRequired:
-		"A photo of the credit slip is required before you can submit — it is the only record of the return.",
+	photograph: "Photograph credit slip",
+	photoRequired: "Required to submit — it's the only record of the return.",
 	noPhoto: "No credit slip yet.",
 	detailsTitle: "Credit slip details",
 	totalLabel: "Credit total",
-	dateLabel: "When you returned it",
-	linesTitle: "What you returned",
+	dateLabel: "Return date",
+	linesTitle: "Items returned",
 	linePlaceholder: "Part as it reads on the credit slip",
 	reconcileVerb: "credited",
 	jobsTitle: "Jobs credited",
 	submitLabel: "Send refund to dispatch",
 	submitted: "Refund sent to dispatch",
 	blockedNoPhoto: "Photograph the credit slip first",
-	blockedNoLines: "Add what you returned first",
+	blockedNoLines: "Add the returned items first",
 	discardTitle: "Discard this refund?",
 	discardBody:
-		"The photo and every line on it go with it. The original purchase is not affected.",
+		"The photo and all items will be deleted. The original purchase isn't affected.",
 	discardLabel: "Discard this refund",
 	discardFailed: "Could not discard the refund",
 };
@@ -125,15 +124,20 @@ export function refundStateTone(
 	return "muted";
 }
 
-/** The same, as a heading that has to say it is a refund at all. */
-export function refundStatusLabel(p: Pick<FieldPurchase, "status" | "refund_settled_at">): string {
-	return p.status === "draft" ? "New refund" : `Refund · ${refundStateLabel(p)}`;
+/**
+ * The sheet's heading: which purchase this is, named by where it was bought. A
+ * status ("Pending review") or a "New field purchase" said nothing about which
+ * receipt was open, and "New" stayed on a draft reopened days later.
+ */
+export function sheetTitle(p: Pick<FieldPurchase, "kind">, vendor: string): string {
+	const name = vendor.trim();
+	if (p.kind === "refund") return name ? `Refund · ${name}` : REFUND.untitled;
+	return name || PURCHASE.untitled;
 }
 
-/** The sheet's heading, whichever kind it is. */
-export function sheetTitle(p: Pick<FieldPurchase, "kind" | "status" | "refund_settled_at">) {
-	if (p.kind === "refund") return refundStatusLabel(p);
-	return p.status === "draft" ? PURCHASE.newTitle : FIELD_PURCHASE_STATUS_LABELS[p.status];
+/** The line under the heading: where the purchase stands. */
+export function sheetStatus(p: Pick<FieldPurchase, "kind" | "status" | "refund_settled_at">): string {
+	return p.kind === "refund" ? refundStateLabel(p) : FIELD_PURCHASE_STATUS_LABELS[p.status];
 }
 
 /** "1 refund pending · $42.00" — plural-aware, money already formatted. */

@@ -1,25 +1,24 @@
 /**
- * Provider response mapping, the null-provider path, and the Mindee transport,
- * whose enqueue/poll pair has failure states a mapping test cannot reach. The
- * fixtures are documented response shapes, not recordings of a live account.
+ * Provider selection, value coercion, and the keyless fixture provider. The
+ * Textract mapping lives in receiptOcrTextract.test.ts.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
 	getReceiptOcrProvider,
 	normalizeLine,
-	OCR_LOW_CONFIDENCE,
+	OCR_CUTOFFS,
 	toConfidence,
 	toDate,
 	toMoney,
 } from "../receiptOcr/index.js";
-import { extractWithMindee, mapMindee } from "../receiptOcr/mindee.js";
-import { SAMPLE_RECEIPT, mapFixture } from "../receiptOcr/fixture.js";
-import mindeeV2Receipt from "../receiptOcr/__fixtures__/mindeeV2Receipt.json";
+import { buildOcrFlags } from "../receiptOcr/flags.js";
+import { remapHeader } from "../receiptOcr/remap.js";
 
 const ENV_KEYS = [
 	"RECEIPT_OCR_PROVIDER",
-	"MINDEE_API_KEY",
-	"MINDEE_MODEL_ID",
+	"TEXTRACT_REGION",
+	"TEXTRACT_ACCESS_KEY_ID",
+	"TEXTRACT_SECRET_ACCESS_KEY",
 	"NODE_ENV",
 ] as const;
 
@@ -44,20 +43,25 @@ describe("getReceiptOcrProvider", () => {
 		expect(getReceiptOcrProvider()).toBeNull();
 	});
 
+	it("retired providers are unknown, so they disable OCR rather than resolving", () => {
+		for (const retired of ["mindee", "azure"]) {
+			process.env.RECEIPT_OCR_PROVIDER = retired;
+			expect(getReceiptOcrProvider()).toBeNull();
+		}
+	});
+
 	it("returns null rather than a half-configured provider", () => {
-		process.env.RECEIPT_OCR_PROVIDER = "mindee";
-		expect(getReceiptOcrProvider()).toBeNull();
-		// A key without the model it names cannot ask Mindee anything.
-		process.env.MINDEE_API_KEY = "k";
+		process.env.RECEIPT_OCR_PROVIDER = "textract";
 		expect(getReceiptOcrProvider()).toBeNull();
 	});
 
-	// Case-insensitively, so an operator's "Mindee" is not a silently disabled OCR.
+	// Case-insensitively, so an operator's "Textract" is not a silently disabled OCR.
 	it("resolves the configured provider by name", () => {
-		process.env.RECEIPT_OCR_PROVIDER = "Mindee";
-		process.env.MINDEE_API_KEY = "k";
-		process.env.MINDEE_MODEL_ID = "3e8f1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b";
-		expect(getReceiptOcrProvider()?.name).toBe("mindee");
+		process.env.RECEIPT_OCR_PROVIDER = "Textract";
+		process.env.TEXTRACT_REGION = "us-east-1";
+		process.env.TEXTRACT_ACCESS_KEY_ID = "k";
+		process.env.TEXTRACT_SECRET_ACCESS_KEY = "s";
+		expect(getReceiptOcrProvider()?.name).toBe("textract");
 	});
 
 	it("disables rather than throws on an unknown provider name", () => {
@@ -187,331 +191,6 @@ describe("value coercion", () => {
 	});
 });
 
-/** A Mindee V2 inference for the Receipt catalogue template. */
-const MINDEE_RECEIPT = {
-	inference: {
-		result: {
-			fields: {
-				supplier_name: { value: "Grainger", confidence: "Certain" },
-				date: { value: "2026-08-21", confidence: "High" },
-				time: { value: "14:32:00", confidence: "High" },
-				total_net: { value: 61.0, confidence: "High" },
-				total_tax: { value: 4.27, confidence: "Medium" },
-				total_amount: { value: 65.27, confidence: "Certain" },
-				line_items: {
-					confidence: "High",
-					items: [
-						{
-							confidence: "High",
-							fields: {
-								description: { value: "Capacitor 45/5" },
-								quantity: { value: 1 },
-								unit_price: { value: 24.99 },
-								total_price: { value: 24.99 },
-							},
-						},
-						// Wrapped, which is the other shape the list schema permits.
-						[
-							{
-								confidence: "Medium",
-								fields: {
-									description: { value: "Contactor 2P" },
-									quantity: { value: 2 },
-									unit_price: { value: 18.0 },
-									total_price: { value: 36.0 },
-								},
-							},
-						],
-					],
-				},
-			},
-		},
-	},
-};
-
-describe("mapMindee", () => {
-	it("maps the header, its confidences, and the line items", () => {
-		const out = mapMindee(MINDEE_RECEIPT);
-		expect(out.vendor_name).toBe("Grainger");
-		// Date and time are separate fields; the instant is what the job-window check reads.
-		expect(out.purchased_at?.toISOString()).toBe("2026-08-21T14:32:00.000Z");
-		expect([out.subtotal, out.tax_amount, out.total]).toEqual([61, 4.27, 65.27]);
-		expect(out.lines).toHaveLength(2);
-		expect(out.lines[0]).toMatchObject({ quantity: 1, line_total: 24.99, confidence: 0.9 });
-		expect(out.lines[1]).toMatchObject({ quantity: 2, line_total: 36, confidence: 0.6 });
-	});
-
-	it("scores the grades so that Medium and below trip the technician's flag", () => {
-		const out = mapMindee(MINDEE_RECEIPT);
-		expect(out.field_confidence).toEqual({
-			vendor_name: 1,
-			purchased_at: 0.9,
-			subtotal: 0.9,
-			tax_amount: 0.6,
-			total: 1,
-		});
-		expect(out.field_confidence.tax_amount).toBeLessThan(OCR_LOW_CONFIDENCE);
-		expect(out.field_confidence.subtotal).toBeGreaterThanOrEqual(OCR_LOW_CONFIDENCE);
-	});
-
-	it("keeps a date with no time rather than dropping the day", () => {
-		const out = mapMindee({
-			inference: { result: { fields: { date: { value: "2026-08-21" } } } },
-		});
-		expect(out.purchased_at?.toISOString()).toBe("2026-08-21T00:00:00.000Z");
-	});
-
-	it("survives a payload with nothing in it", () => {
-		const out = mapMindee({});
-		expect(out.vendor_name).toBeNull();
-		expect(out.lines).toEqual([]);
-		expect(out.field_confidence).toEqual({});
-	});
-
-	it("carries the receipt number, which is the strongest reuse key on the paper", () => {
-		expect(mapMindee(mindeeV2Receipt).receipt_number).toBe("884213");
-		expect(mapMindee({}).receipt_number).toBeNull();
-	});
-
-	it("ignores a grade it has never seen instead of scoring it zero", () => {
-		const out = mapMindee({
-			inference: { result: { fields: { total_amount: { value: 5, confidence: "Excellent" } } } },
-		});
-		expect(out.total).toBe(5);
-		expect(out.field_confidence).toEqual({});
-	});
-
-	/**
-	 * A full V2 envelope, unlike `SAMPLE_RECEIPT`'s bare `inference.result`. This is
-	 * the test that fails if Mindee changes its payload rather than its docs.
-	 */
-	it("maps a full V2 envelope", () => {
-		const out = mapMindee(mindeeV2Receipt);
-		expect(out.vendor_name).toBe("Northgate Trade Supply");
-		expect(out.purchased_at?.toISOString()).toBe("2026-08-21T14:32:00.000Z");
-		expect([out.subtotal, out.tax_amount, out.total]).toEqual([287.83, 22.39, 310.22]);
-		expect(out.lines).toHaveLength(5);
-		expect(out.lines[0]).toMatchObject({
-			description: "Capacitor 45/5 MFD 440V",
-			quantity: 2,
-			line_total: 49.98,
-		});
-		// Every grade on this receipt was Certain, so the whole header scores 1.
-		expect(out.field_confidence).toEqual({
-			vendor_name: 1,
-			purchased_at: 1,
-			subtotal: 1,
-			tax_amount: 1,
-			total: 1,
-		});
-	});
-
-	it("reads the same receipt from both fixtures, so neither can drift alone", () => {
-		const fromJson = mapMindee(mindeeV2Receipt);
-		const fromModule = mapFixture(SAMPLE_RECEIPT);
-		expect(fromJson.total).toBe(fromModule.total);
-		expect(fromJson.tax_amount).toBe(fromModule.tax_amount);
-		expect(fromJson.lines).toHaveLength(fromModule.lines.length);
-	});
-
-	it("reports what kind of document it read and in what currency", () => {
-		const out = mapMindee(mindeeV2Receipt);
-		expect(out.document_type).toBe("expense_receipt");
-		expect(out.currency).toBe("USD");
-	});
-});
-
-describe("extractWithMindee", () => {
-	const CFG = { apiKey: "md_test", modelId: "3e8f1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b" };
-	const FILE = { buffer: Buffer.from("receipt-bytes"), mimetype: "image/heic", filename: "r.heic" };
-	const JOB_URL = "https://api-v2.mindee.net/v2/jobs/j1";
-	const RESULT_URL = `${JOB_URL}/result`;
-
-	interface Reply {
-		status?: number;
-		body?: unknown;
-	}
-
-	/** A fresh Response per call: a body can only be read once. */
-	function mockFetch(...replies: Reply[]) {
-		let i = 0;
-		const fn = vi.fn(async () => {
-			const r = replies[Math.min(i, replies.length - 1)] ?? {};
-			i += 1;
-			return new Response(JSON.stringify(r.body ?? {}), {
-				status: r.status ?? 200,
-				headers: { "content-type": "application/json" },
-			});
-		});
-		vi.stubGlobal("fetch", fn);
-		return fn;
-	}
-
-	const enqueued = { body: { job: { id: "j1", polling_url: JOB_URL } } };
-
-	beforeEach(() => {
-		vi.useFakeTimers();
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
-		vi.unstubAllGlobals();
-	});
-
-	/** The poll sleeps, so the clock has to move for the promise to settle. */
-	async function settle<T>(p: Promise<T>, ms = 30_000) {
-		const done = p.then(
-			(value) => ({ rejected: false as const, value }),
-			(err: unknown) => ({ rejected: true as const, err }),
-		);
-		await vi.advanceTimersByTimeAsync(ms);
-		return done;
-	}
-
-	it.each([
-		[401, "401-001", /rejected the API key \(401\)/],
-		[403, "403-001", /rejected the API key \(403\)/],
-		[402, "402-001", /out of credit/],
-		[404, "404-001", /No Mindee model matches MINDEE_MODEL_ID/],
-		[429, "429-001", /rate limiting - retry the receipt shortly/],
-		[422, "422-003", /would not accept this receipt/],
-		[500, "500-000", /Mindee returned 500/],
-	])("turns a %i into a message that says what to do about it", async (status, code, match) => {
-		mockFetch({ status, body: { status, detail: "the reason", code } });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(true);
-		expect((out as { err: Error }).err.message).toMatch(match);
-		// The vendor code survives into ocr_error, which is where support reads it.
-		expect((out as { err: Error }).err.message).toContain(code);
-	});
-
-	it("sends the model id and the file, and authenticates without Bearer", async () => {
-		const fetchMock = mockFetch(
-			enqueued,
-			{ body: { job: { status: "Processed", result_url: RESULT_URL } } },
-			{ body: MINDEE_RECEIPT },
-		);
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(false);
-
-		const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-		expect(url).toBe("https://api-v2.mindee.net/v2/products/extraction/enqueue");
-		const auth = (init.headers as Record<string, string>).authorization;
-		expect(auth).toBe(CFG.apiKey);
-		expect(auth).not.toMatch(/bearer/i);
-
-		const form = init.body as FormData;
-		expect(form.get("model_id")).toBe(CFG.modelId);
-		// Without this the grades come back null and nothing ever trips the flag.
-		expect(form.get("confidence")).toBe("true");
-		expect((form.get("file") as { name?: string }).name).toBe("r.heic");
-	});
-
-	/**
-	 * `raw_text` puts the receipt's full printed text - card digits, approval code,
-	 * footer - into `ocr_raw`. The retention policy for that column was reasoned
-	 * about a field-level payload, not a searchable copy of the whole receipt, so
-	 * this is pinned rather than left to a provider default that could change
-	 * under us.
-	 */
-	it("never asks Mindee for the receipt's raw text", async () => {
-		const fetchMock = mockFetch(
-			enqueued,
-			{ body: { job: { status: "Processed", result_url: RESULT_URL } } },
-			{ body: MINDEE_RECEIPT },
-		);
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(false);
-
-		const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-		expect((init.body as FormData).get("raw_text")).toBe("false");
-	});
-
-	it("polls past Processing and reads the result the job points at", async () => {
-		const fetchMock = mockFetch(
-			enqueued,
-			{ body: { job: { status: "Processing" } } },
-			{ body: { job: { status: "Processed", result_url: RESULT_URL } } },
-			{ body: MINDEE_RECEIPT },
-		);
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(false);
-		expect((out as { value: { vendor_name: string } }).value.vendor_name).toBe("Grainger");
-
-		expect(fetchMock).toHaveBeenCalledTimes(4);
-		// Left on, the poll answers a redirect that fetch would follow blind.
-		for (const [url] of fetchMock.mock.calls.slice(1) as unknown as [string][]) {
-			expect(url).toContain("redirect=false");
-		}
-		expect((fetchMock.mock.calls[3] as unknown as [string])[0]).toContain(RESULT_URL);
-	});
-
-	it("reads an inference the poll hands back inline", async () => {
-		const fetchMock = mockFetch(enqueued, { body: MINDEE_RECEIPT });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect((out as { value: { total: number } }).value.total).toBe(65.27);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-	});
-
-	it("falls back to the job id when enqueue names no polling url", async () => {
-		const fetchMock = mockFetch({ body: { job: { id: "j1" } } }, { body: MINDEE_RECEIPT });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(false);
-		expect((fetchMock.mock.calls[1] as unknown as [string])[0]).toContain("/v2/jobs/j1");
-	});
-
-	it("refuses an enqueue that names no job at all", async () => {
-		mockFetch({ body: {} });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect((out as { err: Error }).err.message).toMatch(/named no job to poll/);
-	});
-
-	it("reports a failed job with the reason Mindee gave", async () => {
-		mockFetch(enqueued, { body: { job: { status: "Failed", error: { detail: "Unreadable page" } } } });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect((out as { err: Error }).err.message).toMatch(/could not read the receipt: Unreadable page/);
-	});
-
-	it("refuses a processed job that names no result", async () => {
-		mockFetch(enqueued, { body: { job: { status: "Processed" } } });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect((out as { err: Error }).err.message).toMatch(/named no result to read/);
-	});
-
-	it("gives up inside the window a technician can stand at a counter", async () => {
-		mockFetch(enqueued, { body: { job: { status: "Processing" } } });
-		const out = await settle(extractWithMindee(FILE, CFG), 60_000);
-		expect(out.rejected).toBe(true);
-		expect((out as { err: Error }).err.message).toMatch(/did not answer in time/);
-	});
-
-	it("retries once through a rate limit rather than losing the receipt", async () => {
-		const fetchMock = mockFetch(
-			{ status: 429, body: { status: 429, detail: "slow down", code: "429-001" } },
-			enqueued,
-			{ body: MINDEE_RECEIPT },
-		);
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(false);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
-	});
-
-	it("gives up after one retry rather than hammering a limit", async () => {
-		const fetchMock = mockFetch({ status: 429, body: { status: 429, detail: "slow down", code: "429-001" } });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(true);
-		expect((out as { err: Error }).err.message).toMatch(/rate limiting/);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-	});
-
-	it("does not retry a rejected key, which will not get better", async () => {
-		const fetchMock = mockFetch({ status: 401, body: { status: 401, detail: "bad", code: "401-001" } });
-		const out = await settle(extractWithMindee(FILE, CFG));
-		expect(out.rejected).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-	});
-});
-
 /**
  * The keyless provider. Its job is to make auto-fill demonstrable and E2E-testable
  * with no vendor account and no network, so what is asserted is that it is
@@ -583,9 +262,37 @@ describe("fixture provider", () => {
 
 	it("carries a low-confidence header field and line, so the flags have something to show", async () => {
 		const out = await getReceiptOcrProvider()!.extract(file);
-		expect(Object.values(out.field_confidence).some((c) => c < OCR_LOW_CONFIDENCE)).toBe(true);
-		expect(out.lines.some((l) => l.confidence != null && l.confidence < OCR_LOW_CONFIDENCE)).toBe(
+		expect(Object.values(out.field_confidence).some((c) => c < OCR_CUTOFFS.line)).toBe(true);
+		expect(out.lines.some((l) => l.confidence != null && l.confidence < OCR_CUTOFFS.line)).toBe(
 			true,
 		);
+	});
+
+	it("fixture yields all three flag kinds", async () => {
+		const out = await getReceiptOcrProvider()!.extract(file);
+		const { fields } = buildOcrFlags(out);
+		// Unsure by confidence, unsure by rule, and calculated; the confident
+		// vendor carries no flag at all.
+		expect(fields.purchased_at).toMatchObject({ kind: "unsure", rule: null });
+		expect(fields.receipt_number?.kind).toBe("unsure");
+		expect(fields.receipt_number?.rule).toBeNull();
+		expect(fields.total?.kind).toBe("calculated");
+		expect(fields.vendor_name).toBeUndefined();
+		expect(out.total).toBe(310.22);
+		expect(out.vendor_phone).toBe("(555) 555-0188");
+	});
+});
+
+describe("remapHeader", () => {
+	it("remapHeader('mindee', raw) is null", () => {
+		expect(remapHeader("mindee", { anything: true })).toBeNull();
+	});
+
+	it("remapHeader('textract', raw) includes receipt_number", async () => {
+		process.env.RECEIPT_OCR_PROVIDER = "fixture";
+		const file = { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" };
+		const out = await getReceiptOcrProvider()!.extract(file);
+		expect(remapHeader("textract", out.raw)?.receipt_number).toBe("884213");
+		expect(remapHeader("fixture", out.raw)?.receipt_number).toBe("884213");
 	});
 });

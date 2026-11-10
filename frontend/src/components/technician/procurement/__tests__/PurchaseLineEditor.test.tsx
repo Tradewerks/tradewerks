@@ -8,7 +8,13 @@ import { within } from "@testing-library/react";
 import { render, screen } from "../../../../test/testUtils";
 import { describe, expect, test, vi } from "vitest";
 import PurchaseLineEditor, { type LineJobOption } from "../PurchaseLineEditor";
-import { blankLine, type ExtractedReceiptLine, type LineDraft } from "../lineDrafts";
+import {
+	applySheetDisposition,
+	blankLine,
+	type ExtractedReceiptLine,
+	type LineDraft,
+	type SheetDisposition,
+} from "../lineDrafts";
 import type { FieldPurchase } from "../../../../types/fieldPurchases";
 
 vi.mock("../../../../hooks/useVehicles", () => ({
@@ -23,8 +29,12 @@ vi.mock("../../../../hooks/useInventory", () => ({
 	useReconcileTargetsQuery: () => ({ data: [], isFetching: false, error: null }),
 }));
 
-/** Only `ocr_status` and `ocr_line_count` are read off the purchase here. */
-const purchase = { ocr_status: "skipped", ocr_line_count: null } as unknown as FieldPurchase;
+/** Only the OCR status, line count and the line cutoff are read off the purchase here. */
+const purchase = {
+	ocr_status: "skipped",
+	ocr_line_count: null,
+	ocr_field_flags: { fields: {}, line_cutoff: 0.75 },
+} as unknown as FieldPurchase;
 
 const draft = (description: string, over: Partial<LineDraft> = {}): LineDraft => ({
 	...blankLine(),
@@ -82,7 +92,7 @@ describe("editing across a delete", () => {
 		const beltBefore = descriptionInputs()[2]!;
 		const capacitorBefore = descriptionInputs()[1]!;
 
-		await user.click(screen.getAllByLabelText("Remove line")[0]!);
+		await user.click(screen.getAllByLabelText("Remove item")[0]!);
 
 		const remaining = descriptionInputs();
 		expect(remaining.map((i) => i.value)).toEqual(["Capacitor 45/5", "Fan belt"]);
@@ -99,7 +109,7 @@ describe("editing across a delete", () => {
 		await user.click(capacitor);
 		capacitor.setSelectionRange(2, 5);
 
-		await user.click(screen.getAllByLabelText("Remove line")[0]!);
+		await user.click(screen.getAllByLabelText("Remove item")[0]!);
 
 		const survivor = descriptionInputs()[0]!;
 		expect(survivor).toBe(capacitor);
@@ -133,11 +143,11 @@ describe("saying which job a line was for", () => {
 			/>
 		);
 
-		const select = screen.getByLabelText("Which job it was for") as HTMLSelectElement;
+		const select = screen.getByLabelText("Job") as HTMLSelectElement;
 		expect(select.value).toBe("a");
 		await user.selectOptions(select, "b");
 		expect(
-			(screen.getByLabelText("Which job it was for") as HTMLSelectElement).value
+			(screen.getByLabelText("Job") as HTMLSelectElement).value
 		).toBe("b");
 	});
 
@@ -181,7 +191,7 @@ describe("saying which job a line was for", () => {
 
 		// And the half that moved is tagged to the other job, which is the point.
 		const jobs = screen.getAllByLabelText(
-			"Which job it was for"
+			"Job"
 		) as HTMLSelectElement[];
 		expect([jobs[0]!.value, jobs[1]!.value]).toEqual(["a", "b"]);
 	});
@@ -197,7 +207,7 @@ describe("saying which job a line was for", () => {
 			/>
 		);
 
-		expect(screen.getByText(/1 line still needs a job/i)).toBeTruthy();
+		expect(screen.getByText(/1 item needs a job/i)).toBeTruthy();
 	});
 });
 
@@ -224,7 +234,7 @@ describe("low-confidence announcement", () => {
 
 		expect(screen.getAllByRole("status")).toHaveLength(1);
 		expect(statusText()).toBe(
-			"2 lines read with low confidence — check them against the paper."
+			"2 items read with low confidence — check them against the receipt."
 		);
 	});
 
@@ -242,7 +252,7 @@ describe("low-confidence announcement", () => {
 		);
 
 		expect(statusText()).toBe(
-			"1 line read with low confidence — check it against the paper."
+			"1 item read with low confidence — check it against the receipt."
 		);
 
 		await user.click(screen.getByRole("checkbox", { name: /matches the receipt/i }));
@@ -299,7 +309,7 @@ describe("an extraction the purchase never applied", () => {
 			/>
 		);
 		expect(
-			screen.getByRole("button", { name: /2 lines read from the receipt/i })
+			screen.getByRole("button", { name: /2 items read from the receipt/i })
 		).toBeTruthy();
 	});
 
@@ -328,7 +338,7 @@ describe("an extraction the purchase never applied", () => {
 
 		const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
 		expect(boxes.map((b) => b.checked)).toEqual([true, false]);
-		expect(screen.getByText(/1 line still to check against the paper/i)).toBeTruthy();
+		expect(screen.getByText(/1 item left to check against the receipt/i)).toBeTruthy();
 	});
 
 	/**
@@ -345,7 +355,7 @@ describe("an extraction the purchase never applied", () => {
 				]}
 			/>
 		);
-		expect(statusText()).toMatch(/2 lines read from the receipt/i);
+		expect(statusText()).toMatch(/2 items read from the receipt/i);
 	});
 
 	/**
@@ -402,22 +412,22 @@ describe("receipt total against the lines", () => {
 
 	test("says nothing while the lines plus tax add up to what was paid", () => {
 		withPaid(49.98);
-		expect(screen.queryByText(/do not add up/i)).toBeNull();
+		expect(screen.queryByText(/don't add up/i)).toBeNull();
 	});
 
 	test("names the gap when they do not, on a draft the server still has at zero", () => {
 		withPaid(80, 4);
-		expect(screen.getByText(/do not add up/i).textContent).toContain("$26.02");
+		expect(screen.getByText(/don't add up/i).textContent).toContain("$26.02");
 	});
 
 	test("names an overshoot as its own thing, not a shortfall", () => {
 		withPaid(30);
-		expect(screen.getByText(/do not add up/i).textContent).toContain("unaccounted for");
+		expect(screen.getByText(/don't add up/i).textContent).toContain(" over.");
 	});
 
 	test("holds off until there is a total to check against", () => {
 		withPaid(0);
-		expect(screen.queryByText(/do not add up/i)).toBeNull();
+		expect(screen.queryByText(/don't add up/i)).toBeNull();
 	});
 });
 
@@ -431,7 +441,7 @@ describe("the receipt-transcription path", () => {
 		).toBeVisible();
 		expect(screen.getByLabelText("Qty")).toBeVisible();
 		expect(screen.getByLabelText("Unit price")).toBeVisible();
-		expect(screen.getByLabelText("Which job it was for")).toBeVisible();
+		expect(screen.getByLabelText("Job")).toBeVisible();
 	});
 
 	test("folds stock and billing away", () => {
@@ -461,5 +471,158 @@ describe("the receipt-transcription path", () => {
 			"receive"
 		);
 		expect(within(toggle).getByText("To Warehouse")).toBeInTheDocument();
+	});
+});
+
+describe("stock & billing for all lines", () => {
+	const TRUCK = { id: "veh-1", name: "Truck 12" };
+
+	/** Owns the sheet's answer the way the page does: picking it moves the followers. */
+	function BulkHarness({
+		initial,
+		def = { disposition: "non_stock", vehicleId: "" },
+		editable = true,
+		onLines,
+	}: {
+		initial: LineDraft[];
+		def?: SheetDisposition;
+		editable?: boolean;
+		onLines?: (l: LineDraft[]) => void;
+	}) {
+		const [lines, setLines] = useState(initial);
+		const [sheet, setSheet] = useState(def);
+		const set = (l: LineDraft[]) => {
+			setLines(l);
+			onLines?.(l);
+		};
+		return (
+			<PurchaseLineEditor
+				purchase={purchase}
+				editable={editable}
+				lines={lines}
+				onChange={set}
+				myVehicle={TRUCK}
+				sheetDisposition={sheet}
+				onSheetDispositionChange={(d) => {
+					setSheet(d);
+					set(applySheetDisposition(lines, d));
+				}}
+			/>
+		);
+	}
+
+	const bar = () => screen.getByRole("radiogroup", { name: /all items/i });
+	const summaries = () =>
+		screen
+			.getAllByRole("button", { name: /stock & billing/i })
+			.map((b) => b.textContent ?? "");
+
+	test("one press moves every following line", async () => {
+		const user = userEvent.setup();
+		const onLines = vi.fn();
+		render(<BulkHarness initial={[draft("A"), draft("B")]} onLines={onLines} />);
+		await user.click(within(bar()).getByRole("radio", { name: "Added to stock" }));
+		const last = onLines.mock.calls.at(-1)![0] as LineDraft[];
+		expect(last.map((l) => [l.disposition, l.disposition_vehicle_id])).toEqual([
+			["receive", "veh-1"],
+			["receive", "veh-1"],
+		]);
+		expect(summaries().every((t) => /Truck 12/.test(t) && /all items/.test(t))).toBe(true);
+	});
+
+	test("a line set on its own keeps its answer through a bulk change", async () => {
+		const user = userEvent.setup();
+		const onLines = vi.fn();
+		render(
+			<BulkHarness
+				initial={[
+					draft("A"),
+					draft("B", {
+						disposition: "receive",
+						disposition_vehicle_id: "",
+						dispositionPinned: true,
+					}),
+				]}
+				onLines={onLines}
+			/>
+		);
+		expect(screen.getByText(/1 item set separately/)).toBeInTheDocument();
+		await user.click(within(bar()).getByRole("radio", { name: "Added to stock" }));
+		const last = onLines.mock.calls.at(-1)![0] as LineDraft[];
+		expect(last[1]).toMatchObject({ disposition_vehicle_id: "", dispositionPinned: true });
+		expect(last[0]).toMatchObject({ disposition_vehicle_id: "veh-1" });
+	});
+
+	test("answering on the line pins it; Make all match lets it go", async () => {
+		const user = userEvent.setup();
+		const onLines = vi.fn();
+		render(<BulkHarness initial={[draft("A"), draft("B")]} onLines={onLines} />);
+		await user.click(screen.getAllByRole("button", { name: /stock & billing/i })[1]!);
+		// The select is the native one; the catalog picker is a combobox too.
+		const select = screen
+			.getAllByRole("combobox")
+			.find((el) => el.tagName === "SELECT")!;
+		await user.selectOptions(select, "receive");
+		expect((onLines.mock.calls.at(-1)![0] as LineDraft[])[1]!.dispositionPinned).toBe(true);
+		expect(summaries()[1]).toMatch(/this item/);
+		await user.click(screen.getByRole("button", { name: "Make all match" }));
+		const last = onLines.mock.calls.at(-1)![0] as LineDraft[];
+		expect(last[1]).toMatchObject({ disposition: "non_stock", dispositionPinned: false });
+		expect(screen.queryByText(/set separately/)).not.toBeInTheDocument();
+	});
+
+	test("a line added takes the sheet's answer", async () => {
+		const user = userEvent.setup();
+		const onLines = vi.fn();
+		render(
+			<BulkHarness
+				initial={[
+					draft("A", { disposition: "receive", disposition_vehicle_id: "veh-1" }),
+					draft("B", { disposition: "receive", disposition_vehicle_id: "veh-1" }),
+				]}
+				def={{ disposition: "receive", vehicleId: "veh-1" }}
+				onLines={onLines}
+			/>
+		);
+		await user.click(screen.getByRole("button", { name: /add item/i }));
+		const last = onLines.mock.calls.at(-1)![0] as LineDraft[];
+		expect(last[2]).toMatchObject({ disposition: "receive", disposition_vehicle_id: "veh-1" });
+	});
+
+	test("a stock answer leaves a discount line on the job and says so", async () => {
+		const user = userEvent.setup();
+		const onLines = vi.fn();
+		render(
+			<BulkHarness
+				initial={[draft("A"), draft("Promo", { unit_price: "-5" })]}
+				onLines={onLines}
+			/>
+		);
+		await user.click(within(bar()).getByRole("radio", { name: "Added to stock" }));
+		const last = onLines.mock.calls.at(-1)![0] as LineDraft[];
+		expect(last[1]).toMatchObject({ disposition: "non_stock", dispositionPinned: false });
+		expect(screen.getByText(/1 discount stays on the job/)).toBeInTheDocument();
+	});
+
+	test("no bar for a single line", () => {
+		render(<BulkHarness initial={[draft("A")]} />);
+		expect(screen.queryByRole("radiogroup", { name: /all items/i })).not.toBeInTheDocument();
+	});
+
+	test("read-only: one sentence instead of the controls", () => {
+		render(
+			<BulkHarness
+				editable={false}
+				initial={[
+					draft("A"),
+					draft("B", { disposition: "receive", disposition_vehicle_id: "veh-1" }),
+					draft("C"),
+				]}
+			/>
+		);
+		expect(screen.queryByRole("radiogroup", { name: /all items/i })).not.toBeInTheDocument();
+		expect(
+			screen.getByText("2 consumed on job · 1 added to Truck 12")
+		).toBeInTheDocument();
 	});
 });

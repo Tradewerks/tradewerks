@@ -37,6 +37,7 @@
 	},
 	"dependencies": {
 		"@aws-sdk/client-s3": "^3.1047.0",
+		"@aws-sdk/client-textract": "^3.1159.0",
 		"@aws-sdk/s3-request-presigner": "^3.1047.0",
 		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",

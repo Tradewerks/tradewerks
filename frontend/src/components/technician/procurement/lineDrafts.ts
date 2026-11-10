@@ -27,6 +27,11 @@ export interface LineDraft {
 	acknowledged: boolean;
 	/** Null on anything the technician typed; a score on anything OCR read. */
 	ocrConfidence: number | null;
+	/**
+	 * Set on its own rather than following the sheet's stock & billing answer. A
+	 * following line moves when that answer changes; a pinned one stays put.
+	 */
+	dispositionPinned: boolean;
 }
 
 const EMPTY: Omit<LineDraft, "key" | "allocationKey"> = {
@@ -42,6 +47,7 @@ const EMPTY: Omit<LineDraft, "key" | "allocationKey"> = {
 	// ceremony; what the spec asks to be checked is what a machine read.
 	acknowledged: true,
 	ocrConfidence: null,
+	dispositionPinned: false,
 };
 
 export const blankLine = (allocationKey = ""): LineDraft => ({
@@ -97,6 +103,8 @@ export function toDrafts(
 			// unconfirmed however well the provider scored it.
 			acknowledged: !!l.verified_at || ocrConfidence == null,
 			ocrConfidence,
+			// Settled by `seedSheet`, which is the only thing that knows the majority.
+			dispositionPinned: false,
 		};
 	});
 }
@@ -183,4 +191,110 @@ export function draftsFromOcr(
 		acknowledged: false,
 		ocrConfidence: l.confidence,
 	}));
+}
+
+/**
+ * The sheet's one stock & billing answer. Almost every receipt is used one way —
+ * all of it onto the job, or all of it onto the truck — so it is asked once, and
+ * each line either follows it or is set on its own.
+ */
+export interface SheetDisposition {
+	disposition: FieldPurchaseDisposition;
+	/** Only meaningful for `receive`: "" is the warehouse. */
+	vehicleId: string;
+}
+
+/**
+ * A discount or a return. The server refuses one received into stock (it would
+ * value the shelf below zero), so a stock answer passes these by.
+ */
+export function isNegativeLine(d: LineDraft): boolean {
+	const price = Number(d.unit_price);
+	const qty = Number(d.quantity);
+	return price < 0 || (Number.isFinite(qty) && Number.isFinite(price) && qty * price < 0);
+}
+
+/** What the sheet's answer resolves to on this one line. */
+function resolvedFor(d: LineDraft, def: SheetDisposition): Pick<
+	LineDraft,
+	"disposition" | "disposition_vehicle_id"
+> {
+	if (def.disposition === "receive" && isNegativeLine(d)) {
+		return { disposition: "non_stock", disposition_vehicle_id: "" };
+	}
+	return {
+		disposition: def.disposition,
+		disposition_vehicle_id: def.disposition === "receive" ? def.vehicleId : "",
+	};
+}
+
+/** Whether a line already says what the sheet's answer would make it say. */
+export function followsSheet(d: LineDraft, def: SheetDisposition): boolean {
+	const r = resolvedFor(d, def);
+	return d.disposition === r.disposition && d.disposition_vehicle_id === r.disposition_vehicle_id;
+}
+
+/**
+ * Moves every following line onto the sheet's answer; pinned lines keep their own.
+ * A pinned line that now says the same thing as the sheet is let go, so "set
+ * separately" only ever counts lines that actually differ.
+ *
+ * Returns the same array when nothing changed.
+ */
+export function applySheetDisposition(drafts: LineDraft[], def: SheetDisposition): LineDraft[] {
+	let changed = false;
+	const next = drafts.map((d) => {
+		if (d.dispositionPinned) {
+			if (!followsSheet(d, def)) return d;
+			changed = true;
+			return { ...d, dispositionPinned: false };
+		}
+		if (followsSheet(d, def)) return d;
+		changed = true;
+		return { ...d, ...resolvedFor(d, def) };
+	});
+	return changed ? next : drafts;
+}
+
+/**
+ * The answer a sheet with no lines yet starts from. With a job, the part went on
+ * it — the ordinary counter trip. With none, consuming it would bill nobody, so a
+ * restock run starts on stock: the technician's truck where they have one.
+ */
+export function startingSheetDisposition(
+	hasJob: boolean,
+	myVehicleId: string | null
+): SheetDisposition {
+	return hasJob
+		? { disposition: "non_stock", vehicleId: "" }
+		: { disposition: "receive", vehicleId: myVehicleId ?? "" };
+}
+
+/**
+ * Reads the sheet's answer back off lines the server sent — it stores one answer
+ * per line, not the sheet's. The most common answer wins (ties go to the job, the
+ * common case); lines that differ come back pinned. Discount lines and lines with
+ * no answer do not vote. Null when nothing votes.
+ */
+export function seedSheet(drafts: LineDraft[]): {
+	lines: LineDraft[];
+	def: SheetDisposition | null;
+} {
+	const votes = new Map<string, number>();
+	for (const d of drafts) {
+		if (!d.disposition || isNegativeLine(d)) continue;
+		const key = `${d.disposition}|${d.disposition === "receive" ? d.disposition_vehicle_id : ""}`;
+		votes.set(key, (votes.get(key) ?? 0) + 1);
+	}
+	if (votes.size === 0) return { lines: drafts, def: null };
+	const [winner] = [...votes.entries()].sort(
+		([ka, a], [kb, b]) =>
+			b - a || Number(kb.startsWith("non_stock")) - Number(ka.startsWith("non_stock"))
+	)[0]!;
+	const [disposition, vehicleId] = winner.split("|") as [FieldPurchaseDisposition, string];
+	const def = { disposition, vehicleId };
+	return {
+		lines: drafts.map((d) => ({ ...d, dispositionPinned: !followsSheet(d, def) })),
+		def,
+	};
 }

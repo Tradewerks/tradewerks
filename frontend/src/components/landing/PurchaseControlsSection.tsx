@@ -2,17 +2,17 @@ import { CardLabel, SectionTitle } from "./primitives";
 
 const container = "mx-auto max-w-[1200px] px-6";
 
-// Wording mirrors the field app: AuthorityStrip, ReceiptValueDiff and LimitBreachNotice.
+// Wording mirrors the field app: AuthorityStrip, ReceiptValueDiff, OcrFieldChip and LimitBreachNotice.
 const AUTHORITY: [string, string, boolean?][] = [
 	["Per purchase", "$150"],
 	["Left today", "$212"],
 	["Left this week", "$48", true],
 ];
 
-const FIELDS: { label: string; entered: string; reads?: string }[] = [
+const FIELDS: { label: string; entered: string; reads?: string; flag?: string }[] = [
 	{ label: "Vendor", entered: "Johnstone Supply" },
-	{ label: "Date", entered: "Sep 30, 2026" },
-	{ label: "Tax", entered: "$11.42" },
+	{ label: "Date", entered: "Sep 30, 2026", flag: "Unsure" },
+	{ label: "Tax", entered: "$11.42", flag: "Unsure" },
 	{ label: "Total", entered: "$168.40", reads: "$186.40" },
 ];
 
@@ -23,7 +23,7 @@ const CONTROLS: [string, string][] = [
 	],
 	[
 		"The receipt checks the typing",
-		"Snap the receipt and it's read for vendor, date, tax, total and line items. Where it disagrees with what the tech typed, both numbers sit side by side. Nothing is overwritten.",
+		"Snap the receipt and it's read for vendor, date, tax, total and line items. Anything the reader wasn't sure of, or had to calculate, is marked for the tech to check. Where it disagrees with what the tech typed, both numbers sit side by side. Nothing is overwritten.",
 	],
 	[
 		"One receipt, one reimbursement",
@@ -68,6 +68,14 @@ function SubmitCard() {
 						<div className="text-[13px] text-ink-4">{f.label}</div>
 						<div className="flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1">
 							<div className="text-[15px] font-semibold">{f.entered}</div>
+							{f.flag && (
+								<div className="flex items-center gap-1.5 rounded-full bg-sky px-2.5 py-1 text-xs text-sky-3">
+									{f.flag}
+									<span className="font-semibold text-sky-btn underline underline-offset-2">
+										Looks right
+									</span>
+								</div>
+							)}
 							{f.reads && (
 								<div className="flex items-center gap-1.5 rounded-full bg-sky px-2.5 py-1 text-xs text-sky-3">
 									receipt reads{" "}
@@ -83,6 +91,8 @@ function SubmitCard() {
 					</div>
 				))}
 			</div>
+
+			<div className="text-[13px] text-ink-4">Check against photo: Date, Tax</div>
 
 			<div className="flex flex-col gap-2 rounded-[10px] border border-amber-line bg-amber-tint px-3.5 py-3 text-amber-ink">
 				<div className="text-sm font-bold">

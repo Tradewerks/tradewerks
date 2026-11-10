@@ -162,14 +162,14 @@ describe("blocking on a blank or non-numeric quantity or price", () => {
 	it("blocks a blank price", () => {
 		renderSheet(draft({ lines: [line({ quantity: "2", unit_price: "" })] }));
 		expect(
-			screen.getByRole("button", { name: /enter a number for quantity and price/i })
+			screen.getByRole("button", { name: /enter a quantity and price/i })
 		).toBeDisabled();
 	});
 
 	it("blocks a blank quantity", () => {
 		renderSheet(draft({ lines: [line({ quantity: "", unit_price: "24.99" })] }));
 		expect(
-			screen.getByRole("button", { name: /enter a number for quantity and price/i })
+			screen.getByRole("button", { name: /enter a quantity and price/i })
 		).toBeDisabled();
 	});
 
@@ -178,7 +178,7 @@ describe("blocking on a blank or non-numeric quantity or price", () => {
 	it("blocks a price that is not a number", () => {
 		renderSheet(draft({ lines: [line({ quantity: "2", unit_price: "abc" })] }));
 		expect(
-			screen.getByRole("button", { name: /enter a number for quantity and price/i })
+			screen.getByRole("button", { name: /enter a quantity and price/i })
 		).toBeDisabled();
 	});
 
@@ -186,7 +186,7 @@ describe("blocking on a blank or non-numeric quantity or price", () => {
 	it("blocks a quantity that is a lone separator", () => {
 		renderSheet(draft({ lines: [line({ quantity: "-", unit_price: "24.99" })] }));
 		expect(
-			screen.getByRole("button", { name: /enter a number for quantity and price/i })
+			screen.getByRole("button", { name: /enter a quantity and price/i })
 		).toBeDisabled();
 	});
 
@@ -271,7 +271,7 @@ describe("the pre-approval footer", () => {
 		expect(
 			screen.getByRole("button", { name: /send for pre-approval/i })
 		).toBeEnabled();
-		expect(screen.getByText(/dispatch has to approve it/i)).toBeInTheDocument();
+		expect(screen.getByText(/needs dispatch pre-approval/i)).toBeInTheDocument();
 		expect(bar(container).textContent).not.toMatch(/then this is reimbursed/i);
 	});
 

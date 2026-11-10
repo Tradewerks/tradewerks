@@ -62,6 +62,6 @@ export function describeBreach(
 	return {
 		title: `${LIMIT_LABEL[breach.code]} ${money(limit)}`,
 		spent: spentLabel ? `${money(Math.max(0, wouldBe - measured))} ${spentLabel}` : null,
-		action: `Come down ${money(Math.max(0, wouldBe - limit))}`,
+		action: `${money(Math.max(0, wouldBe - limit))} over`,
 	};
 }

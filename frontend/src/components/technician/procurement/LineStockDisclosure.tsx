@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 import CatalogItemPicker from "../../inventory/CatalogItemPicker";
 import { DISPOSITION_LABELS, type FieldPurchaseDisposition } from "../../../types/fieldPurchases";
+import TechSelect from "./TechSelect";
 import type { LineDraft } from "./lineDrafts";
 
 /**
@@ -19,6 +20,8 @@ export default function LineStockDisclosure({
 	editable,
 	myVehicle,
 	onChange,
+	following,
+	onFollow,
 }: {
 	draft: LineDraft;
 	editable: boolean;
@@ -30,6 +33,14 @@ export default function LineStockDisclosure({
 	 */
 	myVehicle?: { id: string; name: string } | null;
 	onChange: (patch: Partial<LineDraft>) => void;
+	/**
+	 * Whether this line takes the sheet's stock & billing answer (true) or was set on
+	 * its own (false). Undefined where the sheet asks no bulk question — one line, or
+	 * a refund — and the row reads as it always has.
+	 */
+	following?: boolean;
+	/** Puts a line set on its own back onto the sheet's answer. */
+	onFollow?: () => void;
 }) {
 	// An unrecorded line bills nobody and stocks nothing. Opening it is the only
 	// way a collapsed group can still ask the question.
@@ -48,8 +59,21 @@ export default function LineStockDisclosure({
 				? { text: "Billed to job", warn: false }
 				: { text: "Not recorded", warn: true };
 
+	// A follower is inherited, so it recedes; a line set on its own is an exception
+	// and is what a technician scanning the list needs to find.
+	const pinned = following === false;
+	const summaryTone = summary.warn
+		? "text-warning-text"
+		: following
+			? "text-text-muted"
+			: pinned
+				? "text-text-primary"
+				: "text-text-secondary";
+
 	return (
-		<div className="mt-2 rounded-md border border-border">
+		<div
+			className={`mt-2 rounded-md border ${pinned ? "border-border border-l-2 border-l-primary" : "border-border"}`}
+		>
 			<button
 				type="button"
 				aria-expanded={open}
@@ -75,12 +99,22 @@ export default function LineStockDisclosure({
 					    this row is scanned down a list of lines, and the whole
 					    point of the warn state is that it stands out. */}
 					<span
-						className={`inline-flex flex-shrink-0 items-center gap-1 text-xs font-medium ${summary.warn ? "text-warning-text" : "text-text-secondary"}`}
+						className={`inline-flex flex-shrink-0 items-center gap-1 text-xs font-medium ${summaryTone}`}
 					>
 						{summary.warn && (
 							<AlertTriangle aria-hidden size={12} />
 						)}
 						{summary.text}
+						{following && (
+							<span className="font-normal text-text-faint">
+								· all items
+							</span>
+						)}
+						{pinned && !summary.warn && (
+							<span className="font-normal text-text-muted">
+								· this item
+							</span>
+						)}
 					</span>
 				</span>
 			</button>
@@ -94,7 +128,7 @@ export default function LineStockDisclosure({
 						<span className="mb-1 block text-xs text-text-muted">
 							What happened to it
 						</span>
-						<select
+						<TechSelect
 							value={draft.disposition}
 							disabled={!editable}
 							onChange={(e) =>
@@ -117,7 +151,6 @@ export default function LineStockDisclosure({
 											}),
 								})
 							}
-							className="h-11 w-full rounded-md border border-border bg-base px-2 text-sm text-text-primary disabled:opacity-60"
 						>
 							<option value="">Not recorded</option>
 							{(
@@ -129,7 +162,7 @@ export default function LineStockDisclosure({
 									{DISPOSITION_LABELS[k]}
 								</option>
 							))}
-						</select>
+						</TechSelect>
 					</label>
 
 					{draft.disposition === "receive" && (
@@ -214,6 +247,18 @@ export default function LineStockDisclosure({
 									one to stock it.
 								</span>
 							)}
+						</div>
+					)}
+
+					{pinned && editable && onFollow && (
+						<div className="sm:col-span-2">
+							<button
+								type="button"
+								onClick={onFollow}
+								className="inline-flex min-h-9 items-center text-xs font-medium text-primary underline-offset-2 hover:underline"
+							>
+								Match all items
+							</button>
 						</div>
 					)}
 

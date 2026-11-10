@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, Plus, ScanLine, Split, Trash2 } from "lucide-react";
+import { Check, Plus, ScanLine, Split, Trash2 } from "lucide-react";
+import { OcrLineMark } from "../../fieldPurchases/OcrLineMark";
 import { money } from "../../fieldPurchases/fieldPurchaseFormat";
-import { OCR_LOW_CONFIDENCE, type FieldPurchase } from "../../../types/fieldPurchases";
+import type { FieldPurchase } from "../../../types/fieldPurchases";
+import BulkDispositionBar from "./BulkDispositionBar";
 import {
+	applySheetDisposition,
 	blankLine,
 	draftsFromOcr,
 	pendingOcrLines,
 	splitLine,
 	type ExtractedReceiptLine,
 	type LineDraft,
+	type SheetDisposition,
 } from "./lineDrafts";
 import LineStockDisclosure from "./LineStockDisclosure";
 import RefundPartPicker, { RefundLineStock } from "./RefundPartPicker";
+import TechSelect from "./TechSelect";
 import { sheetCopy } from "./sheetCopy";
 
 /** A job the receipt covers, as the line editor needs to name it. */
@@ -51,6 +56,12 @@ interface Props {
 	 */
 	totalPaid?: number;
 	taxAmount?: number;
+	/**
+	 * The sheet's one stock & billing answer, which every line follows unless it was
+	 * set on its own. Absent on refunds, which make no stock or billing claim.
+	 */
+	sheetDisposition?: SheetDisposition;
+	onSheetDispositionChange?: (next: SheetDisposition) => void;
 }
 
 /**
@@ -71,6 +82,8 @@ export default function PurchaseLineEditor({
 	extractedLines = [],
 	totalPaid = 0,
 	taxAmount = 0,
+	sheetDisposition,
+	onSheetDispositionChange,
 }: Props) {
 	const copy = sheetCopy(purchase.kind);
 	// Null off a refund, so every refund-only branch below keys off this.
@@ -81,6 +94,14 @@ export default function PurchaseLineEditor({
 		0
 	);
 	const pending = pendingOcrLines(extractedLines, lines);
+	const bulk = parentLines ? undefined : sheetDisposition;
+	// One line is its own bulk answer: a bar above it would ask the same question twice.
+	const showBulk = bulk != null && lines.length >= 2;
+
+	// Every change goes out with following lines already on the sheet's answer, so a
+	// line added, seeded, split or repriced never carries a stale one to submit.
+	const emit = (next: LineDraft[]) =>
+		onChange(bulk ? applySheetDisposition(next, bulk) : next);
 
 	// Lines plus tax must reconcile to what was paid, within a cent — checked
 	// here as well as at submit because here is
@@ -96,11 +117,13 @@ export default function PurchaseLineEditor({
 	// One summary region rather than a live region per line: OCR lands on every line
 	// at once, and N regions announcing together is unreadable. The per-line marks
 	// stay visual and are still reachable by navigating the line itself.
+	// The cutoff is the one the scan was judged by. A purchase scanned before it was
+	// recorded has none, and gets no marks rather than a guessed threshold.
+	const lineCutoff = purchase.ocr_field_flags?.line_cutoff ?? null;
+	const isLowLine = (score: number | null) =>
+		lineCutoff != null && score != null && score < lineCutoff;
 	const lowConfidenceCount = lines.filter(
-		(l) =>
-			!l.acknowledged &&
-			l.ocrConfidence != null &&
-			l.ocrConfidence < OCR_LOW_CONFIDENCE
+		(l) => !l.acknowledged && isLowLine(l.ocrConfidence)
 	).length;
 
 	// Pressing the offer is what unmounts it, so focus would fall to <body> and
@@ -118,21 +141,29 @@ export default function PurchaseLineEditor({
 
 	const seedExtracted = () => {
 		setSeedFrom(lines.length);
-		onChange([
+		emit([
 			...lines,
 			...draftsFromOcr(pending, jobs.length === 1 ? jobs[0]!.key : ""),
 		]);
 	};
 
-	const edit = (i: number, patch: Partial<LineDraft>) =>
-		onChange(lines.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+	// Answering stock & billing on the line itself takes it off the sheet's answer;
+	// `applySheetDisposition` lets it go again if the answer is the same one.
+	const edit = (i: number, patch: Partial<LineDraft>) => {
+		const own = "disposition" in patch || "disposition_vehicle_id" in patch;
+		emit(
+			lines.map((d, j) =>
+				j === i ? { ...d, ...patch, ...(own ? { dispositionPinned: true } : {}) } : d
+			)
+		);
+	};
 
 	// The halves land next to each other, because the second one is only
 	// intelligible beside the line it came out of.
 	const split = (i: number) => {
 		const other = jobs.find((j) => j.key !== lines[i]!.allocationKey) ?? jobs[0]!;
 		const halves = splitLine(lines[i]!, other.key);
-		onChange([...lines.slice(0, i), ...halves, ...lines.slice(i + 1)]);
+		emit([...lines.slice(0, i), ...halves, ...lines.slice(i + 1)]);
 	};
 
 	return (
@@ -142,7 +173,7 @@ export default function PurchaseLineEditor({
 					{copy.linesTitle}
 				</h2>
 				<span className="text-xs tabular-nums text-text-muted">
-					{lines.length} line{lines.length === 1 ? "" : "s"} ·{" "}
+					{lines.length} item{lines.length === 1 ? "" : "s"} ·{" "}
 					{money(linesTotal)}
 				</span>
 			</div>
@@ -159,11 +190,10 @@ export default function PurchaseLineEditor({
 				>
 					<ScanLine aria-hidden size={14} className="flex-shrink-0" />
 					<span className="min-w-0 flex-1">
-						{pending.length} line
-						{pending.length === 1 ? "" : "s"} read from the{" "}
-						{copy.noun} {pending.length === 1 ? "is" : "are"} not on
-						this sheet — add{" "}
-						{pending.length === 1 ? "it" : "them"} to review
+						{pending.length} item
+						{pending.length === 1 ? "" : "s"} read from the {copy.noun}{" "}
+						{pending.length === 1 ? "hasn't" : "haven't"} been added yet — tap to
+						add {pending.length === 1 ? "it" : "them"}
 					</span>
 				</button>
 			)}
@@ -174,15 +204,28 @@ export default function PurchaseLineEditor({
 			<div role="status" aria-live="polite" className="sr-only">
 				{[
 					pending.length > 0
-						? `${pending.length} line${pending.length === 1 ? "" : "s"} read from the ${copy.noun} ${pending.length === 1 ? "is" : "are"} not on this sheet yet.`
+						? `${pending.length} item${pending.length === 1 ? "" : "s"} read from the ${copy.noun} ${pending.length === 1 ? "hasn't" : "haven't"} been added yet.`
 						: "",
 					lowConfidenceCount > 0
-						? `${lowConfidenceCount} line${lowConfidenceCount === 1 ? "" : "s"} read with low confidence — check ${lowConfidenceCount === 1 ? "it" : "them"} against the paper.`
+						? `${lowConfidenceCount} item${lowConfidenceCount === 1 ? "" : "s"} read with low confidence — check ${lowConfidenceCount === 1 ? "it" : "them"} against the ${copy.noun}.`
 						: "",
 				]
 					.filter(Boolean)
 					.join(" ")}
 			</div>
+
+			{showBulk && (
+				<BulkDispositionBar
+					value={bulk}
+					lines={lines}
+					myVehicle={myVehicle}
+					editable={editable}
+					onChange={(next) => onSheetDispositionChange?.(next)}
+					onMatchAll={() =>
+						emit(lines.map((d) => ({ ...d, dispositionPinned: false })))
+					}
+				/>
+			)}
 
 			{editable && parentLines && (
 				<RefundPartPicker
@@ -195,9 +238,7 @@ export default function PurchaseLineEditor({
 
 			<div ref={listRef} className="space-y-3">
 				{lines.map((d, i) => {
-					const lowConfidence =
-						d.ocrConfidence != null &&
-						d.ocrConfidence < OCR_LOW_CONFIDENCE;
+					const lowConfidence = isLowLine(d.ocrConfidence);
 					return (
 						<div
 							key={d.key}
@@ -226,7 +267,7 @@ export default function PurchaseLineEditor({
 								{editable && isSplit && (
 									<button
 										type="button"
-										aria-label={`Split ${d.description || "this line"} across two jobs`}
+										aria-label={`Split ${d.description || "this item"} across two jobs`}
 										onClick={() =>
 											split(i)
 										}
@@ -241,9 +282,9 @@ export default function PurchaseLineEditor({
 								{editable && (
 									<button
 										type="button"
-										aria-label="Remove line"
+										aria-label="Remove item"
 										onClick={() =>
-											onChange(
+											emit(
 												lines.filter(
 													(
 														_,
@@ -327,9 +368,9 @@ export default function PurchaseLineEditor({
 							{isSplit && (
 								<label className="mt-2 block min-w-0">
 									<span className="mb-1 block text-xs text-text-muted">
-										Which job it was for
+										Job
 									</span>
-									<select
+									<TechSelect
 										value={
 											d.allocationKey
 										}
@@ -342,13 +383,10 @@ export default function PurchaseLineEditor({
 														.value,
 											})
 										}
-										className="h-11 w-full rounded-md border border-border bg-base px-2 text-sm text-text-primary disabled:opacity-60"
 									>
 										{/* Blank is a real state, not a placeholder: submit
 										    refuses while any line is still on it. */}
-										<option value="">
-											Not said yet
-										</option>
+										<option value="">Choose a job</option>
 										{jobs.map((j) => (
 											<option
 												key={
@@ -363,7 +401,7 @@ export default function PurchaseLineEditor({
 												}
 											</option>
 										))}
-									</select>
+									</TechSelect>
 								</label>
 							)}
 
@@ -378,17 +416,31 @@ export default function PurchaseLineEditor({
 									editable={editable}
 									myVehicle={myVehicle}
 									onChange={(patch) => edit(i, patch)}
+									following={
+										showBulk
+											? !d.dispositionPinned
+											: undefined
+									}
+									onFollow={() =>
+										emit(
+											lines.map((x, j) =>
+												j === i
+													? {
+															...x,
+															dispositionPinned: false,
+														}
+													: x
+											)
+										)
+									}
 								/>
 							)}
 
 							{lowConfidence && !d.acknowledged && (
 								<p className="mt-2 inline-flex items-center gap-1 text-xs text-warning-text">
-									<AlertTriangle
-										aria-hidden
-										size={12}
-									/>{" "}
-									Read with low confidence —
-									check it against the paper
+									<OcrLineMark confidence={d.ocrConfidence!} />{" "}
+									Read with low confidence — check it against the{" "}
+									{copy.noun}
 								</p>
 							)}
 
@@ -409,7 +461,7 @@ export default function PurchaseLineEditor({
 										}
 										className="h-5 w-5 accent-primary"
 									/>
-									This line matches the{" "}
+									This item matches the{" "}
 									{copy.noun}
 								</label>
 							)}
@@ -431,7 +483,7 @@ export default function PurchaseLineEditor({
 				<button
 					type="button"
 					onClick={() =>
-						onChange([
+						emit([
 							...lines,
 							blankLine(
 								jobs.length === 1
@@ -442,14 +494,14 @@ export default function PurchaseLineEditor({
 					}
 					className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-text-secondary hover:bg-surface-raised"
 				>
-					<Plus aria-hidden size={14} /> Add line
+					<Plus aria-hidden size={14} /> Add item
 				</button>
 			)}
 
 			{editable && unconfirmed > 0 && (
 				<p className="mt-2 text-xs text-text-muted">
-					{unconfirmed} line{unconfirmed === 1 ? "" : "s"} still to
-					check against the paper.
+					{unconfirmed} item{unconfirmed === 1 ? "" : "s"} left to check against the{" "}
+					{copy.noun}.
 				</p>
 			)}
 
@@ -457,11 +509,10 @@ export default function PurchaseLineEditor({
 			    rows, so the count belongs beside them. */}
 			{editable && isSplit && unassigned > 0 && (
 				<p className="mt-2 text-xs text-warning-text">
-					{unassigned} line
-					{unassigned === 1 ? " still needs" : "s still need"} a job —
+					{unassigned} item{unassigned === 1 ? " needs" : "s need"} a job —
 					{parentLines
-						? " nothing is credited for a line nobody claimed."
-						: " nothing is billed for a line nobody claimed."}
+						? " items without one aren't credited."
+						: " items without one aren't billed."}
 				</p>
 			)}
 
@@ -469,19 +520,12 @@ export default function PurchaseLineEditor({
 				// One string rather than interpolated fragments: it is a plain
 				// sentence, and split across nodes it is read out in pieces.
 				<p className="mt-2 text-xs text-warning-text">
-					{`These lines plus tax do not add up to the ${money(paid)} ${copy.reconcileVerb} — ${money(
+					{`Items plus tax don't add up to the ${money(paid)} ${copy.reconcileVerb} — ${money(
 						Math.abs(shortfall)
-					)} ${shortfall > 0 ? "is missing" : "is unaccounted for"}.`}
+					)} ${shortfall > 0 ? "short" : "over"}.`}
 				</p>
 			)}
 
-			{purchase.ocr_line_count != null && purchase.ocr_status === "succeeded" && (
-				<p className="mt-2 text-xs text-text-faint">
-					{purchase.ocr_line_count} line
-					{purchase.ocr_line_count === 1 ? "" : "s"} read from the
-					photo.
-				</p>
-			)}
 		</section>
 	);
 }

@@ -416,13 +416,21 @@ const NEAR_TOTAL_PERCENT = new Prisma.Decimal("0.02");
 const NEAR_TOTAL_FLOOR = new Prisma.Decimal("2.00");
 const DAY_MS = 86_400_000;
 
-/** Punctuation and store numbers vary between two prints of the same vendor. */
+/**
+ * Punctuation and store numbers vary between two prints of the same vendor. Words are
+ * sorted because OCR can return a multi-line name block out of print order
+ * ("HOME CENTERS, LLC / LOWE'S").
+ */
 export function normalizeVendor(name: string | null): string {
 	return (name ?? "")
 		.toLowerCase()
-		.replace(/[^a-z0-9 ]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim()
+		.split(" ")
+		// "The Home Depot" typed against "HOME DEPOT #6977" printed.
+		.filter((w) => w && w !== "the")
+		.sort()
+		.join(" ");
 }
 
 /** Formatting varies between a receipt print and whatever someone typed into the app. */
@@ -438,9 +446,20 @@ export function normalizeReceiptNumber(value: string | null): string {
 		.toLowerCase();
 }
 
-/** A store number appended to one print of a receipt should not defeat a vendor match. */
-const vendorsNear = (a: string, b: string): boolean =>
-	!!a && !!b && (a === b || (a.length >= 4 && (b.includes(a) || a.includes(b))));
+/**
+ * A store number appended to one print of a receipt should not defeat a vendor match.
+ * Takes `normalizeVendor` output; compares word sets since that output is word-sorted.
+ */
+export function vendorsNear(a: string, b: string): boolean {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	// "FredMeyer" off a logo vs "Fred Meyer" typed in.
+	if (a.length >= 4 && a.replace(/ /g, "") === b.replace(/ /g, "")) return true;
+	const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+	if (short.length < 4) return false;
+	const words = new Set(long.split(" "));
+	return short.split(" ").every((w) => words.has(w));
+}
 
 const sameUtcDay = (a: Date, b: Date) =>
 	a.getUTCFullYear() === b.getUTCFullYear() &&
@@ -455,33 +474,46 @@ export function findDuplicate(
 	subject: DuplicateSubject,
 	priors: DuplicateCandidate[],
 ): DuplicateVerdict | null {
-	// A vendor's own ticket number is the one thing on a receipt that is unique by
-	// construction, so it outranks the fuzzy tier: a re-photographed receipt keeps its
-	// number while its bytes, and sometimes its read date and total, change.
+	// A re-photographed receipt keeps its ticket number while its bytes, and sometimes its
+	// read total, change. But chain ticket numbers are short per-register counters (Home
+	// Depot, Walmart), so unrelated receipts collide: the number alone only refuses when
+	// the dates agree, and otherwise is a suspicion.
+	let near: DuplicateVerdict | null = null;
 	const subjectNo = normalizeReceiptNumber(subject.receipt_number);
 	if (subjectNo) {
 		const subjectVendor = normalizeVendor(subject.vendor_name);
 		for (const prior of priors) {
 			if (
-				normalizeReceiptNumber(prior.receipt_number) === subjectNo &&
-				vendorsNear(subjectVendor, normalizeVendor(prior.vendor_name))
+				normalizeReceiptNumber(prior.receipt_number) !== subjectNo ||
+				!vendorsNear(subjectVendor, normalizeVendor(prior.vendor_name))
 			) {
+				continue;
+			}
+			const datesAgree =
+				!!subject.purchased_at &&
+				!!prior.purchased_at &&
+				Math.abs(subject.purchased_at.getTime() - prior.purchased_at.getTime()) <= DAY_MS;
+			if (datesAgree) {
 				return {
 					level: "exact",
 					purchase_id: prior.id,
 					message: `Receipt ${subject.receipt_number} from this vendor was already submitted`,
 				};
 			}
+			near ??= {
+				level: "near",
+				purchase_id: prior.id,
+				message: `Receipt ${subject.receipt_number} from this vendor matches an earlier purchase on a different date`,
+			};
 		}
 	}
 
 	const vendor = normalizeVendor(subject.vendor_name);
 	const at = subject.purchased_at;
 	const total = toDecimal(subject.total);
-	if (!vendor || !at || total.isZero()) return null;
+	if (!vendor || !at || total.isZero()) return near;
 
 	const nearTotal = Prisma.Decimal.max(total.times(NEAR_TOTAL_PERCENT), NEAR_TOTAL_FLOOR);
-	let near: DuplicateVerdict | null = null;
 
 	for (const prior of priors) {
 		const priorVendor = normalizeVendor(prior.vendor_name);

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import RefundPartPicker, { RefundLineStock } from "../RefundPartPicker";
 import { partsSummary, refundLedger, returnableParts } from "../refundParts";
 import { blankLine, type LineDraft } from "../lineDrafts";
-import { pendingRefundsLine, refundStatusLabel, sheetCopy, sheetTitle } from "../sheetCopy";
+import { pendingRefundsLine, sheetCopy, sheetStatus, sheetTitle } from "../sheetCopy";
 import type { FieldPurchaseRefundParentLine } from "../../../../types/fieldPurchases";
 
 const ITEM = "item-1";
@@ -144,12 +144,15 @@ describe("sheetCopy", () => {
 		expect(sheetCopy("refund").submitLabel).toBe("Send refund to dispatch");
 	});
 
-	it("titles a purchase by its status and a refund by where the money is", () => {
-		expect(
-			sheetTitle({ kind: "purchase", status: "draft", refund_settled_at: null })
-		).toBe("New field purchase");
-		expect(refundStatusLabel({ status: "approved", refund_settled_at: null })).toBe(
-			"Refund · Credit on its way"
+	it("titles the sheet by its vendor and states the status beneath", () => {
+		expect(sheetTitle({ kind: "purchase" }, "")).toBe("Field purchase");
+		expect(sheetTitle({ kind: "purchase" }, " Ferguson ")).toBe("Ferguson");
+		expect(sheetTitle({ kind: "refund" }, "Ferguson")).toBe("Refund · Ferguson");
+		expect(sheetStatus({ kind: "purchase", status: "draft", refund_settled_at: null })).toBe(
+			"Draft"
+		);
+		expect(sheetStatus({ kind: "refund", status: "approved", refund_settled_at: null })).toBe(
+			"Credit on its way"
 		);
 	});
 
