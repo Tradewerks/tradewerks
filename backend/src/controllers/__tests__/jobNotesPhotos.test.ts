@@ -55,7 +55,9 @@ describe("updateJobNote — removed photos are deleted from storage after commit
 		);
 
 		expect(result.err).toBe("");
-		expect(fake.job_note_photo.deleteMany.mock.calls[0][0]).toEqual({ where: { id: { in: [GONE_ID] } } });
+		expect(fake.job_note_photo.deleteMany.mock.calls[0][0]).toEqual({
+			where: { AND: [{ id: { in: [GONE_ID] } }, { note: { organization_id: "org-1" } }] },
+		});
 		expect(deleteFile).toHaveBeenCalledTimes(1);
 		expect(deleteFile).toHaveBeenCalledWith(`${RAW}gone.jpg`);
 	});

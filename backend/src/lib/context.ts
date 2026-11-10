@@ -82,6 +82,10 @@ const ORG_SCOPED_MODELS = new Set([
 	"timesheet_week",
 	"shift_correction",
 	"visit_tech_arrival",
+	"supplier",
+	"supplier_item",
+	"unmapped_part_decision",
+	"purchase_event",
 ]);
 
 /**
@@ -90,10 +94,8 @@ const ORG_SCOPED_MODELS = new Set([
  * row to the caller's org. Registering a model here gives it the same tenancy
  * guarantees as an org-scoped model — reads are filtered, writes are guarded.
  *
- * Models still relying on caller-provided parent scoping (not auto-enforced):
- * job_visit_line_item, job_visit_technician, quote_line_item,
- * recurring_occurrence, invoice_line_item, client_contact.
- * Add them here as needed.
+ * Creates are not checked: a create with another org's parent id still goes
+ * through, so callers must load the parent with the scoped client first.
  *
  * Keys are matched by exact string against the Prisma model name, which is
  * lowercase (`schema.prisma`) — a capitalised key silently matches nothing and
@@ -120,7 +122,29 @@ const RELATION_SCOPED_MODELS: Record<string, (organizationId: string) => Record<
 	dispatcher_notification: (o) => ({ dispatcher: { organization_id: o } }),
 	technician_shift: (o) => ({ tech: {organization_id: o }}),
 	technician_shift_break: (o) => ({ shift: { tech: { organization_id: o }}}),
-	invoice_payment: (o) => ({ invoice: { organization_id: o }})
+	invoice_payment: (o) => ({ invoice: { organization_id: o }}),
+	project_note: (o) => ({ project: { organization_id: o }}),
+	project_note_photo: (o) => ({ note: { project: { organization_id: o } } }),
+	job_note_photo: (o) => ({ note: { organization_id: o } }),
+	client_contact: (o) => ({ client: { organization_id: o } }),
+	client_external_mapping: (o) => ({ client: { organization_id: o } }),
+	quote_line_item: (o) => ({ quote: { organization_id: o } }),
+	job_line_item: (o) => ({ job: { organization_id: o } }),
+	job_visit_line_item: (o) => ({ visit: { job: { organization_id: o } } }),
+	job_visit_technician: (o) => ({ visit: { job: { organization_id: o } } }),
+	recurring_rule: (o) => ({ recurring_plan: { organization_id: o } }),
+	recurring_rule_weekday: (o) => ({ recurring_rule: { recurring_plan: { organization_id: o } } }),
+	recurring_occurrence: (o) => ({ recurring_plan: { organization_id: o } }),
+	recurring_plan_line_item: (o) => ({ recurring_plan: { organization_id: o } }),
+	invoice_schedule: (o) => ({ recurring_plan: { organization_id: o } }),
+	invoice_line_item: (o) => ({ invoice: { organization_id: o } }),
+	invoice_job: (o) => ({ invoice: { organization_id: o } }),
+	invoice_visit: (o) => ({ invoice: { organization_id: o } }),
+	purchase_job_allocation: (o) => ({ purchase: { organization_id: o } }),
+	supplier_external_mapping: (o) => ({ supplier: { organization_id: o } }),
+	technician_external_mapping: (o) => ({ technician: { organization_id: o } }),
+	followup_step: (o) => ({ sequence: { organization_id: o } }),
+	tax_group_rate: (o) => ({ tax_group: { organization_id: o } }),
 };
 
 // Returns the where-fragment that pins a row to the caller's org, or null if the

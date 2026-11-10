@@ -100,6 +100,21 @@ describe("getScopedDb — read scoping", () => {
 		});
 	});
 
+	it.each([
+		"supplier", "supplier_item", "unmapped_part_decision", "purchase_event",
+		"project_note_photo", "job_note_photo", "client_contact", "client_external_mapping",
+		"quote_line_item", "job_line_item", "job_visit_line_item", "job_visit_technician",
+		"recurring_rule", "recurring_rule_weekday", "recurring_occurrence", "recurring_plan_line_item",
+		"invoice_schedule", "invoice_line_item", "invoice_job", "invoice_visit",
+		"purchase_job_allocation", "supplier_external_mapping", "technician_external_mapping",
+		"followup_step", "tax_group_rate",
+	])("scopes %s reads to the caller's org", async (model) => {
+		const { query } = await runHook(ORG_A, "findMany", model, {});
+		const where = query.mock.calls[0][0].where;
+		expect(where.AND).toHaveLength(2);
+		expect(JSON.stringify(where.AND[1])).toContain(`"organization_id":"${ORG_A}"`);
+	});
+
 	it("scopes invoice_payment through invoice.organization_id", async () => {
 		const { query } = await runHook(ORG_A, "findFirst", "invoice_payment", { where: { id: "p1" } });
 		expect(query).toHaveBeenCalledWith({
