@@ -20,6 +20,7 @@ import {
 } from "../controllers/techniciansController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
+import { setRefreshToken } from '../services/jwtService.js';
 import {
 	ErrorCodes,
 	createSuccessResponse,
@@ -245,6 +246,7 @@ router.post("/:id/change-password", async (req, res, next) => {
                     ),
                 );
         }
+        setRefreshToken(res, result.data!.refreshToken);
         res.json(createSuccessResponse(null));
     } catch (err) {
         next(err);

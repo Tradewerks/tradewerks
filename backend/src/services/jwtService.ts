@@ -1,7 +1,9 @@
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { db } from "../db.js";
 import { createErrorResponse, ErrorCodes } from "../types/responses.js";
 import { getAllPermissions } from "../lib/permissionCatalogs.js";
+import { Response } from "express";
 
 // The subset of a dispatcher/technician row the token claims are built from.
 // Deliberately excludes credential columns — they are omitted globally by the
@@ -76,7 +78,8 @@ export const generateRefreshToken = async (user: User, role: string) => {
 			organization_id: user.organization_id,
 		},
 		JWT_REFRESH_SECRET,
-		{ expiresIn: "7d" },
+		// jwtid: same claims in the same second would otherwise re-create a revoked token
+		{ expiresIn: "7d", jwtid: crypto.randomUUID() },
 	);
 
 	await db.jwt_refresh_token.create({
@@ -268,3 +271,12 @@ export const refreshAccessToken = async (refreshToken: string) => {
 		throw new Error("Internal server error");
 	}
 };
+
+export const setRefreshToken = (res: Response, token: string) => {
+	res.cookie("refreshToken", token, { 
+		httpOnly: true, 
+		secure: process.env.NODE_ENV === "production", 
+		sameSite: "strict", 
+		maxAge: 7 * 24 * 60 * 60 * 1000 
+	});
+}

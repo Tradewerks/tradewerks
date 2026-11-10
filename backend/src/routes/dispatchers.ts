@@ -19,6 +19,7 @@ import { requestPasswordReset } from '../controllers/authenticationController.js
 import { resetMfa } from '../controllers/mfaController.js';
 import { requirePermission, requirePermissionOrSelf } from '../lib/requirePermissions.js';
 import { getUserHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
+import { setRefreshToken } from '../services/jwtService.js';
 
 const router = Router();
 
@@ -174,6 +175,7 @@ router.post("/:id/change-password", async (req, res, next) => {
                     ),
                 );
         }
+        setRefreshToken(res, result.data!.refreshToken);
         res.json(createSuccessResponse(null));
     } catch (err) {
         next(err);

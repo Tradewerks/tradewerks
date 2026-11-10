@@ -5,7 +5,7 @@ import {
 	createErrorResponse,
 } from "../types/responses.js";
 import { checkToken } from "../controllers/authenticationController.js";
-import { verifyPendingToken } from "../services/jwtService.js";
+import { setRefreshToken, verifyPendingToken } from "../services/jwtService.js";
 import {
 	setupTotp,
 	enableTotp,
@@ -124,6 +124,7 @@ router.post("/disable", requireAccess, async (req, res, next) => {
 		const { password, code, backupCode } = req.body;
 		const result = await disableTotp(req.user!.uid, req.user!.role, password, code, backupCode);
 		if (result && "error" in result) return res.status(400).json(result);
+		setRefreshToken(res, result.data.refreshToken);
 		res.json(createSuccessResponse(null));
 	} catch (err) {
 		next(err);

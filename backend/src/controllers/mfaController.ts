@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { log } from "../services/appLogger.js";
-import { createErrorResponse, ErrorCodes } from "../types/responses.js";
+import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
 import {
     generateSecret,
     buildOtpAuthUri,
@@ -10,7 +10,7 @@ import {
 import { encryptSecret } from "../services/crypto.js";
 import { acceptTotp, spendRecoveryCode } from "../services/mfaCode.js";
 import { issueAuthTokens } from "./authenticationController.js";
-import { verifyPendingToken } from "../services/jwtService.js";
+import { generateRefreshToken, setRefreshToken, verifyPendingToken } from "../services/jwtService.js";
 import { logActivity } from "../services/logger.js";
 import bcrypt from "bcryptjs";
 import { Response } from "express";
@@ -58,6 +58,11 @@ async function getOrgId(userId: string, role: string): Promise<string | null> {
 }
 
 export async function setupTotp(userId: string, role: string): Promise<{ otpAuthUri: string; secret: string }> {
+    const existing = await db.mfa_credential.findUnique({where: { user_id_role: { user_id: userId, role }}});
+    if (existing?.enabled){
+        throw httpError(400, ErrorCodes.VALIDATION_ERROR, "MFA is already enabled");
+    }
+
     const { email, orgName } = await resolveEmailOrg(userId, role);
     const secret = generateSecret();
     await db.mfa_credential.upsert({
@@ -94,6 +99,7 @@ export async function enableTotp(userId: string, role: string, code: string, via
         await tx.mfa_recovery_code.createMany({
             data: hashed_codes.map((code) => ({ user_id: userId, role, code })),
         });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: userId }})
     });
 
     const organization_id = await getOrgId(userId, role);
@@ -111,6 +117,8 @@ export async function enableTotp(userId: string, role: string, code: string, via
         const result = await issueAuthTokens(res, userId, role);
         return { data: { backupCodes: codes, session: result?.data ?? null } };
     }
+    const { email } = await resolveEmailOrg(userId, role);
+    setRefreshToken(res, await generateRefreshToken({ id: userId, email, organization_id }, role));
     return { data: { backupCodes: codes } };
 }
 
@@ -182,6 +190,7 @@ export async function disableTotp(userId: string, role: string, password?: strin
     await db.$transaction(async (tx) => {
         await tx.mfa_credential.deleteMany({ where: { user_id: userId, role } });
         await tx.mfa_recovery_code.deleteMany({ where: { user_id: userId, role } });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId } });
     });
     await logActivity({
         event_type: "mfa.disabled",
@@ -192,7 +201,8 @@ export async function disableTotp(userId: string, role: string, password?: strin
         actor_type: actorTypeFor(role),
         actor_id: userId,
     });
-    return { data: null };
+    const refreshToken = await generateRefreshToken(user, role);
+    return { data: { refreshToken } };
 }
 
 export async function getMfaStatus(userId: string, role: string) {
@@ -209,6 +219,7 @@ export async function resetMfa(targetUserId: string, targetRole: string, actorId
     await db.$transaction(async (tx) => {
         await tx.mfa_credential.deleteMany({ where: { user_id: targetUserId, role: { in: roles } } });
         await tx.mfa_recovery_code.deleteMany({ where: { user_id: targetUserId, role: { in: roles } } });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: targetUserId }});
     });
     await logActivity({
         event_type: "mfa.reset",

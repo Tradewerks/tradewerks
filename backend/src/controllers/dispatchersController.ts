@@ -18,6 +18,7 @@ import { assertSeatAvailable } from "../lib/entitlements/seats.js";
 import type { HttpError } from "../types/responses.js";
 import { setUserActive } from "../services/userActiveCache.js";
 import { getSocket } from "../services/socketService.js";
+import { generateRefreshToken } from "../services/jwtService.js";
 
 export const getAllDispatchers = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
@@ -328,6 +329,8 @@ export const changeDispatcherPassword = async (
             },
         });
 
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: id }});
+
         await logActivity({
             event_type: "dispatcher.password.changed",
             action: "changed",
@@ -349,7 +352,8 @@ export const changeDispatcherPassword = async (
             user_agent: context?.userAgent,
         });
     });
-    return { message: "Password updated successfully", err: ""};
+    const refreshToken = await generateRefreshToken(dispatcher, dispatcher.role);
+    return { data: { refreshToken }, err: ""};
 };
 
 export const deactivateDispatcher = async (id: string, organizationId: string, context?: UserContext) => {

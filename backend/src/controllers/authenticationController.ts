@@ -6,6 +6,7 @@ import { createErrorResponse, ErrorCodes } from "../types/responses.js";
 import {
 	generateAccessToken,
 	generateRefreshToken,
+	setRefreshToken,
 	verifyToken,
 	verifyRefreshToken,
 	generateOTPToken,
@@ -230,14 +231,7 @@ export const issueAuthTokens = async (
 		}
 
 		const accessToken = generateAccessToken(user, role, orgTimezone, rolePermissions);
-		const refreshToken = await generateRefreshToken(user, role);
-		// set refresh token in httpOnly cookie
-		res.cookie("refreshToken", refreshToken, {
-			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
-			sameSite: "strict",
-			maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-		});
+		setRefreshToken(res, await generateRefreshToken(user, role));
 
 		await logActivity({
 			event_type: forcePasswordReset ? "auth.first_login" : "auth.login",
@@ -467,6 +461,8 @@ export const resetPassword = async (
 					data: { ...data, invite_token_hash: null, invite_expires_at: null },
 				});
 			}
+
+			await tx.jwt_refresh_token.deleteMany({ where: { userId: user.id }});
 		});
 		await logActivity({
 			event_type: "auth.password_reset",

@@ -27,6 +27,7 @@ import { assertSeatAvailable, OPEN_VISIT_STATUSES } from "../lib/entitlements/se
 import type { HttpError } from "../types/responses.js";
 import { setUserActive } from "../services/userActiveCache.js";
 import { getSocket } from "../services/socketService.js";
+import { generateRefreshToken } from "../services/jwtService.js";
 
 const VALID_BREAK_REASONS = new Set<string>([
 	"Lunch",
@@ -815,6 +816,8 @@ export const changeTechnicianPassword = async (
 			},
 		});
 
+		await tx.jwt_refresh_token.deleteMany({ where: { userId: id }});
+
 		await logActivity({
 			event_type: "technician.password.changed",
 			action: "changed",
@@ -836,7 +839,8 @@ export const changeTechnicianPassword = async (
 			user_agent: context?.userAgent,
 		});
 	});
-	return { message: "Password updated successfully", err: ""};
+	const refreshToken = await generateRefreshToken(technician, "technician");
+	return { data: { refreshToken }, err: ""};
 };
 
 export const returnFromJob = async(orgId: string, technicianId: string, context?: UserContext) => {
