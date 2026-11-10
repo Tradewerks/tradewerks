@@ -80,6 +80,8 @@ router.post("/", requirePermission("manage_technicians"), async (req, res, next)
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+        // without manage_roles the org's default role is used
+        if (!hasPermission(req, "manage_roles")) delete req.body?.organization_role_id;
         const result = await insertTechnician(req.body, orgId, context);
 
         if (result.err) {

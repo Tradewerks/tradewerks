@@ -74,6 +74,11 @@ export const insertDispatcher = async (
         if (existing) {
             return { err: "Email already exists" };
         }
+
+        const roleId = parsed.organization_role_id
+            ? (await sdb.organization_role.findFirst({ where: { id: parsed.organization_role_id, base_tier: "dispatcher" }, select: { id: true } }))?.id
+            : (await sdb.organization_role.findFirst({ where: { base_tier: "dispatcher", is_default: true }, select: { id: true } }))?.id ?? null;
+        if (roleId === undefined) return { err: "Role not found" };
         // if no password provided, generate a random one and email it to them
         const tempPassword = passwordProvided ? parsed.password! : randomBytes(8).toString("hex") + "A1!";
         const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -88,6 +93,7 @@ export const insertDispatcher = async (
             const dispatcher = await tx.dispatcher.create({
                 data: {
                     ...parsedWithoutPassword,
+                    organization_role_id: roleId,
                     organization_id: organizationId,
                     password: hashedPassword,
                     email_verification_token: emailVerificationToken,

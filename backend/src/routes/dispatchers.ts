@@ -17,7 +17,7 @@ import {
 } from "../controllers/dispatchersController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
-import { requirePermission, requirePermissionOrSelf } from '../lib/requirePermissions.js';
+import { requirePermission, requirePermissionOrSelf, hasPermission } from '../lib/requirePermissions.js';
 import { getUserHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 import { setRefreshToken } from '../services/jwtService.js';
 
@@ -62,6 +62,8 @@ router.post("/", requirePermission("manage_dispatchers"), async (req, res, next)
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+        // without manage_roles the org's default role is used
+        if (!hasPermission(req, "manage_roles")) delete req.body?.organization_role_id;
         const result = await insertDispatcher(req.body, orgId, context);
 
         if (result.err) {

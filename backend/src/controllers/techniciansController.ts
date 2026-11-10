@@ -142,9 +142,13 @@ export const insertTechnician = async (
 			return { err: "Email already exists" };
 		}
 
+		const roleId = parsed.organization_role_id
+            ? (await sdb.organization_role.findFirst({ where: { id: parsed.organization_role_id, base_tier: "technician" }, select: { id: true } }))?.id
+            : (await sdb.organization_role.findFirst({ where: { base_tier: "technician", is_default: true }, select: { id: true } }))?.id ?? null;
+        if (roleId === undefined) return { err: "Role not found" };
+
 		const passwordProvided = parsed.password ? true : false;
-		const tempPassword =
-			parsed.password ?? randomBytes(8).toString("hex") + "A1!";
+		const tempPassword = parsed.password ?? randomBytes(8).toString("hex") + "A1!";
 		const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
 		const created = await sdb.$transaction(async (tx) => {
@@ -153,6 +157,7 @@ export const insertTechnician = async (
 			const technician = await tx.technician.create({
 				data: {
 					...parsedWithoutPassword,
+					organization_role_id: roleId,
 					organization_id: organizationId,
 					password: hashedPassword,
 					...(passwordProvided && { last_login: new Date() }),
