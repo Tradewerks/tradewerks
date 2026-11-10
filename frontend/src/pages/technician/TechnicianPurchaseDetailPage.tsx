@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
 	AlertTriangle,
@@ -33,30 +33,50 @@ import ReceiptValueDiff from "../../components/technician/procurement/ReceiptVal
 import LimitBreachNotice from "../../components/technician/procurement/LimitBreachNotice";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import SheetNotice from "../../components/technician/procurement/SheetNotice";
+import { OcrCheckSummary } from "../../components/fieldPurchases/OcrCheckSummary";
+import { OCR_FIELD_LABEL, needsCheck } from "../../components/fieldPurchases/ocrFlagCopy";
 import {
+	effectiveReviews,
+	reviewsToSend,
+	type FieldStrings,
+} from "../../components/technician/procurement/ocrReviewState";
+import {
+	applySheetDisposition,
 	clampDestinations,
+	seedSheet,
+	startingSheetDisposition,
 	toDrafts,
 	type LineDraft,
+	type SheetDisposition,
 } from "../../components/technician/procurement/lineDrafts";
 import { useToast } from "../../components/ui/useToast";
 import { FOCUS_RING, money } from "../../components/fieldPurchases/fieldPurchaseFormat";
 import { partsSummary, refundLedger } from "../../components/technician/procurement/refundParts";
 import { errorMessage, toLocalInputValue } from "../../util/util";
+import { useOcrReadState } from "../../util/ocrRead";
 import TechPage from "../../components/technician/TechPage";
+import { useMeasuredHeight } from "../../hooks/useMeasuredHeight";
 import { useModule } from "../../hooks/useEntitlements";
 import {
 	pendingRefundsLine,
 	refundStateLabel,
 	refundStateTone,
 	sheetCopy,
+	sheetStatus,
 	sheetTitle,
 } from "../../components/technician/procurement/sheetCopy";
+import TechSelect from "../../components/technician/procurement/TechSelect";
 import {
 	isTechEditable,
 	type FieldPurchase,
 	type FieldPurchaseRefundParent,
 	type FieldPurchaseRefundSummary,
+	type OcrFieldKey,
+	type OcrFieldReview,
 } from "../../types/fieldPurchases";
+
+/** The store a part goes back to is the store it came from; the refund copies it. */
+const LOCKED_ON_REFUND: ReadonlySet<OcrFieldKey> = new Set(["vendor_name"]);
 
 /**
  * One job the receipt covers. No amount: the share is the sum of the lines tagged
@@ -175,6 +195,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 	const remove = useDeleteFieldPurchase();
 	const refund = useCreateRefund();
 	const toast = useToast();
+	// The fixed action bar grows when a limit is crossed (the breach notice rides
+	// above its button), so the room under the page follows its real height.
+	const [footerRef, footerH] = useMeasuredHeight<HTMLDivElement>();
 
 	const [vendor, setVendor] = useState("");
 	// The ask, before there is a receipt. Kept apart from `total` on purpose: an
@@ -184,7 +207,29 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 	const [total, setTotal] = useState("");
 	const [tax, setTax] = useState("");
 	const [purchasedAt, setPurchasedAt] = useState("");
-	const [lines, setLines] = useState<LineDraft[]>(() => toDrafts(purchase));
+	const [receiptNo, setReceiptNo] = useState("");
+	// Fields the technician pressed "Looks right" on. "Edited" is not held here: it is
+	// derived from the value against the scan's reading, so editing back un-edits.
+	const [confirmed, setConfirmed] = useState<ReadonlySet<OcrFieldKey>>(new Set());
+	// The sheet's one stock & billing answer and the lines that follow it, read back
+	// off what the server stored. With nothing stored to read, the answer is the
+	// starting one, and stays live to the roster and truck until somebody picks.
+	const [seed0] = useState(() => {
+		const seeded = seedSheet(toDrafts(purchase));
+		const def =
+			seeded.def ??
+			startingSheetDisposition(purchase.allocations.length > 0, myVehicle?.id ?? null);
+		// A refund makes no stock or billing claim, so its lines are left as sent.
+		const keep = purchase.kind === "refund";
+		return {
+			lines: keep ? seeded.lines : applySheetDisposition(seeded.lines, def),
+			def,
+			fromStart: !seeded.def,
+		};
+	});
+	const [lines, setLines] = useState<LineDraft[]>(seed0.lines);
+	const [sheetDisp, setSheetDisp] = useState<SheetDisposition>(seed0.def);
+	const sheetDispFromStart = useRef(seed0.fromStart);
 	// One receipt can serve more than one job — the counter trip that fixes two
 	// call-outs is the ordinary case, not an exotic one. A single-job purchase
 	// follows its own total server-side and never needs touching.
@@ -207,7 +252,8 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		purchase.ocr_status === "succeeded"
 	);
 	const receipt = extraction?.header ?? null;
-	const scoreOf = (field: string) => extraction?.field_confidence?.[field] ?? null;
+	const flagSet = purchase.ocr_field_flags ?? null;
+	const storedReview: OcrFieldReview = purchase.ocr_field_review ?? {};
 
 	const serverShape = `${purchase.updated_at}|${purchase.lines.map((l) => l.id).join(",")}`;
 	useEffect(() => {
@@ -218,9 +264,25 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		setTotal(Number(purchase.total).toFixed(2));
 		setTax(Number(purchase.tax_amount).toFixed(2));
 		setPurchasedAt(toLocalInputValue(purchase.purchased_at));
+		setReceiptNo(purchase.receipt_number ?? "");
+		setConfirmed(
+			new Set(
+				(Object.keys(storedReview) as OcrFieldKey[]).filter(
+					(k) => storedReview[k]?.state === "confirmed"
+				)
+			)
+		);
 		// The roster keys a server-known job by its allocation id, which is what
 		// `toDrafts` then matches each line's own allocation against.
-		setLines(toDrafts(purchase));
+		const seeded = seedSheet(toDrafts(purchase));
+		const def =
+			seeded.def ??
+			startingSheetDisposition(purchase.allocations.length > 0, myVehicle?.id ?? null);
+		sheetDispFromStart.current = !seeded.def;
+		setSheetDisp(def);
+		setLines(
+			purchase.kind === "refund" ? seeded.lines : applySheetDisposition(seeded.lines, def)
+		);
 		setAllocs(
 			purchase.allocations.map((a) => ({
 				key: a.id,
@@ -234,6 +296,28 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [serverShape, dirty]);
 
+	// A new photo or read clears the server's reviews; a "Looks right" pressed against
+	// the old one must not survive just because the sheet is dirty.
+	// The URL without its query: the server presigns it afresh on every response.
+	const readIdentity = [
+		purchase.receipt_image_url?.split("?")[0],
+		purchase.ocr_completed_at,
+		JSON.stringify(flagSet),
+	].join("|");
+	const seenRead = useRef(readIdentity);
+	useEffect(() => {
+		if (seenRead.current === readIdentity) return;
+		seenRead.current = readIdentity;
+		setConfirmed(
+			new Set(
+				(Object.keys(storedReview) as OcrFieldKey[]).filter(
+					(k) => storedReview[k]?.state === "confirmed"
+				)
+			)
+		);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [readIdentity]);
+
 	// Runs after the profile lands, and after every re-seed that brings a stored
 	// destination back. Deliberately does not mark the sheet dirty: nothing the
 	// technician typed changed, and a false "unsaved changes" on open would be
@@ -241,7 +325,26 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 	useEffect(() => {
 		if (!techProfile) return;
 		setLines((prev) => clampDestinations(prev, myVehicle?.id ?? null));
+		setSheetDisp((prev) =>
+			prev.vehicleId && prev.vehicleId !== myVehicle?.id
+				? { ...prev, vehicleId: myVehicle?.id ?? "" }
+				: prev
+		);
 	}, [techProfile, myVehicle?.id]);
+
+	// A starting answer nobody has picked follows what it was started from: a job
+	// added to a restock run means the parts went on it, and the truck arriving with
+	// the profile is a better stock answer than the warehouse it fell back to.
+	// The roster is empty until the seed effect fills it, so until the technician
+	// touches the sheet the purchase's own jobs are the answer.
+	const hasJob = dirty ? allocs.length > 0 : purchase.allocations.length > 0;
+	useEffect(() => {
+		if (!sheetDispFromStart.current || purchase.kind === "refund") return;
+		const def = startingSheetDisposition(hasJob, myVehicle?.id ?? null);
+		setSheetDisp(def);
+		setLines((prev) => applySheetDisposition(prev, def));
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [hasJob, myVehicle?.id]);
 
 	const editable = isTechEditable(purchase.status);
 	// Asked for but not yet bought — the receipt half of this screen has nothing
@@ -340,9 +443,58 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		!spentAlready &&
 		purchase.kind === "purchase";
 
+	const readings: FieldStrings = {
+		vendor_name: receipt?.vendor_name ?? null,
+		receipt_number: receipt?.receipt_number ?? null,
+		purchased_at: receipt?.purchased_at ? toLocalInputValue(receipt.purchased_at) : null,
+		subtotal: money2(receipt?.subtotal),
+		tax_amount: money2(receipt?.tax_amount),
+		total: money2(receipt?.total),
+	};
+	const reviews = effectiveReviews({
+		flags: flagSet,
+		readings,
+		// The subtotal has no input here, so it is whatever the scan read.
+		entered: {
+			vendor_name: vendor,
+			receipt_number: receiptNo,
+			purchased_at: purchasedAt,
+			subtotal: readings.subtotal,
+			tax_amount: tax,
+			total,
+		},
+		confirmed,
+		stored: storedReview,
+		locked: isRefund ? LOCKED_ON_REFUND : undefined,
+	});
+	const reviewKey = JSON.stringify([reviews, storedReview]);
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	const reviewMap = useMemo(() => reviewsToSend(flagSet, reviews, storedReview), [reviewKey, flagSet]);
+	const stamped: OcrFieldReview = Object.fromEntries(
+		Object.entries(reviews).map(([k, state]) => [k, { state, at: "" }])
+	);
+	const toCheck = needsCheck(flagSet, stamped);
+	const checkText = `Check against ${copy.noun}: ${toCheck.map((k) => OCR_FIELD_LABEL[k]).join(", ")}`;
+	const confirmField = (k: OcrFieldKey) => () => {
+		setDirty(true);
+		setConfirmed((prev) => new Set(prev).add(k));
+	};
+	const flagProps = (k: OcrFieldKey) => ({
+		field: k,
+		flag: flagSet?.fields[k],
+		review: reviews[k] ?? null,
+		onConfirm: confirmField(k),
+	});
+
 	const sheet = useMemo(
 		() => ({
 			vendor_name: vendor.trim() || null,
+			// Only when changed: an unhydrated or untouched field must not clobber
+			// what the server holds.
+			...(receiptNo.trim() !== (purchase.receipt_number ?? "").trim()
+				? { receipt_number: receiptNo.trim() || null }
+				: {}),
+			...(reviewMap ? { field_reviews: reviewMap } : {}),
 			total: totalNum,
 			tax_amount: Number(tax) || 0,
 			...(purchasedAt
@@ -380,7 +532,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				sort_order: i,
 			})),
 		}),
-		[vendor, totalNum, tax, purchasedAt, lines, allocs, jobOfKey, isRefund]
+		[vendor, receiptNo, purchase.receipt_number, totalNum, tax, purchasedAt, lines, allocs, jobOfKey, isRefund, reviewMap]
 	);
 
 	// `Number("")` is 0 and `Number("abc")` is NaN, so neither a blank nor a
@@ -394,7 +546,8 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		!purchase.receipt_image_url ||
 		unassigned > 0 ||
 		lines.some((l) => !l.description.trim()) ||
-		lines.some((l) => notANumber(l.quantity) || notANumber(l.unit_price));
+		lines.some((l) => notANumber(l.quantity) || notANumber(l.unit_price)) ||
+		toCheck.length > 0;
 
 	// Why the submit is dead, said in the button rather than under it: a line of
 	// its own cost 24px of a 390x844 screen at all times, and a technician staring
@@ -409,7 +562,18 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 	const refundRemaining = refundParent ? Number(refundParent.remaining) : null;
 	const overRefund = refundRemaining != null && refundClaim > refundRemaining + 0.005;
 
-	const blockedReason = !incomplete
+	// The server refuses until the read lands: the flags that gate submit come with it.
+	// A stalled read is refused too, so the button names the way out instead.
+	const readState = useOcrReadState(purchase);
+	const reading = readState !== null;
+	const readingReason =
+		readState === "stalled"
+			? `Reading the ${copy.noun} failed — tap Try again`
+			: `Reading the ${copy.noun}…`;
+
+	const blockedReason = reading
+		? readingReason
+		: !incomplete
 		? overRefund
 			? `More than the ${money(refundRemaining ?? 0)} left to refund`
 			: null
@@ -418,12 +582,14 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 			: lines.length === 0
 				? copy.blockedNoLines
 				: unconfirmed > 0
-					? `Check ${unconfirmed} line${unconfirmed === 1 ? "" : "s"} against the paper`
+					? `Check ${unconfirmed} item${unconfirmed === 1 ? "" : "s"} against the ${copy.noun}`
 					: unassigned > 0
-						? `Say which job ${unassigned === 1 ? "one line was" : `${unassigned} lines were`} for`
+						? `Choose a job for ${unassigned === 1 ? "1 item" : `${unassigned} items`}`
 						: lines.some((l) => !l.description.trim())
-							? "Every line needs a description"
-							: "Enter a number for quantity and price on every line";
+							? "Every item needs a description"
+							: lines.some((l) => notANumber(l.quantity) || notANumber(l.unit_price))
+								? "Enter a quantity and price for every item"
+								: checkText;
 
 	// A job the technician can add the receipt to. Their own jobs only, and never
 	// one the receipt already covers.
@@ -549,19 +715,24 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 
 	return (
 		// No page padding: the technician layout already supplies it, including its
-		// own pb-20. `pb` adds what the fixed action bar needs on top of the equally
-		// fixed bottom nav — 65px + 64px against the layout's 80, plus slack.
-		<TechPage className="space-y-4 pb-16">
+		// own pb-20 for the fixed bottom nav (64px) plus 16 of slack. The fixed action
+		// bar sits on that nav, so its measured height is what the page adds on top.
+		<TechPage className="space-y-4" style={{ paddingBottom: footerH }}>
 			{/* Status and total stay put: the line list is long enough that a
 			    technician scrolling it loses both, and both decide what to do next.
 			    Discard rides up here rather than under the submit — it is
 			    irreversible, and the top corner is the one place on a phone a thumb
 			    does not reach by accident. */}
 			<header className="sticky top-0 z-10 -mx-4 flex items-center gap-2 border-b border-border bg-canvas px-4 py-2.5">
-				<div className="flex min-w-0 flex-1 items-baseline justify-between gap-2">
-					<h1 className="min-w-0 truncate text-base font-semibold text-text-primary">
-						{sheetTitle(purchase)}
-					</h1>
+				<div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+					<div className="min-w-0">
+						<h1 className="truncate text-base font-semibold leading-tight text-text-primary">
+							{sheetTitle(purchase, vendor)}
+						</h1>
+						<p className="truncate text-xs leading-tight text-text-muted">
+							{sheetStatus(purchase)}
+						</p>
+					</div>
 					<span className="flex-shrink-0 text-base font-semibold tabular-nums text-text-primary">
 						{/* Money coming back, so it reads as coming back. */}
 						{isRefund ? "−" : ""}
@@ -620,7 +791,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								purchase.status === "queried"
 									? "Dispatch asked for a change"
 									: purchase.status === "rejected"
-										? "Dispatch turned this down"
+										? "Rejected by dispatch"
 										: "Note from dispatch"
 							}
 						>
@@ -633,7 +804,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							icon={ShieldQuestion}
 							title={
 								purchase.status === "preauth_denied"
-									? "Dispatch said no"
+									? "Pre-approval denied"
 									: "Pre-approval note"
 							}
 						>
@@ -648,7 +819,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 			{shownFlags.length > 0 && (
 				// Advisory: flags route a reviewer's attention and never block, so
 				// they read as information rather than as something owed.
-				<SheetNotice tone="info" icon={Flag} title="Dispatch will check">
+				<SheetNotice tone="info" icon={Flag} title="Flagged for dispatch review">
 					<ul className="space-y-0.5">
 						{shownFlags.map((f, i) => (
 							<li key={`${f.code}-${i}`}>{f.message}</li>
@@ -663,11 +834,11 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				// yet. What matters at this point is the ask itself.
 				<section className="rounded-xl border border-border bg-base p-4">
 					<h2 className="mb-1 text-sm font-semibold text-text-primary">
-						What you asked for
+						Pre-approval request
 					</h2>
 					<p className="mb-3 text-xs text-text-muted">
-						There is no receipt to photograph and no lines to
-						check until dispatch says yes and you have paid.
+						Once dispatch approves and you&apos;ve paid, photograph
+						the receipt here.
 					</p>
 					<label className="block">
 						<span className="mb-1 block text-xs text-text-muted">
@@ -693,14 +864,14 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							onChange={(e) =>
 								touch(setReason)(e.target.value)
 							}
-							placeholder="Part not on the truck, job is down"
+							placeholder="e.g. Part not on the truck, unit is down"
 							className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
 						/>
 					</label>
 					{purchase.status === "pending_preauth" && (
 						<p className="mt-3 text-xs text-text-secondary">
-							Waiting on dispatch. You get a notification
-							either way — do not pay for it until then.
+							Waiting on dispatch. Don&apos;t buy it until it&apos;s
+							approved — you&apos;ll be notified either way.
 						</p>
 					)}
 				</section>
@@ -715,6 +886,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 						<h2 className="mb-3 text-sm font-semibold text-text-primary">
 							{copy.detailsTitle}
 						</h2>
+						<div className="mb-3 empty:hidden">
+							<OcrCheckSummary flags={flagSet} review={stamped} against={copy.noun} />
+						</div>
 						{/* Label and diff are siblings, not both inside the <label>:
 						    a <label> may hold only the one control it names, and a
 						    nested button gets double-activated by implicit
@@ -731,10 +905,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 										receipt?.vendor_name ??
 										null
 									}
-									confidence={scoreOf(
-										"vendor_name"
-									)}
+									{...flagProps("vendor_name")}
 									editable={editable && !isRefund}
+									confirmable={editable}
 									controlId="fp-vendor"
 									onUse={touch(setVendor)}
 								/>
@@ -754,6 +927,28 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
 							/>
 						</div>
+						<div className="mt-3">
+							<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+								<label htmlFor="fp-receipt-no">Receipt #</label>
+								<ReceiptValueDiff
+									label="Receipt #"
+									entered={receiptNo}
+									receipt={receipt?.receipt_number ?? null}
+									{...flagProps("receipt_number")}
+									editable={editable}
+									controlId="fp-receipt-no"
+									onUse={touch(setReceiptNo)}
+								/>
+							</div>
+							<input
+								id="fp-receipt-no"
+								value={receiptNo}
+								disabled={!editable}
+								onChange={(e) => touch(setReceiptNo)(e.target.value)}
+								placeholder="Invoice or ticket number"
+								className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
+							/>
+						</div>
 						<div className="mt-3 flex gap-2">
 							<div className="flex-1">
 								<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
@@ -766,9 +961,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 										receipt={money2(
 											receipt?.total
 										)}
-										confidence={scoreOf(
-											"total"
-										)}
+										{...flagProps("total")}
 										numeric
 										editable={editable}
 										controlId="fp-total"
@@ -802,9 +995,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 										receipt={money2(
 											receipt?.tax_amount
 										)}
-										confidence={scoreOf(
-											"tax_amount"
-										)}
+										{...flagProps("tax_amount")}
 										numeric
 										editable={editable}
 										controlId="fp-tax"
@@ -843,9 +1034,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 												)
 											: null
 									}
-									confidence={scoreOf(
-										"purchased_at"
-									)}
+									{...flagProps("purchased_at")}
 									editable={editable}
 									controlId="fp-purchased-at"
 									onUse={touch(
@@ -866,6 +1055,23 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary disabled:opacity-60"
 							/>
 						</div>
+						{/* No input of its own: the subtotal follows the lines. It is here
+						    only so a flagged one can be checked, which submit requires. */}
+						{flagSet?.fields.subtotal && (
+							<div className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+								<span>Subtotal</span>
+								<span className="tabular-nums text-text-secondary">
+									{readings.subtotal ?? "not read"}
+								</span>
+								<ReceiptValueDiff
+									label="Subtotal"
+									entered={readings.subtotal ?? ""}
+									receipt={null}
+									{...flagProps("subtotal")}
+									editable={editable}
+								/>
+							</div>
+						)}
 					</section>
 
 					<PurchaseLineEditor
@@ -881,6 +1087,13 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							setDirty(true);
 							setLines(next);
 						}}
+						sheetDisposition={isRefund ? undefined : sheetDisp}
+						onSheetDispositionChange={(def) => {
+							setDirty(true);
+							sheetDispFromStart.current = false;
+							setSheetDisp(def);
+							setLines((prev) => applySheetDisposition(prev, def));
+						}}
 					/>
 				</>
 			)}
@@ -890,9 +1103,6 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 					<h2 className="text-sm font-semibold text-text-primary">
 						{copy.jobsTitle}
 					</h2>
-					{allocs.some((a) => a.job_visit_id) && (
-						<span className="text-xs text-text-muted">Tap to open the visit</span>
-					)}
 				</div>
 				<ul className="space-y-2">
 					{allocs.map((a) => {
@@ -938,7 +1148,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 									<span className="block truncate text-xs text-text-muted">
 										{to
 											? (a.visit_name ?? "Visit")
-											: "No visit to open"}
+											: "No visit"}
 										{/* The chip is visual; say the date once for a reader. */}
 										{to && start && (
 											<span className="sr-only">
@@ -1005,15 +1215,15 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				{editable && !isRefund && addableJobs.length > 0 && (
 					<label className="mt-2 block">
 						<span className="mb-1 block text-xs text-text-muted">
-							Also bought for another job?
+							Split with another job
 						</span>
-						<select
+						<TechSelect
 							value=""
 							onChange={(e) => addJob(e.target.value)}
-							className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary"
+							surface="surface"
 						>
 							<option value="">
-								Add a job to split this receipt…
+								Choose a job…
 							</option>
 							{addableJobs.map((j) => (
 								<option
@@ -1024,15 +1234,8 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 										`Job ${j.job_number ?? ""}`.trim()}
 								</option>
 							))}
-						</select>
+						</TechSelect>
 					</label>
-				)}
-				{unassigned > 0 && (
-					<p className="mt-2 text-xs text-warning-text">
-						{unassigned} line{unassigned === 1 ? "" : "s"} do
-						not say which job they were for — tag them above
-						before you can submit.
-					</p>
 				)}
 				{isRefund ? (
 					// Refunds never write to a visit — approval flags dispatch to
@@ -1043,9 +1246,8 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				) : (
 					!billsAVisit && (
 						<p className="mt-2 text-xs text-text-muted">
-							Not attached to a visit, so nothing is added to
-							the customer's bill — dispatch will handle the
-							charge.
+							No visit attached, so nothing is added to the
+							customer&apos;s bill. Dispatch will bill it.
 						</p>
 					)
 				)}
@@ -1056,7 +1258,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				// it painted over the button. One row at rest: both notices below
 				// render nothing until a ceiling is actually crossed, so a breach
 				// grows the bar rather than reserving room for one that never comes.
-				<div className="fixed inset-x-0 bottom-16 z-40 border-t border-border bg-base px-4 py-2.5">
+				<div
+					ref={footerRef}
+					className="fixed inset-x-0 bottom-16 z-40 border-t border-border bg-base px-4 py-2.5"
+				>
 					{/* The reason the numbers changed, above the button that acts on them. */}
 					<LimitBreachNotice
 						breaches={breaches}
@@ -1116,8 +1321,8 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								/>
 							}
 							label="Send for pre-approval"
-							blockedReason={null}
-							disabled={preauth.isPending}
+							blockedReason={reading ? readingReason : null}
+							disabled={preauth.isPending || reading}
 							onClick={() => void onRequestPreauth()}
 						/>
 					) : (
@@ -1126,7 +1331,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							icon={<Send aria-hidden size={16} />}
 							label={copy.submitLabel}
 							blockedReason={blockedReason}
-							disabled={submit.isPending || incomplete || overRefund}
+							disabled={submit.isPending || incomplete || overRefund || reading}
 							onClick={() => void onSubmit()}
 						/>
 					)}
@@ -1137,7 +1342,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				// Same slot as the editable bar, which never shows alongside it —
 				// `approved` is not tech-editable — so the thumb finds this screen's
 				// one action where every other state of it keeps its own.
-				<div className="fixed inset-x-0 bottom-16 z-40 border-t border-border bg-base px-4 py-2.5">
+				<div
+					ref={footerRef}
+					className="fixed inset-x-0 bottom-16 z-40 border-t border-border bg-base px-4 py-2.5"
+				>
 					<ReturnPartBar
 						summary={purchase.refund_summary ?? null}
 						pending={refund.isPending}

@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Server } from "socket.io";
 import { db } from "../../db.js";
-import { createNotification, notifyDispatchers, setSocketIo } from "../notificationsController.js";
+import {
+	createNotification,
+	DISPATCHER_NOTIFICATION_PERMISSIONS,
+	notifyDispatchers,
+	setSocketIo,
+} from "../notificationsController.js";
 
 vi.mock("../../db.js", () => ({
 	db: {
@@ -99,5 +104,12 @@ describe("notifyDispatchers recipients (build plan 2)", () => {
 		mockDb.dispatcher.findMany.mockResolvedValue([] as never);
 		await notifyDispatchers({ type: "usage_limit_warning", title: "t", body: "b" }, "org-1");
 		expect(mockDb.dispatcher.findMany.mock.calls[0]![0]!.where).toMatchObject({ deactivated_at: null });
+	});
+});
+
+describe("tax notification permissions", () => {
+	it("routes tax rate changes and QuickBooks tax code prompts to manage_taxes", () => {
+		expect(DISPATCHER_NOTIFICATION_PERMISSIONS.tax_rate_changed).toBe("manage_taxes");
+		expect(DISPATCHER_NOTIFICATION_PERMISSIONS.qb_tax_code_needed).toBe("manage_taxes");
 	});
 });

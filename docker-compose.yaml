@@ -17,7 +17,7 @@ services:
       - "3000:3000"
     env_file:
       # Carries the receipt-OCR settings too - RECEIPT_OCR_PROVIDER and the
-      # MINDEE_* credentials it selects. Deliberately NOT
+      # provider credentials it selects (TEXTRACT_*). Deliberately NOT
       # repeated under `environment` below: that block outranks env_file, so an
       # entry there would blank a key the operator had set in .env.
       # See backend/.env.example for what each provider value does.
@@ -98,6 +98,7 @@ services:
     restart: unless-stopped
     volumes:
         - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+        - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
         - prometheus_data:/prometheus
     command:
         - '--config.file=/etc/prometheus/prometheus.yml'

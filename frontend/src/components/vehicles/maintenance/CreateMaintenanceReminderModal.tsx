@@ -186,7 +186,7 @@ export default function CreateMaintenanceReminderModal({
 
                 {repeating
                     ? (
-                        <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
+                        <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
                             <div>
                                 <label className={LABEL}>Every (mi)</label>
                                 <input
@@ -225,25 +225,21 @@ export default function CreateMaintenanceReminderModal({
                     )
                     : (
                         <div className="space-y-1.5">
-                            <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
+                            <div className="grid grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)] gap-2 items-end">
                                 <div>
                                     <label className={LABEL}>Due date</label>
                                     <input
                                         type="date"
-                                        className={INPUT}
+                                        className={`${INPUT} appearance-none`}
                                         value={dueAt}
                                         onChange={(e) => setDueAt(e.target.value)}
                                     />
                                 </div>
                                 <span className="pb-2 text-xs font-medium text-text-muted">and/or</span>
                                 <div>
-                                    <div className="flex items-baseline justify-between gap-1">
+                                    <div className=" items-baseline justify-between gap-1">
                                         <label className={LABEL}>Due at (mi)</label>
-                                        {currentOdometerMi != null && (
-                                            <span className="text-[10px] normal-case tracking-normal font-normal text-text-muted whitespace-nowrap">
-                                                currently at {currentOdometerMi.toLocaleString()} mi
-                                            </span>
-                                        )}
+                                        
                                     </div>
                                     <input
                                         className={`${INPUT} text-right tabular-nums`}
@@ -252,7 +248,14 @@ export default function CreateMaintenanceReminderModal({
                                         onChange={(e) => setDueOdometerMi(e.target.value.replace(/[^0-9]/g, ""))}
                                         placeholder="mi"
                                     />
+                                    
                                 </div>
+                                <span/><span/>
+                                {currentOdometerMi != null && (
+                                    <span className="text-[10px] justify-self-end normal-case tracking-normal font-normal text-text-muted whitespace-nowrap">
+                                        currently at {currentOdometerMi.toLocaleString()} mi
+                                    </span>
+                                )}
                             </div>
                             {dueOdometerMi !== "" && Number(dueOdometerMi) < (currentOdometerMi ?? 0) && (
                                 <p className="text-xs font-medium text-warning-text text-right">Set due milage is less than the current milage</p>

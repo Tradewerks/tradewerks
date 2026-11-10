@@ -52,7 +52,7 @@ function UrlParamSearchBar({ placeholder, paramKey, onValueChange, onSubmit, cla
 		if (!value.trim()) return;
 		if (onSubmit) {
 			const accepted = onSubmit(value.trim());
-			if (accepted) setValue("");
+			if (accepted) handleChange("");
 			return;
 		}
 		const next = new URLSearchParams(searchParams);

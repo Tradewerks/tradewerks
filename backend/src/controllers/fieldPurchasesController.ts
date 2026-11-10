@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { ZodError } from "zod";
 import { Prisma, type line_item_disposition } from "../../generated/prisma/client.js";
 import { db } from "../db.js";
+import { wallClockToInstant } from "../lib/dayRange.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { logActivity } from "../services/logger.js";
 import { log } from "../services/appLogger.js";
@@ -11,13 +12,36 @@ import { getBuffer, isOwnBucketUrl, signImageUrl, uploadFile } from "../services
 import {
 	getReceiptOcrProvider,
 	OCR_MAX_BYTES,
+	OCR_STALE_MS,
+	OcrProviderError,
 	type ExtractedLine,
 	type OcrFile,
 	type ReceiptExtraction,
 } from "../services/receiptOcr/index.js";
 import { remapHeader, type ExtractedHeader } from "../services/receiptOcr/remap.js";
+import { buildOcrFlags, type OcrFlagSet } from "../services/receiptOcr/flags.js";
+import { ocrMetrics, outcomeForFailure } from "../services/receiptOcr/ocrMetrics.js";
+import type { OcrFieldKey } from "../services/receiptOcr/normalize.js";
 import type { field_purchase_ocr_status } from "../../generated/prisma/client.js";
 import { consumeQuota } from "../lib/entitlements/quota.js";
+
+const STILL_READING = "The receipt is still being read — wait a moment, then try again";
+export const READ_STALLED =
+	"Reading the receipt never finished — tap Try again under the photo (or Replace photo), then submit";
+
+/**
+ * Pending past OCR_STALE_MS: the read died with its process or failed retryably, and is
+ * the sweeper's (or the technician's Try again) to re-run. Rows marked pending before
+ * `ocr_started_at` existed fall back to `updated_at`, which any edit moves.
+ */
+export function readInFlight(
+	row: { ocr_status: string | null; ocr_started_at?: Date | null; updated_at?: Date | null },
+	now = Date.now(),
+): boolean {
+	if (row.ocr_status !== "pending") return false;
+	const started = row.ocr_started_at ?? row.updated_at;
+	return !started || now - started.getTime() < OCR_STALE_MS;
+}
 
 export const SCANS_USED_UP =
 	"This month's receipt scans are used up. Enter the lines by hand; scanning resumes on the 1st (UTC).";
@@ -173,7 +197,10 @@ const PURCHASE_SELECT = {
 	ocr_status: true,
 	ocr_provider: true,
 	ocr_field_confidence: true,
+	ocr_field_flags: true,
+	ocr_field_review: true,
 	ocr_completed_at: true,
+	ocr_started_at: true,
 	ocr_error: true,
 	ocr_line_count: true,
 	ocr_corrections: true,
@@ -1184,8 +1211,31 @@ export async function getPurchaseExtraction(
 			completed_at: row.ocr_completed_at,
 			field_confidence: (row.ocr_field_confidence ?? {}) as Record<string, number>,
 			lines: Array.isArray(row.ocr_lines) ? (row.ocr_lines as unknown as ExtractedSnapshot[]) : [],
-			header: remapHeader(row.ocr_provider, row.ocr_raw),
+			header: await inOrgZone(orgId, remapHeader(row.ocr_provider, row.ocr_raw)),
 		},
+	};
+}
+
+/**
+ * Providers return the date as printed, zoneless. It means the org's wall clock,
+ * the same clock a technician typing the date by hand is on.
+ */
+async function orgTimezone(orgId: string): Promise<string | null> {
+	const org = await db.organization.findFirst({
+		where: { id: orgId },
+		select: { timezone: true },
+	});
+	return org?.timezone ?? null;
+}
+
+async function inOrgZone(
+	orgId: string,
+	header: ExtractedHeader | null,
+): Promise<ExtractedHeader | null> {
+	if (!header?.purchased_at) return header;
+	return {
+		...header,
+		purchased_at: wallClockToInstant(header.purchased_at, await orgTimezone(orgId)),
 	};
 }
 
@@ -1239,6 +1289,8 @@ async function loadEditable(orgId: string, purchaseId: string, context?: UserCon
 			receipt_image_url: true,
 			receipt_image_hash: true,
 			ocr_status: true,
+			ocr_started_at: true,
+			updated_at: true,
 		},
 	});
 	if (!purchase) return { err: "Field purchase not found" as const };
@@ -1279,6 +1331,14 @@ export async function updatePurchase(
 		}
 
 		const purchase = await sdb.$transaction(async (tx) => {
+			const reviewed = parsed.field_reviews
+				? await mergeFieldReviews(
+						tx as unknown as Prisma.TransactionClient,
+						orgId,
+						purchaseId,
+						parsed.field_reviews,
+					)
+				: undefined;
 			if (parsed.allocations) {
 				const keep = parsed.allocations.map((a) => a.job_id);
 				await tx.field_purchase_job_allocation.deleteMany({
@@ -1321,6 +1381,7 @@ export async function updatePurchase(
 					...(parsed.purchased_at !== undefined && { purchased_at: parsed.purchased_at }),
 					...(parsed.tax_amount !== undefined && { tax_amount: parsed.tax_amount }),
 					...(parsed.total !== undefined && { total: parsed.total }),
+					...(reviewed && { ocr_field_review: reviewed as Prisma.InputJsonValue }),
 				},
 			});
 			await recomputeSubtotal(tx as unknown as Prisma.TransactionClient, purchaseId);
@@ -1345,6 +1406,58 @@ export async function updatePurchase(
 	} catch (err) {
 		return toErr(err);
 	}
+}
+
+type FieldReview = { state: "confirmed" | "edited"; at: string };
+type ReviewMap = Partial<Record<OcrFieldKey, FieldReview>>;
+
+/**
+ * Merged over the stored map rather than replacing it, so a save naming one field
+ * keeps the others. Not row-locked: two truly simultaneous saves can still lose one.
+ */
+async function mergeFieldReviews(
+	tx: Prisma.TransactionClient,
+	orgId: string,
+	purchaseId: string,
+	patch: Partial<Record<OcrFieldKey, "confirmed" | "edited" | null>>,
+): Promise<ReviewMap> {
+	const row = await tx.field_purchase.findFirst({
+		where: { id: purchaseId, organization_id: orgId },
+		select: { ocr_field_review: true },
+	});
+	const merged: ReviewMap = { ...((row?.ocr_field_review ?? {}) as ReviewMap) };
+	const at = new Date().toISOString();
+	for (const [key, state] of Object.entries(patch) as [OcrFieldKey, FieldReview["state"] | null][]) {
+		if (state === null) delete merged[key];
+		else merged[key] = { state, at };
+	}
+	return merged;
+}
+
+const OCR_FIELD_LABELS: Record<OcrFieldKey, string> = {
+	vendor_name: "Vendor",
+	receipt_number: "Receipt #",
+	purchased_at: "Date",
+	subtotal: "Subtotal",
+	tax_amount: "Tax",
+	total: "Total",
+};
+
+/**
+ * Labels of the unsure/calculated fields the technician has not yet resolved. A
+ * `not_found` field has nothing to confirm, and a null flag set (legacy, skipped or
+ * failed read) never gates: there is no read to have been wrong about.
+ */
+function unresolvedOcrFields(flags: unknown, review: unknown): string[] {
+	const fields = (flags as OcrFlagSet | null)?.fields;
+	if (!fields) return [];
+	const done = (review ?? {}) as ReviewMap;
+	return (Object.keys(OCR_FIELD_LABELS) as OcrFieldKey[])
+		.filter((k) => {
+			const kind = fields[k]?.kind;
+			return (kind === "unsure" || kind === "calculated") && !done[k];
+		})
+		.map((k) => OCR_FIELD_LABELS[k]);
 }
 
 /**
@@ -1741,6 +1854,7 @@ export async function uploadReceipt(
 		const parsed = captureMetaSchema.parse(meta);
 		const loaded = await loadEditable(orgId, purchaseId, context);
 		if (loaded.err) return { err: loaded.err };
+		if (readInFlight(loaded.purchase)) return { err: STILL_READING };
 
 		const provider = getReceiptOcrProvider();
 		const hash = createHash("sha256").update(file.buffer).digest("hex");
@@ -1754,7 +1868,7 @@ export async function uploadReceipt(
 		}
 
 		// Same bytes on the same purchase that already read successfully is a
-		// retry of the upload, not a new receipt to bill Mindee for again.
+		// retry of the upload, not a new receipt to bill the OCR provider for again.
 		const alreadyRead =
 			loaded.purchase.receipt_image_hash === hash && loaded.purchase.ocr_status === "succeeded";
 
@@ -1764,6 +1878,7 @@ export async function uploadReceipt(
 		const wantsRead = !!provider && !alreadyRead && file.buffer.byteLength <= OCR_MAX_BYTES;
 		const usedUp = wantsRead && !(await claimScan(orgId));
 		const reads = !!provider && !alreadyRead && !usedUp;
+		if (usedUp && provider) ocrMetrics.read(provider.name, "skipped");
 
 		const purchase = await sdb.$transaction(async (tx) => {
 			const row = await tx.field_purchase.update({
@@ -1783,6 +1898,13 @@ export async function uploadReceipt(
 								: "pending",
 					ocr_provider: provider?.name ?? null,
 					ocr_error: usedUp ? SCANS_USED_UP : null,
+					...(reads && { ocr_started_at: new Date(), ocr_attempts: 1 }),
+					// The old image's chips describe a different receipt; if the new read
+					// is skipped or fails nothing would ever replace them.
+					...(!alreadyRead && {
+						ocr_field_flags: Prisma.DbNull,
+						ocr_field_review: {},
+					}),
 				},
 				select: PURCHASE_SELECT,
 			});
@@ -1801,11 +1923,12 @@ export async function uploadReceipt(
 		// response open for a vendor round-trip, and a failed extraction still leaves
 		// them the manual entry they would have used anyway.
 		if (reads) {
-			void runReceiptOcr(orgId, purchaseId, {
-				buffer: file.buffer,
-				mimetype: file.mimetype,
-				filename: file.originalname,
-			});
+			void runReceiptOcr(
+				orgId,
+				purchaseId,
+				{ buffer: file.buffer, mimetype: file.mimetype, filename: file.originalname },
+				hash,
+			);
 		}
 
 		return { purchase: await shapePurchase(purchase) };
@@ -1818,19 +1941,37 @@ export async function uploadReceipt(
 // OCR extraction
 // ---------------------------------------------------------------------------
 
-/** One definition of what a failed extraction leaves behind, for all three ways `runReceiptOcr` can fail. */
-async function failExtraction(orgId: string, purchaseId: string, message: string) {
-	await getScopedDb(orgId)
+/**
+ * One definition of what a failed extraction leaves behind, for all three ways
+ * `runReceiptOcr` can fail. Only while this read still owns the row: a stalled read
+ * that finally fails must not stamp `failed` over the newer read that replaced it.
+ * No match throws (P2025), which lands in the catch.
+ */
+async function failExtraction(
+	orgId: string,
+	purchaseId: string,
+	message: string,
+	startedFor?: string | null,
+): Promise<boolean> {
+	const stamped = await getScopedDb(orgId)
 		.field_purchase.update({
-			where: { id: purchaseId },
+			where: {
+				id: purchaseId,
+				ocr_status: "pending",
+				...(startedFor != null && { receipt_image_hash: startedFor }),
+			},
 			data: {
 				ocr_status: "failed",
 				ocr_error: message.slice(0, 500),
 				ocr_completed_at: new Date(),
 			},
 		})
-		.catch(() => undefined);
-	emitToOrg(orgId, "field_purchase:ocr", { id: purchaseId, status: "failed" });
+		.then(
+			() => true,
+			() => false,
+		);
+	if (stamped) emitToOrg(orgId, "field_purchase:ocr", { id: purchaseId, status: "failed" });
+	return stamped;
 }
 
 /**
@@ -1855,10 +1996,18 @@ async function resolveSupplierByPhone(orgId: string, vendorPhone: string | null)
 /**
  * Never overwrites what the technician already entered - header fields only while
  * empty, lines only while there are none, because the tech is the verifier of record.
- * Never throws, and every exit stamps `ocr_status`: `pending` reads as "still
- * working" forever.
+ * Never throws, and every exit stamps `ocr_status` - except a retryable provider
+ * failure, which leaves the row `pending` (its `ocr_started_at` already set) for the
+ * sweeper to re-run once it goes stale.
+ * `recovery` marks a sweeper re-run, so its success counts as `recovered`.
  */
-export async function runReceiptOcr(orgId: string, purchaseId: string, file: OcrFile) {
+export async function runReceiptOcr(
+	orgId: string,
+	purchaseId: string,
+	file: OcrFile,
+	startedFor?: string | null,
+	opts: { recovery?: boolean } = {},
+) {
 	const provider = getReceiptOcrProvider();
 	if (!provider) return;
 
@@ -1867,32 +2016,43 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 			orgId,
 			purchaseId,
 			`Receipt image is too large to read (${Math.ceil(file.buffer.byteLength / 1024 / 1024)} MB) - enter the lines by hand`,
+			startedFor,
 		);
+		ocrMetrics.read(provider.name, "failed");
 		return;
 	}
 
 	const sdb = getScopedDb(orgId);
 
 	let extraction: ReceiptExtraction;
+	const started = performance.now();
 	try {
 		extraction = await provider.extract(file);
 	} catch (err) {
+		ocrMetrics.duration(provider.name, (performance.now() - started) / 1000);
+		const kind = err instanceof OcrProviderError ? err.kind : "final";
+		ocrMetrics.read(provider.name, outcomeForFailure(kind));
+		if (kind !== "final") {
+			log.warn({ err, purchaseId, kind }, "receipt OCR failed retryably - left pending for the sweeper");
+			return;
+		}
 		log.warn({ err, purchaseId }, "receipt OCR failed");
 		await failExtraction(
 			orgId,
 			purchaseId,
 			err instanceof Error ? err.message : "Extraction failed",
+			startedFor,
 		);
 		return;
 	}
+	ocrMetrics.duration(provider.name, (performance.now() - started) / 1000);
 
 	// A provider that grades nothing is indistinguishable from a healthy one until a
-	// technician is never asked to check a field. Mindee needs `confidence=true` per
-	// call and may gate it by plan, so this is a configuration fault, not a bad receipt.
+	// technician is never asked to check a field. That is a provider fault, not a bad receipt.
 	if (Object.keys(extraction.field_confidence).length === 0) {
 		log.warn(
 			{ provider: provider.name, purchaseId },
-			"extraction returned no field confidence - the low-confidence flags cannot fire",
+			"extraction returned no field confidence - no field will be flagged unsure",
 		);
 	}
 
@@ -1900,7 +2060,13 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 	// table, and a failed or empty lookup must not stop the extraction itself
 	// from being applied.
 	const matchedSupplierId = await resolveSupplierByPhone(orgId, extraction.vendor_phone);
+	const purchasedAt = extraction.purchased_at
+		? wallClockToInstant(extraction.purchased_at, await orgTimezone(orgId).catch(() => null))
+		: null;
 
+	const flagSet = buildOcrFlags(extraction);
+	// Widened by hand: assignments inside the transaction callback do not reach TS's narrowing.
+	let outcome = "succeeded" as "succeeded" | "failed" | "stale";
 	try {
 		await sdb.$transaction(async (tx) => {
 			const current = await tx.field_purchase.findFirst({
@@ -1908,6 +2074,8 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 				select: {
 					id: true,
 					status: true,
+					ocr_status: true,
+					receipt_image_hash: true,
 					supplier_id: true,
 					vendor_name: true,
 					receipt_number: true,
@@ -1919,7 +2087,34 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 					_count: { select: { lines: true } },
 				},
 			});
-			if (!current) return;
+			if (!current) {
+				outcome = "stale";
+				return;
+			}
+			// A newer photo or read owns the row now; anything written here would be
+			// this image's reading landing on that one.
+			if (
+				current.ocr_status !== "pending" ||
+				(startedFor != null && current.receipt_image_hash !== startedFor)
+			) {
+				outcome = "stale";
+				return;
+			}
+			// Still this read's to finish, but the sheet left the technician's hands
+			// mid-read: header values and flags nobody can now check must not land.
+			// Stamped rather than left pending, which nothing would ever clear.
+			if (!isTechEditable(current.status)) {
+				await tx.field_purchase.update({
+					where: { id: purchaseId },
+					data: {
+						ocr_status: "failed",
+						ocr_error: "The purchase moved on before the receipt was read",
+						ocr_completed_at: new Date(),
+					},
+				});
+				outcome = "failed";
+				return;
+			}
 
 			const empty = (v: unknown) => v == null;
 			const zero = (v: Prisma.Decimal) => toDecimal(v).isZero();
@@ -1983,6 +2178,9 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 					ocr_line_count: extraction.lines.length,
 					ocr_completed_at: new Date(),
 					ocr_error: null,
+					ocr_field_flags: flagSet as unknown as Prisma.InputJsonValue,
+					// Answers to the previous read mean nothing against this one.
+					ocr_field_review: {},
 					flags: ocrFlags as unknown as Prisma.InputJsonValue,
 					...(empty(current.vendor_name) &&
 						extraction.vendor_name != null && { vendor_name: extraction.vendor_name }),
@@ -1991,7 +2189,7 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 							receipt_number: extraction.receipt_number,
 						}),
 					...(empty(current.purchased_at) &&
-						extraction.purchased_at != null && { purchased_at: extraction.purchased_at }),
+						purchasedAt != null && { purchased_at: purchasedAt }),
 					...(zero(current.subtotal) &&
 						extraction.subtotal != null && { subtotal: extraction.subtotal }),
 					...(zero(current.tax_amount) &&
@@ -2034,11 +2232,19 @@ export async function runReceiptOcr(orgId: string, purchaseId: string, file: Ocr
 			orgId,
 			purchaseId,
 			err instanceof Error ? err.message : "Could not apply the extraction",
+			startedFor,
 		);
+		ocrMetrics.read(provider.name, "failed");
 		return;
 	}
 
-	emitToOrg(orgId, "field_purchase:ocr", { id: purchaseId, status: "succeeded" });
+	if (outcome === "stale") {
+		ocrMetrics.read(provider.name, "superseded");
+		return;
+	}
+	if (outcome === "succeeded") ocrMetrics.flags(flagSet);
+	ocrMetrics.read(provider.name, outcome === "succeeded" && opts.recovery ? "recovered" : outcome);
+	emitToOrg(orgId, "field_purchase:ocr", { id: purchaseId, status: outcome });
 }
 
 /**
@@ -2073,10 +2279,16 @@ async function startOcrRead(
 	const sdb = getScopedDb(orgId);
 	const row = await sdb.field_purchase.findFirst({
 		where: { id: purchaseId },
-		select: { receipt_image_url: true, ocr_status: true },
+		select: {
+			receipt_image_url: true,
+			receipt_image_hash: true,
+			ocr_status: true,
+			ocr_started_at: true,
+			updated_at: true,
+		},
 	});
 	if (!row?.receipt_image_url) return { err: "This purchase has no receipt image to read" };
-	if (row.ocr_status === "pending") return { err: "This receipt is already being read" };
+	if (readInFlight(row)) return { err: "This receipt is already being read" };
 
 	const provider = getReceiptOcrProvider();
 	if (!provider) return { err: "Receipt reading is not configured — enter the lines by hand" };
@@ -2086,14 +2298,26 @@ async function startOcrRead(
 		return { err: SCANS_USED_UP };
 	await sdb.field_purchase.update({
 		where: { id: purchaseId },
-		data: { ocr_status: "pending", ocr_provider: provider.name, ocr_error: null },
+		data: {
+			ocr_status: "pending",
+			ocr_provider: provider.name,
+			ocr_error: null,
+			ocr_started_at: new Date(),
+			// The technician asked: a fresh run of attempts, not one more on the sweeper's count.
+			ocr_attempts: 1,
+			// A re-read that fails must not leave the old read's flags gating a
+			// submit whose reviews are already gone.
+			ocr_field_flags: Prisma.DbNull,
+			ocr_field_review: {},
+		},
 	});
 
-	void runReceiptOcr(orgId, purchaseId, {
-		buffer: stored.buffer,
-		mimetype: stored.contentType,
-		filename: "receipt",
-	});
+	void runReceiptOcr(
+		orgId,
+		purchaseId,
+		{ buffer: stored.buffer, mimetype: stored.contentType, filename: "receipt" },
+		row.receipt_image_hash,
+	);
 	return { started: true };
 }
 
@@ -2127,6 +2351,9 @@ export async function requestPreauth(
 		// exit that settles the credit.
 		if (loaded.purchase!.kind === "refund") {
 			return { err: "A refund does not need pre-authorization — the money is coming back" };
+		}
+		if (loaded.purchase!.ocr_status === "pending") {
+			return { err: readInFlight(loaded.purchase!) ? STILL_READING : READ_STALLED };
 		}
 
 		// The sheet arrives with the button that switches flows. Applied first so a
@@ -2379,7 +2606,7 @@ async function syncBilledLines(
 					visit_line_item_id: true,
 					visit_line_item: { select: { visit_id: true } },
 					allocation: { select: { job_visit_id: true } },
-					inventory_item: { select: { name: true, unit_price: true } },
+					inventory_item: { select: { name: true, unit_price: true, taxable: true } },
 				},
 				orderBy: { sort_order: "asc" },
 			},
@@ -2452,7 +2679,14 @@ async function syncBilledLines(
 			continue;
 		}
 		const created = await tx.job_visit_line_item.create({
-			data: { ...data, visit_id: visitId, source: "field_addition", item_type: "material" },
+			data: {
+				...data,
+				// New lines only: a standing line keeps whatever the dispatcher set.
+				...(line.inventory_item && { taxable: line.inventory_item.taxable }),
+				visit_id: visitId,
+				source: "field_addition",
+				item_type: "material",
+			},
 		});
 		await tx.field_purchase_line.update({
 			where: { id: line.id },
@@ -2481,11 +2715,12 @@ async function applySheet(
 	const sheet = submitPurchaseSchema.parse(data);
 	const header = {
 		...(sheet.vendor_name !== undefined && { vendor_name: sheet.vendor_name }),
+		...(sheet.receipt_number !== undefined && { receipt_number: sheet.receipt_number }),
 		...(sheet.purchased_at !== undefined && { purchased_at: sheet.purchased_at }),
 		...(sheet.tax_amount !== undefined && { tax_amount: sheet.tax_amount }),
 		...(sheet.total !== undefined && { total: sheet.total }),
 	};
-	if (Object.keys(header).length > 0 || sheet.allocations) {
+	if (Object.keys(header).length > 0 || sheet.allocations || sheet.field_reviews) {
 		// A single-job purchase keeps its allocation equal to the total, so
 		// editing the total here does not strand the split.
 		const current = await sdb.field_purchase.findFirst({
@@ -2498,6 +2733,7 @@ async function applySheet(
 			purchaseId,
 			{
 				...header,
+				...(sheet.field_reviews && { field_reviews: sheet.field_reviews }),
 				// A split the technician edited wins; otherwise a single-job
 				// purchase follows its own total, so editing the total on the
 				// sheet cannot strand the allocation.
@@ -2555,6 +2791,11 @@ export async function submitPurchase(
 				parent_purchase_id: true,
 				ocr_lines: true,
 				flags: true,
+				ocr_field_flags: true,
+				ocr_field_review: true,
+				ocr_status: true,
+				ocr_started_at: true,
+				updated_at: true,
 				lines: {
 					select: {
 						id: true,
@@ -2630,6 +2871,19 @@ export async function submitPurchase(
 		const unverified = existing.lines.filter((l) => !l.verified_at);
 		if (unverified.length > 0) {
 			return { err: `Verify every line before submitting (${unverified.length} left)` };
+		}
+
+		// The flags that gate below are written when the read lands; submitting
+		// ahead of it would pass a gate that is not there yet.
+		// A stalled read is refused too: the tech re-reads rather than submitting unchecked.
+		if (existing.ocr_status === "pending") {
+			return { err: readInFlight(existing) ? STILL_READING : READ_STALLED };
+		}
+		const unresolved = unresolvedOcrFields(existing.ocr_field_flags, existing.ocr_field_review);
+		if (unresolved.length > 0) {
+			return {
+				err: `Check the flagged receipt fields before submitting: ${unresolved.join(", ")}`,
+			};
 		}
 
 		if (existing.allocations.length === 0) {

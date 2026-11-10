@@ -10,6 +10,10 @@ import { assertLineRefsInOrg } from "../lib/lineRefs.js";
 import { DocumentRuleError } from "../lib/statusTransitions.js";
 import type { AdjustmentLineInput } from "../lib/validate/invoices.js";
 import type { DocumentShape } from "./disputeAdapters.js";
+import { asV2 } from "./qb/qbAdoption.js";
+import { scaleCreditTaxToAdopted } from "./tax/adoptedCreditTax.js";
+import { qbAstTaxCents, readTaxSnapshot } from "./tax/snapshot.js";
+import { centsToDollars, dollarsToCents } from "./taxEngine.js";
 
 /**
  * An issued invoice is immutable — the tax snapshot lock in invoicesController
@@ -94,6 +98,73 @@ async function loadBilledTargets(
 		jobIds: jobs.map((j) => j.job_id),
 		visits: visits.map((v) => ({ visit_id: v.visit_id, job_id: v.visit.job_id })),
 	};
+}
+
+/**
+ * Against an AST-adopted original, our estimate is not what the customer was billed. Only the
+ * document totals move, as with adoption itself; the adjustment's lines keep our estimate.
+ */
+async function rescaleToAdoptedTax(
+	tx: Prisma.TransactionClient,
+	original: { id: string; tax_source: string | null; tax_snapshot: Prisma.JsonValue },
+	adjustmentId: string,
+): Promise<void> {
+	if (original.tax_source !== "qb_ast") return;
+	const origStored = readTaxSnapshot(original.tax_snapshot);
+	const origQbCents = qbAstTaxCents(original.tax_snapshot);
+	if (!origStored || origQbCents == null) return;
+	const origSnap = asV2(origStored);
+
+	const adj = await tx.invoice.findFirst({
+		where: { id: adjustmentId },
+		select: { tax_snapshot: true, amount_paid: true },
+	});
+	const adjStored = readTaxSnapshot(adj?.tax_snapshot);
+	if (!adj || !adjStored) return;
+	const adjSnap = asV2(adjStored);
+	// A net charge is new billing that keeps our estimate, so it keeps our source too.
+	if (adjSnap.total_tax_cents > 0) return;
+
+	const prior = await tx.invoice.aggregate({
+		where: {
+			adjusts_invoice_id: original.id,
+			status: { not: "Void" },
+			id: { not: adjustmentId },
+		},
+		_sum: { subtotal: true, discount_amount: true, tax_amount: true },
+	});
+	const priorNetCents = dollarsToCents(
+		Number(prior._sum.subtotal ?? 0) - Number(prior._sum.discount_amount ?? 0),
+	);
+	const priorAdjTaxCents = dollarsToCents(Number(prior._sum.tax_amount ?? 0));
+
+	// Net of discount: credits carry none, so closing out a discounted invoice credits its net.
+	const adjNetCents = adjSnap.subtotal_cents - adjSnap.discount_cents;
+	const origNetCents = origSnap.subtotal_cents - origSnap.discount_cents;
+	const taxCents = scaleCreditTaxToAdopted({
+		adjTaxCents: adjSnap.total_tax_cents,
+		origOursCents: origSnap.total_tax_cents,
+		origQbCents,
+		priorAdjTaxCents,
+		isFullCredit: adjNetCents + priorNetCents === -origNetCents,
+	});
+
+	// Same formula as applyQbAdoption; an adjustment's balance is never clamped.
+	const total = centsToDollars(adjNetCents + taxCents);
+	await tx.invoice.update({
+		where: { id: adjustmentId },
+		data: {
+			tax_source: "qb_ast",
+			tax_amount: centsToDollars(taxCents),
+			total,
+			balance_due: total - Number(adj.amount_paid ?? 0),
+			tax_snapshot: {
+				...adjSnap,
+				source: "qb_ast",
+				qb_tax_cents: taxCents,
+			} as unknown as Prisma.InputJsonValue,
+		},
+	});
 }
 
 export async function createAdjustmentInvoice(
@@ -189,6 +260,10 @@ export async function createAdjustmentInvoice(
 	// subtotal is a signed reduce, per-line tax keeps the line's sign, and the
 	// discount block (which is not) is skipped because adjustments carry none.
 	await lockInvoiceTaxSnapshot(adjustment.id, organizationId, tx, now);
+
+	// Must follow the lock (which taxed at our estimate) and precede the ceiling, which has to
+	// see the total this adjustment actually credits.
+	await rescaleToAdoptedTax(tx, original, adjustment.id);
 
 	// Must follow the lock: it rewrites the line-level tax the join rows sum.
 	// Kept here rather than in the caller so any future caller inherits it.

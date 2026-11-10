@@ -15,6 +15,8 @@ import {
 import { provisionOrganization } from "../src/services/provisionOrganization.js";
 import { hashInviteToken } from "../src/lib/inviteToken.js";
 import { DAY_MS } from "../src/lib/dayRange.js";
+import { buildOcrFlags } from "../src/services/receiptOcr/flags.js";
+import { mapTextract, retainable } from "../src/services/receiptOcr/textract.js";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const db = new PrismaClient({ adapter });
@@ -60,6 +62,57 @@ function daysFromNow(offset: number): Date {
 	const chicagoDateStr = now.toLocaleDateString("en-CA", { timeZone: ORG_TIMEZONE }); // "YYYY-MM-DD"
 	const [y, mo, d] = chicagoDateStr.split("-").map(Number);
 	return new Date(Date.UTC(y, mo - 1, d + offset, 18, 0, 0));
+}
+
+interface SeedOcrHeader {
+	vendor: string;
+	vendorConf: number;
+	receiptNo: string | null;
+	/** Printed as on the paper, month first. */
+	date: string;
+	dateConf: number;
+	subtotal: number;
+	tax: number;
+	/** Null leaves the TOTAL line off the paper, so the total is calculated. */
+	total: number | null;
+	totalConf?: number;
+	taxConf?: number;
+}
+
+/**
+ * A small Textract-shaped payload plus the flags the app would have stored for it,
+ * computed by the real mapper so a seeded row cannot disagree with what a live read
+ * of the same payload would show.
+ */
+function seedTextractOcr(h: SeedOcrHeader) {
+	const field = (type: string, text: string, confidence: number) => ({
+		Type: { Text: type, Confidence: 99 },
+		ValueDetection: { Text: text, Confidence: confidence },
+		PageNumber: 1,
+	});
+	const money = (n: number) => `$${n.toFixed(2)}`;
+	const raw = retainable({
+		DocumentMetadata: { Pages: 1 },
+		ExpenseDocuments: [
+			{
+				ExpenseIndex: 1,
+				SummaryFields: [
+					field("VENDOR_NAME", h.vendor, h.vendorConf * 100),
+					...(h.receiptNo ? [field("INVOICE_RECEIPT_ID", h.receiptNo, 92)] : []),
+					field("INVOICE_RECEIPT_DATE", h.date, h.dateConf * 100),
+					field("SUBTOTAL", money(h.subtotal), 96),
+					field("TAX", money(h.tax), (h.taxConf ?? 0.94) * 100),
+					...(h.total != null ? [field("TOTAL", money(h.total), (h.totalConf ?? 0.98) * 100)] : []),
+				],
+				LineItemGroups: [],
+			},
+		],
+	});
+	return {
+		ocr_provider: "textract",
+		ocr_raw: raw as object,
+		ocr_field_flags: buildOcrFlags(mapTextract(raw)) as unknown as object,
+	};
 }
 
 function firstOfMonth(monthOffset: number): Date {
@@ -133,6 +186,12 @@ async function main() {
 			// purchase. Set below John Smith's 750 per-transaction ceiling so a single
 			// purchase can be under his own limit and still need a second signer.
 			field_purchase_second_signoff_threshold: 500.0,
+			// Cost inputs for the Job Profitability net view. Without these the whole
+			// Net column set is dashes, which is why they live here and not in a
+			// scratch script — the corpus has been lost to a container reset before.
+			monthly_overhead: 9500.0,
+			cost_per_mile: 0.67,
+			overhead_rate_per_hour: 18.5,
 		},
 	});
 
@@ -142,7 +201,10 @@ async function main() {
 		"quotes", "recurring_plans", "projects", "inventory", "fleet", "vehicle_stock",
 		"purchasing", "field_purchases", "followups", "disputes",
 	];
-	const PRO_MODULES = [...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto", "ai_assistant"];
+	const PRO_MODULES = [
+		...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto",
+		"ai_assistant",
+	];
 	await db.plan.createMany({
 		data: [
 			{ key: "starter", label: "Starter", assignable: true, is_signup_default: true },
@@ -332,6 +394,8 @@ async function main() {
 				hire_date: new Date("2015-03-12"),
 				coords: { lat: 43.8014, lon: -91.2396 },
 				hourly_rate: 95.00,
+				// Deliberately NO cost_rate: this is the job-profitability "labor unknown"
+				// fixture. Give him one and the dash branch stops being exercised.
 				last_login: new Date(),
 				organization_role_id: technicianRole.id,
 			},
@@ -350,6 +414,7 @@ async function main() {
 				hire_date: new Date("2020-07-01"),
 				coords: { lat: 43.8129, lon: -91.2559 },
 				hourly_rate: 75.00,
+				cost_rate: 42.00,
 				organization_role_id: technicianRole.id,
 			},
 		}),
@@ -366,6 +431,7 @@ async function main() {
 				hire_date: new Date("2022-04-18"),
 				coords: { lat: 43.8014, lon: -91.2396 },
 				hourly_rate: 65.00,
+				cost_rate: 38.00,
 				organization_role_id: technicianRole.id,
 			},
 		}),
@@ -412,6 +478,7 @@ async function main() {
 				category: "Refrigerants",
 				unit: "cylinder",
 				is_batch_tracked: true,
+				taxable: false,
 			},
 		}),
 		db.inventory_item.create({
@@ -2073,6 +2140,10 @@ async function main() {
 			scheduled_end_at: dateAt(yesterday, 12),
 			actual_start_at: dateAt(yesterday, 9, 15),
 			actual_end_at: dateAt(yesterday, 11, 30),
+			// Outbound + return, as the Drive transition and goOffline would write
+			// them. Travel cost is dashes on every job without these.
+			estimated_drive_miles: 14.2,
+			estimated_return_drive_miles: 16.8,
 			status: "Completed",
 			subtotal: 485.0,
 			tax_rate: 0.0825,
@@ -2128,6 +2199,9 @@ async function main() {
 			scheduled_start_at: dateAt(today, 7),
 			scheduled_end_at: dateAt(today, 17),
 			actual_start_at: actualAt(today, 7, 10, 45),
+			// Outbound only — still on site, so no return leg yet. This is the normal
+			// mid-day shape, not an omission.
+			estimated_drive_miles: 22.4,
 			status: "OnSite",
 			subtotal: 6800.0,
 			tax_rate: 0.0825,
@@ -4696,6 +4770,13 @@ async function main() {
 	await db.visit_tech_time_entry.createMany({
 		data: [
 			{ visit_id: visit1.id, tech_id: tech2.id, clocked_in_at: dateAt(yesterday, 9, 15), clocked_out_at: dateAt(yesterday, 11, 30), hours_worked: 2.25 },
+			// Second rated tech on the same visit: the only fixture that proves job
+			// labor sums across technicians rather than taking one rate.
+			{ visit_id: visit1.id, tech_id: tech3.id, clocked_in_at: dateAt(yesterday, 10), clocked_out_at: dateAt(yesterday, 11, 30), hours_worked: 1.5 },
+			// tech1 has no cost_rate, so J-0002 labor reads "-" — the unknown fixture.
+			// It must sit on a job with a NON-Draft invoice or the row never renders:
+			// the report builds rows from invoiced revenue and skips Draft/Void.
+			{ visit_id: visit2.id, tech_id: tech1.id, clocked_in_at: dateAt(today, 7, 10), clocked_out_at: dateAt(today, 10, 40), hours_worked: 3.5 },
 			{ visit_id: recurringVisit1.id, tech_id: tech1.id, clocked_in_at: dateAt(occurrencePastStart, 8, 5), clocked_out_at: dateAt(occurrencePastStart, 11, 50), hours_worked: 3.75 },
 		],
 	});
@@ -5394,8 +5475,19 @@ async function main() {
 			capture_accuracy_m: 12,
 			submitted_at: hrsAgo(5),
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "FERGUSON #418",
+				vendorConf: 0.98,
+				receiptNo: "418-77302",
+				date: "11/06/2026",
+				dateConf: 0.96,
+				subtotal: 117.15,
+				tax: 9.67,
+				total: 126.82,
+				totalConf: 0.99,
+				taxConf: 0.7,
+			}),
+			ocr_field_review: { tax_amount: { state: "confirmed", at: new Date().toISOString() } },
 			ocr_field_confidence: { vendor_name: 0.98, purchased_at: 0.96, total: 0.99, tax_amount: 0.87 },
 			ocr_lines: ocrSnapshot(cleanLines),
 			ocr_completed_at: hrsAgo(6),
@@ -5455,8 +5547,18 @@ async function main() {
 			captured_at: hrsAgo(4),
 			submitted_at: hrsAgo(3),
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "FERGUSON #418",
+				vendorConf: 0.95,
+				receiptNo: null,
+				date: "11/06/2026",
+				dateConf: 0.62,
+				subtotal: 351.0,
+				tax: 28.96,
+				total: 402.0,
+				totalConf: 0.41,
+				taxConf: 0.55,
+			}),
 			ocr_field_confidence: { vendor_name: 0.95, purchased_at: 0.62, total: 0.41, tax_amount: 0.55 },
 			ocr_lines: ocrSnapshot(flaggedLines),
 			ocr_completed_at: hrsAgo(4),
@@ -5554,8 +5656,18 @@ async function main() {
 			reviewed_by_id: dispatcher2.id,
 			review_note: "Looks right to me — over threshold, needs Alex as well.",
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "Copeland Distribution",
+				vendorConf: 0.99,
+				receiptNo: "CD-55120",
+				date: "11/06/2026",
+				dateConf: 0.97,
+				subtotal: 565.0,
+				tax: 46.61,
+				total: 611.61,
+				totalConf: 0.98,
+				taxConf: 0.93,
+			}),
 			ocr_field_confidence: { vendor_name: 0.99, purchased_at: 0.97, total: 0.98, tax_amount: 0.93 },
 			ocr_lines: ocrSnapshot(signoffLines),
 			ocr_completed_at: daysFromNow(-1),
@@ -5652,7 +5764,7 @@ async function main() {
 			// The provider answered and found nothing, which is a failure; `skipped`
 			// above is the no-provider-configured success path.
 			ocr_status: "failed",
-			ocr_provider: "mindee",
+			ocr_provider: "textract",
 			ocr_error: "Provider returned no line items for this document",
 			flags: [GEO_MISSING],
 			created_at: daysFromNow(-6),
@@ -5744,8 +5856,19 @@ async function main() {
 			captured_at: hrsAgo(7),
 			submitted_at: hrsAgo(6),
 			ocr_status: "succeeded",
-			ocr_provider: "mindee",
-			ocr_raw: { provider: "mindee", document_type: "receipt", seeded: true },
+			...seedTextractOcr({
+				vendor: "Copeland Distribution",
+				vendorConf: 0.91,
+				receiptNo: "CD-55188",
+				date: "11/06/2026",
+				dateConf: 0.88,
+				subtotal: 132.75,
+				tax: 10.95,
+				total: null,
+				totalConf: 0.94,
+				taxConf: 0.72,
+			}),
+			ocr_field_review: { tax_amount: { state: "edited", at: new Date().toISOString() } },
 			ocr_field_confidence: { vendor_name: 0.91, purchased_at: 0.88, total: 0.94, tax_amount: 0.72 },
 			ocr_lines: ocrSnapshot(mariaLines),
 			ocr_completed_at: hrsAgo(7),
@@ -5883,7 +6006,7 @@ async function main() {
 
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.created", actor_type: "technician", actor_id: tech1.id, detail: {}, at: hrsAgo(6) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.receipt_captured", actor_type: "technician", actor_id: tech1.id, detail: { ocr_status: "pending" }, at: hrsAgo(6) },
-			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.ocr_completed", actor_type: "system", detail: { provider: "mindee", line_count: 3 }, at: hrsAgo(6) },
+			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.ocr_completed", actor_type: "system", detail: { provider: "textract", line_count: 3 }, at: hrsAgo(6) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.lines_replaced", actor_type: "technician", actor_id: tech1.id, detail: { corrections: 1 }, at: hrsAgo(5) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.lines_verified", actor_type: "technician", actor_id: tech1.id, detail: { count: 3 }, at: hrsAgo(5) },
 			{ organization_id: org.id, field_purchase_id: fpClean.id, type: "purchase.submitted", actor_type: "technician", actor_id: tech1.id, detail: { total: "126.82" }, at: hrsAgo(5) },

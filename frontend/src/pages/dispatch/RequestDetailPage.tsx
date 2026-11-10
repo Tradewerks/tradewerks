@@ -334,7 +334,7 @@ export default function RequestDetailPage() {
 	);
 
 	return (
-		<div className="text-text-primary pb-4 md:pb-6">
+		<div className="text-text-primary">
 			<div className="space-y-4">
 				<DetailHeader
 					title={request.title}

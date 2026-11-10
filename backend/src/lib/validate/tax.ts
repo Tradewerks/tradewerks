@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stateCode } from "../../services/tax/address.js";
 
 export const createTaxRateSchema = z.object({
 	name: z.string().min(1, "Name is required").max(100, "Name must be at most 100 characters"),
@@ -50,3 +51,23 @@ export type CreateTaxRateInput = z.infer<typeof createTaxRateSchema>;
 export type UpdateTaxRateInput = z.infer<typeof updateTaxRateSchema>;
 export type CreateTaxGroupInput = z.infer<typeof createTaxGroupSchema>;
 export type UpdateTaxGroupInput = z.infer<typeof updateTaxGroupSchema>;
+
+const usStateCode = z
+	.string()
+	.trim()
+	.toUpperCase()
+	.refine((s) => /^[A-Z]{2}$/.test(s) && stateCode(s) === s, "Unknown US state code");
+
+export const updateTaxSettingsSchema = z
+	.object({
+		tax_mode: z.enum(["auto", "manual"]).optional(),
+		tax_registered_states: z
+			.array(usStateCode)
+			.max(60)
+			.transform((a) => [...new Set(a)].sort())
+			.optional(),
+	})
+	.refine(
+		(v) => v.tax_mode !== undefined || v.tax_registered_states !== undefined,
+		{ message: "Nothing to update" },
+	);

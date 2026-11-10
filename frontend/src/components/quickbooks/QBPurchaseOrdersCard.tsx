@@ -1,3 +1,4 @@
+import { LoaderCircle } from "lucide-react";
 import { useQBPurchaseOrderQuery } from "../../hooks/useQuickbooks";
 import { formatCurrency, formatDateOnly } from "../../util/util";
 
@@ -25,7 +26,9 @@ export default function QBPurchaseOrdersCard() {
                         {isLoading ? (
                             <tr>
                                 <td colSpan={5} className="px-5 py-8 text-center text-sm text-text-muted">
-                                    Loading…
+                                    <span className="inline-flex items-center gap-2">
+                                        Loading <LoaderCircle size={11} className="shrink-0 animate-spin" />
+                                    </span>
                                 </td>
                             </tr>
                         ) : purchaseOrders?.length ? (

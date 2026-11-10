@@ -10,6 +10,7 @@ const handlers = { scheduleVisit: noop, invoice: noop, cancel: noop };
 const ctx = (over: Record<string, unknown> = {}) => ({
 	status: "Scheduled" as JobStatus,
 	visitCount: 2,
+	lineItemCount: 0,
 	openVisitCount: 1,
 	canEdit: true,
 	canCreateVisit: true,
@@ -68,10 +69,15 @@ describe("jobActions", () => {
 		expect(ids).not.toContain("complete");
 	});
 
-	it("refuses to invoice a job with no visits", () => {
+	it("refuses to invoice a job with no visits and no line items", () => {
 		const invoice = jobActions(ctx({ status: "Unscheduled", visitCount: 0 }))[1];
 		expect(invoice.disabled).toBe(true);
-		expect(invoice.disabledReason).toMatch(/no visits/i);
+		expect(invoice.disabledReason).toMatch(/no visits or line items/i);
+	});
+
+	it("allows invoicing job line items when the job has no visits", () => {
+		const invoice = jobActions(ctx({ status: "Completed", visitCount: 0, lineItemCount: 3 }))[1];
+		expect(invoice.disabled).toBe(false);
 	});
 
 	it("refuses to cancel a job that is already finished", () => {

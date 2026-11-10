@@ -1,5 +1,6 @@
 import { db } from "../db.js";
 import { ErrorCodes, httpError } from "../types/responses.js";
+import { log } from "../services/appLogger.js";
 import {
 	LIMIT_KEYS,
 	MODULES,
@@ -416,13 +417,18 @@ export async function moveOrgs(
 				result.skipped.push({ orgId, name, cause: "no_entitlement" });
 			else if (status === 409)
 				result.skipped.push({ orgId, name, cause: "conflict" });
-			else
+			else {
+				// Only a deliberate client error carries a message meant for people; anything
+				// else (Prisma, driver) stays in the log.
+				const shown = status !== undefined && status < 500;
+				if (!shown) log.error({ err, orgId, key }, "move org failed");
 				result.skipped.push({
 					orgId,
 					name,
 					cause: "error",
-					message: (err as Error).message,
+					...(shown && { message: (err as Error).message }),
 				});
+			}
 		}
 	}
 	await db.log.create(

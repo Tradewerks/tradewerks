@@ -37,6 +37,7 @@ const CreateTechnician = ({
 	const [password, setPassword] = useState("");
 	const [choosePassword, setChoosePassword] = useState(false);
 	const [organizationRoleId, setOrganizationRoleId] = useState<string | null>(null);
+	const [costRate, setCostRate] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [errors, setErrors] = useState<ZodError | null>(null);
 
@@ -67,6 +68,7 @@ const CreateTechnician = ({
 		setOrganizationRoleId(null);
 		setSubmitError(null);
 		setSeatLimit(false);
+		setCostRate("");
 	}, []);
 
 	useEffect(() => {
@@ -87,6 +89,7 @@ const CreateTechnician = ({
 			title: title.trim(),
 			description: description.trim(),
 			organization_role_id: organizationRoleId,
+			cost_rate: costRate.trim() === "" ? null : Number(costRate),
 			status,
 			hire_date: hireDate,
 		};
@@ -240,6 +243,22 @@ const CreateTechnician = ({
 						</select>
 					</div>
 					<div className="min-w-0">
+						<label className={LABEL}>Hourly Cost</label>
+						<input
+							type="number"
+							step="any"
+							min="0"
+							placeholder="Not set"
+							value={costRate}
+							onChange={(e) => setCostRate(e.target.value)}
+							className={INPUT}
+							disabled={isLoading}
+						/>
+						<p className="mt-0.5 text-xs text-text-tertiary">
+							Fully-burdened hourly cost (wage + tax + benefits). Not the billing rate.
+						</p>
+					</div>
+					<div className="min-w-0">
 						<label className={LABEL}>Hire Date</label>
 						<DatePicker
 							portal
@@ -267,7 +286,7 @@ const CreateTechnician = ({
 				/>
 			</div>
 		),
-		[name, email, phone, title, description, hireDate, isLoading, errors, choosePassword, password, organizationRoleId, technicianRoles, submitError, seatLimit, canRequestSeats]
+		[name, email, phone, title, description, hireDate, isLoading, errors, choosePassword, password, organizationRoleId, technicianRoles, submitError, seatLimit, canRequestSeats, costRate]
 	);
 
 	return (

@@ -139,7 +139,7 @@ export default function QueueHeader({ filters, summary, showSignoff }: QueueHead
 			</div>
 
 			{/* One height and border language, so the field and the dropdowns read as one object. */}
-			<div className="flex flex-wrap items-center gap-2 px-3 py-2">
+			<div className="flex flex-wrap items-center gap-2 px-3 py-2 short:py-1">
 				<SearchBar
 					placeholder="Technician, vendor or part…"
 					value={draft}

@@ -894,3 +894,46 @@ describe("edit — tracking gate and callout", () => {
 		expect(mockSetTagsMutateAsync).not.toHaveBeenCalled();
 	});
 });
+
+describe("taxable flag", () => {
+	it("defaults to checked and sends taxable: true on create", async () => {
+		mockCreateMutateAsync.mockResolvedValue(makeItem({ id: "item-9", name: "Tax" }));
+		render(<CreateInventoryItem isOpen onClose={vi.fn()} />);
+		await fillBasicsAndAdvance("Tax");
+		expect(screen.getByLabelText("Taxable")).toBeChecked();
+		expect(screen.getByText("New lines with this item start taxable.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Next" }));
+		await userEvent.click(screen.getByRole("button", { name: "Create Item" }));
+		await waitFor(() => expect(mockCreateMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockCreateMutateAsync.mock.calls[0][0].taxable).toBe(true);
+	});
+
+	it("sends taxable: false when unchecked", async () => {
+		mockCreateMutateAsync.mockResolvedValue(makeItem({ id: "item-9", name: "Tax" }));
+		render(<CreateInventoryItem isOpen onClose={vi.fn()} />);
+		await fillBasicsAndAdvance("Tax");
+		await userEvent.click(screen.getByLabelText("Taxable"));
+		expect(screen.queryByText("New lines with this item start taxable.")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Next" }));
+		await userEvent.click(screen.getByRole("button", { name: "Create Item" }));
+		await waitFor(() => expect(mockCreateMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockCreateMutateAsync.mock.calls[0][0].taxable).toBe(false);
+	});
+
+	it("seeds an edit from the stored flag and shows Not taxable in the review", async () => {
+		mockUpdateMutateAsync.mockResolvedValue(makeItem());
+		mockSetTagsMutateAsync.mockResolvedValue(undefined);
+		render(
+			<CreateInventoryItem isOpen onClose={vi.fn()} existingItem={makeItem({ taxable: false })} />,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "Next" }));
+		expect(screen.getByLabelText("Taxable")).not.toBeChecked();
+		await userEvent.click(screen.getByLabelText("Taxable"));
+		await userEvent.click(screen.getByLabelText("Taxable"));
+		await userEvent.click(screen.getByRole("button", { name: "Next" }));
+		expect(screen.getByText("Not taxable")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+		await waitFor(() => expect(mockUpdateMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockUpdateMutateAsync.mock.calls[0][0].data.taxable).toBe(false);
+	});
+});

@@ -1,24 +1,15 @@
 import { useNavigate } from "react-router-dom";
-import type { Vehicle, StockHealthStatus, VehicleReadiness, ReadinessState } from "../../types/vehicles";
+import type { Vehicle, StockHealthStatus, VehicleReadiness } from "../../types/vehicles";
 import { usePermission } from "../../hooks/usePermission";
-import { getStockCounts, getStockHealth } from "./stockHealth";
+import { getStockCounts, getStockHealth, HEALTH_CONFIG, READINESS_CONFIG } from "./stockHealth";
 
-const HEALTH_CONFIG: Record<StockHealthStatus, {
-	borderColor: string;
-	rowBg: string;
-}> = {
-	ok:  { borderColor: "border-l-success", rowBg: "" },
-	low: { borderColor: "border-l-warning", rowBg: "bg-warning/5" },
-	out: { borderColor: "border-l-error",   rowBg: "bg-error/5" },
-};
-
-function TruckIcon({ health }: { health: StockHealthStatus }) {
+export function TruckIcon({ health }: { health: StockHealthStatus }) {
 	const stroke =
 		health === "out" ? "var(--color-error)" :
 		health === "low" ? "var(--color-warning)" :
 		"var(--color-success)";
 	return (
-		<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+		<svg className="shrink-0" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
 			<rect x="1" y="3" width="15" height="13" rx="2" />
 			<path d="M16 8h4l3 5v3h-7V8z" />
 			<circle cx="5.5" cy="18.5" r="2.5" />
@@ -43,13 +34,6 @@ export default function VehicleCard({ vehicle, onEdit, readiness, onReadinessCli
 	const canEdit = usePermission("manage_inventory");
 	const counts = getStockCounts(vehicle);
 	const health = getStockHealth(vehicle);
-
-	const READINESS_CONFIG: Partial<Record<ReadinessState, { label: string; className: string }>> = {
-		unknown:      { label: "Unknown",  className: "text-text-muted border-border bg-surface-raised" },
-		auto_ready:   { label: "Ready",    className: "text-success border-success/40 bg-success/10" },
-		needs_action: { label: "",         className: "text-warning border-warning/40 bg-warning/10" },
-		confirmed:    { label: "Ready ✓",  className: "text-success border-success/40 bg-success/10" },
-	};
 	const cfg = HEALTH_CONFIG[health];
 	const techNames = vehicle.current_technicians ?? [];
 	const techLabel = techNames.length === 0

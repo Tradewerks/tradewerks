@@ -71,6 +71,29 @@ describe("updateJobNote — removed photos are deleted from storage after commit
 		expect(deleteFile).toHaveBeenCalledWith(`${RAW}gone.jpg`);
 	});
 
+	it("stores a trimmed photo name, and a blank one as null", async () => {
+		fake.job_note_photo.findMany.mockResolvedValue([]);
+
+		const result = await updateJobNote(
+			"job-1",
+			"note-1",
+			{
+				photos: [
+					{ photo_url: `${RAW}a.jpg`, photo_label: "Before", photo_name: "  Condenser coil " },
+					{ photo_url: `${RAW}b.jpg`, photo_label: "After", photo_name: "  " },
+				],
+			},
+			"org-1",
+			{ dispatcherId: "disp-1" },
+		);
+
+		expect(result.err).toBe("");
+		expect(fake.job_note_photo.createMany.mock.calls[0][0].data.map((p: { photo_name: unknown }) => p.photo_name)).toEqual([
+			"Condenser coil",
+			null,
+		]);
+	});
+
 	it("does not touch storage when photos are not part of the update", async () => {
 		const result = await updateJobNote("job-1", "note-1", { content: "b" }, "org-1", { dispatcherId: "disp-1" });
 		expect(result.err).toBe("");

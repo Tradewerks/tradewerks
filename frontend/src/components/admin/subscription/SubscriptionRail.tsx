@@ -61,10 +61,12 @@ export default function SubscriptionRail({
 		.filter((m) => m.kind === "plan_gated")
 		.sort((a, b) => excludedLast(a.state) - excludedLast(b.state));
 
+	// The cap is budgeted from where the rail starts at page top (header, padding,
+	// tabs), not from its stuck position, so it fits before the page scrolls at all.
 	return (
 		<aside
 			aria-label="Subscription"
-			className="rounded-xl border border-border-subtle bg-base lg:sticky lg:top-4"
+			className="rounded-xl border border-border-subtle bg-base lg:sticky lg:top-4 lg:max-h-[calc(100vh-10.5rem)] lg:overflow-y-auto"
 		>
 			<div className="p-4">
 				<p className={sectionLabel}>Subscription</p>

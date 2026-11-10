@@ -21,6 +21,9 @@ vi.mock("../../controllers/invoicesController.js", () => ({
 	recordPayment: vi.fn(),
 	deletePayment: vi.fn(),
 	recordRefund: vi.fn(),
+	qbTaxFinalizeRefusal: vi.fn().mockResolvedValue(null),
+	isQbTaxReviewRefusal: (r: { code?: string }) => r?.code === "QB_TAX_REVIEW",
+	isQbTaxZeroRefusal: (r: { code?: string }) => r?.code === "QB_TAX_ZERO",
 }));
 
 vi.mock("../../services/emailService.js", () => ({
@@ -68,6 +71,7 @@ import invoicesRouter from "../invoices.js";
 import { callRoute } from "./harness.js";
 import {
 	getInvoiceById,
+	qbTaxFinalizeRefusal,
 	updateInvoice,
 } from "../../controllers/invoicesController.js";
 import { sendInvoiceEmail } from "../../services/emailService.js";
@@ -75,6 +79,7 @@ import { sendInvoiceEmail } from "../../services/emailService.js";
 const mockGetInvoiceById = vi.mocked(getInvoiceById);
 const mockUpdateInvoice = vi.mocked(updateInvoice);
 const mockSendInvoiceEmail = vi.mocked(sendInvoiceEmail);
+const mockQbTaxFinalizeRefusal = vi.mocked(qbTaxFinalizeRefusal);
 import { logActivity } from "../../services/logger.js";
 const mockLogActivity = vi.mocked(logActivity);
 
@@ -101,31 +106,29 @@ describe("POST /invoices/:id/send transition guard", () => {
 	 * finalizes on whichever one is used, so nothing reaches the client
 	 * unfrozen or undated.
 	 */
-	it("emails straight from Draft, finalizing on the way", async () => {
+	it("finalizes a Draft through Issued, then emails, then marks it Sent", async () => {
 		mockGetInvoiceById.mockResolvedValue({
 			id: "i1",
 			status: "Draft",
 		} as never);
-		mockUpdateInvoice.mockResolvedValue({
-			err: "",
-			item: { id: "i1" },
-		} as never);
+		const order: string[] = [];
+		mockUpdateInvoice.mockImplementation((async (req: { body: { status: string } }) => {
+			order.push(req.body.status);
+			return { err: "", item: { id: "i1" } };
+		}) as never);
+		mockSendInvoiceEmail.mockImplementationOnce(async () => {
+			order.push("email");
+		});
 
 		const res = await send();
 
-		expect(mockSendInvoiceEmail).toHaveBeenCalled();
-		// The exact body, not just that it was called: a future edit that
-		// changed this to {status: "Issued"} (marking it hand-delivered after
-		// the system just emailed it) would still pass a bare toHaveBeenCalled.
-		expect(mockUpdateInvoice.mock.calls[0][0].body).toEqual({
-			status: "Sent",
-		});
+		expect(order).toEqual(["Issued", "email", "Sent"]);
+		expect(mockUpdateInvoice.mock.calls[0][3]).toEqual({ qbTaxConfirmed: true });
 		expect(res.body.success).toBe(true);
 	});
 
-	// The email is already in the client's inbox by the time this write runs;
-	// a failure here must not be swallowed into a false success.
-	it("surfaces the status write's own refusal after the email already sent", async () => {
+	// The lock-time checks run in the Issued write, so a refusal there must stop the email.
+	it("does not email when finalizing the draft is refused", async () => {
 		mockGetInvoiceById.mockResolvedValue({
 			id: "i1",
 			status: "Draft",
@@ -136,10 +139,26 @@ describe("POST /invoices/:id/send transition guard", () => {
 
 		const res = await send();
 
-		expect(mockSendInvoiceEmail).toHaveBeenCalled();
+		expect(mockSendInvoiceEmail).not.toHaveBeenCalled();
 		expect(res.status).toBe(400);
 		expect(res.body.success).toBe(false);
 		expect(res.body.error.message).toBe("Void invoices cannot be modified");
+	});
+
+	it("leaves a Draft Issued and says so when the email fails", async () => {
+		mockGetInvoiceById.mockResolvedValue({
+			id: "i1",
+			status: "Draft",
+		} as never);
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+		mockSendInvoiceEmail.mockRejectedValueOnce(new Error("PDF render failed"));
+
+		const res = await send();
+
+		expect(mockUpdateInvoice).toHaveBeenCalledTimes(1);
+		expect(mockUpdateInvoice.mock.calls[0][0].body).toEqual({ status: "Issued" });
+		expect(res.status).toBe(502);
+		expect(res.body.error.message).toMatch(/^The invoice was created, but the email was not sent/);
 	});
 
 	// Wider than Draft: a dispatcher re-sending a copy of an invoice that has
@@ -354,5 +373,191 @@ describe("POST /invoices/:id/send untranslated failure", () => {
 
 		expect(res.status).toBe(404);
 		expect(res.body.error.code).toBe("NOT_FOUND");
+	});
+});
+
+const qbRefusal = {
+	err: "QuickBooks calculated $8.12 (you estimated $7.50). Acknowledge the tax review to continue.",
+	code: "QB_TAX_REVIEW" as const,
+	details: {
+		qb_tax_cents: 812,
+		ours_cents: 750,
+		reason: "QuickBooks calculated $8.12 (you estimated $7.50)",
+	},
+};
+
+// In an AST realm the emailed PDF must carry QuickBooks' figure, so the
+// confirm runs before the email and an unacknowledged delta stops the send.
+describe("POST /invoices/:id/send QuickBooks AST gate", () => {
+	beforeEach(() => {
+		mockQbTaxFinalizeRefusal.mockResolvedValue(null);
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+	});
+
+	it("409s an unacknowledged QuickBooks delta without emailing or finalizing", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Draft" } as never);
+		mockQbTaxFinalizeRefusal.mockResolvedValue(qbRefusal);
+
+		const res = await send();
+
+		expect(res.status).toBe(409);
+		expect(res.body.error).toEqual({
+			code: "QB_TAX_REVIEW",
+			message: qbRefusal.err,
+			details: qbRefusal.details,
+		});
+		expect(mockSendInvoiceEmail).not.toHaveBeenCalled();
+		expect(mockUpdateInvoice).not.toHaveBeenCalled();
+	});
+
+	it("confirms before emailing a draft and tells updateInvoice not to confirm again", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Draft" } as never);
+		const order: string[] = [];
+		mockQbTaxFinalizeRefusal.mockImplementation(async () => {
+			order.push("confirm");
+			return null;
+		});
+		mockSendInvoiceEmail.mockImplementationOnce(async () => {
+			order.push("email");
+		});
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(order).toEqual(["confirm", "email"]);
+		expect(mockQbTaxFinalizeRefusal).toHaveBeenCalledWith("i1", "org-1");
+		expect(mockUpdateInvoice.mock.calls[0][3]).toEqual({ qbTaxConfirmed: true });
+	});
+
+	it.each(["Sent", "Issued"])("does not confirm when re-sending a %s invoice", async (status) => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status } as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(mockQbTaxFinalizeRefusal).not.toHaveBeenCalled();
+		expect(mockSendInvoiceEmail).toHaveBeenCalled();
+		expect(mockUpdateInvoice).toHaveBeenCalledTimes(1);
+		expect(mockUpdateInvoice.mock.calls[0][3]).toBeUndefined();
+	});
+});
+
+describe("PATCH /invoices/:id QuickBooks AST gate", () => {
+	const patch = () =>
+		callRoute(invoicesRouter, "patch", "/:id", {
+			params: { id: "i1" },
+			body: { status: "Issued" },
+		});
+
+	it("answers the finalize refusal as 409 QB_TAX_REVIEW", async () => {
+		mockUpdateInvoice.mockResolvedValue(qbRefusal as never);
+
+		const res = await patch();
+
+		expect(res.status).toBe(409);
+		expect(res.body.success).toBe(false);
+		expect(res.body.error).toEqual({
+			code: "QB_TAX_REVIEW",
+			message: qbRefusal.err,
+			details: qbRefusal.details,
+		});
+	});
+
+	it("keeps other refusals at 400 VALIDATION_ERROR", async () => {
+		mockUpdateInvoice.mockResolvedValue({ err: "Void invoices cannot be modified" } as never);
+
+		const res = await patch();
+
+		expect(res.status).toBe(400);
+		expect(res.body.error.code).toBe("VALIDATION_ERROR");
+	});
+
+	// Only a user who can acknowledge the review (send_invoices) is refused by it.
+	const patchAs = (permissions: string[], body: object = { status: "Issued" }) =>
+		callRoute(invoicesRouter, "patch", "/:id", {
+			params: { id: "i1" },
+			body,
+			user: { role: "dispatcher", permissions },
+		});
+
+	it("tells updateInvoice a send_invoices holder can acknowledge the review", async () => {
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+
+		const res = await patchAs(["view_invoices", "edit_invoices", "send_invoices"]);
+
+		expect(res.status).toBe(200);
+		expect(mockUpdateInvoice.mock.calls[0][3]).toEqual({ canAckQbTaxReview: true });
+	});
+
+	it("derives the acknowledge right from permissions, never from the body", async () => {
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+
+		const res = await patchAs(["view_invoices", "edit_invoices"], {
+			status: "Issued",
+			canAckQbTaxReview: true,
+		});
+
+		expect(res.status).toBe(200);
+		expect(mockUpdateInvoice.mock.calls[0][3]).toEqual({ canAckQbTaxReview: false });
+	});
+});
+
+// Auto mode has no taxability gate: only the QuickBooks refusals stand between a draft and the send.
+describe("POST /invoices/:id/send auto-mode draft", () => {
+	beforeEach(() => {
+		mockQbTaxFinalizeRefusal.mockResolvedValue(null);
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+	});
+
+	it("finalizes and emails an auto-mode draft with an uncategorised line", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Draft" } as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(mockQbTaxFinalizeRefusal).toHaveBeenCalledWith("i1", "org-1");
+		expect(mockUpdateInvoice.mock.calls[0][1]).toBe("org-1");
+		expect(mockSendInvoiceEmail).toHaveBeenCalled();
+	});
+
+	it.each(["Sent", "Issued"])("re-send of a %s invoice is not re-confirmed", async (status) => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status } as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(mockQbTaxFinalizeRefusal).not.toHaveBeenCalled();
+	});
+});
+
+describe("QuickBooks $0 block responses", () => {
+	const zeroRefusal = {
+		err: "QuickBooks charged no tax. Check the sales tax category on these QuickBooks items: Services",
+		code: "QB_TAX_ZERO" as const,
+		details: { items: ["Services"], line_ids: ["l1"] },
+	};
+	it("/send answers 409 QB_TAX_ZERO without emailing", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Draft" } as never);
+		mockQbTaxFinalizeRefusal.mockResolvedValue(zeroRefusal as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(409);
+		expect(res.body.error).toEqual({
+			code: "QB_TAX_ZERO",
+			message: zeroRefusal.err,
+			details: zeroRefusal.details,
+		});
+		expect(mockSendInvoiceEmail).not.toHaveBeenCalled();
+	});
+
+	it("PATCH answers 409 QB_TAX_ZERO", async () => {
+		mockUpdateInvoice.mockResolvedValue(zeroRefusal as never);
+		const res = await callRoute(invoicesRouter, "patch", "/:id", {
+			params: { id: "i1" },
+			body: { status: "Issued" },
+		});
+		expect(res.status).toBe(409);
+		expect(res.body.error.code).toBe("QB_TAX_ZERO");
 	});
 });

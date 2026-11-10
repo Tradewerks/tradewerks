@@ -1,7 +1,6 @@
 import { qbFetch } from "../quickbooksService.js"
 import { qbQueryAll } from "../qb/qbQuery.js"
 import { getScopedDb } from "../../lib/context.js"
-import { db } from "../../db.js"
 import { httpError, ErrorCodes } from "../../types/responses.js"
 
 interface QBTaxRate {
@@ -32,13 +31,16 @@ export interface QBTaxCodeLite {
 
 export const getQBTaxCodes = async (orgId: string): Promise<QBTaxCodeLite[]> => {
 	const [taxeCodes, taxRates] = await Promise.all([
-		qbQueryAll<QBTaxCode>(orgId, "TaxCode", "Active = true"),
+		// QB's TaxCode query rejects `Active = true` once STARTPOSITION follows it; filter here.
+		qbQueryAll<QBTaxCode>(orgId, "TaxCode"),
 		qbQueryAll<QBTaxRate>(orgId, "TaxRate")
 	]);
     
     const rates = new Map(taxRates.map(rate => [rate.Id, rate]));
 
-    return taxeCodes.map(code =>{
+    // TAX/NON/CustomSalesTax are US pseudo-codes, valid only on lines — never as a rate code.
+    const PSEUDO = new Set(["TAX", "NON", "CustomSalesTax"]);
+    return taxeCodes.filter((code) => code.Active !== false && !PSEUDO.has(code.Id)).map(code =>{
         const taxRateDetails = code.SalesTaxRateList?.TaxRateDetail ?? [];
         const results = taxRateDetails
             .filter(detail => detail.TaxTypeApplicable === "TaxOnAmount" && detail.TaxRateRef?.value)

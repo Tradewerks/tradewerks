@@ -16,6 +16,19 @@ export interface ExtractedLine {
 	confidence: number | null;
 }
 
+export const OCR_HEADER_FIELDS = [
+	"vendor_name",
+	"receipt_number",
+	"purchased_at",
+	"subtotal",
+	"tax_amount",
+	"total",
+] as const;
+export type OcrFieldKey = (typeof OCR_HEADER_FIELDS)[number];
+
+/** How a header value came to be: printed and read, computed from other fields, or picked by a chain rule. */
+export type OcrFieldSource = { source: "read" | "derived" | "rule"; rule?: string };
+
 export interface ReceiptExtraction {
 	vendor_name: string | null;
 	/** The vendor's own number for this ticket - the strongest reuse key a receipt carries. */
@@ -33,6 +46,8 @@ export interface ReceiptExtraction {
 	lines: ExtractedLine[];
 	/** `{ field: 0..1 }` for the header fields the provider reported on. */
 	field_confidence: Record<string, number>;
+	/** Absent key = value is null. Confidence alone cannot tell a read value from a computed one. */
+	field_source: Partial<Record<OcrFieldKey, OcrFieldSource>>;
 	raw: unknown;
 }
 
@@ -41,18 +56,74 @@ export interface ReceiptOcrProvider {
 	extract(file: OcrFile): Promise<ReceiptExtraction>;
 }
 
-/** Below this, the technician's UI marks a field for attention. */
-export const OCR_LOW_CONFIDENCE = 0.75;
+export interface OcrCutoffs {
+	fields: Record<OcrFieldKey, number>;
+	line: number;
+}
+
+/**
+ * Below a cutoff, the technician's UI marks a value for attention. Calibrated 2026-11-06 on
+ * tuned n=16 + holdout n=8; holdout too small to justify lowering below 0.75; receipt_number
+ * raised (tuned set: 1 fewer silent error, 0 holdout noise up to 0.90).
+ */
+export const OCR_CUTOFFS: OcrCutoffs = {
+	fields: {
+		vendor_name: 0.75,
+		receipt_number: 0.85,
+		purchased_at: 0.75,
+		subtotal: 0.75,
+		tax_amount: 0.75,
+		total: 0.75,
+	},
+	line: 0.75,
+};
+
+/** Providers that only read (no derivation or chain rules) mark every non-null header key as read. */
+export function readSources(
+	header: Pick<ReceiptExtraction, OcrFieldKey>,
+): ReceiptExtraction["field_source"] {
+	const out: ReceiptExtraction["field_source"] = {};
+	for (const key of OCR_HEADER_FIELDS) if (header[key] != null) out[key] = { source: "read" };
+	return out;
+}
 
 /** A tech is waiting on the result, and a stalled vendor call is worse than none. */
 export const OCR_TIMEOUT_MS = 20_000;
+
+/**
+ * A read still `pending` this long after it started died with its process, or failed
+ * in a way worth another go; the sweeper re-runs it. Mirrored in the frontend's
+ * `util/ocrRead.ts`.
+ */
+export const OCR_STALE_MS = OCR_TIMEOUT_MS + 100_000;
+
+/**
+ * `final` is about the receipt or our setup and will fail the same way again. The rest
+ * are the provider's bad moment: the row stays `pending` and the sweeper retries it.
+ */
+export type OcrFailureKind = "throttled" | "timeout" | "unavailable" | "final";
+
+/** `message` reaches the technician verbatim through `ocr_error`. */
+export class OcrProviderError extends Error {
+	constructor(
+		message: string,
+		readonly kind: OcrFailureKind,
+	) {
+		super(message);
+		this.name = "OcrProviderError";
+	}
+
+	get retryable(): boolean {
+		return this.kind !== "final";
+	}
+}
 
 /**
  * The upload route (`receiptUpload`) already refuses anything over 5 MB before
  * `runReceiptOcr` ever sees it, and the client compresses well under that - so this
  * constant does no work there. It exists for `startOcrRead`, which replays the stored
  * image straight out of object storage with no multer in front of it; kept well under
- * Mindee's own 100 MB ceiling.
+ * any provider's size ceiling.
  */
 export const OCR_MAX_BYTES = 15 * 1024 * 1024;
 

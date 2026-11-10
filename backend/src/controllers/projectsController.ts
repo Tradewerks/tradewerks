@@ -9,6 +9,7 @@ import {
 } from "../lib/validate/projects.js";
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
+import { emitToOrg } from "../services/socketService.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { log } from "../services/appLogger.js";
 import { generateProjectNumber } from "../db.js";
@@ -199,6 +200,7 @@ export const insertProject = async (req: Request, context?: UserContext) => {
             }
         }
 
+    if (created) emitToOrg(orgId, "project:updated", { projectId: created.id });
     return { err: "", project: created ?? undefined };
 
     }catch (err){
@@ -303,6 +305,7 @@ export const updateProject = async (req: Request, context?: UserContext) => {
             return project;
         });
 
+        emitToOrg(orgId, "project:updated", { projectId: id });
         return { err: "", project: updated ?? undefined };
     } catch ( error) {
         return failureResult(error, "Update project error", "Failed to update project");
@@ -343,6 +346,7 @@ export const deleteProject = async (orgId: string, id: string, context?: UserCon
             })
         })
 
+        emitToOrg(orgId, "project:updated", { projectId: id });
         return { err: "" };
     } catch(error) {
         return failureResult(error, "Delete project error", "Failed to delete project");
@@ -402,6 +406,7 @@ export const attachJob = async (req: Request, context?: UserContext) => {
             });
             return project;
         });
+        emitToOrg(orgId, "project:updated", { projectId });
         return { err: "", project };
     } catch (error) {
         return failureResult(error, "Attach job to project error", "Failed to attach job to project");
@@ -453,7 +458,8 @@ export const detachJob = async (req: Request, context?: UserContext) => {
             })
             return job;
         });
-        return { err: "", job }; 
+        emitToOrg(orgId, "project:updated", { projectId });
+        return { err: "", job };
     } catch (error) {
         return failureResult(error, "Detach job from project error", "Failed to detach job from project");
     }

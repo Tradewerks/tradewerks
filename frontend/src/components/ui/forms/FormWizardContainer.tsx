@@ -18,6 +18,8 @@ interface FormWizardContainerProps<T extends number> {
 	onNext?: () => void;
 	onBack?: () => void;
 	onSubmit?: () => void;
+	/** False keeps Save disabled while the form still needs an answer. */
+	canSubmit?: boolean;
 	canGoNext?: boolean;
 	submitLabel?: string;
 	children: React.ReactNode;
@@ -51,6 +53,7 @@ export function FormWizardContainer<T extends number>({
 	onNext,
 	onBack,
 	onSubmit,
+	canSubmit = true,
 	canGoNext,
 	submitLabel,
 	children,
@@ -175,9 +178,13 @@ export function FormWizardContainer<T extends number>({
 	const btnPrimary =
 		"inline-flex items-center gap-1.5 h-8 px-4 rounded-md bg-primary-hover hover:bg-primary disabled:bg-surface-raised disabled:text-text-muted text-sm font-semibold text-on-primary transition-colors disabled:cursor-not-allowed whitespace-nowrap flex-shrink-0";
 	// Success — Submit
-	const btnSuccess = (loading: boolean) =>
+	const btnSuccess = (loading: boolean, blocked = false) =>
 		`inline-flex items-center gap-1.5 h-8 px-4 rounded-md text-sm font-semibold text-on-primary transition-colors whitespace-nowrap flex-shrink-0 ${
-			loading ? "bg-confirm cursor-wait" : "bg-confirm hover:bg-confirm-hover"
+			loading
+				? "bg-confirm cursor-wait"
+				: blocked
+					? "bg-confirm opacity-40 cursor-not-allowed"
+					: "bg-confirm hover:bg-confirm-hover"
 		}`;
 
 	// When Back is visible, the templates button collapses
@@ -297,8 +304,8 @@ export function FormWizardContainer<T extends number>({
 							<button
 								type="button"
 								onClick={onSubmit}
-								disabled={isLoading}
-								className={btnSuccess(isLoading)}
+								disabled={isLoading || !canSubmit}
+								className={btnSuccess(isLoading, !canSubmit)}
 							>
 								{isLoading
 									? "Processing…"

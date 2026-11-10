@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import Card from "../../ui/Card";
 import ActivityPanel from "../../detail/ActivityPanel";
 import ChangeHistory from "../../activity/ChangeHistory";
@@ -88,13 +89,24 @@ export default function TechnicianActivityTab({ technician }: { technician: Tech
 				/>
 			}
 			notes={
-				<Card title="Recent Field Purchases">
-					{canSeePurchases ? (
-						<RecentPurchases techId={technician.id} />
-					) : (
-						<p className="text-sm text-text-muted">
-							Needs the View Field Purchases permission.
-						</p>
+				<Card title="Recent Field Purchases" flush className="lg:h-full">
+					<div className="flex-1 min-h-0 overflow-y-auto p-4">
+						{canSeePurchases ? (
+							<RecentPurchases techId={technician.id} />
+						) : (
+							<p className="text-sm text-text-muted">
+								Needs the View Field Purchases permission.
+							</p>
+						)}
+					</div>
+					{canSeePurchases && (
+						<Link
+							to={`/dispatch/purchases?tab=field_purchases&q=${encodeURIComponent(technician.name)}`}
+							className="shrink-0 border-t border-border-subtle px-4 py-3 flex items-center justify-between text-sm text-primary-text hover:bg-surface-raised focus-visible:bg-surface-raised transition-colors duration-150 ease-out"
+						>
+							Open {technician.name.split(" ")[0]}'s field purchases
+							<ArrowRight size={14} />
+						</Link>
 					)}
 				</Card>
 			}

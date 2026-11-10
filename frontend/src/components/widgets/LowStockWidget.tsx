@@ -40,29 +40,32 @@ export default function LowStockWidget({ className }: { className?: string }) {
 				/>
 			</div>
 
-			<div className="flex items-center gap-3">
+			<div className="flex items-center gap-2 whitespace-nowrap">
 				{outOfStock > 0 && (
-					<div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-error/10 border border-error/20">
+					<div
+						title={`${outOfStock} out of stock`}
+						className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-error/10 border border-error/20"
+					>
 						<AlertTriangle size={12} className="text-error-text" />
-						<span className="text-xs font-medium text-error-text">
-							{outOfStock} out of stock
-						</span>
+						<span className="text-xs font-medium text-error-text">{outOfStock} out</span>
 					</div>
 				)}
 				{lowStock > 0 && (
-					<div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-warning-bg border border-warning-border">
+					<div
+						title={`${lowStock} low stock`}
+						className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-warning-bg border border-warning-border"
+					>
 						<AlertTriangle size={12} className="text-warning-text" />
-						<span className="text-xs font-medium text-warning-text">
-							{lowStock} low stock
-						</span>
+						<span className="text-xs font-medium text-warning-text">{lowStock} low</span>
 					</div>
 				)}
 				{pendingCount > 0 && (
-					<div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary/10 border border-primary/20">
+					<div
+						title={`${pendingCount} pending part${pendingCount !== 1 ? "s" : ""}`}
+						className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary/10 border border-primary/20"
+					>
 						<Package size={12} className="text-primary" />
-						<span className="text-xs font-medium text-primary">
-							{pendingCount} pending part{pendingCount !== 1 ? "s" : ""}
-						</span>
+						<span className="text-xs font-medium text-primary">{pendingCount} pending</span>
 					</div>
 				)}
 			</div>

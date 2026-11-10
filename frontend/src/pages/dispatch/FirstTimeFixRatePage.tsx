@@ -16,6 +16,7 @@ import ReportPagination from "../../components/reports/ReportPagination";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -36,7 +37,9 @@ const COLS: ColumnOption[] = [
 ];
 
 const HEADER_LABELS = buildHeaderLabels(COLS);
-const COLUMN_ALIGN = buildColumnAlign(COLS, ["visitCount"]);
+const NUMERIC_KEYS = ["visitCount"];
+const DATE_KEYS = ["completedAt"];
+const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
 
 export default function FirstTimeFixRatePage() {
 	const [searchInput, setSearchInput] = useState("");
@@ -50,6 +53,7 @@ export default function FirstTimeFixRatePage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -57,8 +61,8 @@ export default function FirstTimeFixRatePage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useFirstTimeFixQuery(queryParams);
@@ -67,7 +71,7 @@ export default function FirstTimeFixRatePage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = data?.summary as FirstTimeFixSummary | undefined;
 
-	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -138,7 +142,7 @@ export default function FirstTimeFixRatePage() {
 									filename: datedFilename("first-time-fix"),
 									sheetName: "First-Time Fix",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -176,6 +180,7 @@ export default function FirstTimeFixRatePage() {
 				) : (
 					<>
 						<AdaptableTable
+							{...tableProps}
 							data={rows}
 							loadListener={isLoading}
 							errListener={error}

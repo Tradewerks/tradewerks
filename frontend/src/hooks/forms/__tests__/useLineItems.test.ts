@@ -309,3 +309,179 @@ describe("useLineItems — dirty tracking in edit mode", () => {
 		expect(result.current.dirtyLineItemFields["li:li-1:unit_price"]).toBeUndefined();
 	});
 });
+
+describe("useLineItems — late-resolving defaultTaxGroupId", () => {
+	test("stamps the untouched blank first line once the default group arrives", () => {
+		const { result, rerender } = renderHook(
+			({ gid }: { gid: string | null }) =>
+				useLineItems({ mode: "create", defaultTaxGroupId: gid }),
+			{ initialProps: { gid: null as string | null } },
+		);
+		expect(result.current.lineItems[0].tax_group_id).toBeNull();
+		rerender({ gid: "g1" });
+		expect(result.current.lineItems[0].tax_group_id).toBe("g1");
+	});
+
+	test("leaves an edited or deliberately untaxed line alone", () => {
+		const { result, rerender } = renderHook(
+			({ gid }: { gid: string | null }) =>
+				useLineItems({ mode: "create", defaultTaxGroupId: gid }),
+			{ initialProps: { gid: null as string | null } },
+		);
+		const id = result.current.lineItems[0].id;
+		act(() => result.current.setLineItemTaxGroup(id, null, false));
+		rerender({ gid: "g1" });
+		expect(result.current.lineItems[0].tax_group_id).toBeNull();
+		expect(result.current.lineItems[0].taxable).toBe(false);
+	});
+
+	test("never stamps when the default stays null (auto mode)", () => {
+		const { result, rerender } = renderHook(
+			({ gid }: { gid: string | null }) =>
+				useLineItems({ mode: "create", defaultTaxGroupId: gid }),
+			{ initialProps: { gid: null as string | null } },
+		);
+		rerender({ gid: null });
+		expect(result.current.lineItems[0].tax_group_id).toBeNull();
+	});
+});
+
+describe("useLineItems — plain taxable flag", () => {
+	const TAXABILITY_KEYS = [
+		"tax_category",
+		"taxability_source",
+		"tax_category_touched",
+		"taxability_touched",
+	];
+	const loaded = makeItem({ id: "s1", name: "Furnace repair", item_type: "labor" });
+
+	test("the hook exposes no category or reset-to-rule setters", () => {
+		const { result } = renderHook(() => useLineItems({ mode: "edit" }));
+		expect(result.current).not.toHaveProperty("setLineItemTaxCategory");
+		expect(result.current).not.toHaveProperty("resetLineItemTaxability");
+	});
+
+	test("flipping taxable marks only taxable dirty and writes no source marker", () => {
+		const { result } = renderHook(() => useLineItems({ mode: "edit" }));
+		act(() => result.current.setLineItems([loaded]));
+		act(() => result.current.setLineItemTaxGroup("s1", null, false));
+		const line = result.current.lineItems[0];
+		expect(line.taxable).toBe(false);
+		expect(result.current.dirtyLineItemFields["li:s1:taxable"]).toBe(true);
+		for (const k of TAXABILITY_KEYS) expect(line).not.toHaveProperty(k);
+	});
+
+	test("seeded and appended lines keep taxable and carry no taxability keys", () => {
+		const seed = {
+			name: "Fee",
+			description: "",
+			quantity: 1,
+			unit_price: 50,
+			item_type: "other" as const,
+			taxable: false,
+		};
+		const { result } = renderHook(() => useLineItems({ mode: "create" }));
+		act(() => result.current.seedLineItems([seed]));
+		act(() => result.current.appendLineItems([seed]));
+		for (const line of result.current.lineItems) {
+			expect(line.taxable).toBe(false);
+			for (const k of TAXABILITY_KEYS) expect(line).not.toHaveProperty(k);
+		}
+	});
+});
+
+describe("useLineItems — taxable follows the picked inventory item", () => {
+	const pick = (taxable: boolean) => ({
+		inventory_item_id: "inv-1",
+		name: "Filter",
+		unit_price: 10,
+		taxable,
+	});
+
+	test("a hand-typed blank line starts taxable", () => {
+		const { result } = renderHook(() => useLineItems({ mode: "create" }));
+		expect(result.current.lineItems[0].taxable).toBe(true);
+		act(() => result.current.addLineItem());
+		expect(result.current.lineItems[1].taxable).toBe(true);
+	});
+
+	test("picking a non-taxable item makes the line non-taxable", () => {
+		const { result } = renderHook(() => useLineItems({ mode: "create" }));
+		const id = result.current.lineItems[0].id;
+		act(() => result.current.setLineItemInventoryItem(id, pick(false)));
+		expect(result.current.lineItems[0].taxable).toBe(false);
+	});
+
+	test("re-picking the item after the dispatcher flipped the line takes the item's flag again", () => {
+		const { result } = renderHook(() => useLineItems({ mode: "create" }));
+		const id = result.current.lineItems[0].id;
+		act(() => result.current.setLineItemInventoryItem(id, pick(false)));
+		act(() => result.current.setLineItemTaxGroup(id, null, true));
+		expect(result.current.lineItems[0].taxable).toBe(true);
+		act(() => result.current.setLineItemInventoryItem(id, pick(false)));
+		expect(result.current.lineItems[0].taxable).toBe(false);
+	});
+
+	test("flipping without re-picking keeps the dispatcher's value across save and reload", () => {
+		const first = renderHook(() => useLineItems({ mode: "create" }));
+		const id = first.result.current.lineItems[0].id;
+		act(() => first.result.current.setLineItemInventoryItem(id, pick(false)));
+		act(() => first.result.current.setLineItemTaxGroup(id, null, true));
+		const saved = first.result.current.lineItems;
+
+		const reloaded = renderHook(() => useLineItems({ mode: "edit", initialItems: saved }));
+		expect(reloaded.result.current.lineItems[0].taxable).toBe(true);
+		expect(reloaded.result.current.lineItems[0].inventory_item_id).toBe("inv-1");
+	});
+
+	test("a link without a flag leaves the line's taxable alone", () => {
+		const { result } = renderHook(() =>
+			useLineItems({ mode: "create", initialItems: [makeItem({ taxable: false })] }),
+		);
+		act(() =>
+			result.current.setLineItemInventoryItem("li-1", {
+				inventory_item_id: "inv-2",
+				name: "Quick",
+				unit_price: null,
+			}),
+		);
+		expect(result.current.lineItems[0].taxable).toBe(false);
+	});
+
+	test("in edit mode the pick marks taxable dirty only when it differs from the original", () => {
+		const { result } = renderHook(() => useLineItems({ mode: "edit" }));
+		act(() => result.current.setLineItems([makeItem()]));
+		act(() => result.current.setLineItemInventoryItem("li-1", pick(false)));
+		expect(result.current.dirtyLineItemFields["li:li-1:taxable"]).toBe(true);
+		act(() => result.current.setLineItemInventoryItem("li-1", pick(true)));
+		expect(result.current.dirtyLineItemFields["li:li-1:taxable"]).toBe(false);
+	});
+});
+
+describe("useLineItems — appended lines keep their source tax group", () => {
+	const seed = {
+		name: "Coil",
+		description: "",
+		quantity: 1,
+		unit_price: 100,
+		item_type: "material" as const,
+	};
+
+	test("a named group survives over the default group", () => {
+		const { result } = renderHook(() =>
+			useLineItems({ mode: "create", minItems: 0, defaultTaxGroupId: "g-default" }),
+		);
+		act(() => result.current.appendLineItems([{ ...seed, tax_group_id: "g-source" }]));
+		expect(result.current.lineItems.at(-1)?.tax_group_id).toBe("g-source");
+	});
+
+	test("an explicit null stays null; an absent group takes the default", () => {
+		const { result } = renderHook(() =>
+			useLineItems({ mode: "create", minItems: 0, defaultTaxGroupId: "g-default" }),
+		);
+		act(() => result.current.appendLineItems([{ ...seed, tax_group_id: null }, seed]));
+		const [explicitNull, absent] = result.current.lineItems.slice(-2);
+		expect(explicitNull.tax_group_id).toBeNull();
+		expect(absent.tax_group_id).toBe("g-default");
+	});
+});

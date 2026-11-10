@@ -178,7 +178,7 @@ export default function InventoryImportReviewPage() {
 	const hasReviewProblems = record.conflict_count > 0;
 
 	return (
-		<div className="mx-auto max-w-6xl space-y-6 p-4 pb-12 sm:p-6 sm:pb-12">
+		<div className="mx-auto max-w-6xl space-y-6">
 			<header className="flex flex-wrap items-start justify-between gap-4">
 				<div className="max-w-3xl">
 					<Link

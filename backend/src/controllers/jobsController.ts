@@ -15,6 +15,12 @@ import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { LineItemToCreate, ChangeSet } from "../types/common.js";
 import { assertInventoryItemsInOrg } from "../lib/inventory.js";
+import {
+	applyInventoryTaxable,
+	applyInventoryTaxableToNewLines,
+	lineTaxFieldsForCreate,
+	lineTaxFieldsForUpdate,
+} from "../lib/inventoryTaxable.js";
 import { log } from "../services/appLogger.js";
 import { generateJobNumber } from "../db.js";
 import { DocumentRuleError } from "../lib/statusTransitions.js";
@@ -24,6 +30,42 @@ import {
 	type DocumentShape,
 } from "../services/disputeAdapters.js";
 import { hasOpenDispute } from "../services/disputeService.js";
+import { holdsKeptRate, recomputeJobTotals } from "../lib/recomputeDocumentTotals.js";
+import { recomputeOpenVisits } from "../lib/recomputeOpenVisits.js";
+import {
+	AddressTaxChoiceError,
+	addressMoves,
+	addressTaxChoiceRefusal,
+	applyAddressTaxChoiceToFamily,
+	choiceActor,
+	keptFamily,
+} from "../lib/addressTaxChoice.js";
+import { assertTaxGroupsInOrg } from "../lib/taxHelpers.js";
+import {
+	dropClientTaxTotals,
+	getEffectiveTaxMode,
+	type TaxMode,
+} from "../services/tax/taxMode.js";
+
+/**
+ * Manual mode keeps today's client-computed job totals; auto mode, and a manual-mode job that
+ * holds a kept address rate, are server-owned.
+ */
+async function recomputeJobIfServerTaxed(
+	jobId: string,
+	organizationId: string,
+	tx: unknown,
+	taxMode?: TaxMode,
+	serverTaxed?: boolean,
+): Promise<void> {
+	const ptx = tx as Prisma.TransactionClient;
+	const taxed =
+		serverTaxed ??
+		((taxMode ?? (await getEffectiveTaxMode(organizationId))) === "auto" ||
+			(await holdsKeptRate("job", jobId, ptx)));
+	if (!taxed) return;
+	await recomputeJobTotals(jobId, organizationId, ptx);
+}
 
 // ============================================================================
 // JOB CRUD
@@ -121,6 +163,8 @@ export const getJobById = async (id: string, organizationId: string) => {
 					address: true,
 					coords: true,
 					is_active: true,
+					is_tax_exempt: true,
+					tax_group_id: true,
 					contacts: {
 						where: {
 							is_primary: true,
@@ -155,6 +199,8 @@ export const getJobById = async (id: string, organizationId: string) => {
 					status: true,
 					total: true,
 					created_at: true,
+					// A job with no snapshot of its own inherits the quote's kept rate.
+					tax_snapshot: true,
 				},
 			},
 			visits: {
@@ -290,11 +336,18 @@ function quoteConversionRefusal(quote: DocumentShape, hasOpenDispute: boolean): 
 
 export const insertJob = async (req: Request, context?: UserContext) => {
 	try {
-		const parsed = createJobSchema.parse(req.body);
+		const organizationId = req.user!.organization_id as string;
+		const taxMode = await getEffectiveTaxMode(organizationId);
+		const sdb = getScopedDb(organizationId);
+		const raw = createJobSchema.parse(req.body);
+		// A quote-converted job inherits its quote's kept rate, so it is server-taxed from the start.
+		const kept =
+			taxMode !== "auto" &&
+			!!raw.quote_id &&
+			(await holdsKeptRate("quote", raw.quote_id, sdb as unknown as Prisma.TransactionClient));
+		const parsed = kept ? dropClientTaxTotals(raw, "auto") : raw;
 		const geoErr = await fillCoords(parsed, true);
 		if (geoErr) return { err: geoErr };
-		const organizationId = req.user!.organization_id as string;
-		const sdb = getScopedDb(organizationId);
 		let created: Awaited<ReturnType<typeof db.job.findFirst>> | undefined;
 		for (let attempt = 0; attempt < 5; attempt++) {
 			try {
@@ -409,6 +462,8 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					source: "quote" as const,
 					item_type: item.item_type,
 					inventory_item_id: item.inventory_item_id,
+					tax_group_id: item.tax_group_id,
+					taxable: item.taxable,
 				}));
 
 				await tx.quote.update({
@@ -514,7 +569,17 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					organizationId,
 					parsed.line_items.map((i) => i.inventory_item_id),
 				);
-				lineItemsToCreate = parsed.line_items.map((item) => ({
+				await assertTaxGroupsInOrg(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					parsed.line_items.map((i) => i.tax_group_id),
+				);
+				const bodyLines = await applyInventoryTaxable(
+					tx,
+					organizationId,
+					parsed.line_items,
+				);
+				lineItemsToCreate = bodyLines.map((item) => ({
 					name: item.name,
 					description: item.description || null,
 					quantity: item.quantity,
@@ -523,6 +588,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					source: "manual" as const,
 					item_type: item.item_type || null,
 					inventory_item_id: item.inventory_item_id ?? null,
+					...lineTaxFieldsForCreate(item),
 				}));
 			}
 
@@ -586,6 +652,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 						source: item.source ?? "manual",
 						item_type: item.item_type,
 						inventory_item_id: item.inventory_item_id ?? null,
+						...lineTaxFieldsForCreate(item),
 					})),
 				});
 			}
@@ -617,6 +684,16 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
 			});
+
+			if (lineItemsToCreate.length > 0) {
+				await recomputeJobIfServerTaxed(
+					job.id,
+					organizationId,
+					tx,
+					taxMode,
+					taxMode === "auto" || kept,
+				);
+			}
 
 			return tx.job.findUnique({
 				where: { id: job.id },
@@ -760,11 +837,19 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 export const updateJob = async (req: Request, organizationId: string, context?: UserContext) => {
 	try {
 		const id = req.params.id as string;
-		const parsed = updateJobSchema.parse(req.body);
+		const taxMode = await getEffectiveTaxMode(organizationId);
+		const sdb = getScopedDb(organizationId);
+		const serverTaxed =
+			taxMode === "auto" ||
+			(await holdsKeptRate("job", id, sdb as unknown as Prisma.TransactionClient));
+		// Review Focus 2: when server-taxed, the server's figures win even on a job with no lines.
+		const parsed = dropClientTaxTotals(
+			updateJobSchema.parse(req.body),
+			serverTaxed ? "auto" : taxMode,
+		);
 		const geoErr = await fillCoords(parsed, true);
 		if (geoErr) return { err: geoErr };
 
-		const sdb = getScopedDb(organizationId);
 		const existing = await sdb.job.findFirst({
 			where: { id },
 			include: { line_items: true },
@@ -773,6 +858,23 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		if (!existing) {
 			return { err: "Job not found" };
 		}
+
+		const addressFamily =
+			taxMode !== "auto" && addressMoves(req.body, parsed, existing)
+				? await keptFamily(sdb as unknown as Prisma.TransactionClient, organizationId, {
+						kind: "job",
+						id,
+					})
+				: null;
+		if (addressFamily && !parsed.address_tax_choice) {
+			return { ...addressTaxChoiceRefusal(addressFamily), item: undefined };
+		}
+
+		const addressChanged =
+			(parsed.address !== undefined && parsed.address !== existing.address) ||
+			parsed.coords !== undefined;
+		const discountChanged =
+			parsed.discount_type !== undefined || parsed.discount_value !== undefined;
 
 		// Exclude line_items from buildChanges (tracked separately for better detail)
 		const { line_items: _lineItems, ...parsedWithoutLineItems } = parsed;
@@ -799,6 +901,23 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		const statusChanged = parsed.status !== undefined && parsed.status !== existing.status;
 
 		const updated = await sdb.$transaction(async (tx) => {
+			// Recompute reads its inputs from the row, so they land first.
+			if ((serverTaxed || addressFamily) && (addressChanged || discountChanged)) {
+				await tx.job.update({
+					where: { id },
+					data: {
+						...(parsed.address !== undefined && { address: parsed.address }),
+						...(parsed.coords !== undefined && { coords: parsed.coords }),
+						...(parsed.discount_type !== undefined && {
+							discount_type: parsed.discount_type,
+						}),
+						...(parsed.discount_value !== undefined && {
+							discount_value: parsed.discount_value,
+						}),
+					},
+				});
+			}
+
 			// BULK LINE ITEMS UPDATE
 			if (parsed.line_items !== undefined) {
 				const incomingItems = parsed.line_items || [];
@@ -806,6 +925,11 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 					tx,
 					organizationId,
 					incomingItems.map((i) => i.inventory_item_id),
+				);
+				await assertTaxGroupsInOrg(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					incomingItems.map((i) => i.tax_group_id),
 				);
 
 				// Track existing and incoming item IDs
@@ -816,6 +940,13 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 					incomingItems
 						.filter((item) => item.id)
 						.map((item) => item.id!),
+				);
+				// New lines take the inventory default; existing lines keep theirs.
+				const withInventoryTaxable = await applyInventoryTaxableToNewLines(
+					tx,
+					organizationId,
+					incomingItems,
+					existingItemIds,
 				);
 
 				// DELETE: Items not in incoming list
@@ -921,6 +1052,21 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 									new: nextInventoryItemId,
 								};
 							}
+							if (item.taxable !== undefined && item.taxable !== existingItem.taxable) {
+								itemChanges.taxable = {
+									old: existingItem.taxable,
+									new: item.taxable,
+								};
+							}
+							if (
+								item.tax_group_id !== undefined &&
+								item.tax_group_id !== existingItem.tax_group_id
+							) {
+								itemChanges.tax_group_id = {
+									old: existingItem.tax_group_id,
+									new: item.tax_group_id,
+								};
+							}
 
 							// Only update if there are actual changes
 							if (Object.keys(itemChanges).length > 0) {
@@ -936,6 +1082,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 										...(item.inventory_item_id !== undefined && {
 											inventory_item_id: nextInventoryItemId,
 										}),
+										...lineTaxFieldsForUpdate(item),
 									},
 								});
 
@@ -971,6 +1118,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 								source: "manual",
 								item_type: item.item_type || null,
 								inventory_item_id: item.inventory_item_id ?? null,
+								...lineTaxFieldsForCreate(withInventoryTaxable(item)),
 							},
 						});
 
@@ -998,6 +1146,22 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 						});
 					}
 				}
+			}
+			if (
+				parsed.line_items !== undefined ||
+				addressChanged ||
+				discountChanged
+			) {
+				await recomputeJobIfServerTaxed(id, organizationId, tx, taxMode, serverTaxed);
+			}
+			if (addressFamily && parsed.address_tax_choice) {
+				await applyAddressTaxChoiceToFamily(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					{ kind: "job", id },
+					parsed.address_tax_choice,
+					choiceActor(context),
+				);
 			}
 			const job = await tx.job.update({
 				where: { id },
@@ -1109,6 +1273,15 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 			return job;
 		});
 
+		// Visits resolve from the job's address; the job's own commit comes first.
+		if (taxMode === "auto" && addressChanged) {
+			try {
+				await recomputeOpenVisits(sdb, id, organizationId, "job edit");
+			} catch (err) {
+				log.error({ err, orgId: organizationId, jobId: id }, "Visit recompute after job edit failed");
+			}
+		}
+
 		if (updated) {
 			emitToOrg(organizationId, "job:updated", { jobId: id, organizationId });
 		}
@@ -1121,6 +1294,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 					.join(", ")}`,
 			};
 		}
+		if (e instanceof AddressTaxChoiceError) return { err: e.message };
 		log.error({ err: e }, "Update job error");
 		return { err: "Internal server error" };
 	}
@@ -1168,6 +1342,9 @@ export const deleteJob = async (id: string, organizationId: string, context?: Us
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Delete job error");
+		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+			return { err: "This job is on an invoice, so it can't be deleted. Cancel the job instead, or remove it from the invoice first." };
+		}
 		return { err: "Internal server error" };
 	}
 };
@@ -1216,12 +1393,16 @@ export const insertJobLineItem = async (
 			await assertInventoryItemsInOrg(tx, organizationId, [
 				parsed.inventory_item_id,
 			]);
+			await assertTaxGroupsInOrg(tx as unknown as Prisma.TransactionClient, organizationId, [
+				parsed.tax_group_id,
+			]);
 
 			// Calculate total if not provided
 			const total =
 				parsed.total !== undefined
 					? parsed.total
 					: parsed.quantity * parsed.unit_price;
+			const [filled] = await applyInventoryTaxable(tx, organizationId, [parsed]);
 
 			const item = await tx.job_line_item.create({
 				data: {
@@ -1234,8 +1415,10 @@ export const insertJobLineItem = async (
 					source: parsed.source || "manual",
 					item_type: parsed.item_type || null,
 					inventory_item_id: parsed.inventory_item_id ?? null,
+					...lineTaxFieldsForUpdate(filled),
 				},
 			});
+			await recomputeJobIfServerTaxed(jobId, organizationId, tx);
 
 			await logActivity({
 				event_type: "job_line_item.created",
@@ -1330,6 +1513,9 @@ export const updateJobLineItem = async (
 			await assertInventoryItemsInOrg(tx, organizationId, [
 				parsed.inventory_item_id,
 			]);
+			await assertTaxGroupsInOrg(tx as unknown as Prisma.TransactionClient, organizationId, [
+				parsed.tax_group_id,
+			]);
 
 			// Recalculate total if quantity or unit_price changed
 			const total =
@@ -1360,8 +1546,10 @@ export const updateJobLineItem = async (
 					...(parsed.inventory_item_id !== undefined && {
 						inventory_item_id: parsed.inventory_item_id,
 					}),
+					...lineTaxFieldsForUpdate(parsed),
 				},
 			});
+			await recomputeJobIfServerTaxed(jobId, organizationId, tx);
 
 			if (Object.keys(changes).length > 0) {
 				await logActivity({
@@ -1442,6 +1630,7 @@ export const deleteJobLineItem = async (
 			await tx.job_line_item.delete({
 				where: { id: itemId },
 			});
+			await recomputeJobIfServerTaxed(jobId, organizationId, tx);
 		});
 
 		return { err: "", message: "Item deleted successfully" };

@@ -31,6 +31,7 @@ export default function NotePhotoGallery({ photos }: {photos: JobNotePhoto[] }){
 					>
 						<Camera size={10} aria-hidden="true" />
 						{p.photo_label}
+						{p.photo_name && <span className="max-w-[140px] truncate">· {p.photo_name}</span>}
 					</button>
 				))}
 			</div>

@@ -208,6 +208,7 @@ export default function CreateInventoryItem({
 	const [ackRequiredByServer, setAckRequiredByServer] = useState(false);
 	const [unitPrice, setUnitPrice] = useState("");
 	const [cost, setCost] = useState("");
+	const [taxable, setTaxable] = useState(true);
 	const [lowStockEnabled, setLowStockEnabled] = useState(false);
 	const [lowStockThreshold, setLowStockThreshold] = useState("");
 	const [alertEmailsEnabled, setAlertEmailsEnabled] = useState(false);
@@ -434,6 +435,7 @@ export default function CreateInventoryItem({
 					: ""
 			);
 			setCost(existingItem.cost != null ? String(existingItem.cost) : "");
+			setTaxable(existingItem.taxable ?? true);
 			setLowStockEnabled(existingItem.low_stock_threshold !== null);
 			setLowStockThreshold(
 				existingItem.low_stock_threshold !== null
@@ -480,6 +482,7 @@ export default function CreateInventoryItem({
 		setAckRequiredByServer(false);
 		setUnitPrice("");
 		setCost("");
+		setTaxable(true);
 		setLowStockEnabled(false);
 		setLowStockThreshold("");
 		setAlertEmailsEnabled(false);
@@ -790,6 +793,7 @@ export default function CreateInventoryItem({
 			unit,
 			unit_price: unitPrice ? Number(unitPrice) : null,
 			cost: cost ? Number(cost) : null,
+			taxable,
 			low_stock_threshold: lowStockEnabled ? Number(lowStockThreshold) || 0 : null,
 			image_urls: imageUrls,
 			// Alert email is only rendered inside the low-stock block; sending it
@@ -811,6 +815,7 @@ export default function CreateInventoryItem({
 			unit,
 			unitPrice,
 			cost,
+			taxable,
 			lowStockEnabled,
 			lowStockThreshold,
 			imageUrls,
@@ -1175,6 +1180,12 @@ export default function CreateInventoryItem({
 								</dd>
 							</div>
 						)}
+						<div className="flex items-baseline justify-between gap-2 min-w-0">
+							<dt className="text-text-tertiary">Tax</dt>
+							<dd className="text-right text-text-primary">
+								{taxable ? "Taxable" : "Not taxable"}
+							</dd>
+						</div>
 						{lowStockEnabled && (
 							<div className="flex items-baseline justify-between gap-2 min-w-0">
 								<dt className="text-text-tertiary">Low stock at</dt>
@@ -1661,6 +1672,21 @@ export default function CreateInventoryItem({
 									disabled={isLoading}
 								/>
 								<FieldMessage>{shownErrors.cost}</FieldMessage>
+							</div>
+							<div className="col-span-4 min-w-0 lg:col-span-2">
+								<label className="flex cursor-pointer items-center gap-2 text-sm text-text-primary lg:mt-6">
+									<input
+										type="checkbox"
+										checked={taxable}
+										onChange={(e) => setTaxable(e.target.checked)}
+										disabled={isLoading}
+										className="h-3.5 w-3.5 cursor-pointer rounded border-border bg-base text-primary focus:ring-primary"
+									/>
+									Taxable
+								</label>
+								{taxable && (
+									<p className="text-xs text-text-muted">New lines with this item start taxable.</p>
+								)}
 							</div>
 						</div>
 

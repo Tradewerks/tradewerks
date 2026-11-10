@@ -53,14 +53,22 @@ describe("ActivityPanel", () => {
 		expect(rail.className).toContain("lg:col-span-1");
 	});
 
-	it("pins the rail without letting the grid stretch it", () => {
-		// `items-start` is what makes `sticky` able to move at all — a
-		// stretched grid item silently ignores it.
+	it("lets the grid stretch both columns and keeps the rail out of the row's sizing", () => {
 		panel();
 		const rail = screen.getByText("note surface").parentElement!;
-		expect(rail.className).toContain("lg:sticky");
-		expect(rail.className).toContain("lg:self-start");
-		expect(rail.parentElement!.className).toContain("items-start");
+		const grid = rail.parentElement!;
+		expect(grid.className).not.toContain("items-start");
+		expect(rail.className).not.toContain("lg:sticky");
+		expect(rail.className).not.toContain("lg:self-start");
+		expect(rail.className).toContain("lg:contain-size"); // many notes can't grow the row
+		expect(rail.className).toContain("lg:min-h-104"); // floor: header + composer + ~1 note
+	});
+
+	it("grows the main column's last card into any extra height", () => {
+		panel();
+		const main = screen.getByText("change log").parentElement!;
+		expect(main.className).toContain("flex-col");
+		expect(main.className).toContain("[&>:last-child]:flex-1");
 	});
 
 	it("still fills the main column when there is nothing to record", () => {

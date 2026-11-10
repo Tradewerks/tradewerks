@@ -14,6 +14,8 @@ import {
     pushQBItem,
     getQBTaxCodes,
     getQBTaxPrefs,
+    getQBTaxCalculation,
+    setPassthroughTaxCode,
     unlinkTaxCode,
     linkTaxCode,
     getImportableQBInvoices,
@@ -299,6 +301,16 @@ export const useQBTaxPrefsQuery = (enabled = true) => {
     });
 };
 
+export const useQBTaxCalculationQuery = (enabled: boolean) => {
+    return useQuery({
+        queryKey: ["qbTaxCalculation"],
+        queryFn: getQBTaxCalculation,
+        enabled,
+        staleTime: 5 * 60_000,
+        retry: false,
+    });
+};
+
 export const useImportableQBInvoicesQuery = (enabled = true, customerId?: string) => {
     return useQuery({
         queryKey: ["importableQBInvoices", customerId],
@@ -400,6 +412,7 @@ export const useQBInvoiceSyncMutation = () => {
         },
         onError: () => {
             queryClient.invalidateQueries({ queryKey: ["qbStatus"] });
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
         },
     });
 };
@@ -474,6 +487,16 @@ export const useUnlinkTaxCodeMutation = () => {
         mutationFn: ({ tax_group_id }) => unlinkTaxCode(tax_group_id),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["tax-groups"] });
+        },
+    });
+};
+
+export const useSetPassthroughTaxCodeMutation = () => {
+    const queryClient = useQueryClient();
+    return useMutation<unknown, Error, { qb_tax_code_id: string | null }>({
+        mutationFn: ({ qb_tax_code_id }) => setPassthroughTaxCode(qb_tax_code_id),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["qbTaxPrefs"] });
         },
     });
 };

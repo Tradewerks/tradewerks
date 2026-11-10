@@ -70,6 +70,25 @@ function localWallClock(year: number, month: number, day: number, hour:number, m
 	return new Date(asIfUtc - settled);
 }
 
+/**
+ * A zoneless wall-clock reading (its UTC fields hold what was printed, e.g. a
+ * receipt's "04/27/23 2:15 PM") as the instant it names in `timezone`. Without
+ * this, a date-only receipt lands at UTC midnight and shows as the day before
+ * anywhere west of UTC.
+ */
+export function wallClockToInstant(wall: Date, timezone?: string | null): Date {
+	if (!timezone || timezone === "UTC") return wall;
+	const at = localWallClock(
+		wall.getUTCFullYear(),
+		wall.getUTCMonth(),
+		wall.getUTCDate(),
+		wall.getUTCHours(),
+		wall.getUTCMinutes(),
+		timezone,
+	);
+	return new Date(at.getTime() + wall.getUTCSeconds() * 1000 + wall.getUTCMilliseconds());
+}
+
 // `hhmm` on the calendar day `at` falls on in `timezone`, as an instant
 export function localTimeOnDay(at: Date, hhmm: string, timezone: string): Date {
 	const { year, month, day } = localParts(at, timezone);

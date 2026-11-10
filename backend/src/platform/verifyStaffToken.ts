@@ -4,40 +4,20 @@ import { log } from "../services/appLogger.js";
 import { createErrorResponse, ErrorCodes } from "../types/responses.js";
 import { platformSecret, verifyStaffClaims } from "./staffToken.js";
 
-const TTL_MS = 30_000;
-type StaffState = { at: number; active: boolean; validAfter: number };
-const cache = new Map<string, StaffState>();
-
-export function setStaffActive(
-	id: string,
-	active: boolean,
-	validAfter: Date | null = null,
-): void {
-	cache.set(id, {
-		at: Date.now(),
-		active,
-		validAfter: validAfter?.getTime() ?? 0,
+// Read on every request, not cached: a cache is per instance, so a disable or MFA reset on
+// one instance would leave the others honoring revoked tokens until it expired.
+async function staffLive(id: string, iat: number | undefined): Promise<boolean> {
+	// Disable and MFA reset revoke every token issued before them, so a re-enable revives none.
+	const issuedAt = new Date((iat ?? 0) * 1000);
+	const row = await db.platform_staff.findFirst({
+		where: {
+			id,
+			status: "active",
+			OR: [{ sessions_valid_after: null }, { sessions_valid_after: { lte: issuedAt } }],
+		},
+		select: { id: true },
 	});
-}
-
-export function forgetStaff(id: string): void {
-	cache.delete(id);
-}
-
-async function staffState(id: string): Promise<StaffState> {
-	const hit = cache.get(id);
-	if (hit && Date.now() - hit.at < TTL_MS) return hit;
-	const row = await db.platform_staff.findUnique({
-		where: { id },
-		select: { status: true, sessions_valid_after: true },
-	});
-	const state = {
-		at: Date.now(),
-		active: row?.status === "active",
-		validAfter: row?.sessions_valid_after?.getTime() ?? 0,
-	};
-	cache.set(id, state);
-	return state;
+	return row !== null;
 }
 
 export function requirePlatformEnabled(
@@ -94,9 +74,7 @@ export async function verifyStaffToken(
 			);
 	}
 	try {
-		const st = await staffState(claims.sid);
-		// Disable and MFA reset revoke every token issued before them, so a re-enable revives none.
-		if (!st.active || (claims.iat ?? 0) * 1000 < st.validAfter)
+		if (!(await staffLive(claims.sid, claims.iat)))
 			return res
 				.status(401)
 				.json(

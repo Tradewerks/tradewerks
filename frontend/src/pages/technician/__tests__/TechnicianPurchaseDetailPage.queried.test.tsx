@@ -128,6 +128,6 @@ describe("a queried purchase over a limit", () => {
 	it("still shows the breach notice beside it", () => {
 		renderSheet();
 
-		expect(screen.getByText(/dispatch has to approve it/i)).toBeInTheDocument();
+		expect(screen.getByText(/needs dispatch pre-approval/i)).toBeInTheDocument();
 	});
 });

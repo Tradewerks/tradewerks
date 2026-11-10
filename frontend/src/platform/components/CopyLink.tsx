@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { inputClass } from "./AuthCard";
+import { smallButton } from "./orgDetailUi";
 
 export default function CopyLink({ url }: { url: string }) {
 	const [copied, setCopied] = useState(false);
@@ -13,7 +14,7 @@ export default function CopyLink({ url }: { url: string }) {
 			/>
 			<button
 				type="button"
-				className="h-9 shrink-0 rounded-md border border-border px-3 text-sm text-text-primary hover:bg-surface-inset"
+				className={`${smallButton} h-9!`}
 				onClick={() => {
 					void navigator.clipboard.writeText(url);
 					setCopied(true);

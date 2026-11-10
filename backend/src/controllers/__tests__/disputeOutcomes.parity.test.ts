@@ -42,12 +42,13 @@ vi.mock("../../lib/context.js", () => ({
 vi.mock("../../services/invoiceService.js", () => ({
 	syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
 	syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
-	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue(undefined),
+	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
 	invoicePaidTotal: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../../services/qb/qbInvoices.js", () => ({
 	mirrorInvoiceVoidToQuickBooks: vi.fn().mockResolvedValue(undefined),
+	pushInvoiceDetached: vi.fn(),
 }));
 
 vi.mock("../../services/logger.js", () => ({

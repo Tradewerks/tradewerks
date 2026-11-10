@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
 	Briefcase,
@@ -32,7 +32,7 @@ import { useDispatcherByIdQuery, useUpdateDispatcherMutation } from "../../hooks
 import { useAuthStore } from "../../auth/authStore";
 import { getReportSource } from "../../reports/reportSources";
 import type { ReportCategoryId, ReportFavoriteKind } from "../../types/reports";
-import type { ReportLayout } from "../../types/dispatchers";
+import type { ReportLayout, ReportLayoutId } from "../../types/dispatchers";
 
 interface ReportLink {
 	title: string;
@@ -119,7 +119,17 @@ const REPORT_CATEGORIES: ReportCategory[] = [
 				title: "Job Profitability",
 				description: "Revenue, cost, and profit by job",
 				to: "/dispatch/reporting/job-profitability",
-			}
+			},
+			{
+				title: "Purchases By Supplier",
+				description: "Pre-tax spend per supplier, orders and field purchases",
+				to: "/dispatch/reporting/purchases-by-supplier",
+			},
+			{
+				title: "Sales By Product",
+				description: "Units, revenue and margin per inventory item",
+				to: "/dispatch/reporting/sales-by-product",
+			},
 		],
 	},
 	{
@@ -192,6 +202,16 @@ const REPORT_CATEGORIES: ReportCategory[] = [
 					"Clients by total discount received",
 				to: "/dispatch/reporting/client-discounts",
 			},
+			{
+				title: "Not Invoiced",
+				description: "Approved, in-progress and completed work not yet billed",
+				to: "/dispatch/reporting/not-invoiced",
+			},
+			{
+				title: "Invoice Lifecycle",
+				description: "How long invoices take to send and get paid, by client",
+				to: "/dispatch/reporting/invoice-lifecycle",
+			},
 		],
 	},
 ];
@@ -206,17 +226,12 @@ const CARD_CAP = 5;
 const favKey = (kind: ReportFavoriteKind, ref: string) => `${kind}:${ref}`;
 const entryKey = (e: HubEntry) => favKey(e.kind, e.ref);
 
-
-
-
-function applyOrder(entries: HubEntry[], order: string[] | undefined): HubEntry[] {
+function applyOrder<T extends { kind: ReportFavoriteKind; ref: string }>(entries: T[], order: string[] | undefined): T[] {
 	if (!order || order.length === 0) return entries;
 	const rank = new Map(order.map((k, i) => [k, i]));
-	return [...entries].sort((a, b) => {
-		const ra = rank.get(entryKey(a)) ?? Number.POSITIVE_INFINITY;
-		const rb = rank.get(entryKey(b)) ?? Number.POSITIVE_INFINITY;
-		return ra - rb;
-	});
+	return [...entries].sort((a, b) =>
+		(rank.get(favKey(a.kind, a.ref)) ?? Infinity) - (rank.get(favKey(b.kind, b.ref)) ?? Infinity)
+	);
 }
 
 function StarButton({
@@ -265,8 +280,11 @@ function CategoryCard({
 	onToggleFavorite,
 	onToggleHidden,
 	onDeleteReport,
+	draggingKey,
 	onDragStartEntry,
-	onDropEntry,
+	onHoverEntry,
+	onCommitDrop,
+	onDragEndEntry,
 }: {
 	category: ReportCategory;
 	entries: HubEntry[];
@@ -278,8 +296,11 @@ function CategoryCard({
 	onToggleFavorite: (kind: ReportFavoriteKind, ref: string) => void;
 	onToggleHidden: (catId: ReportCategoryId, key: string) => void;
 	onDeleteReport: (id: string) => void;
+	draggingKey: string | null;
 	onDragStartEntry: (catId: ReportCategoryId, key: string) => void;
-	onDropEntry: (catId: ReportCategoryId, key: string) => void;
+	onHoverEntry: (catId: ReportLayoutId, key: string) => void;
+	onCommitDrop: (catId: ReportLayoutId) => void;
+	onDragEndEntry: () => void;
 }) {
 	const Icon = category.icon;
 
@@ -287,14 +308,27 @@ function CategoryCard({
 	const visible = editing ? entries : entries.filter((e) => !hidden.has(entryKey(e)));
 	const capped = expanded || editing ? visible : visible.slice(0, CARD_CAP);
 	const overflow = visible.length - CARD_CAP;
+	const isDragSource = draggingKey !== null && entries.some((e) => entryKey(e) === draggingKey);
 
 	return (
-		<div className="bg-base border border-border-subtle rounded-xl overflow-hidden">
+		<div className="bg-base border border-border-subtle rounded-xl overflow-hidden xl:last:flex-1">
 			<div className="flex items-center gap-2 p-4 border-b border-border-subtle">
 				<Icon size={16} className="text-text-tertiary" />
 				<h3 className="font-semibold text-text-primary">{category.label}</h3>
 			</div>
-			<div className="p-3 flex flex-wrap gap-2">
+			<div
+				className="p-3 grid grid-cols-[repeat(auto-fill,minmax(216px,1fr))] gap-2"
+				onDragOver={(e) => {
+					if (!editing || !isDragSource) return;
+					e.preventDefault();
+					e.dataTransfer.dropEffect = "move";
+				}}
+				onDrop={(e) => {
+					if (!editing || !isDragSource) return;
+					e.preventDefault();
+					onCommitDrop(category.id);
+				}}
+			>
 				{visible.length === 0 ? (
 					<p className="text-sm text-text-muted px-1 py-2.5">No reports yet</p>
 				) : (
@@ -305,20 +339,23 @@ function CategoryCard({
 							<div
 								key={key}
 								draggable={editing}
-								onDragStart={() => editing && onDragStartEntry(category.id, key)}
-								onDragOver={(e) => {
-									if (editing) e.preventDefault();
-								}}
-								onDrop={(e) => {
+								onDragStart={(e) => {
 									if (!editing) return;
-									e.preventDefault();
-									onDropEntry(category.id, key);
+									e.dataTransfer.setData("text/plain", key);
+									e.dataTransfer.effectAllowed = "move";
+									onDragStartEntry(category.id, key);
 								}}
-								className={`relative w-[216px] shrink-0 rounded-lg border border-border-subtle p-2.5 transition-all ${
+								onDragEnter={() => editing && onHoverEntry(category.id, key)}
+								onDragEnd={onDragEndEntry}
+								className={`relative rounded-lg border p-2.5 transition-all ${
 									editing
 										? "bg-surface/40 cursor-grab active:cursor-grabbing"
 										: "hover:border-border hover:shadow-sm hover:bg-surface"
-								} ${isHidden ? "opacity-50" : ""}`}
+								} ${
+									key === draggingKey
+										? "opacity-40 border-dashed border-primary"
+										: `border-border-subtle ${isHidden ? "opacity-50" : ""}`
+								}`}
 							>
 								<div className="flex items-start justify-between gap-1.5">
 									{editing ? (
@@ -392,11 +429,25 @@ function CategoryCard({
 function FavoritesCard({
 	favorites,
 	onRemove,
+	editing,
+	draggingKey,
+	onDragStartEntry,
+	onHoverEntry,
+	onCommitDrop,
+	onDragEndEntry,
 }: {
 	favorites: FavoriteLink[];
 	onRemove: (kind: ReportFavoriteKind, ref: string) => void;
+	editing: boolean,
+	draggingKey: string | null;
+	onDragStartEntry: (catId: ReportLayoutId, key: string) => void;
+	onHoverEntry: (catId: ReportLayoutId, key: string) => void;
+	onCommitDrop: (catId: ReportLayoutId) => void;
+	onDragEndEntry: () => void;
 }) {
 	if (favorites.length === 0) return null;
+
+	const isDragSource = draggingKey !== null && favorites.some((f) => favKey(f.kind, f.ref) === draggingKey);
 
 	return (
 		<div className="bg-base border border-border-subtle rounded-xl overflow-hidden mb-4">
@@ -404,31 +455,76 @@ function FavoritesCard({
 				<Star size={16} className="text-warning" fill="currentColor" />
 				<h3 className="font-semibold text-text-primary">Favorites</h3>
 			</div>
-			<div className="p-3 flex flex-wrap gap-2">
-				{favorites.map((fav) => (
-					<div
-						key={`${fav.kind}:${fav.ref}`}
-						className="relative w-[216px] shrink-0 rounded-lg border border-border-subtle p-2.5 transition-all hover:border-border hover:shadow-sm hover:bg-surface"
-					>
-						<div className="flex items-start justify-between gap-1.5">
-							<Link to={fav.to} className="block flex-1 min-w-0">
-								<p className="text-[12.5px] font-semibold text-text-primary truncate">
-									{fav.title}
-								</p>
-								<p className="text-[11px] text-text-muted mt-0.5 truncate">
-									{fav.description}
-								</p>
-							</Link>
-							<StarButton
-								active
-								onClick={(e) => {
-									e.preventDefault();
-									onRemove(fav.kind, fav.ref);
-								}}
-							/>
+			<div
+				className="p-3 grid grid-cols-[repeat(auto-fill,minmax(216px,1fr))] gap-2"
+				onDragOver={(e) => {
+					if (!editing || !isDragSource) return;
+					e.preventDefault();
+					e.dataTransfer.dropEffect = "move";
+				}}
+				onDrop={(e) => {
+					if (!editing || !isDragSource) return;
+					e.preventDefault();
+					onCommitDrop("favorite");
+				}}
+			>
+				{favorites.map((fav) => {
+					const key = `${fav.kind}:${fav.ref}`;
+					return (
+						<div
+							key={key}
+							draggable={editing}
+							onDragStart={(e) => {
+								if (!editing) return;
+								e.dataTransfer.setData("text/plain", key);
+								e.dataTransfer.effectAllowed = "move";
+								onDragStartEntry("favorite", key);
+							}}
+							onDragEnter={() => editing && onHoverEntry("favorite", key)}
+							onDragEnd={onDragEndEntry}
+							className={`relative rounded-lg border p-2.5 transition-all ${
+								editing
+									? "bg-surface/40 cursor-grab active:cursor-grabbing"
+									: "hover:border-border hover:shadow-sm hover:bg-surface"
+							} ${
+								key === draggingKey
+									? "opacity-40 border-dashed border-primary"
+									: "border-border-subtle"
+							}`}
+						>
+							<div className="flex items-start justify-between gap-1.5">
+								{editing ? (
+									<div className="flex-1 min-w-0">
+										<p className="flex items-center gap-1 text-[12.5px] font-semibold text-text-primary">
+											<GripVertical size={12} className="shrink-0 text-text-faint" />
+											<span className="truncate">{fav.title}</span>
+										</p>
+										<p className="text-[11px] text-text-muted mt-0.5 truncate">
+											{fav.description}
+										</p>
+									</div>
+								) : (
+									<>
+										<Link to={fav.to} className="block flex-1 min-w-0">
+											<p className="text-[12.5px] font-semibold text-text-primary truncate">
+												{fav.title}
+											</p>
+											<p className="text-[11px] text-text-muted mt-0.5 truncate">
+												{fav.description}
+											</p>
+										</Link>
+										<StarButton
+											active={!editing}
+											onClick={(e) => {
+												e.preventDefault();
+												onRemove(fav.kind, fav.ref);
+											}}
+										/>
+									</>
+								)}
+							</div>
 						</div>
-					</div>
-				))}
+				)})}
 			</div>
 		</div>
 	);
@@ -456,7 +552,8 @@ export default function ReportingPage() {
 		if (dispatcher?.report_layout) setLayout(dispatcher.report_layout);
 	}, [dispatcher?.report_layout]);
 
-	const dragKeyRef = useRef<{ catId: ReportCategoryId; key: string } | null>(null);
+	const [dragging, setDragging] = useState<{ catId: ReportLayoutId; key: string } | null>(null);
+	const [draftOrder, setDraftOrder] = useState<string[] | null>(null);
 
 	const favByKey = new Map(favorites.map((f) => [favKey(f.kind, f.ref), f]));
 	const isFavorited = (kind: ReportFavoriteKind, ref: string) =>
@@ -501,10 +598,11 @@ export default function ReportingPage() {
 			});
 		}
 		for (const catId of CATEGORY_IDS) {
-			map[catId] = applyOrder(map[catId], layout[catId]?.order);
+			const order = draftOrder && dragging?.catId === catId ? draftOrder : layout[catId]?.order;
+			map[catId] = applyOrder(map[catId], order);
 		}
 		return map;
-	}, [savedReports, layout]);
+	}, [savedReports, layout, dragging, draftOrder]);
 
 	const hiddenByCategory = useMemo(() => {
 		const map = {} as Record<ReportCategoryId, Set<string>>;
@@ -522,7 +620,7 @@ export default function ReportingPage() {
 	};
 
 	const updateCategory = (
-		catId: ReportCategoryId,
+		catId: ReportLayoutId,
 		updater: (cur: { order: string[]; hidden: string[] }) => { order: string[]; hidden: string[] },
 	) => {
 		const cur = layout[catId] ?? { order: [], hidden: [] };
@@ -538,16 +636,33 @@ export default function ReportingPage() {
 		});
 	};
 
-	const handleDrop = (catId: ReportCategoryId, targetKey: string) => {
-		const dragged = dragKeyRef.current;
-		dragKeyRef.current = null;
-		if (!dragged || dragged.catId !== catId || dragged.key === targetKey) return;
-		const keys = entriesByCategory[catId].map(entryKey);
-		const from = keys.indexOf(dragged.key);
-		const to = keys.indexOf(targetKey);
+	const startDrag = (catId: ReportLayoutId, key: string) => {
+		setDragging({ catId, key });
+		const keys = catId === "favorite"
+			? orderedFavorites.map((f) => favKey(f.kind, f.ref))
+			: entriesByCategory[catId].map(entryKey);
+		setDraftOrder(keys);
+	};
+
+	const hoverEntry = (catId: ReportLayoutId, targetKey: string) => {
+		if (!dragging || !draftOrder || dragging.catId !== catId) return;
+		if (dragging.key === targetKey) return;
+		const from = draftOrder.indexOf(dragging.key);
+		const to = draftOrder.indexOf(targetKey);
 		if (from < 0 || to < 0) return;
-		keys.splice(to, 0, keys.splice(from, 1)[0]);
-		updateCategory(catId, (cur) => ({ ...cur, order: keys }));
+		const next = [...draftOrder];
+		next.splice(to, 0, next.splice(from, 1)[0]);
+		setDraftOrder(next);
+	};
+
+	const commitDrop = (catId: ReportLayoutId) => {
+		if (!dragging || dragging.catId !== catId || !draftOrder) return;
+		updateCategory(catId, (cur) => ({ ...cur, order: draftOrder }));
+	};
+
+	const endDrag = () => {
+		setDragging(null);
+		setDraftOrder(null);
 	};
 
 	const favoriteLinks: FavoriteLink[] = favorites
@@ -568,10 +683,13 @@ export default function ReportingPage() {
 		})
 		.filter((l): l is FavoriteLink => l !== null);
 
+	const favOrder = dragging?.catId === "favorite" && draftOrder ? draftOrder : layout.favorite?.order;
+	const orderedFavorites = applyOrder(favoriteLinks, favOrder);
+
 	return (
 		<div className="text-text-primary">
 			<PageHeader title="Reporting">
-				<FavoritesButton favorites={favoriteLinks} onRemove={toggleFavorite} />
+				<FavoritesButton favorites={orderedFavorites} onRemove={toggleFavorite} />
 				<button
 					onClick={() => setEditing((v) => !v)}
 					aria-pressed={editing}
@@ -599,7 +717,16 @@ export default function ReportingPage() {
 					save automatically.
 				</p>
 			)}
-			{!editing && <FavoritesCard favorites={favoriteLinks} onRemove={toggleFavorite} />}
+			<FavoritesCard 
+				favorites={orderedFavorites}
+				onRemove={toggleFavorite}
+				editing={editing}
+				draggingKey={dragging?.catId === "favorite" ? dragging.key : null}
+				onDragStartEntry={startDrag}
+				onHoverEntry={hoverEntry}
+				onCommitDrop={commitDrop}
+				onDragEndEntry={endDrag}
+			/>
 			<div className="flex flex-col xl:flex-row gap-4">
 				{[LEFT_COLUMN_CATEGORIES, RIGHT_COLUMN_CATEGORIES].map((column, i) => (
 					<div key={i} className="flex flex-col gap-4 xl:flex-1">
@@ -618,10 +745,11 @@ export default function ReportingPage() {
 								onToggleFavorite={toggleFavorite}
 								onToggleHidden={toggleHidden}
 								onDeleteReport={handleDeleteReport}
-								onDragStartEntry={(catId, key) => {
-									dragKeyRef.current = { catId, key };
-								}}
-								onDropEntry={handleDrop}
+								draggingKey={dragging?.catId === category.id ? dragging.key : null}
+								onDragStartEntry={startDrag}
+								onHoverEntry={hoverEntry}
+								onCommitDrop={commitDrop}
+								onDragEndEntry={endDrag}
 							/>
 						))}
 					</div>

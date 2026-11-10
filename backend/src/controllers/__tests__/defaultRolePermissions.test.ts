@@ -116,3 +116,13 @@ describe("Default Dispatcher template follows the send-permission migration", ()
 		expect(migration).not.toContain("'technician'");
 	});
 });
+
+/** confirm_taxability was removed with automatic taxability; manage_taxes stays. */
+describe("Default Dispatcher template and taxability", () => {
+	const template = defaultDispatcherPermissions();
+
+	it("keeps manage_taxes and no longer grants confirm_taxability", () => {
+		expect(template).toContain("manage_taxes");
+		expect(template).not.toContain("confirm_taxability");
+	});
+});

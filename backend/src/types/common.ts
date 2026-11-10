@@ -1,3 +1,5 @@
+export type LineItemTypeValue = "labor" | "material" | "equipment" | "other";
+
 export type LineItemToCreate = {
 	name: string;
 	description: string | null;
@@ -5,7 +7,7 @@ export type LineItemToCreate = {
 	unit_price: number;
 	total?: number; // Optional - calculated if not provided
 	source: "quote" | "recurring_plan" | "manual" | "field_addition";
-	item_type: "labor" | "material" | "equipment" | "other" | null;
+	item_type: LineItemTypeValue | null;
 	sort_order?: number; // Optional - defaulted by context
 	tax_group_id?: string | null;
 	taxable?: boolean;

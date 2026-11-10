@@ -295,7 +295,7 @@ export default function MaintenanceTab ({ vehicleId }: maintenanceTabProps) {
                             <p className="text-sm text-text-muted">No maintenance records yet.</p>
                         )}
                         {!isLoading && !isError && records && records.length > 0 && (
-                            <div className="flex flex-col max-h-[560px] min-h-0">
+                            <div className="flex flex-col max-h-[min(560px,50vh)] min-h-0">
                                 <div className="flex flex-wrap items-center gap-1 mb-1 flex-none">
                                     {(Object.entries(MAINTENANCE_CATEGORY_LABELS) as [MaintenanceCategory, string][]).map(( [category, label] ) => {
                                         const {icon: Icon, className} = CATEGORY_ICON[category];
@@ -345,7 +345,7 @@ export default function MaintenanceTab ({ vehicleId }: maintenanceTabProps) {
                             <p className="text-sm text-text-muted">No reminders yet.</p>
                         )}
                         {!remindersLoading && !remindersError && sortedReminders.length > 0 && (
-                            <div className="flex flex-col gap-2 overflow-y-auto max-h-[560px] pr-1">
+                            <div className="flex flex-col gap-2 overflow-y-auto max-h-[min(560px,50vh)] pr-1">
                                 {sortedReminders.map(({ reminder, due }) => (
                                     <div key={reminder.id} className="rounded-lg border border-border-subtle">
                                         <ReminderRow

@@ -70,7 +70,7 @@ export default function AddNotePhotoModal({
 					<button
 						onClick={onClose}
 						aria-label="Close"
-						className="text-text-muted hover:text-text-primary p-1 -mr-1 rounded-md hover:bg-surface transition-colors"
+						className="text-text-muted hover:text-text-primary p-3 -my-3 -mr-3 rounded-md hover:bg-surface transition-colors"
 					>
 						<X size={16} />
 					</button>

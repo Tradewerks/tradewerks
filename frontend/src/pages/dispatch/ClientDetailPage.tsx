@@ -1,7 +1,7 @@
 ﻿import { useState, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-	Edit,
+	Edit2,
 	Briefcase,
 	FileText,
 	Phone,
@@ -13,21 +13,23 @@ import {
 	ReceiptText,
 	RefreshCw,
 	CheckCircle2,
+	Trash2,
 } from "lucide-react";
 import Card from "../../components/ui/Card";
+import DetailHeader from "../../components/detail/DetailHeader";
 import EditClientModal from "../../components/clients/EditClient";
 import ContactManager from "../../components/clients/ContactManager";
 import NoteManager from "../../components/clients/NoteManager";
 import ClientDisputesCard from "../../components/clients/ClientDisputesCard";
-import { useClientByIdQuery } from "../../hooks/useClients";
+import { useClientByIdQuery, useDeleteClientMutation } from "../../hooks/useClients";
 import { useInvoicesByClientIdQuery } from "../../hooks/useInvoices";
 import {
 	InvoiceStatusColors,
 	InvoiceStatusLabels,
 	type InvoiceStatus,
 } from "../../types/invoices";
-import { QuoteStatusColors, type QuoteStatus } from "../../types/quotes";
-import { formatCurrency, formatDate } from "../../util/util";
+import { QuoteStatusColors, QuoteStatusLabels, type QuoteStatus } from "../../types/quotes";
+import { errorMessage, formatCurrency, formatDate } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
 import ChangeHistory from "../../components/activity/ChangeHistory";
 import {
@@ -36,6 +38,7 @@ import {
 	useQBMappedCustomersQuery,
 } from "../../hooks/useQuickbooks";
 import { useToast } from "../../components/ui/useToast";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 
 type MainTab = "active" | "requests" | "quotes" | "jobs" | "plans" | "invoices";
 const ITEMS_LIMIT = 8;
@@ -60,12 +63,14 @@ export default function ClientDetailsPage() {
 	const navigate = useNavigate();
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [activeTab, setActiveTab] = useState<MainTab>("active");
+	const [deleteConfirm, setDeleteConfirm] = useState(false);
 
 	const { data: client, isLoading, error } = useClientByIdQuery(clientId!);
 	const { data: invoices } = useInvoicesByClientIdQuery(clientId!);
 
 	const toast = useToast();
 	const qbClientSync = useQBClientSyncMutation();
+	const deleteClient = useDeleteClientMutation();
 	const { data: qbStatus } = useQBStatusQuery();
 	const { data: qbMappedCustomers } = useQBMappedCustomersQuery();
 
@@ -86,8 +91,27 @@ export default function ClientDetailsPage() {
 		}
 	};
 
+	const handleDelete = async () => {
+		if (!clientId) return;
+		if (!deleteConfirm) {
+			setDeleteConfirm(true);
+			return;
+		}
+
+		try {
+			await deleteClient.mutateAsync(clientId);
+			toast.success(`${client?.name ?? "Client"} deleted`);
+			navigate("/dispatch/clients");
+		} catch (error) {
+			console.error("Failed to delete client:", error);
+			setDeleteConfirm(false);
+			toast.error(errorMessage(error, "Failed to delete client"));
+		}
+	};
+
 	//permissions
 	const EDIT_CLIENT = usePermission("edit_clients");
+	const DELETE_CLIENT = usePermission("delete_clients");
 
 	const workflowData = useMemo(() => {
 		if (!client) return { active: [], requests: [], quotes: [], jobs: [], plans: [], invoices: [] };
@@ -108,6 +132,7 @@ export default function ClientDetailsPage() {
 			title: q.title,
 			number: q.quote_number,
 			status: q.status,
+			statusLabel: QuoteStatusLabels[q.status as QuoteStatus],
 			created_at: q.created_at,
 			address: client.address,
 			total: q.total,
@@ -428,26 +453,12 @@ export default function ClientDetailsPage() {
 
 	return (
 		<div className="min-h-0 bg-canvas text-text-primary w-full">
-			<div className="w-full px-4 sm:px-5 lg:px-6 py-4">
-				{/* Header */}
-				<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
-					<div className="min-w-0">
-						<h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-text-primary truncate">
-							{client.name}
-						</h1>
-					</div>
-
-					<div className="flex items-center gap-2 flex-shrink-0">
-						<span
-							className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${
-								client.is_active
-									? "bg-success/20 text-success-text border-success/30"
-									: "bg-error/20 text-error-text border-error/30"
-							}`}
-						>
-							{client.is_active ? "Active" : "Inactive"}
-						</span>
-							{qbConnected && qbSynced && (
+			<div className="w-full">
+				<div className="mb-5">
+					<DetailHeader
+						title={client.name}
+						badges={
+							qbConnected && qbSynced && (
 								<span
 									className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-success-bg text-success-bright-text border-success-border"
 									title={`Synced to QuickBooks customer #${qbMapping?.external_id}`}
@@ -455,8 +466,21 @@ export default function ClientDetailsPage() {
 									<CheckCircle2 size={11} />
 									In QuickBooks
 								</span>
-							)}
-							{qbShowAction && (
+							)
+						}
+						statusPill={
+							<span
+								className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${
+									client.is_active
+										? "bg-success/20 text-success-text border-success/30"
+										: "bg-error/20 text-error-text border-error/30"
+								}`}
+							>
+								{client.is_active ? "Active" : "Inactive"}
+							</span>
+						}
+						inlineActions={
+							qbShowAction && (
 								<button
 									title={!EDIT_CLIENT ? "You don't have permission to perform this action" : "Create this client as a customer in QuickBooks Online"}
 									disabled={!EDIT_CLIENT || qbClientSync.isPending}
@@ -471,22 +495,40 @@ export default function ClientDetailsPage() {
 										{qbClientSync.isPending ? "Syncing…" : "Sync to QuickBooks"}
 									</span>
 								</button>
-							)}
-							<button
-								title={!EDIT_CLIENT ? "You don't have permission to perform this action" : undefined}
-								disabled={!EDIT_CLIENT}
-								className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-hover hover:bg-primary-active text-on-primary rounded text-xs font-medium transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-								onClick={() => {
-									if (!EDIT_CLIENT) return;
-									setIsEditModalOpen(true);
-								}}
-							>
-								<Edit size={12} />
-								<span className="hidden sm:inline">
-									Edit
-								</span>
-							</button>
-					</div>
+							)
+						}
+						menuGroups={[
+							{
+								id: "client",
+								label: "Client",
+								items: [
+									{
+										id: "edit",
+										label: "Edit Client",
+										icon: <Edit2 size={16} />,
+										disabled: !EDIT_CLIENT,
+										disabledReason: EDIT_CLIENT
+											? undefined
+											: "You don't have permission to perform this action",
+										onSelect: () => setIsEditModalOpen(true),
+									},
+									...(DELETE_CLIENT
+										? [
+												{
+													id: "delete",
+													label: "Delete Client",
+													icon: <Trash2 size={16} />,
+													intent: "destructive" as const,
+													disabled: deleteClient.isPending,
+													onSelect: () => setDeleteConfirm(true),
+												},
+											]
+										: []),
+								],
+							},
+						]}
+						menuLabel="Client actions"
+					/>
 				</div>
 
 				{/* Two Column Layout with Responsive Ordering */}
@@ -675,6 +717,16 @@ export default function ClientDetailsPage() {
 					client={client}
 				/>
 			</div>
+			<ConfirmDialog 
+				open={deleteConfirm}
+				title="Confirm Client Delete"
+				body={`${client.name} will be deleted`}
+				confirmLabel="Delete Client"
+				pending={deleteClient.isPending}
+				onConfirm={handleDelete}
+				onCancel={() => setDeleteConfirm(false)}
+				tone="destructive"
+			/>
 		</div>
 	);
 }

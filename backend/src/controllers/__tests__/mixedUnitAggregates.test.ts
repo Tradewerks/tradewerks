@@ -209,7 +209,7 @@ function sqlSentTo(call: unknown[]): string {
 
 const REVERSAL_CASE = "CASE WHEN sm.reason = 'reversal' THEN -sm.qty ELSE sm.qty END";
 const CONSUMPTION_PREDICATE =
-	"( sm.reason IN ('parts_used', 'direct_consumption') OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed') )";
+	"( sm.reason IN ('parts_used', 'direct_consumption') OR (sm.reason = 'reversal' AND sm.from_location_type = 'consumed') OR (sm.reason = 'supplier_purchase' AND sm.to_location_type = 'consumed') )";
 
 describe("reversal netting — the SQL sent to Postgres", () => {
 	// updatePartsUsedQty writes `reversal` movements (consumed → vehicle) when a
@@ -610,6 +610,7 @@ describe("getInventoryReport — mixed units", () => {
 		expect(mockDb.stock_movement.groupBy.mock.calls[0][0].where.OR).toEqual([
 			{ reason: { in: ["parts_used", "direct_consumption"] } },
 			{ reason: "reversal", from_location_type: "consumed" },
+			{ reason: "supplier_purchase", to_location_type: "consumed" },
 		]);
 	});
 });

@@ -7,7 +7,8 @@ import {
     createErrorResponse,
 } from "../types/responses.js";
 import { getUserContext, getScopedDb } from '../lib/context.js';
-import { requirePermission, requirePermissionForBody } from '../lib/requirePermissions.js';
+import { hasPermission, requirePermission, requirePermissionForBody } from '../lib/requirePermissions.js';
+import { acknowledgeTaxReviewRoute } from './tax.js';
 import { logActivity } from '../services/logger.js';
 import * as invoicesController from '../controllers/invoicesController.js';
 import { createInvoiceRecord } from '../services/invoiceService.js';
@@ -19,7 +20,11 @@ import { buildVisitInvoicePayload, buildRecurringPlanInvoicePayload } from '../s
 import { overlapCheckSchema, generateInvoiceSchema, createRefundSchema } from '../lib/validate/invoices.js';
 import { advanceNextInvoiceAt, calculateNextInvoiceAt, type ScheduleFrequency } from '../lib/invoiceSchedule.js';
 import { Prisma } from '../../generated/prisma/client.js';
-import { assertValidInvoiceTransition, InvalidTransitionError } from '../lib/statusTransitions.js';
+import {
+    assertValidInvoiceTransition,
+    InvalidTransitionError,
+    isInvoiceFinalizingTransition,
+} from '../lib/statusTransitions.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 import {
     disputeErrorResponse,
@@ -29,6 +34,13 @@ import {
 } from '../controllers/disputesController.js';
 
 const router = Router();
+
+type TaxRefusal = invoicesController.QbTaxReviewRefusal | invoicesController.QbTaxZeroRefusal;
+const isTaxRefusal = (result: object): result is TaxRefusal =>
+    invoicesController.isQbTaxReviewRefusal(result) ||
+    invoicesController.isQbTaxZeroRefusal(result);
+const taxRefusalResponse = (refusal: TaxRefusal) =>
+    createErrorResponse(refusal.code, refusal.err, refusal.details);
 
 router.get("/", requirePermission("view_invoices"), async (req, res, next) => {
     try {
@@ -117,7 +129,30 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
             throw e;
         }
 
+        // A re-send of an already finalized invoice is not a finalize and must not re-push.
+        const finalizing = isInvoiceFinalizingTransition(existing.status, "Sent");
         const context = getUserContext(req);
+        if (finalizing) {
+            const refusal = await invoicesController.qbTaxFinalizeRefusal(id, orgId);
+            if (refusal) return res.status(409).json(taxRefusalResponse(refusal));
+            // Finalize through Issued before emailing, so every lock-time check has passed
+            // and the PDF is the locked, dated document. A failed email then leaves it
+            // Issued, ready to re-send, instead of delivered but still a draft.
+            const issued = await invoicesController.updateInvoice(
+                { params: { id }, body: { status: "Issued" } } as any,
+                orgId,
+                context,
+                { qbTaxConfirmed: true },
+            );
+            if (isTaxRefusal(issued)) return res.status(409).json(taxRefusalResponse(issued));
+            if (issued.err) {
+                const status = issued.err.includes("not found") ? 404 : 400;
+                return res
+                    .status(status)
+                    .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, issued.err));
+            }
+        }
+
         try {
             await sendInvoiceEmail(id, recipientEmail, orgId);
         } catch (e: unknown) {
@@ -155,7 +190,8 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
                 .json(
                     createErrorResponse(
                         failure?.code ?? ErrorCodes.EMAIL_SEND_FAILED,
-                        failure?.message ?? "Email could not be sent.",
+                        (finalizing ? "The invoice was created, but the email was not sent. " : "") +
+                            (failure?.message ?? "Email could not be sent."),
                     ),
                 );
         }
@@ -164,6 +200,7 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
             orgId,
             context,
         );
+        if (isTaxRefusal(result)) return res.status(409).json(taxRefusalResponse(result));
         if (result.err) {
             const status = result.err.includes("not found") ? 404 : 400;
             return res
@@ -336,7 +373,10 @@ router.patch("/:id", requirePermission("edit_invoices"), requireVoidPermission, 
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
-        const result = await invoicesController.updateInvoice(req, orgId, context);
+        const result = await invoicesController.updateInvoice(req, orgId, context, {
+            canAckQbTaxReview: hasPermission(req, "send_invoices"),
+        });
+        if (isTaxRefusal(result)) return res.status(409).json(taxRefusalResponse(result));
         if (result.err) {
             const status = result.err.includes("not found") ? 404 : 400;
             return res
@@ -353,6 +393,12 @@ router.patch("/:id", requirePermission("edit_invoices"), requireVoidPermission, 
         next(err);
     }
 });
+
+router.post(
+	"/:id/tax-review/acknowledge",
+	requirePermission("send_invoices"),
+	acknowledgeTaxReviewRoute("invoice"),
+);
 
 router.delete("/:id", requirePermission("delete_invoices"), async (req, res, next) => {
     try {

@@ -224,32 +224,12 @@ async function doPushPurchase(purchaseId: string, orgId: string): Promise<string
     const accountId = await getOrgRealmId(orgId);
     const qbPurchaseId = purchase.qb_purchase_id && purchase.account_id === accountId ? purchase.qb_purchase_id : null;
 
-    if (purchase.status === "cancelled") {
-        if (!qbPurchaseId) {
-            throw httpError(400, ErrorCodes.VALIDATION_ERROR, "This purchase was never pushed to QuickBooks — nothing to update");
-        }
-        // QBO's PurchaseOrder entity has no void/delete-by-operation support (unlike
-        // Invoice) — "POStatus" is the only lifecycle field it exposes, so closing it
-        // is the correct analog to reflecting a local cancellation.
-        const existing = (await qbFetch(orgId, "GET", `/purchaseorder/${qbPurchaseId}`)) as QBPurchaseOrderResponse;
-        await qbFetch(orgId, "POST", "/purchaseorder", {
-            sparse: true,
-            Id: qbPurchaseId,
-            SyncToken: existing.PurchaseOrder.SyncToken,
-            POStatus: "Closed",
-        });
-        await sdb.purchase.update({
-            where: { id: purchaseId },
-            data: { qb_purchase_id: qbPurchaseId, account_id: accountId, qb_sync_status: "synced" },
-        });
-        return qbPurchaseId;
-    }
-
-    if (purchase.status === "received") {
-        if (!qbPurchaseId) {
-            throw httpError(400, ErrorCodes.VALIDATION_ERROR, "This purchase was never pushed to QuickBooks — nothing to update");
-        }
-        // Fully received - nothing left to arrive against this PO, same closure as a cancellation.
+    // QBO's PurchaseOrder entity has no void/delete-by-operation support (unlike
+    // Invoice) — "POStatus" is the only lifecycle field it exposes, so closing it
+    // reflects both a cancellation and a full receipt. One never pushed (or pushed
+    // to a previous company) is created below already Closed.
+    const closed = purchase.status === "cancelled" || purchase.status === "received";
+    if (closed && qbPurchaseId) {
         const existing = (await qbFetch(orgId, "GET", `/purchaseorder/${qbPurchaseId}`)) as QBPurchaseOrderResponse;
         await qbFetch(orgId, "POST", "/purchaseorder", {
             sparse: true,
@@ -281,7 +261,10 @@ async function doPushPurchase(purchaseId: string, orgId: string): Promise<string
         return qbPurchaseId;
     }
 
-    const created = await qbFetch(orgId, "POST", "/purchaseorder", payload) as QBPurchaseOrderResponse;
+    const created = await qbFetch(orgId, "POST", "/purchaseorder", {
+        ...payload,
+        ...(closed && { POStatus: "Closed" }),
+    }) as QBPurchaseOrderResponse;
     await sdb.purchase.update({
         where: { id: purchaseId },
         data: {

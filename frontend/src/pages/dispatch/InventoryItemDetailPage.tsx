@@ -883,8 +883,7 @@ export default function InventoryItemDetailPage() {
 					    the stock ledger, and the usage-by-job list; the forecast
 					    card keeps its own fixed 90d window and says so on its
 					    face.
-					    Boxed as its own toolbar (mirrors PageReportSection's
-					    filter bar), not a bare flex row — unboxed and sitting
+					    Boxed as its own toolbar, not a bare flex row — unboxed and sitting
 					    directly above ReorderHealthCard's bordered Card, it read
 					    as that card's header rather than a control for the whole
 					    tab. Three columns, not two spans crowded together: the

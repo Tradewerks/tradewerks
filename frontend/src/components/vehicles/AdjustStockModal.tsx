@@ -281,6 +281,7 @@ function QuantitiesStep({
 								<div className="flex justify-center">
 									<input
 										type="number"
+										inputMode="decimal"
 										min={0}
 										value={newQty}
 										onChange={(e) => {
@@ -394,11 +395,11 @@ function ConfirmStep({
 								key={item.id}
 								className="flex items-center justify-between px-4 py-2 border-b border-border-subtle last:border-0"
 							>
-								<span className="text-sm text-text-primary">
+								<span className="text-sm text-text-primary min-w-0">
 									{item.inventory_item.name}
 								</span>
-								<div className="flex items-center gap-3">
-									<span className="text-sm text-text-secondary">
+								<div className="flex items-center gap-3 shrink-0">
+									<span className="text-sm text-text-secondary whitespace-nowrap">
 										{current} → {newQty}
 									</span>
 									<span

@@ -1,8 +1,10 @@
 import { isModuleOn } from "./entitlementService.js";
 import OAuthClient from "intuit-oauth";
 import { getScopedDb } from "../lib/context.js";
-import { db } from "../db.js";
 import { httpError, ErrorCodes } from "../types/responses.js";
+import { isDifferentCompany, notifyTaxCodeNeeds } from "./qb/qbConnectTaxGuard.js";
+import { signQbOAuthState, verifyQbOAuthState } from "./qb/qbOAuthState.js";
+import { log } from "./appLogger.js";
 
 // ============================================================================
 // QUICKBOOKS TEMPORARILY DISABLED — integration not ready for production.
@@ -108,12 +110,38 @@ async function doRefresh(orgId: string): Promise<{ accessToken: string; realmId:
 	}
 }
 
-export function getAuthUrl(orgId: string): string {
+export function getAuthUrl(orgId: string, userId: string): string {
 	const client = makeOAuthClient();
 	return client.authorizeUri({
 		scope: [OAuthClient.scopes.Accounting],
-		state: orgId,
+		state: signQbOAuthState(orgId, userId),
 	});
+}
+
+// The callback route is public; the signed state is the only thing tying it to an org.
+export async function handleCallbackRequest(
+	query: { state?: unknown; realmId?: unknown },
+	fullUrl: string,
+): Promise<"connected" | "error"> {
+	const verified = typeof query.state === "string" ? verifyQbOAuthState(query.state) : null;
+	if (!verified) {
+		log.warn("QuickBooks callback refused: missing, expired or unsigned state");
+		return "error";
+	}
+	// Without a realm the company-change guard would read the reconnect as a new company and
+	// unlink every tax code.
+	const realmId = typeof query.realmId === "string" ? query.realmId.trim() : "";
+	if (!realmId) {
+		log.warn({ orgId: verified.orgId }, "QuickBooks callback refused: missing realmId");
+		return "error";
+	}
+	try {
+		await handleCallback(fullUrl, verified.orgId, realmId);
+		return "connected";
+	} catch (err) {
+		log.warn({ err }, "QuickBooks callback failed");
+		return "error";
+	}
 }
 
 export async function handleCallback(
@@ -132,15 +160,32 @@ export async function handleCallback(
 		expires_in: number;
 	};
 	const sdb = getScopedDb(orgId);
-	await sdb.organization.update({
+	const before = await sdb.organization.findUnique({
 		where: { id: orgId },
-		data: {
-			qb_realm_id: realmId,
-			qb_access_token: token.access_token,
-			qb_refresh_token: token.refresh_token,
-			qb_token_expires_at: new Date(Date.now() + token.expires_in * 1000),
-		},
+		select: { qb_tax_codes_realm_id: true, qb_passthrough_tax_code_id: true },
 	});
+	const companyChanged = isDifferentCompany(before?.qb_tax_codes_realm_id ?? null, realmId);
+	const unlinked = await sdb.$transaction(async (tx) => {
+		await tx.organization.update({
+			where: { id: orgId },
+			data: {
+				qb_realm_id: realmId,
+				qb_access_token: token.access_token,
+				qb_refresh_token: token.refresh_token,
+				qb_token_expires_at: new Date(Date.now() + token.expires_in * 1000),
+				qb_tax_codes_realm_id: realmId,
+				...(companyChanged && { qb_passthrough_tax_code_id: null }),
+			},
+		});
+		if (!companyChanged) return 0;
+		// Explicit org filter: the scoped extension is not relied on inside the transaction client.
+		const { count } = await tx.tax_group.updateMany({
+			where: { organization_id: orgId, qb_tax_code_id: { not: null } },
+			data: { qb_tax_code_id: null },
+		});
+		return count + (before?.qb_passthrough_tax_code_id ? 1 : 0);
+	});
+	await notifyTaxCodeNeeds(orgId, unlinked > 0);
 }
 
 export async function getValidToken(orgId: string): Promise<{ accessToken: string; realmId: string }> {

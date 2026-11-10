@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, RouterProvider, createMemoryRouter } from "react-router-dom";
+import { act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigate = vi.fn();
@@ -96,12 +97,78 @@ describe("build plan 4", () => {
 		expect((await screen.findAllByText("Trial ends in 3 d")).length).toBeGreaterThan(0);
 	});
 
-	it("the filter asks for trials ending in 7 days", async () => {
+	const renderAt = (url: string) =>
+		render(
+			<MemoryRouter initialEntries={[url]}>
+				<OrgsPage />
+			</MemoryRouter>,
+		);
+
+	it("the trial filter asks for trials ending in 7 days", async () => {
 		state.rows = [];
 		renderPage();
-		await userEvent.click(screen.getByRole("checkbox", { name: /trials ending in 7 days/i }));
-		await waitFor(() => expect(state.useOrgs).toHaveBeenLastCalledWith("", 1, true));
+		const u = userEvent.setup();
+		await u.click(screen.getByRole("button", { name: /Trial/ }));
+		await u.click(screen.getByRole("option", { name: "Trials ending in 7 days" }));
+		await waitFor(() => expect(state.useOrgs).toHaveBeenLastCalledWith("", 1, true, undefined));
 		expect(screen.getByText("No trials end in the next 7 days.")).toBeInTheDocument();
+	});
+
+	it("the tier filter asks for orgs on that tier and resets the page", async () => {
+		renderAt("/platform/orgs?page=3");
+		const u = userEvent.setup();
+		await u.click(screen.getByRole("button", { name: /Tier/ }));
+		await u.click(screen.getByRole("option", { name: "Pro" }));
+		await waitFor(() =>
+			expect(state.useOrgs).toHaveBeenLastCalledWith("", 1, false, {
+				key: "pro",
+				version: undefined,
+			}),
+		);
+		expect(screen.getAllByText("Tier: Pro").length).toBeGreaterThan(0);
+	});
+
+	it("deep link reads tier and version, and names them in the chip", () => {
+		state.rows = [];
+		renderAt("/platform/orgs?tier=pro&version=2");
+		expect(state.useOrgs).toHaveBeenLastCalledWith("", 1, false, { key: "pro", version: 2 });
+		expect(screen.getByText("Tier: Pro v2")).toBeInTheDocument();
+		expect(screen.getByText("No organizations are on Pro v2.")).toBeInTheDocument();
+	});
+
+	it("deep link reads q, trial and page from the URL", () => {
+		renderAt("/platform/orgs?q=acme&trial=ending&page=2");
+		expect(state.useOrgs).toHaveBeenLastCalledWith("acme", 2, true, undefined);
+	});
+
+	it("typing a search resets page to 1", async () => {
+		renderAt("/platform/orgs?page=3");
+		expect(state.useOrgs).toHaveBeenLastCalledWith("", 3, false, undefined);
+		await userEvent.type(screen.getByPlaceholderText("Search organizations..."), "zed");
+		await waitFor(() => expect(state.useOrgs).toHaveBeenLastCalledWith("zed", 1, false, undefined));
+		expect(state.useOrgs).not.toHaveBeenCalledWith("z", expect.anything(), expect.anything());
+	});
+
+	it("Enter in the search box also resets page to 1", async () => {
+		renderAt("/platform/orgs?page=3");
+		const u = userEvent.setup();
+		await u.type(screen.getByPlaceholderText("Search organizations..."), "zed{Enter}");
+		await waitFor(() => expect(state.useOrgs).toHaveBeenLastCalledWith("zed", 1, false, undefined));
+	});
+
+	it("empty with filters offers Clear filters", async () => {
+		state.rows = [];
+		renderAt("/platform/orgs?trial=ending");
+		expect(screen.getByText("No trials end in the next 7 days.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+		await waitFor(() => expect(state.useOrgs).toHaveBeenLastCalledWith("", 1, false, undefined));
+		expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+	});
+
+	it("ctrl-click a row does not navigate in place", () => {
+		renderPage();
+		fireEvent.click(screen.getAllByText("Pro v2")[0], { ctrlKey: true });
+		expect(navigate).not.toHaveBeenCalled();
 	});
 
 	it("New organization creates and then shows the invite link", async () => {
@@ -136,6 +203,21 @@ describe("build plan 4", () => {
 	});
 });
 
+describe("OrgsPage history", () => {
+	it("back to a URL with ?page keeps the page", async () => {
+		const router = createMemoryRouter([{ path: "/platform/orgs", element: <OrgsPage /> }], {
+			initialEntries: ["/platform/orgs?q=acme&page=2", "/platform/orgs?q=zed"],
+			initialIndex: 1,
+		});
+		render(<RouterProvider router={router} />);
+		await act(async () => {
+			await router.navigate(-1);
+		});
+		await waitFor(() => expect(state.useOrgs).toHaveBeenLastCalledWith("acme", 2, false, undefined));
+		expect(router.state.location.search).toContain("page=2");
+	});
+});
+
 describe("OrgsPage pagination", () => {
 	it("hides the pager when every org fits on one page", () => {
 		render(<OrgsPage />, { wrapper: MemoryRouter });
@@ -148,6 +230,6 @@ describe("OrgsPage pagination", () => {
 		expect(screen.getByText("Showing 1–25 of 60")).toBeInTheDocument();
 		expect(screen.queryByRole("group", { name: "Rows per page" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-		expect(state.useOrgs).toHaveBeenLastCalledWith("", 2, false);
+		expect(state.useOrgs).toHaveBeenLastCalledWith("", 2, false, undefined);
 	});
 });

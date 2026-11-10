@@ -141,6 +141,30 @@ const ROUTES: RouteCase[] = [
 		perm: "view_reports",
 	},
 	{
+		path: "reporting/not-invoiced",
+		url: "/dispatch/reporting/not-invoiced",
+		page: "NotInvoicedPage",
+		perm: "view_reports",
+	},
+	{
+		path: "reporting/invoice-lifecycle",
+		url: "/dispatch/reporting/invoice-lifecycle",
+		page: "InvoiceLifecyclePage",
+		perm: "view_reports",
+	},
+	{
+		path: "reporting/purchases-by-supplier",
+		url: "/dispatch/reporting/purchases-by-supplier",
+		page: "PurchasesBySupplierPage",
+		perm: "view_reports",
+	},
+	{
+		path: "reporting/sales-by-product",
+		url: "/dispatch/reporting/sales-by-product",
+		page: "SalesByProductPage",
+		perm: "view_reports",
+	},
+	{
 		path: "reporting/profit-and-loss",
 		url: "/dispatch/reporting/profit-and-loss",
 		page: "ProfitAndLossPage",

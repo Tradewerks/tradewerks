@@ -16,6 +16,8 @@ export interface LifecycleAction {
 	 * visible and disabled instead.
 	 */
 	hidden?: boolean;
+	/** The action's write is in flight: the button shows a spinner and ignores clicks. */
+	pending?: boolean;
 	onSelect: () => void;
 }
 

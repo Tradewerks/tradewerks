@@ -1,5 +1,8 @@
 import z from "zod";
-import { coordsSchema, dispositionFieldsSchema } from "./shared.js";
+import {
+	coordsSchema,
+	dispositionFieldsSchema,
+} from "./shared.js";
 
 // ============================================================================
 // INVOICE SCHEDULE
@@ -140,6 +143,8 @@ export const createRecurringPlanSchema = z
 						.nullable(),
 					sort_order: z.number().int().min(0).optional(),
 					inventory_item_id: z.string().uuid().nullable().optional(),
+					taxable: z.boolean().optional(),
+					tax_group_id: z.string().uuid().nullable().optional(),
 					...dispositionFieldsSchema,
 				}),
 			)
@@ -369,6 +374,8 @@ export const updateRecurringPlanSchema = z
 						.nullable(),
 					sort_order: z.number().int().min(0).optional(),
 					inventory_item_id: z.string().uuid().nullable().optional(),
+					taxable: z.boolean().optional(),
+					tax_group_id: z.string().uuid().nullable().optional(),
 					...dispositionFieldsSchema,
 				}),
 			)
@@ -539,6 +546,8 @@ export const updateRecurringPlanLineItemsSchema = z.object({
 					.nullable(),
 				sort_order: z.number().int().min(0).optional(),
 				inventory_item_id: z.string().uuid().nullable().optional(),
+				taxable: z.boolean().optional(),
+				tax_group_id: z.string().uuid().nullable().optional(),
 				...dispositionFieldsSchema,
 			}),
 		)

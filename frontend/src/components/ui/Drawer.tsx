@@ -19,6 +19,8 @@ interface DrawerProps {
 	footer?: ReactNode;
 }
 
+// Blocking overlay: backdrop, focus trap, Esc closes, unmounts when closed.
+// Persistent side panel the page keeps working beside? Use DockedPanel instead.
 const baseClasses = "bg-surface border-border-card shadow-xl flex flex-col duration-200 ease-out";
 
 export default function Drawer({ isOpen, onClose, title, side = "right", children, footer }: DrawerProps) {

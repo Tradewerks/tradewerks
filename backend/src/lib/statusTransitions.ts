@@ -136,6 +136,11 @@ export function isInvoiceFinalizingTransition(
 	return from === "Draft" && (to === "Issued" || to === "Sent");
 }
 
+/** Same rule for quotes: leaving Draft through either door locks the quote's tax basis. */
+export function isQuoteFinalizingTransition(from: string, to: string | undefined): boolean {
+	return from === "Draft" && (to === "Issued" || to === "Sent");
+}
+
 export function assertValidInvoiceTransition(from: string, to: string): void {
 	if (from === to) return;
 	const allowed = INVOICE_TRANSITIONS[from];
@@ -146,3 +151,6 @@ export function assertValidInvoiceTransition(from: string, to: string): void {
 		throw new InvalidTransitionError(from, to);
 	}
 }
+
+/** Jobs and visits share the open/closed split: Completed and Cancelled stop recomputing. */
+export const OPEN = { notIn: ["Completed", "Cancelled"] as ("Completed" | "Cancelled")[] };

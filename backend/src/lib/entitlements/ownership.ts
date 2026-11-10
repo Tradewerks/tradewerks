@@ -35,6 +35,7 @@ export const PAGE_SUMMARY_MODULE: Record<string, string> = {
 	quotes: "quotes",
 	inventory: "inventory",
 	projects: "projects",
+	recurring_plans: "recurring_plans",
 };
 
 /** Names from `names` whose owning module is on (core names always pass). */

@@ -1,5 +1,7 @@
 import { getScopedDb } from "../lib/context.js";
 import { assertInventoryItemsInOrg } from "../lib/inventory.js";
+import { applyInventoryTaxable } from "../lib/inventoryTaxable.js";
+import { findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { generateInvoiceNumber } from "../db.js";
 import {
@@ -50,6 +52,8 @@ export interface CreateInvoicePayload {
 		taxable?: boolean;
 	}>;
 	job_ids?: string[];
+	// billed_amount is ignored on create — the link is kept, the figure is derived
+	// from line-item attribution by syncBilledAmounts.
 	job_billings?: Array<{ job_id: string; billed_amount: number }>;
 	visit_billings?: Array<{ visit_id: string; billed_amount: number }>;
 }
@@ -369,7 +373,7 @@ export async function lockInvoiceTaxSnapshot(
 	tx: Prisma.TransactionClient,
 	lockedAt: Date = new Date(),
 ): Promise<void> {
-	await lockDocumentTaxSnapshot("invoice", invoiceId, organizationId, tx, lockedAt);
+	return lockDocumentTaxSnapshot("invoice", invoiceId, organizationId, tx, lockedAt);
 }
 
 // ============================================================================
@@ -518,8 +522,21 @@ export async function createInvoiceRecord(
 				organizationId,
 				payload.line_items.map((li) => li.inventory_item_id),
 			);
+			const foreignGroups = await findForeignTaxGroupIds(
+				tx,
+				organizationId,
+				payload.line_items.map((li) => li.tax_group_id),
+			);
+			if (foreignGroups.length > 0) {
+				throw new Error(`Tax group not found: ${foreignGroups.join(", ")}`);
+			}
+			const lineItems = await applyInventoryTaxable(
+				tx,
+				organizationId,
+				payload.line_items,
+			);
 			await tx.invoice_line_item.createMany({
-				data: payload.line_items.map((item, idx) => ({
+				data: lineItems.map((item, idx) => ({
 					invoice_id: invoice.id,
 					name: item.name,
 					description: item.description ?? null,
@@ -538,12 +555,35 @@ export async function createInvoiceRecord(
 					taxable: item.taxable !== undefined ? item.taxable : true,
 				})),
 			});
-
-			// Recompute invoice totals using taxEngine now that line items exist with real IDs
-			await recomputeInvoiceTotals(invoice.id, organizationId, tx);
 		}
 
-		// Link jobs (traceability-only — no billed_amount)
+		// Billed links first, with a placeholder amount — syncBilledAmounts below
+		// derives the real figure from line-item attribution. The payload decides
+		// which jobs and visits are billed, never how much.
+		if (payload.job_billings && payload.job_billings.length > 0) {
+			await tx.invoice_job.createMany({
+				data: payload.job_billings.map((jb) => ({
+					invoice_id: invoice.id,
+					job_id: jb.job_id,
+					billed_amount: 0,
+				})),
+			});
+		}
+
+		if (payload.visit_billings && payload.visit_billings.length > 0) {
+			await tx.invoice_visit.createMany({
+				data: payload.visit_billings.map((vb) => ({
+					invoice_id: invoice.id,
+					visit_id: vb.visit_id,
+					billed_amount: 0,
+				})),
+			});
+		}
+
+		await syncBilledAmounts(invoice.id, tx);
+
+		// Traceability-only links come after the sync so they keep a null
+		// billed_amount — they are navigation, not billing.
 		if (payload.job_ids && payload.job_ids.length > 0) {
 			const billedJobIds = new Set(
 				payload.job_billings?.map((jb) => jb.job_id) ?? [],
@@ -562,26 +602,9 @@ export async function createInvoiceRecord(
 			}
 		}
 
-		// Link jobs with explicit billed_amount
-		if (payload.job_billings && payload.job_billings.length > 0) {
-			await tx.invoice_job.createMany({
-				data: payload.job_billings.map((jb) => ({
-					invoice_id: invoice.id,
-					job_id: jb.job_id,
-					billed_amount: jb.billed_amount,
-				})),
-			});
-		}
-
-		// Link visits with explicit billed_amount
-		if (payload.visit_billings && payload.visit_billings.length > 0) {
-			await tx.invoice_visit.createMany({
-				data: payload.visit_billings.map((vb) => ({
-					invoice_id: invoice.id,
-					visit_id: vb.visit_id,
-					billed_amount: vb.billed_amount,
-				})),
-			});
+		// After every job link: recompute takes the service address from the earliest linked job.
+		if (payload.line_items && payload.line_items.length > 0) {
+			await recomputeInvoiceTotals(invoice.id, organizationId, tx);
 		}
 
 		await tx.client.update({

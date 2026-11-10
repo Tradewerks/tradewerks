@@ -8,6 +8,12 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { getScopedDb } from "../lib/context.js";
+import {
+	applyInventoryTaxable,
+	applyInventoryTaxableToNewLines,
+	lineTaxFieldsForCreate,
+	lineTaxFieldsForUpdate,
+} from "../lib/inventoryTaxable.js";
 import { getClosedWindows } from "../services/moduleWindowService.js";
 import {
 	assertInventoryItemsInOrg,
@@ -20,6 +26,7 @@ import {
 	updateRecurringPlanSchema,
 	updateRecurringPlanLineItemsSchema,
 	updateInvoiceScheduleSchema,
+	type UpdateRecurringPlanLineItemsInput,
 	generateOccurrencesSchema,
 	skipOccurrenceSchema,
 	rescheduleOccurrenceSchema,
@@ -33,6 +40,8 @@ import {
 	VisitGenerationResult,
 } from "../types/common.js";
 import { addDays } from "date-fns";
+import { assertTaxGroupsInOrg } from "../lib/taxHelpers.js";
+import { holdsKeptRate, recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import {
 	calculateNextInvoiceAt,
 	type ScheduleFrequency,
@@ -577,13 +586,23 @@ export const insertRecurringPlan = async (
 					organizationId,
 					parsed.line_items.map((i) => i.inventory_item_id),
 				);
+				await assertTaxGroupsInOrg(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					parsed.line_items.map((i) => i.tax_group_id),
+				);
 				await assertDispositionVehiclesInOrg(
 					tx,
 					organizationId,
 					parsed.line_items.map((i) => i.disposition_vehicle_id),
 				);
+				const lineItems = await applyInventoryTaxable(
+					tx,
+					organizationId,
+					parsed.line_items,
+				);
 				await tx.recurring_plan_line_item.createMany({
-					data: parsed.line_items.map((item, idx) => ({
+					data: lineItems.map((item, idx) => ({
 						recurring_plan_id: plan.id,
 						name: item.name,
 						description: item.description ?? null,
@@ -591,6 +610,7 @@ export const insertRecurringPlan = async (
 						unit_price: item.unit_price,
 						item_type: item.item_type ?? null,
 						sort_order: item.sort_order ?? idx,
+						...lineTaxFieldsForCreate(item),
 						inventory_item_id: item.inventory_item_id ?? null,
 						...templateDispositionFields(item.inventory_item_id, item),
 					})),
@@ -705,6 +725,94 @@ export const insertRecurringPlan = async (
 		return { err: "Internal server error" };
 	}
 };
+
+/** Replaces a plan's template lines: missing ids deleted, known ids updated, the rest created. */
+async function syncPlanLineItems(
+	tx: Prisma.TransactionClient,
+	organizationId: string,
+	planId: string,
+	existingLines: { id: string }[],
+	incoming: UpdateRecurringPlanLineItemsInput["line_items"],
+): Promise<void> {
+	await assertInventoryItemsInOrg(
+		tx,
+		organizationId,
+		incoming.map((i) => i.inventory_item_id),
+	);
+	await assertTaxGroupsInOrg(
+		tx,
+		organizationId,
+		incoming.map((i) => i.tax_group_id),
+	);
+	await assertDispositionVehiclesInOrg(
+		tx,
+		organizationId,
+		incoming.map((i) => i.disposition_vehicle_id),
+	);
+	const existingItemIds = new Set(
+		existingLines.map((item) => item.id),
+	);
+	const incomingItemIds = new Set(
+		incoming
+			.filter((item) => item.id)
+			.map((item) => item.id!),
+	);
+	// New lines take the inventory default; existing lines keep theirs.
+	const withInventoryTaxable = await applyInventoryTaxableToNewLines(
+		tx,
+		organizationId,
+		incoming,
+		existingItemIds,
+	);
+
+	// DELETE: Items not in incoming list
+	const itemsToDelete = existingLines.filter(
+		(item) => !incomingItemIds.has(item.id),
+	);
+
+	for (const item of itemsToDelete) {
+		await tx.recurring_plan_line_item.delete({
+			where: { id: item.id },
+		});
+	}
+
+	// CREATE OR UPDATE
+	for (const item of incoming) {
+		if (item.id && existingItemIds.has(item.id)) {
+			await tx.recurring_plan_line_item.update({
+				where: { id: item.id },
+				data: {
+					name: item.name,
+					description: item.description || null,
+					quantity: item.quantity,
+					unit_price: item.unit_price,
+					item_type: item.item_type ?? null,
+					sort_order: item.sort_order ?? 0,
+					...lineTaxFieldsForUpdate(item),
+					...(item.inventory_item_id !== undefined && {
+						inventory_item_id: item.inventory_item_id,
+						...templateDispositionFields(item.inventory_item_id, item),
+					}),
+				},
+			});
+		} else {
+			await tx.recurring_plan_line_item.create({
+				data: {
+					recurring_plan_id: planId,
+					name: item.name,
+					description: item.description || null,
+					quantity: item.quantity,
+					unit_price: item.unit_price,
+					item_type: item.item_type ?? null,
+					sort_order: item.sort_order ?? 0,
+					...lineTaxFieldsForCreate(withInventoryTaxable(item)),
+					inventory_item_id: item.inventory_item_id ?? null,
+					...templateDispositionFields(item.inventory_item_id, item),
+				},
+			});
+		}
+	}
+}
 
 export const updateRecurringPlan = async (
 	jobId: string,
@@ -862,76 +970,13 @@ export const updateRecurringPlan = async (
 
 			// Update line items if provided
 			if (parsed.line_items) {
-				await assertInventoryItemsInOrg(
-					tx,
+				await syncPlanLineItems(
+					tx as unknown as Prisma.TransactionClient,
 					organizationId,
-					parsed.line_items.map((i) => i.inventory_item_id),
+					existing.id,
+					existing.line_items,
+					parsed.line_items,
 				);
-				await assertDispositionVehiclesInOrg(
-					tx,
-					organizationId,
-					parsed.line_items.map((i) => i.disposition_vehicle_id),
-				);
-				const existingItemIds = new Set(
-					existing.line_items.map((item) => item.id),
-				);
-				const incomingItemIds = new Set(
-					parsed.line_items
-						.filter((item) => item.id)
-						.map((item) => item.id!),
-				);
-
-				// DELETE: Items not in incoming list
-				const itemsToDelete = existing.line_items.filter(
-					(item) => !incomingItemIds.has(item.id),
-				);
-
-				for (const item of itemsToDelete) {
-					await tx.recurring_plan_line_item.delete({
-						where: { id: item.id },
-					});
-				}
-
-				// CREATE OR UPDATE
-				for (const item of parsed.line_items) {
-					if (item.id && existingItemIds.has(item.id)) {
-						await tx.recurring_plan_line_item.update({
-							where: { id: item.id },
-							data: {
-								name: item.name,
-								description: item.description || null,
-								quantity: item.quantity,
-								unit_price: item.unit_price,
-								item_type: item.item_type ?? null,
-								sort_order: item.sort_order ?? 0,
-								...(item.inventory_item_id !== undefined && {
-									inventory_item_id: item.inventory_item_id,
-									...templateDispositionFields(
-										item.inventory_item_id,
-										item,
-									),
-								}),
-							},
-						});
-					} else {
-						await tx.recurring_plan_line_item.create({
-							data: {
-								recurring_plan_id: existing.id,
-								name: item.name,
-								description: item.description || null,
-								quantity: item.quantity,
-								unit_price: item.unit_price,
-								item_type: item.item_type ?? null,
-								sort_order: item.sort_order ?? 0,
-								inventory_item_id: item.inventory_item_id ?? null,
-								...templateDispositionFields(
-									item.inventory_item_id,
-									item,
-								),
-							},
-						});
-					}
-				}
 			}
 
 			// Update job container if relevant fields changed
@@ -1150,70 +1195,13 @@ export const updateRecurringPlanLineItems = async (
 		}
 
 		const updated = await sdb.$transaction(async (tx) => {
-			await assertInventoryItemsInOrg(
-				tx,
+			await syncPlanLineItems(
+				tx as unknown as Prisma.TransactionClient,
 				organizationId,
-				parsed.line_items.map((i) => i.inventory_item_id),
+				plan.id,
+				plan.line_items,
+				parsed.line_items,
 			);
-			await assertDispositionVehiclesInOrg(
-				tx,
-				organizationId,
-				parsed.line_items.map((i) => i.disposition_vehicle_id),
-			);
-			const existingItemIds = new Set(
-				plan.line_items.map((item) => item.id),
-			);
-			const incomingItemIds = new Set(
-				parsed.line_items
-					.filter((item) => item.id)
-					.map((item) => item.id!),
-			);
-
-			// DELETE: Items not in incoming list
-			const itemsToDelete = plan.line_items.filter(
-				(item) => !incomingItemIds.has(item.id),
-			);
-
-			for (const item of itemsToDelete) {
-				await tx.recurring_plan_line_item.delete({
-					where: { id: item.id },
-				});
-			}
-
-			// CREATE OR UPDATE
-			for (const item of parsed.line_items) {
-				if (item.id && existingItemIds.has(item.id)) {
-					await tx.recurring_plan_line_item.update({
-						where: { id: item.id },
-						data: {
-							name: item.name,
-							description: item.description || null,
-							quantity: item.quantity,
-							unit_price: item.unit_price,
-							item_type: item.item_type ?? null,
-							sort_order: item.sort_order ?? 0,
-							...(item.inventory_item_id !== undefined && {
-								inventory_item_id: item.inventory_item_id,
-								...templateDispositionFields(item.inventory_item_id, item),
-							}),
-						},
-					});
-				} else {
-					await tx.recurring_plan_line_item.create({
-						data: {
-							recurring_plan_id: plan.id,
-							name: item.name,
-							description: item.description || null,
-							quantity: item.quantity,
-							unit_price: item.unit_price,
-							item_type: item.item_type ?? null,
-							sort_order: item.sort_order ?? 0,
-							inventory_item_id: item.inventory_item_id ?? null,
-							...templateDispositionFields(item.inventory_item_id, item),
-						},
-					});
-				}
-			}
 
 			await logActivity({
 				event_type: "recurring_plan.template_updated",
@@ -1916,6 +1904,8 @@ export const generateVisitFromOccurrence = async (
 									Number(item.unit_price),
 								source: "recurring_plan",
 								item_type: item.item_type,
+								taxable: item.taxable,
+								tax_group_id: item.tax_group_id,
 								sort_order: idx,
 								// A generated visit's parts are planned parts —
 								// same lifecycle a dispatcher gets when they
@@ -1935,6 +1925,12 @@ export const generateVisitFromOccurrence = async (
 					},
 				},
 			});
+
+			// Plans carry no snapshot; a container job holding a kept rate taxes its visits with it.
+			const ptx = tx as unknown as Prisma.TransactionClient;
+			if (await holdsKeptRate("job", plan.job_container!.id, ptx)) {
+				await recomputeVisitTotals(visit.id, organizationId, ptx);
+			}
 
 			await tx.recurring_occurrence.update({
 				where: { id: occurrenceId },

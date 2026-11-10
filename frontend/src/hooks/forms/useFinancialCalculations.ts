@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import type { DiscountType, FinancialState } from "../../types/common";
 import type { TaxGroup, TaxSnapshot } from "../../types/tax";
+import { roundHalfUpSymmetric, truncateTowardZero, type TaxRounding } from "../../lib/taxRounding";
 
 // ─── Multi-group tax types ────────────────────────────────────────────────────
 
@@ -38,16 +39,23 @@ export function calculateMultiGroupTax(
 	taxGroups: TaxGroup[],
 	discountType: DiscountType | null | undefined,
 	discountValue: number | null | undefined,
-	clientExempt: boolean
+	clientExempt: boolean,
+	rounding: TaxRounding = "line_floor"
 ): MultiGroupTaxResult {
 	// Work in integer cents — mirrors backend taxEngine.ts exactly
 	const subtotal_cents = Math.round(lineItems.reduce((sum, item) => sum + item.total, 0) * 100);
 
+	// Same operation order as the backend engine: (sub * v) / 100 and round(v * 100) avoid the
+	// float drift of sub * (v / 100) and floor(v * 100), e.g. 0.29 * 100 = 28.999999999999996.
+	const safeDiscount = Math.max(0, discountValue ?? 0);
 	const rawDiscount_cents =
 		discountType === "percent"
-			? Math.floor(subtotal_cents * ((discountValue ?? 0) / 100))
-			: Math.floor((discountValue ?? 0) * 100);
-	const discount_cents = Math.min(Math.max(rawDiscount_cents, 0), subtotal_cents);
+			? Math.floor((subtotal_cents * safeDiscount) / 100)
+			: Math.round(safeDiscount * 100);
+	const discount_cents =
+		subtotal_cents > 0 && discountType != null && discountValue != null
+			? Math.min(rawDiscount_cents, subtotal_cents)
+			: 0;
 
 	const subtotal = subtotal_cents / 100;
 	const discount_amount = discount_cents / 100;
@@ -85,10 +93,13 @@ export function calculateMultiGroupTax(
 
 		taxable_subtotal_cents += effective_taxable_cents;
 
-		// Floor per rate — identical to backend: Math.floor(effective_taxable * taxRate.rate)
+		// Half-up groups get their cents after the loop, once each group's base is complete.
 		let item_tax_cents = 0;
-		for (const gr of group.rates) {
-			item_tax_cents += Math.floor(effective_taxable_cents * gr.tax_rate.rate);
+		if (rounding !== "jurisdiction_half_up") {
+			// Per rate, toward zero — identical to backend floorTowardZero(effective_taxable * rate)
+			for (const gr of group.rates) {
+				item_tax_cents += truncateTowardZero(effective_taxable_cents * gr.tax_rate.rate);
+			}
 		}
 
 		const existing = groupAccumulator.get(group.id);
@@ -101,6 +112,15 @@ export function calculateMultiGroupTax(
 				taxable_amount_cents: effective_taxable_cents,
 				tax_amount_cents: item_tax_cents,
 			});
+		}
+	}
+
+	if (rounding === "jurisdiction_half_up") {
+		for (const acc of groupAccumulator.values()) {
+			const base = acc.taxable_amount_cents;
+			for (const gr of acc.group.rates) {
+				acc.tax_amount_cents += roundHalfUpSymmetric(base * gr.tax_rate.rate);
+			}
 		}
 	}
 
@@ -144,6 +164,8 @@ interface UseFinancialCalculationsOptions {
 	clientExempt?: boolean;
 	/** When provided, the hook bypasses all calculation and returns values from the snapshot */
 	snapshot?: TaxSnapshot | null;
+	/** How live tax is rounded; pick it with roundingFor(document.tax_snapshot). */
+	rounding?: TaxRounding;
 }
 
 interface UseFinancialCalculationsReturn extends FinancialState {
@@ -190,6 +212,7 @@ export const useFinancialCalculations = (
 		lineItemsForCalc = [],
 		clientExempt = false,
 		snapshot = null,
+		rounding = "line_floor",
 	} = options;
 
 	const [taxRate, setTaxRateState] = useState<number>(initialTaxRate);
@@ -336,9 +359,10 @@ export const useFinancialCalculations = (
 				taxGroups,
 				discountType,
 				discountValue,
-				clientExempt
+				clientExempt,
+				rounding
 			),
-		[lineItemsForCalc, taxGroups, discountType, discountValue, clientExempt]
+		[lineItemsForCalc, taxGroups, discountType, discountValue, clientExempt, rounding]
 	);
 
 	// ── Legacy single-rate fallback calculations ──────────────────────────────

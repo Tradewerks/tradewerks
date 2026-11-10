@@ -1,6 +1,5 @@
-import { mapFixture } from "./fixture.js";
-import { mapMindee } from "./mindee.js";
 import type { ReceiptExtraction } from "./normalize.js";
+import { mapTextract } from "./textract.js";
 
 /**
  * The header as the receipt read, recovered from the stored provider payload.
@@ -20,11 +19,12 @@ import type { ReceiptExtraction } from "./normalize.js";
  */
 const MAPPERS: Record<string, (raw: unknown) => ReceiptExtraction> = Object.assign(
 	Object.create(null) as Record<string, (raw: unknown) => ReceiptExtraction>,
-	{ fixture: mapFixture, mindee: mapMindee },
+	{ fixture: mapTextract, textract: mapTextract },
 );
 
 export interface ExtractedHeader {
 	vendor_name: string | null;
+	receipt_number: string | null;
 	purchased_at: Date | null;
 	subtotal: number | null;
 	tax_amount: number | null;
@@ -36,8 +36,8 @@ export function remapHeader(provider: string | null, raw: unknown): ExtractedHea
 	const map = provider ? MAPPERS[provider] : undefined;
 	if (!map || raw == null) return null;
 	try {
-		const { vendor_name, purchased_at, subtotal, tax_amount, total } = map(raw);
-		return { vendor_name, purchased_at, subtotal, tax_amount, total };
+		const { vendor_name, receipt_number, purchased_at, subtotal, tax_amount, total } = map(raw);
+		return { vendor_name, receipt_number, purchased_at, subtotal, tax_amount, total };
 	} catch {
 		// Evidence that no longer parses is not worth failing a page read over.
 		return null;

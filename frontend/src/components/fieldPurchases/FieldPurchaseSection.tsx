@@ -140,7 +140,7 @@ export default function FieldPurchasesSection() {
 		: EMPTY_COPY[filters.stage];
 
 	return (
-		<div className="flex flex-col gap-3 pb-4">
+		<div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
 			{/* Every card prints "—" without this, which is also what they print while
 			    loading and next to what zero looks like. The strip is how a dispatcher
 			    decides whether today is under control, so it must not fail quietly. */}
@@ -156,7 +156,7 @@ export default function FieldPurchasesSection() {
 				</p>
 			)}
 
-			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+			<div className="grid grid-cols-2 gap-3 lg:shrink-0 lg:grid-cols-4">
 				<StatCard
 					dense
 					label="Awaiting decision"
@@ -194,9 +194,8 @@ export default function FieldPurchasesSection() {
 				/>
 			</div>
 
-			{/* DispatchLayout scrolls the page, not this panel, so both panes get their
-			    height from here. 14rem is the measured chrome above it. */}
-			<div className="flex min-h-[24rem] flex-col overflow-hidden rounded-lg border border-border bg-base lg:h-[calc(100vh-14rem)]">
+			{/* Fill contract: the page root is h-full of the layout scroller; this box takes the rest. */}
+			<div className="flex min-h-[22rem] flex-col overflow-hidden rounded-lg border border-border bg-base lg:flex-1">
 				{/* Only worth drawing when the second screen is reachable at all. */}
 				{canManageGrants && (
 					<div
@@ -229,7 +228,7 @@ export default function FieldPurchasesSection() {
 									document.getElementById(`fp-tab-${next}`)?.focus();
 								}}
 								onClick={() => setView(v.key)}
-								className={`-mb-px cursor-pointer border-b-2 px-5 py-2.5 text-sm font-medium transition-colors ${
+								className={`-mb-px cursor-pointer border-b-2 px-5 py-2.5 short:py-1.5 text-sm font-medium transition-colors ${
 									view === v.key
 										? "border-primary text-text-primary"
 										: "border-transparent text-text-tertiary hover:text-text-primary"

@@ -58,8 +58,26 @@ export type FieldPurchaseDisposition = "receive" | "non_stock";
 /** `skipped` is a success: no provider is configured, so the lines are typed in. */
 export type FieldPurchaseOcrStatus = "not_run" | "skipped" | "pending" | "succeeded" | "failed";
 
-/** Mirrors OCR_LOW_CONFIDENCE in backend/src/services/receiptOcr/index.ts. */
-export const OCR_LOW_CONFIDENCE = 0.75;
+export type OcrFieldKey =
+	| "vendor_name"
+	| "receipt_number"
+	| "purchased_at"
+	| "subtotal"
+	| "tax_amount"
+	| "total";
+export type OcrFlagKind = "unsure" | "calculated" | "not_found";
+export interface OcrFieldFlag {
+	kind: OcrFlagKind;
+	confidence: number | null;
+	rule: string | null;
+}
+export interface OcrFlagSet {
+	fields: Partial<Record<OcrFieldKey, OcrFieldFlag>>;
+	line_cutoff: number;
+}
+export type OcrFieldReview = Partial<
+	Record<OcrFieldKey, { state: "confirmed" | "edited"; at: string }>
+>;
 
 export interface FieldPurchaseGrant {
 	id: string;
@@ -172,7 +190,13 @@ export interface FieldPurchase {
 	ocr_provider: string | null;
 	/** `{ field: 0..1 }` for the header fields the provider reported on. */
 	ocr_field_confidence: Record<string, number>;
+	receipt_number: string | null;
+	/** Null on a purchase scanned before per-field flags existed. */
+	ocr_field_flags: OcrFlagSet | null;
+	ocr_field_review: OcrFieldReview;
 	ocr_completed_at: string | null;
+	/** When the current read started; null on rows read before it was recorded. */
+	ocr_started_at?: string | null;
 	ocr_error: string | null;
 	ocr_line_count: number | null;
 	ocr_corrections: number | null;
@@ -276,6 +300,7 @@ export interface FieldPurchaseExtraction {
 	/** Null where the payload came from a provider the server cannot re-map. */
 	header: {
 		vendor_name: string | null;
+		receipt_number: string | null;
 		purchased_at: string | null;
 		subtotal: number | null;
 		tax_amount: number | null;

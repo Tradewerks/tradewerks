@@ -10,6 +10,12 @@ vi.mock("../../db.js", () => {
 		invoice_payment: { aggregate: vi.fn() },
 		client: { count: vi.fn(), groupBy: vi.fn() },
 		inventory_item: { findMany: vi.fn(), count: vi.fn() },
+		recurring_plan: { count: vi.fn(), groupBy: vi.fn() },
+		quote: { count: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn() },
+		job: { count: vi.fn(), groupBy: vi.fn() },
+		job_visit: { aggregate: vi.fn() },
+		request: { count: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn() },
+		project: { count: vi.fn(), aggregate: vi.fn(), groupBy: vi.fn() },
 		$queryRaw: vi.fn(),
 		$extends,
 	};
@@ -23,6 +29,12 @@ const mockDb = vi.mocked(db) as unknown as {
 	invoice_payment: { aggregate: Fn };
 	client: { count: Fn; groupBy: Fn };
 	inventory_item: { findMany: Fn; count: Fn };
+	recurring_plan: { count: Fn; groupBy: Fn };
+	quote: { count: Fn; aggregate: Fn; groupBy: Fn };
+	job: { count: Fn; groupBy: Fn };
+	job_visit: { aggregate: Fn };
+	request: { count: Fn; aggregate: Fn; groupBy: Fn };
+	project: { count: Fn; aggregate: Fn; groupBy: Fn };
 	$queryRaw: Fn;
 };
 
@@ -50,7 +62,7 @@ describe("getPageSummary — page validation", () => {
 	});
 
 	it("exposes the page list and a breakdown set for every page (route schema reads these)", () => {
-		expect([...PAGES]).toEqual(["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects"]);
+		expect([...PAGES]).toEqual(["jobs", "quotes", "requests", "invoices", "clients", "inventory", "projects", "recurring_plans"]);
 		for (const p of PAGES) expect(BREAKDOWNS[p].length).toBeGreaterThan(0);
 	});
 });
@@ -115,62 +127,16 @@ describe("getPageSummary — invoices", () => {
 	});
 });
 
-// Open Balance and Avg Income exclude Draft and Void invoices — only issued,
-// unpaid invoices with a positive balance count as open receivables. Disputed
-// invoices are still owed, so Open Balance is the sum of a non-disputed aging
-// aggregate and a disputed aggregate — mirroring the aged-receivables reports,
-// where Disputed is carved out of the ageing population but stays in the total.
+// Open Balance, Active and Avg. Income are unranged; they live in getPageSnapshot.
 describe("getPageSummary — clients", () => {
-	beforeEach(() => {
-		mockDb.client.count.mockResolvedValue(10);
+	it("reports only New, ranged by created date", async () => {
+		mockDb.client.count.mockResolvedValue(3);
 		mockDb.client.groupBy.mockResolvedValue([]);
-		mockDb.invoice.aggregate
-			.mockResolvedValueOnce({ _sum: { balance_due: 200 } })
-			.mockResolvedValueOnce({ _sum: { balance_due: 50 } })
-			.mockResolvedValueOnce({ _sum: { total: 5000 } });
-	});
-
-	// `not: 0` rather than `gt: 0`: an unapplied credit adjustment carries a
-	// negative balance_due, and a positive-only filter left it out entirely, so
-	// Open Balance overstated what the client owed by the whole credit.
-	it("Open Balance mirrors aged receivables: issued, with a non-zero balance, plus any disputed balance", async () => {
-		const res = await getPageSummary(ORG, "clients");
-		const agingArgs = mockDb.invoice.aggregate.mock.calls[0][0];
-		expect(agingArgs.where.status).toEqual({ notIn: ["Draft", "Paid", "Void", "Disputed"] });
-		expect(agingArgs.where.balance_due).toEqual({ not: 0 });
-		expect(agingArgs._sum).toEqual({ balance_due: true });
-
-		const disputedArgs = mockDb.invoice.aggregate.mock.calls[1][0];
-		expect(disputedArgs.where.status).toEqual({ equals: "Disputed" });
-		expect(disputedArgs.where.balance_due).toEqual({ not: 0 });
-		expect(disputedArgs._sum).toEqual({ balance_due: true });
-
-		expect(stat(res, "Open Balance")).toBe(250);
-	});
-
-	it("lets a credit reduce Open Balance instead of vanishing from it", async () => {
-		mockDb.invoice.aggregate.mockReset();
-		mockDb.invoice.aggregate
-			// $2,000 owed less a $500 credit, both inside the filter: the DB
-			// sums both only because the where clause reads `not: 0`, not
-			// `gt: 0` — asserted below, or this mocked total proves nothing.
-			.mockResolvedValueOnce({ _sum: { balance_due: 1500 } })
-			.mockResolvedValueOnce({ _sum: { balance_due: 0 } })
-			.mockResolvedValueOnce({ _sum: { total: 5000 } });
-
-		const res = await getPageSummary(ORG, "clients");
-
-		const agingArgs = mockDb.invoice.aggregate.mock.calls[0][0];
-		expect(agingArgs.where.balance_due).toEqual({ not: 0 });
-		expect(stat(res, "Open Balance")).toBe(1500);
-	});
-
-	it("Avg Income spreads issued (non-Draft, non-Void) billing over the whole client book", async () => {
-		const res = await getPageSummary(ORG, "clients");
-		const incomeArgs = mockDb.invoice.aggregate.mock.calls[2][0];
-		expect(incomeArgs.where.status).toEqual(ISSUED);
-		expect(incomeArgs._sum).toEqual({ total: true });
-		expect(stat(res, "Avg. Income")).toBe(500);
+		const start = "2026-08-01T06:00:00.000Z";
+		const res = await getPageSummary(ORG, "clients", start);
+		expect(res.stats.map((s) => [s.label, s.value])).toEqual([["New", 3]]);
+		expect(mockDb.client.count.mock.calls[0][0].where.created_at).toEqual({ gte: new Date(start) });
+		expect(mockDb.invoice.aggregate).not.toHaveBeenCalled();
 	});
 });
 
@@ -182,6 +148,7 @@ describe("getPageSummary — inventory", () => {
 			{ id: "b", quantity: 0, low_stock_threshold: null, cost: 1 },
 		]);
 		mockDb.inventory_item.count.mockResolvedValue(12345);
+		mockDb.$queryRaw.mockResolvedValue([{ value: 55, missingCost: 0 }]);
 
 		const res = await getPageSummary(ORG, "inventory");
 
@@ -190,6 +157,121 @@ describe("getPageSummary — inventory", () => {
 			mockDb.inventory_item.findMany.mock.calls[0][0].where,
 		);
 		expect(mockDb.inventory_item.findMany.mock.calls[0][0].take).toBe(10000);
-		expect(stat(res, "Asset Value")).toBe(10);
+		expect(stat(res, "Asset Value")).toBe(55);
+		expect(res.stats.find((s) => s.label === "Asset Value")?.note).toBeUndefined();
 	});
+
+	// Asset value sums warehouse + fleet in SQL, uncapped, discontinued included.
+	it("sums asset value in SQL and notes items without cost", async () => {
+		mockDb.inventory_item.findMany.mockResolvedValue([]);
+		mockDb.inventory_item.count.mockResolvedValue(0);
+		mockDb.$queryRaw.mockResolvedValue([{ value: 55, missingCost: 3 }]);
+
+		const res = await getPageSummary(ORG, "inventory");
+
+		const sql = (mockDb.$queryRaw.mock.calls[0][0] as { strings: string[] }).strings.join("");
+		expect(sql).toContain("vehicle_stock_item");
+		expect(sql).not.toContain("is_active");
+		expect(res.stats.find((s) => s.label === "Asset Value")?.note).toBe("3 items without cost");
+	});
+});
+
+describe("getPageSummary — recurring_plans", () => {
+	beforeEach(() => {
+		mockDb.recurring_plan.count
+			.mockResolvedValueOnce(9)
+			.mockResolvedValueOnce(6)
+			.mockResolvedValueOnce(2)
+			.mockResolvedValueOnce(1);
+		mockDb.recurring_plan.groupBy.mockResolvedValue([
+			{ status: "Active", _count: { _all: 6 } },
+			{ status: "Paused", _count: { _all: 2 } },
+		]);
+	});
+
+	// The Plans list's Date filter keeps plans IN EFFECT during the range (started
+	// by its end, not ended before its start), so the report ranges the same way.
+	it("ranges counts and breakdown by plans in effect during the range", async () => {
+		const start = "2026-08-01T06:00:00.000Z";
+		const end = "2026-09-01T05:59:59.999Z";
+		const res = await getPageSummary(ORG, "recurring_plans", start, end);
+
+		const inEffect = {
+			starts_at: { lte: new Date(end) },
+			OR: [{ ends_at: null }, { ends_at: { gte: new Date(start) } }],
+		};
+		const wheres = mockDb.recurring_plan.count.mock.calls.map((c) => c[0].where);
+		expect(wheres).toEqual([{ organization_id: ORG, ...inEffect }]);
+		expect(mockDb.recurring_plan.groupBy.mock.calls[0][0].where).toEqual({ organization_id: ORG, ...inEffect });
+
+		// Active / Paused / Ending Soon are current state — getPageSnapshot.
+		expect(res.stats.map((s) => [s.label, s.value])).toEqual([["Total", 9]]);
+	});
+
+	it("with no range, counts every plan (no visit filter)", async () => {
+		await getPageSummary(ORG, "recurring_plans");
+		const wheres = mockDb.recurring_plan.count.mock.calls.map((c) => c[0].where);
+		expect(wheres[0]).toEqual({ organization_id: ORG });
+		expect(mockDb.recurring_plan.groupBy.mock.calls[0][0].where).toEqual({ organization_id: ORG });
+	});
+
+	it("groups by status by default and by priority on request", async () => {
+		const byStatus = await getPageSummary(ORG, "recurring_plans");
+		expect(mockDb.recurring_plan.groupBy.mock.calls[0][0].by).toEqual(["status"]);
+		expect(byStatus.breakdownLabel).toBe("By Status");
+		expect(byStatus.breakdown).toEqual([
+			{ label: "Active", value: 6 },
+			{ label: "Paused", value: 2 },
+		]);
+
+		mockDb.recurring_plan.groupBy.mockResolvedValue([{ priority: "High", _count: { _all: 3 } }]);
+		const byPriority = await getPageSummary(ORG, "recurring_plans", undefined, undefined, "priority");
+		expect(mockDb.recurring_plan.groupBy.mock.calls[1][0].by).toEqual(["priority"]);
+		expect(byPriority.breakdownLabel).toBe("By Priority");
+		expect(byPriority.breakdown).toEqual([{ label: "High", value: 3 }]);
+	});
+});
+
+describe("getPageSummary — quotes", () => {
+	// Shown in a ~76px card beside four others; "Avg. Approve Time" wrapped to three lines.
+	it("labels the approval-time stat short enough for one line", async () => {
+		mockDb.quote.count.mockResolvedValue(0);
+		mockDb.quote.aggregate.mockResolvedValue({ _sum: { total: 0 } });
+		mockDb.quote.groupBy.mockResolvedValue([]);
+		const res = await getPageSummary(ORG, "quotes");
+		expect(res.stats.map((s) => s.label)).toContain("Approve Time");
+	});
+});
+
+// Current-state stats moved to getPageSnapshot; the popover keeps only these.
+describe("getPageSummary — period stats per page", () => {
+	const PERIOD: Record<(typeof PAGES)[number], string[]> = {
+		jobs: ["Total", "Revenue"],
+		quotes: ["Total", "Approved", "Approve Time"],
+		requests: ["Total", "Converted", "Est. Value"],
+		invoices: ["Total", "Created", "Collected", "Avg. Days to Pay"],
+		clients: ["New"],
+		inventory: ["Total Items", "Low", "Out of Stock", "Asset Value"],
+		projects: ["Total", "Budget", "Committed"],
+		recurring_plans: ["Total"],
+	};
+	beforeEach(() => {
+		const models = [mockDb.invoice, mockDb.client, mockDb.recurring_plan, mockDb.quote, mockDb.job, mockDb.request, mockDb.project];
+		for (const m of models) {
+			m.count.mockResolvedValue(0);
+			m.groupBy.mockResolvedValue([]);
+			if ("aggregate" in m) m.aggregate.mockResolvedValue({ _sum: {} });
+		}
+		mockDb.job_visit.aggregate.mockResolvedValue({ _sum: {} });
+		mockDb.invoice_payment.aggregate.mockResolvedValue({ _sum: {} });
+		mockDb.inventory_item.findMany.mockResolvedValue([]);
+		mockDb.inventory_item.count.mockResolvedValue(0);
+		mockDb.$queryRaw.mockResolvedValue([{}]);
+	});
+	for (const page of PAGES) {
+		it(`period stats match the spec — ${page}`, async () => {
+			const res = await getPageSummary(ORG, page);
+			expect(res.stats.map((s) => s.label)).toEqual(PERIOD[page]);
+		});
+	}
 });

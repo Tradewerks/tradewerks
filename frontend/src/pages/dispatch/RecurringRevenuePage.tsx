@@ -16,6 +16,7 @@ import Card from "../../components/ui/Card";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -44,6 +45,7 @@ const COLS: ColumnOption[] = [
 ];
 
 const NUMERIC_KEYS = ["perPeriodAmount", "monthlyValue", "occCompleted", "occSkipped"] as const;
+const DATE_KEYS = ["nextInvoiceAt", "lastInvoicedAt"];
 
 const HEADER_LABELS = buildHeaderLabels(COLS);
 const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
@@ -60,6 +62,7 @@ export default function RecurringRevenuePage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -67,8 +70,8 @@ export default function RecurringRevenuePage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ startDate, endDate, searchTerms, page, limit: pageSize }),
-		[startDate, endDate, searchTerms, page, pageSize],
+		() => ({ startDate, endDate, searchTerms, page, limit: pageSize, ...sort }),
+		[startDate, endDate, searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useRecurringRevenueQuery(queryParams);
@@ -77,7 +80,7 @@ export default function RecurringRevenuePage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = data?.summary as RecurringRevenueSummary | undefined;
 
-	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([startDate, endDate, searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -204,7 +207,7 @@ export default function RecurringRevenuePage() {
 									filename: datedFilename("recurring-revenue"),
 									sheetName: "Recurring Revenue",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms },
+									params: { startDate, endDate, searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -247,6 +250,7 @@ export default function RecurringRevenuePage() {
 							columnVisibility={columnVisibility}
 							headerLabels={HEADER_LABELS}
 							columnAlign={COLUMN_ALIGN}
+							{...tableProps}
 						/>
 						<ReportPagination
 							page={page}

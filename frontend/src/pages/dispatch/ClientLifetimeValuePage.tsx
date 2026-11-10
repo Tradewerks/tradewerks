@@ -14,6 +14,7 @@ import ReportPagination from "../../components/reports/ReportPagination";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
+import { useReportSort } from "../../hooks/useReportSort";
 import {
 	buildColumnAlign,
 	buildHeaderLabels,
@@ -46,6 +47,7 @@ const NUMERIC_KEYS = [
 	"lifetimeRevenue",
 	"avgInvoiceValue",
 ] as const;
+const DATE_KEYS = ["firstPurchaseAt"];
 
 const HEADER_LABELS = buildHeaderLabels(COLS);
 const COLUMN_ALIGN = buildColumnAlign(COLS, NUMERIC_KEYS);
@@ -57,6 +59,7 @@ export default function ClientLifetimeValuePage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -64,8 +67,8 @@ export default function ClientLifetimeValuePage() {
 	}, [terms, searchInput]);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, page, limit: pageSize }),
-		[searchTerms, page, pageSize],
+		() => ({ searchTerms, page, limit: pageSize, ...sort }),
+		[searchTerms, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useClientLifetimeValueQuery(queryParams);
@@ -74,7 +77,7 @@ export default function ClientLifetimeValuePage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = data?.summary as ClientLifetimeValueSummary | undefined;
 
-	const filterKey = JSON.stringify([searchTerms, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -149,7 +152,7 @@ export default function ClientLifetimeValuePage() {
 									filename: datedFilename("client-lifetime-value"),
 									sheetName: "Client Lifetime Value",
 									columns: visibleColumns,
-									params: { searchTerms },
+									params: { searchTerms, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -185,6 +188,7 @@ export default function ClientLifetimeValuePage() {
 				) : (
 					<>
 						<AdaptableTable
+							{...tableProps}
 							data={displayRows}
 							loadListener={isLoading}
 							errListener={error}

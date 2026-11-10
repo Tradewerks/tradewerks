@@ -3,8 +3,19 @@ import type { ReactNode } from "react";
 import { FileText, MapPin, Briefcase } from "lucide-react";
 import Card from "../ui/Card";
 import { formatCurrency } from "../../util/util";
-import { formatRatePercentLabel } from "../../lib/formatTax";
-import type { TaxSnapshot, TaxSnapshotRate } from "../../types/tax";
+import { formatDocRatePercent, formatRatePercentLabel } from "../../lib/formatTax";
+import {
+	autoRateLocation,
+	collapseSnapshotRates,
+	isAddressRateSnapshot,
+	taxBasis,
+	toList,
+	type CollapsedRate,
+} from "../../lib/taxBreakdown";
+import { isV2Snapshot, snapshotSource } from "../../types/tax";
+import type { TaxSnapshot, TaxSnapshotRate, TaxSource } from "../../types/tax";
+import { AutoLineTaxTag, TaxSourceChip } from "../tax/TaxSourceChip";
+import { isKeptAddressRate, ungroupedLineGroup } from "../../lib/taxEditorMode";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,10 +55,15 @@ export interface FinancialSummaryProps {
 	contestedIds?: ReadonlySet<string>;
 
 	// Financials
-	taxSnapshot?: TaxSnapshot | null;
+	/** Several snapshots (a job and its visits) are summed row by row; per-line badges use the first. */
+	taxSnapshot?: TaxSnapshot | readonly TaxSnapshot[] | null;
+	/** Document `tax_source`; falls back to the v2 snapshot's own source. */
+	taxSource?: TaxSource | null;
 	/** Legacy flat-rate fallback (pre-snapshot records only). */
 	legacyTaxRate?: number | null;
 	legacyTaxAmount?: number | null;
+	/** Prefixes the tax amount with "≈ " when the final figure is calculated elsewhere (QuickBooks). */
+	taxIsEstimate?: boolean;
 	subtotal?: number | null;
 	discountAmount?: number | null;
 	discountType?: string | null;
@@ -70,22 +86,15 @@ export interface FinancialSummaryProps {
 	noLineItemsDescription?: string;
 }
 
-// ── Internal types ─────────────────────────────────────────────────────────────
-
-interface CollapsedRate {
-	id: string;
-	name: string;
-	rate: number;
-	amountCents: number;
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function FinancialSummary({
 	lineItems,
 	taxSnapshot,
+	taxSource,
 	legacyTaxRate,
 	legacyTaxAmount,
+	taxIsEstimate = false,
 	contestedIds,
 	subtotal,
 	discountAmount,
@@ -98,10 +107,12 @@ export default function FinancialSummary({
 	noLineItemsTitle = "No Line Items",
 	noLineItemsDescription = "No line items have been added yet.",
 }: FinancialSummaryProps) {
+	const snapshots = useMemo(() => toList(taxSnapshot), [taxSnapshot]);
+	const primarySnapshot = snapshots[0] ?? null;
 	// group name → rates; snapshot is primary, line-item tax_group is fallback.
 	const groupRatesMap = useMemo(() => {
 		const map = new Map<string, TaxSnapshotRate[]>();
-		for (const group of taxSnapshot?.groups ?? []) {
+		for (const group of primarySnapshot?.groups ?? []) {
 			if ((group.rates ?? []).length > 0) map.set(group.name, group.rates);
 		}
 		if (map.size === 0) {
@@ -118,30 +129,9 @@ export default function FinancialSummary({
 			}
 		}
 		return map;
-	}, [taxSnapshot, lineItems]);
+	}, [primarySnapshot, lineItems]);
 
-	// Deduplicate by rate ID across groups, summing amounts. Drops group names for display.
-	const collapsedTaxRates = useMemo((): CollapsedRate[] => {
-		if (!taxSnapshot) return [];
-		const rateMap = new Map<string, CollapsedRate>();
-		for (const group of taxSnapshot.groups ?? []) {
-			for (const rate of group.rates ?? []) {
-				const cents = Math.round(rate.rate * (group.taxable_amount_cents ?? 0));
-				const entry = rateMap.get(rate.id);
-				if (entry) {
-					entry.amountCents += cents;
-				} else {
-					rateMap.set(rate.id, {
-						id: rate.id,
-						name: rate.name,
-						rate: rate.rate,
-						amountCents: cents,
-					});
-				}
-			}
-		}
-		return [...rateMap.values()];
-	}, [taxSnapshot]);
+	const collapsedTaxRates = useMemo(() => collapseSnapshotRates(snapshots), [snapshots]);
 
 	// No snapshot — per-rate totals from line items; split tax_amount by rate weight.
 	// NOTE: tax_rate.rate is a Prisma Decimal, serialised as a string by Express JSON.
@@ -174,6 +164,19 @@ export default function FinancialSummary({
 		}
 		return [...rateMap.values()];
 	}, [collapsedTaxRates, lineItems]);
+
+	const source = taxSource ?? snapshotSource(primarySnapshot);
+	const rateLocation = snapshots.map(autoRateLocation).find((l) => l != null) ?? null;
+	const addressSourced = isAddressRateSnapshot(primarySnapshot, source);
+	const allExempt = snapshots.length > 0 && snapshots.every((s) => s.client_exempt);
+	// Client group or org default: the line names no group, but one taxed it.
+	const ungroupedGroupName = addressSourced
+		? null
+		: (ungroupedLineGroup(
+				primarySnapshot,
+				source,
+				lineItems.flatMap((li) => (li.tax_group?.name ? [li.tax_group.name] : [])),
+			)?.name ?? null);
 
 	const [visibleCount, setVisibleCount] = useState(10);
 
@@ -212,6 +215,11 @@ export default function FinancialSummary({
 									item.total != null
 										? Number(item.total)
 										: Number(item.quantity) * Number(item.unit_price);
+								// Manual mode stamps the default group on non-taxable lines too.
+								const groupName =
+									item.taxable === false
+										? null
+										: item.tax_group?.name || ungroupedGroupName;
 								const isContested =
 									item.id != null && contestedIds?.has(item.id) === true;
 								return (
@@ -276,19 +284,21 @@ export default function FinancialSummary({
 														) : (
 															<Briefcase size={9} className="flex-shrink-0" />
 														)}
-														<span className="truncate">{item.sourceLabel}</span>
+														<span>{item.sourceLabel}</span>
 													</span>
 												)}
-												{item.tax_group?.name ? (
+												{groupName ? (
 													<span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-raised/60 border border-border-strong/50 text-[10px] font-medium text-text-muted whitespace-nowrap leading-none">
-														{item.tax_group.name}
-														{groupRatesMap.has(item.tax_group.name)
+														{groupName}
+														{groupRatesMap.has(groupName)
 															? ` · ${groupRatesMap
-																.get(item.tax_group.name)!
+																.get(groupName)!
 																.map(r => `${r.name} ${formatRatePercentLabel(r.rate)}`)
 																.join(" + ")}`
 															: ""}
 													</span>
+												) : item.taxable !== false && addressSourced ? (
+													<AutoLineTaxTag />
 												) : (
 													<span className="inline-flex items-center px-1.5 py-0.5 rounded bg-surface-raised/40 border border-border-strong/30 text-[10px] text-text-faint whitespace-nowrap leading-none">
 														No Tax
@@ -355,50 +365,6 @@ export default function FinancialSummary({
 							</div>
 						)}
 
-						{/* Tax — collapsed per-rate rows, or line-item fallback, or legacy flat-rate */}
-						{(() => {
-							const rates = collapsedTaxRates.length > 0 ? collapsedTaxRates : lineItemCollapsedRates;
-							const totalTaxCents = rates.reduce((s, r) => s + r.amountCents, 0);
-
-							if (rates.length > 0) {
-								return (
-									<>
-										{rates.map(rate => (
-											<div key={rate.id} className="flex items-center justify-between text-sm">
-												<span className="text-text-tertiary">
-													{rate.name} ({formatRatePercentLabel(rate.rate)}):
-												</span>
-												<span className="text-text-primary font-medium tabular-nums">
-													{formatCurrency(rate.amountCents / 100)}
-												</span>
-											</div>
-										))}
-										{rates.length > 1 && (
-											<div className="flex items-center justify-between text-sm">
-												<span className="text-text-tertiary font-medium">Total Tax:</span>
-												<span className="text-text-primary font-medium tabular-nums">
-													{formatCurrency(totalTaxCents / 100)}
-												</span>
-											</div>
-										)}
-									</>
-								);
-							}
-							if (legacyTaxAmount != null && Number(legacyTaxAmount) > 0) {
-								return (
-									<div className="flex items-center justify-between text-sm">
-										<span className="text-text-tertiary">
-											Tax{legacyTaxRate != null ? ` (${formatRatePercentLabel(Number(legacyTaxRate))})` : ""}:
-										</span>
-										<span className="text-text-primary font-medium tabular-nums">
-											{formatCurrency(Number(legacyTaxAmount))}
-										</span>
-									</div>
-								);
-							}
-							return null;
-						})()}
-
 						{discountAmount != null && Number(discountAmount) > 0 && (
 							<div className="flex items-center justify-between text-sm">
 								<span className="text-text-tertiary">
@@ -413,6 +379,86 @@ export default function FinancialSummary({
 								</span>
 							</div>
 						)}
+
+						{/* Tax — collapsed per-rate rows, or line-item fallback, or legacy flat-rate */}
+						{(() => {
+							if (allExempt) {
+								return (
+									<div className="flex items-center justify-between text-sm">
+										<span className="text-text-tertiary">Tax:</span>
+										<span className="text-text-primary font-medium">Client is tax exempt</span>
+									</div>
+								);
+							}
+							const rates = collapsedTaxRates.length > 0 ? collapsedTaxRates : lineItemCollapsedRates;
+							const totalTaxCents = rates.reduce((s, r) => s + r.amountCents, 0);
+							const approx = taxIsEstimate ? "≈ " : "";
+							const basis = taxBasis(snapshots);
+							const provenance = (
+								<div className="flex flex-wrap items-center gap-1.5 empty:hidden">
+									<TaxSourceChip
+										source={source}
+										kept={
+											isKeptAddressRate(primarySnapshot) &&
+											isV2Snapshot(primarySnapshot) &&
+											primarySnapshot.kept_from_auto === true
+										}
+									/>
+									{rateLocation && (
+										<span className="text-xs text-text-muted">
+											Rates for {rateLocation}
+										</span>
+									)}
+									{basis && (
+										<span className="text-xs text-text-muted tabular-nums">
+											{basis}
+										</span>
+									)}
+								</div>
+							);
+
+							if (rates.length > 0) {
+								return (
+									<>
+										{rates.map(rate => (
+											<div key={rate.id} className="flex items-center justify-between text-sm">
+												<span className="text-text-tertiary">
+													{rate.name} ({formatRatePercentLabel(rate.rate)}):
+												</span>
+												<span className="text-text-primary font-medium tabular-nums">
+													{(rates.length === 1 ? approx : "") + formatCurrency(rate.amountCents / 100)}
+												</span>
+											</div>
+										))}
+										{rates.length > 1 && (
+											<div className="flex items-center justify-between text-sm">
+												<span className="text-text-tertiary font-medium">Total Tax:</span>
+												<span className="text-text-primary font-medium tabular-nums">
+													{approx + formatCurrency(totalTaxCents / 100)}
+												</span>
+											</div>
+										)}
+										{provenance}
+									</>
+								);
+							}
+							if (legacyTaxAmount != null && Number(legacyTaxAmount) > 0) {
+								return (
+									<>
+										<div className="flex items-center justify-between text-sm">
+											<span className="text-text-tertiary">
+												Tax{legacyTaxRate != null ? ` (${formatDocRatePercent(legacyTaxRate)})` : ""}:
+											</span>
+											<span className="text-text-primary font-medium tabular-nums">
+												{formatCurrency(Number(legacyTaxAmount))}
+											</span>
+										</div>
+										{provenance}
+									</>
+								);
+							}
+							return null;
+						})()}
 
 						<div className="border-t border-border my-2" />
 

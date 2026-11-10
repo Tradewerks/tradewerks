@@ -16,6 +16,7 @@ import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { useColumnVisibility, type ColumnOption } from "../../hooks/useColumnVisibility";
 import { camelCaseToRegular } from "../../util/util";
 import { useReorderForecastQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import { exportReportServer } from "../../api/reports";
 import { datedFilename } from "../../util/download";
 import {
@@ -48,6 +49,23 @@ const COLS = cols(
 	// whom". A leading "~" means the vendor was inferred from the last purchase
 	// rather than chosen by anyone.
 	"buyFrom",
+);
+
+// Hidden to fit the table on a laptop, not because the buyer doesn't need them,
+// so the export still carries them.
+const DEFAULT_HIDDEN = ["sku", "category", "warehouse", "vehicles"];
+
+const NUMERIC_KEYS = [
+	"onHand",
+	"warehouse",
+	"vehicles",
+	"reorderPoint",
+	"avgDailyUsage",
+	"daysOfStock",
+];
+// projectedStockout's raw "~Nov 5, 2026" doesn't parse server-side; daysOfStock gives the same order.
+const SORTABLE_COLUMNS = Object.fromEntries(
+	COLS.filter((c) => c.key !== "projectedStockout").map((c) => [c.key, true]),
 );
 
 const SEVERITY_ORDER: ReorderSeverity[] = ["critical", "warning", "healthy", "unknown"];
@@ -162,6 +180,7 @@ export default function ReorderForecastPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS);
 
 	// Severity lives in the URL alongside `search` so a dispatcher can hand
 	// someone "the critical list" as a link. Comma-separated; unknown values are
@@ -215,8 +234,8 @@ export default function ReorderForecastPage() {
 	);
 
 	const queryParams = useMemo<ReportFetchParams>(
-		() => ({ searchTerms, conditions, page, limit: pageSize }),
-		[searchTerms, conditions, page, pageSize],
+		() => ({ searchTerms, conditions, page, limit: pageSize, ...sort }),
+		[searchTerms, conditions, page, pageSize, sort],
 	);
 
 	const { data, isLoading, isFetching, error } = useReorderForecastQuery(queryParams);
@@ -230,7 +249,7 @@ export default function ReorderForecastPage() {
 	const records = useMemo(() => (data?.summary?.chartRows ?? []) as ReorderForecastRow[], [data]);
 	const truncated = data?.summary?.truncated === true;
 
-	const filterKey = JSON.stringify([searchTerms, conditions, pageSize]);
+	const filterKey = JSON.stringify([searchTerms, conditions, pageSize, sort]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -249,9 +268,20 @@ export default function ReorderForecastPage() {
 		return counts;
 	}, [records]);
 
-	const { hidden, toggle, reset, columnVisibility, visibleColumns } = useColumnVisibility(
+	// Off by default so the decision columns (health, buy from) fit a laptop without
+	// scrolling sideways; Columns brings them back.
+	const { hidden, toggle, reset, columnVisibility } = useColumnVisibility(
 		"reorder-forecast",
 		COLS,
+		DEFAULT_HIDDEN,
+	);
+	// Rows carry the export-only fields too, and the table renders every key it isn't told to hide.
+	const tableVisibility = useMemo(
+		() => ({
+			...columnVisibility,
+			...Object.fromEntries(EXPORT_ONLY_COLS.map((c) => [c.key, false])),
+		}),
+		[columnVisibility],
 	);
 
 	const clearAllFilters = () => {
@@ -290,7 +320,7 @@ export default function ReorderForecastPage() {
 			    band and the chart's footer — sizing a card so the axis band doesn't
 			    fit is what produced the clipped footer. */}
 			{showChart && (
-				<div className="mb-4 h-[26rem]">
+				<div className="mb-4 h-[clamp(20rem,45vh,26rem)]">
 					<ReorderPriorityChart data={records} />
 				</div>
 			)}
@@ -400,11 +430,16 @@ export default function ReorderForecastPage() {
 									report: "reorder-forecast",
 									filename: datedFilename("reorder-forecast"),
 									sheetName: "Reorder Forecast",
-									columns: [...visibleColumns, ...EXPORT_ONLY_COLS],
+									columns: [
+										...COLS.filter(
+											(c) => !hidden.has(c.key) || DEFAULT_HIDDEN.includes(c.key),
+										),
+										...EXPORT_ONLY_COLS,
+									],
 									// The same filters the table is under: the
 									// server regenerates the full filtered set
 									// rather than exporting the visible page.
-									params: { searchTerms, conditions },
+									params: { searchTerms, conditions, ...sort },
 								})
 							}
 							disabled={total === 0}
@@ -458,8 +493,10 @@ export default function ReorderForecastPage() {
 							data={rows}
 							loadListener={isLoading}
 							errListener={error}
-							columnVisibility={columnVisibility}
+							columnVisibility={tableVisibility}
 							columnClamp={COLUMN_CLAMP}
+							sortableColumns={SORTABLE_COLUMNS}
+							{...tableProps}
 							cellClass={{
 								health: (row) => HEALTH_CELL_CLASS[row.health as string] ?? "",
 							}}

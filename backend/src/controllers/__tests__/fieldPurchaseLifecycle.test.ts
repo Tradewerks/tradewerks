@@ -8,8 +8,13 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { db } from "../../db.js";
-import { SAMPLE_RECEIPT } from "../../services/receiptOcr/fixture.js";
-import { OCR_MAX_BYTES } from "../../services/receiptOcr/normalize.js";
+import { FIXTURE_RAW } from "../../services/receiptOcr/fixture.js";
+import { buildOcrFlags } from "../../services/receiptOcr/flags.js";
+import {
+	OCR_MAX_BYTES,
+	OCR_STALE_MS,
+	OcrProviderError,
+} from "../../services/receiptOcr/normalize.js";
 import {
 	createRefund,
 	decidePreauth,
@@ -19,12 +24,14 @@ import {
 	getPurchaseExtraction,
 	replaceLines,
 	requestPreauth,
+	readInFlight,
 	retryOcr,
 	reviewPurchase,
 	runReceiptOcr,
 	secondSignoff,
 	settleRefund,
 	submitPurchase,
+	updatePurchase,
 	uploadReceipt,
 } from "../fieldPurchasesController.js";
 
@@ -116,6 +123,20 @@ vi.mock("../notificationsController.js", () => ({
 	notifyDispatchers: vi.fn().mockResolvedValue([]),
 }));
 
+const mockOcrRead = vi.fn();
+const mockOcrFlags = vi.fn();
+vi.mock("../../services/receiptOcr/ocrMetrics.js", async (importOriginal) => {
+	const real = await importOriginal<typeof import("../../services/receiptOcr/ocrMetrics.js")>();
+	return {
+		...real,
+		ocrMetrics: {
+			read: (...args: unknown[]) => mockOcrRead(...args),
+			duration: vi.fn(),
+			flags: (...args: unknown[]) => mockOcrFlags(...args),
+		},
+	};
+});
+
 const mockConsume = vi.fn();
 vi.mock("../../lib/entitlements/quota.js", () => ({
 	consumeQuota: (...args: unknown[]) => mockConsume(...args),
@@ -177,6 +198,7 @@ type Line = {
 	allocation_id?: string | null;
 	visit_line_item_id?: string | null;
 	visit_line_item?: { visit_id: string } | null;
+	inventory_item?: { name: string; unit_price: number; taxable: boolean } | null;
 	allocation?: { job_visit_id: string | null } | null;
 };
 
@@ -548,6 +570,18 @@ describe("requestPreauth", () => {
 		expect(tx.field_purchase_job_allocation.update).not.toHaveBeenCalled();
 	});
 
+	it("refuses while the receipt is still being read, saving nothing", async () => {
+		mockDb.field_purchase.findFirst.mockResolvedValue(purchase({ ocr_status: "pending" }) as never);
+		const result = await requestPreauth(
+			ORG,
+			PURCHASE,
+			{ estimated_amount: 120, sheet: { vendor_name: "Kelley Supply" } },
+			{ techId: TECH },
+		);
+		expect(result.err).toMatch(/still being read/);
+		expect(tx.field_purchase.update).not.toHaveBeenCalled();
+	});
+
 	it("saves the sheet the technician typed before switching to pre-authorization", async () => {
 		mockDb.field_purchase.findFirst.mockResolvedValue(
 			purchase({}, [], [{ job_id: JOB_UUID, amount: 100 }]) as never,
@@ -671,12 +705,12 @@ describe("receipt upload", () => {
 		expect(res.err).toMatch(/receipt image is required/);
 	});
 
-	// Mindee bills per page: re-uploading the same bytes to the same purchase
+	// The OCR provider bills per page: re-uploading the same bytes to the same purchase
 	// after it already read successfully is the "did that go through?" retry,
 	// not a new receipt, and must not pay for a second, identical extraction.
 	it("does not re-extract an image the purchase has already read", async () => {
 		const hash = createHash("sha256").update(file.buffer).digest("hex");
-		mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 		mockDb.field_purchase.findFirst
 			.mockResolvedValueOnce(
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -702,7 +736,7 @@ describe("receipt upload", () => {
 				.mockResolvedValueOnce(null); // no hash clash
 
 		it("charges one scan and starts the read", async () => {
-			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 			mockExtract.mockReturnValue(new Promise(() => {}));
 			loadFresh();
 			const res = await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
@@ -712,7 +746,7 @@ describe("receipt upload", () => {
 		});
 
 		it("keeps the receipt but skips the read once the month's scans are used up", async () => {
-			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 			mockConsume.mockResolvedValue({ allowed: false, used: 300, limit: 300 });
 			loadFresh();
 			const res = await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
@@ -735,7 +769,7 @@ describe("receipt upload", () => {
 		});
 
 		it("charges nothing for an image too large to read", async () => {
-			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 			mockDb.field_purchase.update.mockResolvedValue({} as never); // the "too large" failure stamp
 			loadFresh();
 			const big = { ...file, buffer: Buffer.alloc(16 * 1024 * 1024) };
@@ -744,7 +778,7 @@ describe("receipt upload", () => {
 		});
 
 		it("charges nothing for a receipt already on another purchase", async () => {
-			mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+			mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 			mockDb.field_purchase.findFirst
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				.mockResolvedValueOnce(purchase() as any)
@@ -1338,19 +1372,22 @@ describe("runReceiptOcr", () => {
 			{ description: "Capacitor", quantity: 1, unit_price: 24.99, line_total: 24.99, confidence: 0.93 },
 		],
 		field_confidence: { total: 0.95 },
+		field_source: {},
 		raw: { ok: true },
 	};
 	const FILE = { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" };
 
 	function withProvider() {
 		mockExtract.mockResolvedValue(BASE_EXTRACTION);
-		mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 	}
 
 	function currentPurchase(over: Record<string, unknown> = {}) {
 		tx.field_purchase.findFirst.mockResolvedValue({
 			id: PURCHASE,
 			status: "draft",
+			ocr_status: "pending",
+			receipt_image_hash: "hash-a",
 			vendor_name: null,
 			purchased_at: null,
 			subtotal: new Prisma.Decimal(0),
@@ -1505,7 +1542,7 @@ describe("runReceiptOcr", () => {
 	});
 
 	it("stamps a failure rather than leaving the purchase reading as still working", async () => {
-		mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 		mockExtract.mockRejectedValue(new Error("provider 503"));
 		mockDb.field_purchase.update.mockResolvedValue({} as never);
 
@@ -1522,13 +1559,13 @@ describe("runReceiptOcr", () => {
 		const { log } = await import("../../services/appLogger.js");
 		const warn = vi.spyOn(log, "warn");
 		mockExtract.mockResolvedValue({ ...BASE_EXTRACTION, field_confidence: {} });
-		mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 		currentPurchase();
 
 		await runReceiptOcr(ORG, PURCHASE, { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" });
 
 		expect(warn).toHaveBeenCalledWith(
-			expect.objectContaining({ provider: "mindee" }),
+			expect.objectContaining({ provider: "textract" }),
 			expect.stringMatching(/no field confidence/i),
 		);
 		warn.mockRestore();
@@ -1536,7 +1573,7 @@ describe("runReceiptOcr", () => {
 
 	it("flags a non-receipt document instead of refusing it", async () => {
 		mockExtract.mockResolvedValue({ ...BASE_EXTRACTION, document_type: "bank_statement" });
-		mockProvider.mockReturnValue({ name: "mindee", extract: mockExtract });
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
 		currentPurchase();
 
 		await runReceiptOcr(ORG, PURCHASE, FILE);
@@ -1571,6 +1608,49 @@ describe("runReceiptOcr", () => {
 	 * vendor is not the org's supplier record, so name and address are not
 	 * trusted to say who that is - a wrong link is worse than none.
 	 */
+	describe("a read that is no longer the row's", () => {
+		it("writes nothing once a newer photo replaced the one it read", async () => {
+			withProvider();
+			currentPurchase({ receipt_image_hash: "hash-b" });
+			await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+			expect(tx.field_purchase.update).not.toHaveBeenCalled();
+			expect(tx.field_purchase_line.createMany).not.toHaveBeenCalled();
+			expect(mockDb.field_purchase.update).not.toHaveBeenCalled();
+		});
+
+		it("writes nothing once the row is no longer waiting on a read", async () => {
+			withProvider();
+			currentPurchase({ ocr_status: "skipped" });
+			await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+			expect(tx.field_purchase.update).not.toHaveBeenCalled();
+			expect(tx.field_purchase_line.createMany).not.toHaveBeenCalled();
+		});
+
+		it("lands no header, flags or reviews on a purchase that left the technician's hands", async () => {
+			withProvider();
+			currentPurchase({ status: "pending_preauth" });
+			await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+			expect(tx.field_purchase_line.createMany).not.toHaveBeenCalled();
+			expect(tx.field_purchase.update).toHaveBeenCalledTimes(1);
+			const data = tx.field_purchase.update.mock.calls[0][0].data;
+			// Stamped so a later retry is offered, rather than left pending forever.
+			expect(data.ocr_status).toBe("failed");
+			for (const key of ["vendor_name", "total", "tax_amount", "ocr_field_flags", "ocr_field_review"]) {
+				expect(data).not.toHaveProperty(key);
+			}
+		});
+
+		it("still applies a read whose photo is the one on the row", async () => {
+			withProvider();
+			currentPurchase();
+			await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+			expect(tx.field_purchase.update.mock.calls[0][0].data).toMatchObject({
+				ocr_status: "succeeded",
+				vendor_name: "Grainger",
+			});
+		});
+	});
+
 	describe("supplier match", () => {
 		let suppliers: { id: string; name: string; phone: string | null }[] = [];
 
@@ -1588,7 +1668,7 @@ describe("runReceiptOcr", () => {
 		it("links the purchase to a supplier whose phone the receipt matches", async () => {
 			suppliers = [{ id: "sup-1", name: "Ferguson HVAC Supply", phone: "(414) 555-0188" }];
 			mockProvider.mockReturnValue({
-				name: "mindee",
+				name: "textract",
 				extract: async () => ({ ...BASE_EXTRACTION, vendor_phone: "414-555-0188", vendor_address: null }),
 			});
 
@@ -1600,7 +1680,7 @@ describe("runReceiptOcr", () => {
 		it("leaves supplier_id unset when nothing matches, rather than guessing", async () => {
 			suppliers = [];
 			mockProvider.mockReturnValue({
-				name: "mindee",
+				name: "textract",
 				extract: async () => ({ ...BASE_EXTRACTION, vendor_phone: "414-555-0188", vendor_address: null }),
 			});
 
@@ -1616,7 +1696,7 @@ describe("runReceiptOcr", () => {
 				{ id: "sup-2", name: "Ferguson B", phone: "(414) 555-0188" },
 			];
 			mockProvider.mockReturnValue({
-				name: "mindee",
+				name: "textract",
 				extract: async () => ({ ...BASE_EXTRACTION, vendor_phone: "414-555-0188", vendor_address: null }),
 			});
 
@@ -1683,7 +1763,7 @@ describe("retryOcr", () => {
 		mockProvider.mockReturnValue({ name: "fixture", extract: mockExtract });
 		mockExtract.mockResolvedValue({
 			vendor_name: null, purchased_at: null, subtotal: null, tax_amount: null, total: null,
-			lines: [], field_confidence: {}, raw: null,
+			lines: [], field_confidence: {}, field_source: {}, raw: null,
 		});
 		mockGetBuffer.mockResolvedValue({ buffer: Buffer.from("x"), contentType: "image/jpeg" });
 		mockDb.field_purchase.update.mockResolvedValue({} as never);
@@ -1775,7 +1855,7 @@ describe("getPurchaseExtraction", () => {
 		mockDb.field_purchase.findFirst.mockResolvedValue({
 			ocr_status: "succeeded",
 			ocr_provider: "fixture",
-			ocr_raw: SAMPLE_RECEIPT,
+			ocr_raw: FIXTURE_RAW,
 			ocr_lines: [
 				{ description: "Capacitor", quantity: 1, unit_price: 24.99, line_total: 24.99, confidence: 0.93, applied: false },
 			],
@@ -1791,6 +1871,7 @@ describe("getPurchaseExtraction", () => {
 		// with is still there to show them rather than lost at write time.
 		expect(res.extraction!.header).toMatchObject({
 			vendor_name: "Northgate Trade Supply",
+			receipt_number: "884213",
 			total: 310.22,
 		});
 	});
@@ -2105,6 +2186,37 @@ describe("billing a split receipt", () => {
 
 		const moved = mockRecordMovements.mock.calls.flatMap((c: unknown[]) => c[3] as unknown[]);
 		expect(moved).toEqual([]);
+	});
+
+	it("a new charge from a non-taxable catalog item is written non-taxable; an uncatalogued one omits it", async () => {
+		const catalog = { name: "Cylinder", unit_price: 50, taxable: false };
+		mockDb.field_purchase.findFirst.mockResolvedValue(
+			purchase(
+				{},
+				[
+					consumed({ id: "line-a", allocation_id: "alloc-a" }),
+					consumed({ id: "line-b", allocation_id: "alloc-b" }),
+				],
+				SPLIT,
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			) as any,
+		);
+		billing([
+			consumed({
+				id: "line-a",
+				inventory_item_id: ITEM_UUID,
+				inventory_item: catalog,
+				allocation: { job_visit_id: "visit-a" },
+			}),
+			consumed({ id: "line-b", allocation: { job_visit_id: "visit-b" } }),
+		]);
+		tx.job_visit_line_item.create.mockResolvedValue({ id: "vli-new" });
+
+		await submitPurchase(ORG, PURCHASE, { techId: TECH });
+
+		const written = tx.job_visit_line_item.create.mock.calls.map((c: any[]) => c[0].data);
+		expect(written[0].taxable).toBe(false);
+		expect(written[1]).not.toHaveProperty("taxable");
 	});
 
 	// `visit_line_item_id` is unique, so moving a line between jobs is a delete
@@ -2533,5 +2645,537 @@ describe("refund creation and submit guards", () => {
 
 		const res = await submitPurchase(ORG, PURCHASE, { techId: TECH });
 		expect(res.err).toBe("A refund can only credit jobs the original purchase was for");
+	});
+});
+
+describe("OCR field flags and reviews", () => {
+	const FILE = { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" };
+	const EXTRACTION = {
+		vendor_name: "Grainger",
+		receipt_number: null,
+		vendor_address: null,
+		vendor_phone: null,
+		purchased_at: new Date("2026-08-21T00:00:00Z"),
+		subtotal: 61,
+		tax_amount: 4.27,
+		total: 65.27,
+		taxes: [],
+		document_type: "expense_receipt",
+		currency: "USD",
+		lines: [],
+		field_confidence: { vendor_name: 0.4, total: 0.95 },
+		field_source: { total: { source: "derived" } },
+		raw: { ok: true },
+	};
+
+	function runWith(extraction: unknown) {
+		mockExtract.mockResolvedValue(extraction);
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
+		tx.field_purchase.findFirst.mockResolvedValue({
+			id: PURCHASE,
+			status: "draft",
+			ocr_status: "pending",
+			vendor_name: null,
+			purchased_at: null,
+			subtotal: new Prisma.Decimal(0),
+			tax_amount: new Prisma.Decimal(0),
+			total: new Prisma.Decimal(0),
+			_count: { lines: 0 },
+		});
+		return runReceiptOcr(ORG, PURCHASE, FILE);
+	}
+
+	it("runReceiptOcr stores buildOcrFlags output and clears prior reviews", async () => {
+		await runWith(EXTRACTION);
+		const data = tx.field_purchase.update.mock.calls[0][0].data;
+		expect(data.ocr_field_flags).toEqual(buildOcrFlags(EXTRACTION as never));
+		expect(data.ocr_field_flags.fields.vendor_name.kind).toBe("unsure");
+		expect(data.ocr_field_flags.fields.total.kind).toBe("calculated");
+		expect(data.ocr_field_review).toEqual({});
+	});
+
+	it("failed extraction leaves ocr_field_flags null", async () => {
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
+		mockExtract.mockRejectedValue(new Error("boom"));
+		mockDb.field_purchase.update.mockResolvedValue({} as never);
+		await runReceiptOcr(ORG, PURCHASE, FILE);
+		const data = mockDb.field_purchase.update.mock.calls[0][0].data;
+		expect(data.ocr_status).toBe("failed");
+		expect(data.ocr_field_flags).toBeUndefined();
+		expect(tx.field_purchase.update).not.toHaveBeenCalled();
+	});
+
+	it("startOcrRead re-run resets ocr_field_review to {}", async () => {
+		mockDb.field_purchase.findFirst
+			.mockResolvedValueOnce({
+				id: PURCHASE,
+				status: "draft",
+				technician_id: TECH,
+				receipt_image_url: "https://bucket/receipts/r.jpg",
+			} as never)
+			.mockResolvedValueOnce({
+				receipt_image_url: "https://bucket/receipts/r.jpg",
+				ocr_status: "succeeded",
+			} as never);
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
+		mockExtract.mockResolvedValue({ ...EXTRACTION, field_source: {} });
+		mockGetBuffer.mockResolvedValue({ buffer: Buffer.from("x"), contentType: "image/jpeg" });
+		mockDb.field_purchase.update.mockResolvedValue({} as never);
+		await retryOcr(ORG, PURCHASE, { techId: TECH } as never);
+		expect(mockDb.field_purchase.update.mock.calls[0][0].data).toMatchObject({
+			ocr_status: "pending",
+			ocr_field_review: {},
+			ocr_field_flags: Prisma.DbNull,
+		});
+	});
+
+	describe("replacement receipt upload", () => {
+		const file = {
+			buffer: Buffer.from("receipt-bytes"),
+			mimetype: "image/jpeg",
+			originalname: "r.jpg",
+		};
+		const sha = createHash("sha256").update(file.buffer).digest("hex");
+		const upload = (over: Record<string, unknown>) => {
+			mockProvider.mockReturnValue(null);
+			mockDb.field_purchase.findFirst
+				.mockResolvedValueOnce(purchase(over) as never)
+				.mockResolvedValueOnce(null);
+			return uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+		};
+
+		it("clears prior flags and reviews for a replacement image", async () => {
+			await upload({ receipt_image_hash: "other", ocr_status: "succeeded" });
+			expect(tx.field_purchase.update.mock.calls[0][0].data).toMatchObject({
+				ocr_status: "skipped",
+				ocr_field_flags: Prisma.DbNull,
+				ocr_field_review: {},
+			});
+		});
+
+		it("refuses a new photo while the current one is still being read", async () => {
+			mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
+			mockDb.field_purchase.findFirst.mockResolvedValueOnce(
+				purchase({
+					receipt_image_hash: "other",
+					ocr_status: "pending",
+					updated_at: new Date(Date.now() - 5_000),
+				}) as never,
+			);
+			const res = await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+			expect(res.err).toMatch(/still being read/);
+			expect(mockUploadFile).not.toHaveBeenCalled();
+			expect(tx.field_purchase.update).not.toHaveBeenCalled();
+		});
+
+		it("takes a new photo over a read that stalled (its process died mid-read)", async () => {
+			const res = await upload({
+				receipt_image_hash: "other",
+				ocr_status: "pending",
+				updated_at: new Date(Date.now() - 10 * 60_000),
+			});
+			expect(res.err).toBeUndefined();
+			expect(mockUploadFile).toHaveBeenCalled();
+		});
+
+		it("leaves them alone when the same image was already read", async () => {
+			mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
+			mockDb.field_purchase.findFirst
+				.mockResolvedValueOnce(
+					purchase({ receipt_image_hash: sha, ocr_status: "succeeded" }) as never,
+				)
+				.mockResolvedValueOnce(null);
+			await uploadReceipt(ORG, PURCHASE, file, {}, { techId: TECH });
+			const data = tx.field_purchase.update.mock.calls[0][0].data;
+			expect(data).not.toHaveProperty("ocr_field_flags");
+			expect(data).not.toHaveProperty("ocr_field_review");
+		});
+	});
+
+	describe("updatePurchase field_reviews", () => {
+		beforeEach(() => {
+			mockDb.field_purchase.findFirst.mockResolvedValue(purchase() as never);
+			tx.field_purchase.findUniqueOrThrow.mockResolvedValue({
+				id: PURCHASE,
+				tax_amount: new Prisma.Decimal(0),
+				allocations: [],
+			});
+			tx.field_purchase_line.findMany.mockResolvedValue([]);
+			tx.field_purchase_job_allocation.findMany.mockResolvedValue([]);
+		});
+
+		it("update with field_reviews merges, null removes, server stamps at", async () => {
+			tx.field_purchase.findFirst.mockResolvedValue({
+				ocr_field_review: {
+					vendor_name: { state: "confirmed", at: "2026-01-01T00:00:00.000Z" },
+					total: { state: "edited", at: "2026-01-01T00:00:00.000Z" },
+				},
+			});
+			const res = await updatePurchase(
+				ORG,
+				PURCHASE,
+				{ field_reviews: { tax_amount: "confirmed", total: null } },
+				{ techId: TECH },
+			);
+			expect(res.err).toBeUndefined();
+			expect(tx.field_purchase.findFirst).toHaveBeenCalledWith(
+				expect.objectContaining({ where: { id: PURCHASE, organization_id: ORG } }),
+			);
+			const call = tx.field_purchase.update.mock.calls.find((c) => c[0].data.ocr_field_review);
+			const review = call![0].data.ocr_field_review;
+			expect(Object.keys(review).sort()).toEqual(["tax_amount", "vendor_name"]);
+			expect(review.vendor_name.at).toBe("2026-01-01T00:00:00.000Z");
+			expect(review.tax_amount.state).toBe("confirmed");
+			expect(Number.isNaN(Date.parse(review.tax_amount.at))).toBe(false);
+		});
+
+		it("rejects an unknown field key", async () => {
+			const res = await updatePurchase(
+				ORG,
+				PURCHASE,
+				{ field_reviews: { bogus: "confirmed" } },
+				{ techId: TECH },
+			);
+			expect(res.err).toBeTruthy();
+		});
+	});
+
+	describe("submit gate", () => {
+		const GATE = "Check the flagged receipt fields before submitting";
+		const flagSet = (fields: Record<string, unknown>) => ({ fields, line_cutoff: 0.8 });
+		const unsure = { kind: "unsure", confidence: 0.4, rule: null };
+
+		function gated(flags: unknown, review: unknown = {}) {
+			mockDb.field_purchase.findFirst.mockResolvedValue(
+				purchase(
+					{
+						vendor_name: "Grainger",
+						kind: "purchase",
+						ocr_field_flags: flags,
+						ocr_field_review: review,
+					},
+					[verified()],
+					[{ job_id: "job-1", amount: 100 }],
+				) as never,
+			);
+			mockDb.field_purchase.findMany.mockResolvedValue([] as never);
+		}
+
+		it("submit refuses while an unsure/calculated field has no review", async () => {
+			gated(
+				flagSet({
+					purchased_at: unsure,
+					total: { kind: "calculated", confidence: null, rule: null },
+					vendor_name: unsure,
+				}),
+				{ vendor_name: { state: "confirmed", at: "2026-01-01T00:00:00.000Z" } },
+			);
+			const res = await submitPurchase(ORG, PURCHASE, { techId: TECH });
+			expect(res.err).toBe(`${GATE}: Date, Total`);
+			expect(tx.field_purchase.updateMany).not.toHaveBeenCalled();
+		});
+
+		it("submit sheet field_reviews resolve the flagged fields, so the gate passes", async () => {
+			tx.field_purchase.findFirst.mockResolvedValue({ ocr_field_review: {} });
+			tx.field_purchase.findUniqueOrThrow.mockResolvedValue({
+				id: PURCHASE,
+				tax_amount: new Prisma.Decimal(0),
+				allocations: [],
+			});
+			tx.field_purchase_line.findMany.mockResolvedValue([]);
+			// The row as it reads once the sheet's reviews have been saved.
+			gated(
+				flagSet({ purchased_at: unsure, total: unsure }),
+				{
+					purchased_at: { state: "confirmed", at: "2026-01-01T00:00:00.000Z" },
+					total: { state: "edited", at: "2026-01-01T00:00:00.000Z" },
+				},
+			);
+			const res = await submitPurchase(
+				ORG,
+				PURCHASE,
+				{ techId: TECH },
+				{ field_reviews: { purchased_at: "confirmed", total: "edited" } },
+			);
+			expect(res.err).toBeUndefined();
+			const saved = tx.field_purchase.update.mock.calls.find((c) => c[0].data.ocr_field_review);
+			expect(Object.keys(saved![0].data.ocr_field_review).sort()).toEqual(["purchased_at", "total"]);
+		});
+
+		it("submit allows not_found fields without review", async () => {
+			gated(flagSet({ receipt_number: { kind: "not_found", confidence: null, rule: null } }));
+			const res = await submitPurchase(ORG, PURCHASE, { techId: TECH });
+			expect(res.err).toBeUndefined();
+		});
+
+		it("submit with ocr_field_flags null is not gated", async () => {
+			gated(null);
+			const res = await submitPurchase(ORG, PURCHASE, { techId: TECH });
+			expect(res.err).toBeUndefined();
+		});
+
+		it("submit still refuses a stalled read, pointing the tech at a re-read", async () => {
+			mockDb.field_purchase.findFirst.mockResolvedValue(
+				purchase(
+					{
+						vendor_name: "Grainger",
+						kind: "purchase",
+						ocr_status: "pending",
+						updated_at: new Date(Date.now() - 10 * 60_000),
+						ocr_field_flags: null,
+					},
+					[verified()],
+					[{ job_id: "job-1", amount: 100 }],
+				) as never,
+			);
+			const res = await submitPurchase(ORG, PURCHASE, { techId: TECH });
+			expect(res.err).toMatch(/never finished.*Replace photo/);
+			expect(tx.field_purchase.updateMany).not.toHaveBeenCalled();
+		});
+
+		it("submit refuses while the receipt is still being read", async () => {
+			mockDb.field_purchase.findFirst.mockResolvedValue(
+				purchase(
+					{ vendor_name: "Grainger", kind: "purchase", ocr_status: "pending", ocr_field_flags: null },
+					[verified()],
+					[{ job_id: "job-1", amount: 100 }],
+				) as never,
+			);
+			const res = await submitPurchase(ORG, PURCHASE, { techId: TECH });
+			expect(res.err).toMatch(/still being read/);
+			expect(tx.field_purchase.updateMany).not.toHaveBeenCalled();
+		});
+	});
+});
+
+describe("a pending read that never finished", () => {
+	const loadable = {
+		id: PURCHASE,
+		status: "draft",
+		technician_id: TECH,
+		receipt_image_url: "https://bucket/receipts/r.jpg",
+	};
+	const pendingSince = (ms: number) => ({
+		receipt_image_url: "https://bucket/receipts/r.jpg",
+		receipt_image_hash: "hash-a",
+		ocr_status: "pending",
+		updated_at: new Date(Date.now() - ms),
+	});
+
+	beforeEach(() => {
+		mockProvider.mockReturnValue({ name: "fixture", extract: mockExtract });
+		mockExtract.mockResolvedValue({
+			vendor_name: null, purchased_at: null, subtotal: null, tax_amount: null, total: null,
+			lines: [], field_confidence: {}, field_source: {}, raw: null,
+		});
+		mockGetBuffer.mockResolvedValue({ buffer: Buffer.from("x"), contentType: "image/jpeg" });
+		mockDb.field_purchase.update.mockResolvedValue({} as never);
+	});
+
+	it("can be read again once it is well past the provider timeout", async () => {
+		mockDb.field_purchase.findFirst
+			.mockResolvedValueOnce(loadable as never)
+			.mockResolvedValueOnce(pendingSince(10 * 60_000) as never);
+		const res = await retryOcr(ORG, PURCHASE, { techId: TECH } as never);
+		expect(res.started).toBe(true);
+	});
+
+	it("is still refused while it could be in flight", async () => {
+		mockDb.field_purchase.findFirst
+			.mockResolvedValueOnce(loadable as never)
+			.mockResolvedValueOnce(pendingSince(5_000) as never);
+		const res = await retryOcr(ORG, PURCHASE, { techId: TECH } as never);
+		expect(res.err).toBe("This receipt is already being read");
+		expect(mockGetBuffer).not.toHaveBeenCalled();
+	});
+
+	it("a late failure stamps only the read it belongs to", async () => {
+		mockExtract.mockRejectedValue(new Error("boom"));
+		await runReceiptOcr(ORG, PURCHASE, { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" }, "hash-a");
+		expect(mockDb.field_purchase.update.mock.calls[0][0].where).toEqual({
+			id: PURCHASE,
+			ocr_status: "pending",
+			receipt_image_hash: "hash-a",
+		});
+	});
+
+	it("says nothing when a newer read owns the row and the stamp matches nothing", async () => {
+		const { emitToOrg } = await import("../../services/socketService.js");
+		mockExtract.mockRejectedValue(new Error("boom"));
+		mockDb.field_purchase.update.mockRejectedValue(new Error("P2025: record not found"));
+		await runReceiptOcr(ORG, PURCHASE, { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" }, "hash-a");
+		expect(emitToOrg).not.toHaveBeenCalledWith(ORG, "field_purchase:ocr", expect.anything());
+	});
+});
+
+describe("OCR read reliability", () => {
+	const EXTRACTION = {
+		vendor_name: "Grainger",
+		receipt_number: null,
+		vendor_phone: null,
+		purchased_at: null,
+		subtotal: 10,
+		tax_amount: 1,
+		total: 11,
+		document_type: null,
+		currency: "USD",
+		lines: [],
+		field_confidence: { total: 0.95 },
+		field_source: {},
+		raw: null,
+	};
+	const FILE = { buffer: Buffer.from("x"), mimetype: "image/jpeg", filename: "r.jpg" };
+
+	function pendingRow(over: Record<string, unknown> = {}) {
+		tx.field_purchase.findFirst.mockResolvedValue({
+			id: PURCHASE,
+			status: "draft",
+			ocr_status: "pending",
+			receipt_image_hash: "hash-a",
+			vendor_name: null,
+			purchased_at: null,
+			subtotal: new Prisma.Decimal(0),
+			tax_amount: new Prisma.Decimal(0),
+			total: new Prisma.Decimal(0),
+			flags: [],
+			_count: { lines: 0 },
+			...over,
+		});
+	}
+
+	beforeEach(() => {
+		mockProvider.mockReturnValue({ name: "textract", extract: mockExtract });
+	});
+
+	it.each(["throttled", "timeout", "unavailable"] as const)(
+		"leaves a %s read pending for the sweeper rather than failing it",
+		async (kind) => {
+			mockExtract.mockRejectedValue(new OcrProviderError("busy", kind));
+			await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+			expect(mockDb.field_purchase.update).not.toHaveBeenCalled();
+			expect(mockDb.$transaction).not.toHaveBeenCalled();
+			expect(mockOcrRead).toHaveBeenCalledWith("textract", kind);
+		},
+	);
+
+	it("fails a final provider error, as before", async () => {
+		mockExtract.mockRejectedValue(new OcrProviderError("would not accept", "final"));
+		mockDb.field_purchase.update.mockResolvedValue({} as never);
+		await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+		expect(mockDb.field_purchase.update.mock.calls[0][0].data).toMatchObject({
+			ocr_status: "failed",
+			ocr_error: "would not accept",
+		});
+		expect(mockOcrRead).toHaveBeenCalledWith("textract", "failed");
+	});
+
+	it("treats an unclassified throw as final", async () => {
+		mockExtract.mockRejectedValue(new Error("boom"));
+		mockDb.field_purchase.update.mockResolvedValue({} as never);
+		await runReceiptOcr(ORG, PURCHASE, FILE);
+		expect(mockDb.field_purchase.update.mock.calls[0][0].data.ocr_status).toBe("failed");
+		expect(mockOcrRead).toHaveBeenCalledWith("textract", "failed");
+	});
+
+	it("counts a success, and the flags it raised", async () => {
+		mockExtract.mockResolvedValue(EXTRACTION);
+		pendingRow();
+		await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+		expect(mockOcrRead).toHaveBeenCalledWith("textract", "succeeded");
+		expect(mockOcrFlags).toHaveBeenCalledWith(
+			expect.objectContaining({
+				fields: expect.objectContaining({ receipt_number: expect.anything() }),
+			}),
+		);
+	});
+
+	it("counts a sweeper re-run's success as recovered", async () => {
+		mockExtract.mockResolvedValue(EXTRACTION);
+		pendingRow();
+		await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a", { recovery: true });
+		expect(mockOcrRead).toHaveBeenCalledWith("textract", "recovered");
+	});
+
+	it("counts a read a newer photo replaced as superseded", async () => {
+		mockExtract.mockResolvedValue(EXTRACTION);
+		pendingRow({ receipt_image_hash: "hash-b" });
+		await runReceiptOcr(ORG, PURCHASE, FILE, "hash-a");
+		expect(mockOcrRead).toHaveBeenCalledWith("textract", "superseded");
+		expect(mockOcrFlags).not.toHaveBeenCalled();
+	});
+
+	describe("readInFlight", () => {
+		const now = Date.parse("2026-11-06T12:00:00Z");
+		const ago = (ms: number) => new Date(now - ms);
+
+		it("goes by ocr_started_at, so an edit mid-read does not make it look younger", () => {
+			const row = {
+				ocr_status: "pending",
+				ocr_started_at: ago(OCR_STALE_MS + 1),
+				updated_at: ago(1_000),
+			};
+			expect(readInFlight(row, now)).toBe(false);
+			expect(readInFlight({ ...row, ocr_started_at: ago(5_000) }, now)).toBe(true);
+		});
+
+		it("falls back to updated_at for a read started before the column existed", () => {
+			const legacy = { ocr_status: "pending", ocr_started_at: null };
+			expect(readInFlight({ ...legacy, updated_at: ago(5_000) }, now)).toBe(true);
+			expect(readInFlight({ ...legacy, updated_at: ago(OCR_STALE_MS + 1) }, now)).toBe(false);
+		});
+
+		it("is never in flight unless pending", () => {
+			expect(readInFlight({ ocr_status: "failed", ocr_started_at: ago(0) }, now)).toBe(false);
+		});
+	});
+
+	const freshFile = { buffer: Buffer.from("fresh"), mimetype: "image/jpeg", originalname: "r.jpg" };
+
+	it("an upload that reads stamps the start and a fresh attempt count", async () => {
+		mockExtract.mockReturnValue(new Promise(() => {}));
+		mockDb.field_purchase.findFirst
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			.mockResolvedValueOnce(purchase() as any)
+			.mockResolvedValueOnce(null);
+		await uploadReceipt(ORG, PURCHASE, freshFile, {}, { techId: TECH });
+		const data = tx.field_purchase.update.mock.calls[0][0].data;
+		expect(data.ocr_status).toBe("pending");
+		expect(data.ocr_started_at).toBeInstanceOf(Date);
+		expect(data.ocr_attempts).toBe(1);
+	});
+
+	it("an upload past the scan meter counts as skipped and starts nothing", async () => {
+		mockConsume.mockResolvedValue({ allowed: false, used: 300, limit: 300 });
+		mockDb.field_purchase.findFirst
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			.mockResolvedValueOnce(purchase() as any)
+			.mockResolvedValueOnce(null);
+		await uploadReceipt(ORG, PURCHASE, freshFile, {}, { techId: TECH });
+		expect(mockOcrRead).toHaveBeenCalledWith("textract", "skipped");
+		expect(tx.field_purchase.update.mock.calls[0][0].data).not.toHaveProperty("ocr_started_at");
+	});
+
+	it("a technician's Try again restarts the attempt count", async () => {
+		mockDb.field_purchase.findFirst
+			.mockResolvedValueOnce({
+				id: PURCHASE,
+				status: "draft",
+				technician_id: TECH,
+				receipt_image_url: "https://bucket/receipts/r.jpg",
+			} as never)
+			.mockResolvedValueOnce({
+				receipt_image_url: "https://bucket/receipts/r.jpg",
+				receipt_image_hash: "hash-a",
+				ocr_status: "failed",
+			} as never);
+		mockConsume.mockResolvedValue({ allowed: true });
+		mockExtract.mockReturnValue(new Promise(() => {}));
+		mockGetBuffer.mockResolvedValue({ buffer: Buffer.from("x"), contentType: "image/jpeg" });
+		mockDb.field_purchase.update.mockResolvedValue({} as never);
+		const res = await retryOcr(ORG, PURCHASE, { techId: TECH } as never);
+		expect(res.started).toBe(true);
+		const data = mockDb.field_purchase.update.mock.calls[0][0].data;
+		expect(data.ocr_started_at).toBeInstanceOf(Date);
+		expect(data.ocr_attempts).toBe(1);
 	});
 });

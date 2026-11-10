@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AccessCard, { type AccessCardUser } from "../AccessCard";
 import type { OrganizationRole } from "../../../types/organizations";
@@ -50,10 +50,12 @@ function makeUser(overrides: Partial<AccessCardUser> = {}): AccessCardUser {
 
 // Enter edit mode and swap the single held permission (View Jobs) for View Clients,
 // so the draft becomes exactly {view_clients} — a set both tiers can express.
+// jsdom renders both layouts; click in the stacked (phone) one.
 async function draftViewClientsOnly() {
 	await userEvent.click(screen.getByRole("button", { name: "Edit access" }));
-	await userEvent.click(screen.getByTitle("view_jobs"));
-	await userEvent.click(screen.getByTitle("view_clients"));
+	const stacked = within(screen.getByRole("list"));
+	await userEvent.click(stacked.getByTitle("view_jobs"));
+	await userEvent.click(stacked.getByTitle("view_clients"));
 	await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 }
 

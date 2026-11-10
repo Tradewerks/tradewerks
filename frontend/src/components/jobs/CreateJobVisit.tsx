@@ -12,7 +12,7 @@ import {
 	type LineItemDisposition,
 } from "../../types/common";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
-import { useAllJobVisitsQuery } from "../../hooks/useJobs";
+import { useAllJobVisitsQuery, useJobByIdQuery } from "../../hooks/useJobs";
 import { useAllClientsQuery } from "../../hooks/useClients";
 import {
 	useDraftsByTypeQuery,
@@ -26,9 +26,12 @@ import DatePicker from "../ui/DatePicker";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import { docKeptEstimate, jobKeptSource, keptRateOptionLabel } from "../../lib/taxEditorMode";
 import { useVehiclesQuery } from "../../hooks/useVehicles";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import { useLineItems } from "../../hooks/forms/useLineItems";
+import { useLineItemsForCalc } from "../../hooks/forms/useLineItemsForCalc";
 import TimeConstraints, { type TimeConstraintsState } from "../ui/forms/TimeConstraints";
 import { createStepRouter } from "../../hooks/forms/useZodStepRouting";
 import {
@@ -128,17 +131,14 @@ const CreateJobVisit = ({
 	const { data: vehicles = [] } = useVehiclesQuery("active");
 
 	const { data: taxGroups = [] } = useTaxGroups();
+	const autoModeLoaded = useAutoTaxMode();
+	const autoMode = autoModeLoaded === true;
+	const { data: job } = useJobByIdQuery(jobId);
+	const keptEstimate = docKeptEstimate(null, jobKeptSource(job), autoModeLoaded);
+	const keptRateLabel = keptEstimate ? keptRateOptionLabel(keptEstimate) : null;
+	const clientTaxGroupId = job?.client?.tax_group_id ?? null;
 
-	const lineItemsForCalc = useMemo(
-		() =>
-			lineItems.activeLineItems.map((item) => ({
-				id: item.id,
-				total: Number(item.total),
-				taxable: item.taxable ?? true,
-				tax_group_id: item.tax_group_id ?? null,
-			})),
-		[lineItems.activeLineItems],
-	);
+	const lineItemsForCalc = useLineItemsForCalc(lineItems.activeLineItems, clientTaxGroupId);
 
 	const { groupsSummary, totalTax, resolvedTotal } = useFinancialCalculations(
 		lineItems.subtotal,
@@ -148,6 +148,7 @@ const CreateJobVisit = ({
 			clientExempt,
 			initialDiscountType: "amount",
 			initialDiscountValue: 0,
+			rounding: "jurisdiction_half_up",
 		},
 	);
 
@@ -363,6 +364,7 @@ const CreateJobVisit = ({
 						item_type?: string | null;
 						taxable?: boolean | null;
 						tax_group_id?: string | null;
+						inventory_item_id?: string | null;
 					}>;
 					time_constraints?: {
 						arrivalConstraint: string;
@@ -907,6 +909,8 @@ const CreateJobVisit = ({
 								lineItems.setLineItemTaxGroup(id, groupId, taxable);
 								markDirty();
 							}}
+							autoMode={autoMode}
+							keptRateLabel={keptRateLabel}
 							onTaxGroupBulkSet={(groupId, taxable) => {
 								lineItems.setAllLineItemsTaxGroup(groupId, taxable);
 								markDirty();
@@ -1031,6 +1035,7 @@ const CreateJobVisit = ({
 		}
 	}, [
 		isSourceSearchOpen,
+		autoMode,
 		sourceMode,
 		draftResults,
 		handleSelectDraft,

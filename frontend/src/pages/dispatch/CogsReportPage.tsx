@@ -23,6 +23,7 @@ import {
 import { formatCurrency } from "../../util/util";
 import { parseDateRangeFromParams, resolveDateRange } from "../../util/dateRangeUtils";
 import { useCogsByJobReportQuery, useCogsByItemReportQuery } from "../../hooks/useReports";
+import { useReportSort } from "../../hooks/useReportSort";
 import type { CogsTrendPoint, ReportFetchParams } from "../../types/reports";
 import CogsTrendChart from "../../components/reports/CogsTrendChart";
 
@@ -62,6 +63,8 @@ const ITEM_COLUMN_ALIGN = buildColumnAlign(ITEM_COLS, [
 	"qtyConsumed",
 	"jobCount",
 ]);
+const NUMERIC_KEYS = ["totalCogs", "avgUnitCost", "itemCount", "qtyConsumed", "jobCount"];
+const DATE_KEYS = ["lastConsumedAt"];
 
 interface CogsSummary {
 	totalCogs?: number;
@@ -97,6 +100,7 @@ export default function CogsReportPage() {
 
 	const [page, setPage] = useState(0);
 	const [pageSize, setPageSize] = useState(50);
+	const { sort, tableProps } = useReportSort(NUMERIC_KEYS, DATE_KEYS);
 
 	const searchTerms = useMemo(() => {
 		const t = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
@@ -111,8 +115,9 @@ export default function CogsReportPage() {
 			page,
 			limit: pageSize,
 			conditions: missingOnly ? [MISSING_COST_CONDITION] : undefined,
+			...sort,
 		}),
-		[startDate, endDate, searchTerms, page, pageSize, missingOnly],
+		[startDate, endDate, searchTerms, page, pageSize, missingOnly, sort],
 	);
 
 	const jobQuery = useCogsByJobReportQuery(queryParams, view === "job");
@@ -124,7 +129,15 @@ export default function CogsReportPage() {
 	const hasMore = data?.hasMore ?? false;
 	const summary = useMemo(() => (data?.summary ?? {}) as CogsSummary, [data]);
 
-	const filterKey = JSON.stringify([view, missingOnly, startDate, endDate, searchTerms, pageSize]);
+	const filterKey = JSON.stringify([
+		view,
+		missingOnly,
+		startDate,
+		endDate,
+		searchTerms,
+		pageSize,
+		sort,
+	]);
 	useEffect(() => {
 		setPage(0);
 	}, [filterKey]);
@@ -270,7 +283,13 @@ export default function CogsReportPage() {
 									filename: datedFilename(view === "job" ? "cogs-by-job" : "cogs-by-item"),
 									sheetName: view === "job" ? "COGS by Job" : "COGS by Item",
 									columns: visibleColumns,
-									params: { startDate, endDate, searchTerms, conditions: queryParams.conditions },
+									params: {
+										startDate,
+										endDate,
+										searchTerms,
+										conditions: queryParams.conditions,
+										...sort,
+									},
 								})
 							}
 							disabled={total === 0}
@@ -324,6 +343,7 @@ export default function CogsReportPage() {
 							columnVisibility={columnVisibility}
 							headerLabels={headerLabels}
 							columnAlign={columnAlign}
+							{...tableProps}
 							onRowClick={(row) =>
 								navigate(
 									view === "job"

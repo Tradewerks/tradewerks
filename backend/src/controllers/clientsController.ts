@@ -9,6 +9,16 @@ import { logActivity, buildChanges } from "../services/logger.js";
 import { log } from "../services/appLogger.js";
 import { insertContact } from "./contactsController.js"
 import { getOrgRealmId } from "../services/quickbooksService.js";
+import { Prisma } from "../../generated/prisma/client.js";
+import { getEffectiveTaxMode } from "../services/tax/taxMode.js";
+import {
+	AddressTaxChoiceError,
+	addressMoves,
+	addressTaxChoiceRefusal,
+	applyAddressTaxChoiceToFamily,
+	choiceActor,
+	keptFamily,
+} from "../lib/addressTaxChoice.js";
 
 const buildClientInclude = () => ({
 	jobs: {
@@ -119,6 +129,7 @@ export const insertClient = async (
 					address: parsed.address,
 					coords: parsed.coords!, // fillCoords guarantees coords once address (required) is set
 					is_active: parsed.is_active ?? true,
+					is_tax_exempt: parsed.is_tax_exempt,
 					last_activity: new Date(),
 				},
 			});
@@ -151,6 +162,7 @@ export const insertClient = async (
 					name: { old: null, new: client.name },
 					address: { old: null, new: client.address },
 					is_active: { old: null, new: client.is_active },
+					is_tax_exempt: { old: null, new: client.is_tax_exempt },
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
@@ -217,11 +229,25 @@ export const updateClient = async (
 			return { err: "Client not found" };
 		}
 
+		// Job-less draft invoices are taxed at the client's address.
+		const addressFamily =
+			addressMoves(data, parsed, existing) &&
+			(await getEffectiveTaxMode(organizationId)) !== "auto"
+				? await keptFamily(sdb as unknown as Prisma.TransactionClient, organizationId, {
+						kind: "client",
+						id,
+					})
+				: null;
+		if (addressFamily && !parsed.address_tax_choice) {
+			return { ...addressTaxChoiceRefusal(addressFamily), item: undefined };
+		}
+
 		const changes = buildChanges(existing, parsed, [
 			"name",
 			"address",
 			"coords",
 			"is_active",
+			"is_tax_exempt",
 		] as const);
 
 		const updated = await sdb.$transaction(async (tx) => {
@@ -238,9 +264,22 @@ export const updateClient = async (
 					...(parsed.is_active !== undefined && {
 						is_active: parsed.is_active,
 					}),
+					...(parsed.is_tax_exempt !== undefined && {
+						is_tax_exempt: parsed.is_tax_exempt,
+					}),
 					last_activity: new Date(),
 				},
 			});
+
+			if (addressFamily && parsed.address_tax_choice) {
+				await applyAddressTaxChoiceToFamily(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					{ kind: "client", id },
+					parsed.address_tax_choice,
+					choiceActor(context),
+				);
+			}
 
 			if (Object.keys(changes).length > 0) {
 				await logActivity({
@@ -276,6 +315,7 @@ export const updateClient = async (
 					.join(", ")}`,
 			};
 		}
+		if (e instanceof AddressTaxChoiceError) return { err: e.message };
 		return { err: "Internal server error" };
 	}
 };
@@ -349,6 +389,9 @@ export const deleteClient = async (
 		return { err: "", message: "Client deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Delete client error");
+		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+			return { err: "This client has invoices or is linked to QuickBooks, so it can't be deleted. Mark the client inactive instead." };
+		}
 		return { err: "Failed to delete client. It may have related records." };
 	}
 };

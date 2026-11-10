@@ -790,6 +790,9 @@ export const deleteVehicleStockItem = async (vehicleId: string, itemId: string, 
 			return { err: "Stock quantity mismatch — run an audit adjustment before removing this item" };
 		}
 		log.error({ err: e }, "Failed to delete vehicle stock item");
+		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+			return { err: "This stock item has usage, restock or adjustment history, so it can't be removed." };
+		}
 		return { err: "Failed to delete stock item" };
 	}
 };
@@ -1287,6 +1290,7 @@ export const addPartsUsed = async (visitId: string, data: unknown, organizationI
 					item_type:          "material",
 					sort_order:         0,
 					inventory_item_id:  stockItem.inventory_item_id,
+					taxable:            stockItem.inventory_item.taxable,
 					fulfillment_status: "used",
 				},
 			});

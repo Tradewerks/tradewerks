@@ -12,6 +12,8 @@ vi.mock("../../../hooks/useOrg", () => ({
 	useUploadOrgLogo: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useDeleteOrgLogo: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useUpdateOrgSettings: () => ({ mutateAsync: state.update, isPending: false }),
+	useOrgCosting: () => ({ data: undefined, isLoading: false }),
+	useUpdateOrgCosting: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock("../../../hooks/usePermission", () => ({ usePermission: () => true }));
 vi.mock("../TaxSettingsSection", () => ({ default: () => null }));
@@ -66,7 +68,7 @@ describe("org settings radio groups", () => {
 		});
 		render(<SettingsSection />);
 		fireEvent.click(screen.getByRole("radio", { name: /Metric/ }));
-		fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+		fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
 		await waitFor(() =>
 			expect(state.update).toHaveBeenCalledWith(
 				expect.objectContaining({ measurement_system: "metric" })
@@ -80,7 +82,7 @@ describe("org settings radio groups", () => {
 
 	test("after a no-change save, a later logo refetch keeps an unsaved radio change", async () => {
 		const { rerender } = render(<SettingsSection />);
-		fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+		fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
 		await waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(screen.getByText("Changes saved.")).toBeInTheDocument());
 		fireEvent.click(screen.getByRole("radio", { name: /Dispatch prepared/ }));
@@ -91,7 +93,7 @@ describe("org settings radio groups", () => {
 
 	test("a no-change save omits brand_color when the server has none", async () => {
 		render(<SettingsSection />);
-		fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+		fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
 		await waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
 		expect(state.update.mock.calls[0][0]).not.toHaveProperty("brand_color");
 	});
@@ -101,7 +103,7 @@ describe("org settings radio groups", () => {
 		fireEvent.change(screen.getByPlaceholderText("#1e3a5f"), {
 			target: { value: "#ff0000" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+		fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
 		await waitFor(() =>
 			expect(state.update).toHaveBeenCalledWith(
 				expect.objectContaining({ brand_color: "#ff0000" })

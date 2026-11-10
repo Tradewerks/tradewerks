@@ -12,8 +12,10 @@ import {
 	deriveAllocationAmounts,
 	evaluateFlags,
 	findDuplicate,
+	normalizeVendor,
 	spendWindows,
 	spreadEstimate,
+	vendorsNear,
 	velocityFlags,
 } from "../fieldPurchase.js";
 
@@ -354,6 +356,28 @@ describe("findDuplicate", () => {
 		expect(findDuplicate(subject, [prior({ vendor_name: "GRAINGER  114" })])?.level).toBe("exact");
 	});
 
+	it("matches a vendor whose printed lines OCR returned in a different order", () => {
+		const lowes = { ...subject, vendor_name: "LOWE'S HOME CENTERS, LLC" };
+		expect(
+			findDuplicate(lowes, [prior({ vendor_name: "HOME CENTERS, LLC\nLOWE'S" })])?.level,
+		).toBe("exact");
+		expect(
+			findDuplicate({ ...lowes, receipt_number: "2447105" }, [
+				prior({
+					vendor_name: "HOME CENTERS, LLC\nLOWE'S #1234",
+					total: 12.0,
+					receipt_number: "2447105",
+				}),
+			])?.level,
+		).toBe("exact");
+	});
+
+	it("flags a vendor whose logo OCR read as one word", () => {
+		const fred = { ...subject, vendor_name: "Fred Meyer" };
+		expect(findDuplicate(fred, [prior({ vendor_name: "FredMeyer" })])?.level).toBe("near");
+		expect(findDuplicate(fred, [prior({ vendor_name: "Fresh Market" })])).toBeNull();
+	});
+
 	it("does not match a different vendor, day, or amount", () => {
 		expect(findDuplicate(subject, [prior({ vendor_name: "Ferguson" })])).toBeNull();
 		expect(
@@ -391,9 +415,77 @@ describe("findDuplicate", () => {
 				}),
 			],
 		);
-		// Same vendor, same ticket number: a different date and total cannot make it a
-		// different receipt, so this outranks the fuzzy tier entirely.
+		// Two days apart: store ticket numbers are per-register counters, so this may be a
+		// different receipt. Flag it for the dispatcher, never refuse it.
+		expect(v?.level).toBe("near");
+		expect(v?.purchase_id).toBe("fp-prior");
+	});
+
+	it("refuses a reused ticket number when the dates are within a day", () => {
+		const v = findDuplicate(
+			{
+				vendor_name: "Ferguson",
+				purchased_at: new Date("2026-08-21T15:00:00Z"),
+				total: 65.27,
+				receipt_number: "884213",
+			},
+			[
+				prior({
+					vendor_name: "FERGUSON #12",
+					purchased_at: new Date("2026-08-21T09:00:00Z"),
+					total: 40.0,
+					receipt_number: "884213",
+				}),
+			],
+		);
+		// A misread total on a re-photographed receipt does not make it a new receipt.
 		expect(v?.level).toBe("exact");
+	});
+
+	it("only flags a ticket-number collision from the same chain months apart", () => {
+		const v = findDuplicate(
+			{
+				vendor_name: "THE HOME DEPOT",
+				purchased_at: new Date("2025-03-14"),
+				total: 391.69,
+				receipt_number: "14854",
+			},
+			[
+				prior({
+					vendor_name: "The Home Depot #3008",
+					purchased_at: new Date("2022-01-20"),
+					total: 430.57,
+					receipt_number: "14854",
+				}),
+			],
+		);
+		expect(v?.level).toBe("near");
+	});
+
+	it("only flags a ticket-number match when either date is unknown", () => {
+		const subjectNoDate = {
+			vendor_name: "Ferguson",
+			purchased_at: null,
+			total: 65.27,
+			receipt_number: "884213",
+		};
+		expect(
+			findDuplicate(subjectNoDate, [prior({ vendor_name: "Ferguson", receipt_number: "884213" })])
+				?.level,
+		).toBe("near");
+	});
+
+	it("still refuses on an exact triple when a number match elsewhere was only near", () => {
+		const v = findDuplicate({ ...subject, receipt_number: "884213" }, [
+			prior({
+				id: "old-ticket",
+				purchased_at: new Date("2026-01-02T09:00:00Z"),
+				total: 12.0,
+				receipt_number: "884213",
+			}),
+			prior({ id: "same-triple" }),
+		]);
+		expect(v).toMatchObject({ level: "exact", purchase_id: "same-triple" });
 	});
 
 	it("does not match two receipts that merely both lack a number", () => {
@@ -596,5 +688,23 @@ describe("spreadEstimate", () => {
 
 	it("has nothing to say about a purchase with no jobs", () => {
 		expect(spreadEstimate([], 500).size).toBe(0);
+	});
+});
+
+describe("vendorsNear", () => {
+	const near = (a: string, b: string) => vendorsNear(normalizeVendor(a), normalizeVendor(b));
+
+	it("ignores a leading 'the' alongside a printed store number", () => {
+		expect(near("HOME DEPOT #6977", "The Home Depot")).toBe(true);
+		expect(near("The Home Depot", "HOME DEPOT #6977")).toBe(true);
+	});
+
+	it("still tells different stores apart", () => {
+		expect(near("The Home Depot", "Lowe's")).toBe(false);
+		expect(near("HOME DEPOT #6977", "Ace Hardware #12")).toBe(false);
+	});
+
+	it("drops 'the' only as a whole word", () => {
+		expect(normalizeVendor("The Theater Supply")).toBe("supply theater");
 	});
 });

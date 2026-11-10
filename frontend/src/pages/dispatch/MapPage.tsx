@@ -52,7 +52,7 @@ export default function MapPage() {
 	if (isLoading) return <p>Loading map data...</p>;
 
 	return (
-		<div className="flex flex-col lg:flex-row gap-4 lg:h-[840px]">
+		<div data-page-width="full" className="flex flex-col lg:flex-row gap-4 lg:h-full lg:min-h-[28rem]">
 			<div className="flex-1 min-w-0 lg:h-full">
 				<Card
 					title="Map View"
@@ -67,10 +67,10 @@ export default function MapPage() {
 						</button>
 					}
 				>
-					<div className="space-y-4">
+					<div className="flex h-full min-h-0 flex-col gap-4">
 						<div
 							ref={mapContainerRef}
-							className="w-full h-[700px] bg-surface rounded-lg border border-border overflow-hidden"
+							className="w-full h-[700px] lg:h-auto lg:min-h-[20rem] lg:flex-1 bg-surface rounded-lg border border-border overflow-hidden"
 						>
 							<DynamicMap
 								containerRef={mapContainerRef}

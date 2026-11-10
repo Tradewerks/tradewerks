@@ -23,7 +23,9 @@ interface FunnelDatum {
 }
 
 const STAGE_META: { key: keyof QuoteFunnelStages; label: string; fill: string }[] = [
-	{ key: "created", label: "Created", fill: "var(--color-chart-primary)" },
+	// Every quote in the period, Drafts included. Not "Created": that is the
+	// display name of the Issued stage below.
+	{ key: "created", label: "All quotes", fill: "var(--color-chart-primary)" },
 	{ key: "issued", label: "Created", fill: "var(--color-chart-info)" },
 	{ key: "sent", label: "Sent", fill: "var(--color-chart-warning)" },
 	{ key: "viewed", label: "Viewed", fill: "var(--color-orange)" },

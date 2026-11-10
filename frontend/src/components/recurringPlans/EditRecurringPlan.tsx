@@ -11,18 +11,26 @@ import {
 } from "../../types/recurringPlans";
 import {
 	type LineItemType,
+	type EditableLineItem,
 	PriorityValues,
 	type Priority,
 } from "../../types/common";
 import { useAllClientsQuery } from "../../hooks/useClients";
-import { useUpdateRecurringPlanMutation } from "../../hooks/useRecurringPlans";
+import {
+	useUpdateRecurringPlanMutation,
+	useDebouncedRecurringTaxEstimate,
+} from "../../hooks/useRecurringPlans";
 import { normalizeCoords, type GeocodeResult } from "../../types/location";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
 
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import LineItemsSection from "../ui/forms/LineItemsSection";
+import RecurringTaxEstimate from "./RecurringTaxEstimate";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
+import { useTaxGroups } from "../../hooks/useTaxGroups";
+import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
+import { lineTaxPayload } from "../../lib/taxEditorMode";
 import { useVehiclesQuery } from "../../hooks/useVehicles";
 import TimeConstraints, { type TimeConstraintsState } from "../ui/forms/TimeConstraints";
 import {
@@ -134,10 +142,20 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 		undoLineItemField,
 		setLineItemInventoryItem,
 		setLineItemDisposition,
+		setLineItemTaxGroup,
 		clearLineItemField,
 	} = useLineItems({ minItems: 0, mode: "edit" });
 
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
+	const { data: taxGroups = [] } = useTaxGroups();
+	const autoMode = useAutoTaxMode() === true;
+	const { data: taxEstimate } = useDebouncedRecurringTaxEstimate({
+		clientId,
+		address: geoData?.address,
+		coords: geoData?.coords,
+		lineItems: activeLineItems,
+		planId: plan.id,
+	});
 	const { data: vehicles = [] } = useVehiclesQuery("active");
 	const validateStep1 = useCallback((): boolean => {
 		return !!(
@@ -320,6 +338,8 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 					item_type: (item.item_type || "") as LineItemType | "",
 					total: Number(item.quantity) * Number(item.unit_price),
 					inventory_item_id: item.inventory_item_id ?? null,
+					taxable: item.taxable ?? true,
+					tax_group_id: item.tax_group_id ?? null,
 					disposition: item.disposition ?? null,
 					disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 					isNew: false,
@@ -372,6 +392,9 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 		const preparedLineItems = activeLineItems
 			.filter((item) => item.name.trim() !== "" && item.quantity > 0)
 			.map((item, index) => ({
+				// Without the id the server deletes and recreates every line instead of
+				// updating in place.
+				id: (item as EditableLineItem).entity_line_item_id,
 				name: item.name,
 				description: item.description || undefined,
 				quantity: Number(item.quantity),
@@ -380,9 +403,10 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 					| LineItemType
 					| undefined,
 				sort_order: index,
-				// Update replaces the template wholesale; omitting these NULLs
-				// out what the plan already had.
+				// Lines carry their id, so the backend updates in place and keeps
+				// omitted keys; an explicit null clears. New lines need these on create.
 				inventory_item_id: item.inventory_item_id ?? null,
+				...lineTaxPayload(item),
 				disposition: item.disposition ?? null,
 				disposition_vehicle_id: item.disposition_vehicle_id ?? null,
 			}));
@@ -787,6 +811,9 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 							showDisposition
 							vehicles={vehicles}
 							onDispositionChange={setLineItemDisposition}
+							taxGroups={taxGroups}
+							onTaxChange={setLineItemTaxGroup}
+							autoMode={autoMode}
 							lineItems={activeLineItems}
 							isLoading={isLoading}
 							onAdd={addLineItem}
@@ -799,6 +826,9 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 							onUndo={undoLineItemField}
 							onClear={clearLineItemField}
 						/>
+						<div className="pt-3">
+							<RecurringTaxEstimate estimate={taxEstimate} />
+						</div>
 					</div>
 				);
 
@@ -848,6 +878,10 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 		setLineItemInventoryItem,
 		vehicles,
 		setLineItemDisposition,
+		setLineItemTaxGroup,
+		taxGroups,
+		autoMode,
+		taxEstimate,
 		ErrorDisplay,
 	]);
 
