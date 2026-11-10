@@ -343,7 +343,7 @@ router.put("/:id/vehicle", requireModule("fleet"), requireAnyPermissionOrSelf(["
 });
 
 // Shift start (Offline → Available) or return from break
-router.post("/:id/available", async (req, res, next) => {
+router.post("/:id/available", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -385,7 +385,7 @@ router.post("/:id/available", async (req, res, next) => {
 });
 
 // Shift end → Offline
-router.post("/:id/offline", async (req, res, next) => {
+router.post("/:id/offline", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -416,7 +416,7 @@ router.post("/:id/offline", async (req, res, next) => {
 });
 
 // Take a break
-router.post("/:id/break", async (req, res, next) => {
+router.post("/:id/break", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -445,7 +445,7 @@ router.post("/:id/break", async (req, res, next) => {
 
 
 // Tech explicitly clears WrappingUp → Available
-router.post("/:id/done", async (req, res, next) => {
+router.post("/:id/done", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -471,7 +471,7 @@ router.post("/:id/done", async (req, res, next) => {
 });
 
 // Tech explicitly clears WrappingUp → EnRoute (heading back)
-router.post("/:id/head-back", async (req, res, next) => {
+router.post("/:id/head-back", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
