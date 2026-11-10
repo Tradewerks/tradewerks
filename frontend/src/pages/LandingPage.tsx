@@ -77,7 +77,7 @@ export default function LandingPage() {
 				>
 					<a
 						href="#top"
-						className="flex items-center gap-2.5 text-ink"
+						className="flex items-center gap-1.5 text-ink"
 					>
 						<Logo />
 						<div className="text-[19px] font-bold tracking-[-0.02em]">

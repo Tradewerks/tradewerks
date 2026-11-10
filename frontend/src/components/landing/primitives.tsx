@@ -61,10 +61,8 @@ export function SplitIntro({
 	);
 }
 
+// The landing and legal pages are light-only, so they use the light mark.
+// Decorative: it always sits next to the "TradeWerks" wordmark.
 export function Logo() {
-	return (
-		<div className="flex size-7 items-center justify-center rounded-[7px] bg-brand">
-			<div className="size-2.5 rounded-[2px] bg-lime" />
-		</div>
-	);
+	return <img src="/logo-light.svg" alt="" className="size-8" />;
 }

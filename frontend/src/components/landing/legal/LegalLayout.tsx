@@ -23,7 +23,7 @@ export default function LegalLayout({ title, children }: { title: string; childr
 
 			<header className="border-b border-line bg-paper">
 				<div className={`${container} flex items-center justify-between py-3.5`}>
-					<a href="/" className="flex items-center gap-2.5 text-ink">
+					<a href="/" className="flex items-center gap-1.5 text-ink">
 						<Logo />
 						<div className="text-[19px] font-bold tracking-[-0.02em]">
 							{LEGAL.company}
