@@ -982,7 +982,10 @@ export const deleteInvoicePayment = async (
 		const invoice = await sdb.invoice.findFirst({
 			where: { id: invoiceId },
 		});
-		if (invoice?.status === "Void") {
+		if (!invoice) {
+			return {err: "Invoice not found"};
+		}
+		if (invoice.status === "Void") {
 			return { err: "Cannot modify payments on a void invoice" };
 		}
 

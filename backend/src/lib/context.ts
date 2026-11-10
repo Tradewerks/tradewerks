@@ -92,7 +92,7 @@ const ORG_SCOPED_MODELS = new Set([
  *
  * Models still relying on caller-provided parent scoping (not auto-enforced):
  * job_visit_line_item, job_visit_technician, quote_line_item,
- * recurring_occurrence, invoice_line_item, invoice_payment, client_contact.
+ * recurring_occurrence, invoice_line_item, client_contact.
  * Add them here as needed.
  *
  * Keys are matched by exact string against the Prisma model name, which is
@@ -120,6 +120,7 @@ const RELATION_SCOPED_MODELS: Record<string, (organizationId: string) => Record<
 	dispatcher_notification: (o) => ({ dispatcher: { organization_id: o } }),
 	technician_shift: (o) => ({ tech: {organization_id: o }}),
 	technician_shift_break: (o) => ({ shift: { tech: { organization_id: o }}}),
+	invoice_payment: (o) => ({ invoice: { organization_id: o }})
 };
 
 // Returns the where-fragment that pins a row to the caller's org, or null if the

@@ -100,6 +100,17 @@ describe("getScopedDb — read scoping", () => {
 		});
 	});
 
+	it("scopes invoice_payment through invoice.organization_id", async () => {
+		const { query } = await runHook(ORG_A, "findFirst", "invoice_payment", { where: { id: "p1" } });
+		expect(query).toHaveBeenCalledWith({
+			where: { AND: [{ id: "p1" }, { invoice: { organization_id: ORG_A } }] },
+		});
+		const del = await runHook(ORG_A, "delete", "invoice_payment", { where: { id: "p1" } });
+		expect(del.query).toHaveBeenCalledWith({
+			where: { id: "p1", invoice: { organization_id: ORG_A } },
+		});
+	});
+
 	it("leaves unscoped models untouched", async () => {
 		const { query } = await runHook(ORG_A, "findMany", FREE_MODEL, { where: { id: "x" } });
 		expect(query).toHaveBeenCalledWith({ where: { id: "x" } });
