@@ -114,34 +114,38 @@ export async function enableTotp(userId: string, role: string, code: string, via
     return { data: { backupCodes: codes } };
 }
 
+export type MfaCodeResult = "ok" | "invalid" | "locked" | "not_enabled";
+
+export async function checkMfaCode(userId: string, role: string, code?: string, backupCode?: string): Promise<MfaCodeResult> {
+    const credential = await db.mfa_credential.findUnique({
+        where: { user_id_role: { user_id: userId, role: role } }
+    });
+    if (!credential?.enabled) return "not_enabled";
+    if (isLocked(credential)) return "locked";
+
+    const ok = (await acceptTotp(credential, code)) || (await spendRecoveryCode(userId, role, backupCode));
+    if (!ok) {
+        const attempts = await countFailedCode(credential.id);
+        log.info({ userId, role, attempts }, "MFA verify failed");
+        return "invalid";
+    }
+
+    await db.mfa_credential.update({
+        where: { id: credential.id },
+        data: { failed_attempts: 0, locked_until: null}
+    });
+    return "ok";
+}
+
 export async function verifyMfa(res: Response, pendingToken: string, code?: string, backupCode?: string) {
     const pt = verifyPendingToken(pendingToken);
     if (pt.stage !== "pending_totp") {
         return createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid session");
     }
-    const credential = await db.mfa_credential.findUnique({
-        where: { user_id_role: { user_id: pt.userId, role: pt.role } }
-    });
-    if (!credential || !credential.enabled) {
-        return createErrorResponse(ErrorCodes.INVALID_TOKEN, "MFA not enabled");
-    }
-    if (isLocked(credential)) {
-        return createErrorResponse(ErrorCodes.TOO_MANY_REQUESTS, "Too many attempts. Try again later.");
-    }
-
-    const ok =
-        (await acceptTotp(credential, code)) ||
-        (await spendRecoveryCode(pt.userId, pt.role, backupCode));
-    if (!ok) {
-        const attempts = await countFailedCode(credential.id);
-        log.info({ userId: pt.userId, role: pt.role, attempts }, "MFA verify failed");
-        return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
-    }
-
-    await db.mfa_credential.update({
-        where: { id: credential.id },
-        data: { failed_attempts: 0, locked_until: null },
-    });
+    const result = await checkMfaCode(pt.userId, pt.role, code, backupCode);
+    if (result === "not_enabled") return createErrorResponse(ErrorCodes.INVALID_TOKEN, "MFA not enabled");
+    if (result === "locked") return createErrorResponse(ErrorCodes.TOO_MANY_REQUESTS, "Too many attempts. Try again later.");
+    if (result === "invalid") return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
     return issueAuthTokens(res, pt.userId, pt.role);
 }
 

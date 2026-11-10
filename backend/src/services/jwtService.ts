@@ -11,7 +11,7 @@ interface User {
 	organization_id: string | null;
 	email: string;
 }
-type PendingStage = "pending_otp" | "pending_totp" | "pending_mfa_enroll";
+type PendingStage = "pending_otp" | "pending_totp" | "pending_mfa_enroll" | "pending_oauth_totp";
 
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;

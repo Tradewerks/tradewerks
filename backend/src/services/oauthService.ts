@@ -57,7 +57,8 @@ export const authenticateUser = async (email: string, password: string) => {
     const user = (await db.dispatcher.findUnique({ where: { email }, omit: { password: false } }))
               ?? (await db.technician.findUnique({ where: { email }, omit: { password: false } }));
     const ok = await bcrypt.compare(password, user?.password ?? DUMMY_PASSWORD_HASH);
-    if (!user || !ok) return null;
+    // after bcrypt so deactivated accounts take as long as a wrong password
+    if (!user || !ok || user.deactivated_at) return null;
     const role = "role" in user ? user.role : "technician";
     return { userId: user.id, role, organizationId: user.organization_id };
 }
