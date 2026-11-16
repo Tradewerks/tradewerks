@@ -605,7 +605,7 @@ router.delete("/clients/:clientId/notes/:noteId", requirePermission("edit_client
 
 router.get("/clients/:clientId/jobs", requireAnyPermission("view_clients", "view_jobs"), async (req, res, next) => {
     try {
-        const clientId = req.params.id as string;
+        const clientId = req.params.clientId as string;
         const orgId = req.user!.organization_id as string;
         const jobs = await getJobsByClientId(clientId, orgId);
         res.json(createSuccessResponse(jobs, { count: jobs.length }));
