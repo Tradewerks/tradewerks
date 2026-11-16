@@ -36,7 +36,7 @@ import {
 	mapMaintenanceRecord,
 	mapMaintenanceReminder,
 } from "../types/dto/vehicles.js";
-import { createMaintenanceRecordSchema, createMaintenanceReminderSchema, updateMaintenanceRecordSchema, updateMaintenanceReminderSchema } from "../lib/validate/vehicles.js";
+import { createMaintenanceRecordSchema, createMaintenanceReminderSchema, updateMaintenanceRecordSchema, updateMaintenanceReminderSchema, createVehicleSchema, updateVehicleSchema } from "../lib/validate/vehicles.js";
 import { classifyReminder, resolveDueTargets } from "../lib/validate/vehicleMaintenanceStatus.js";
 import { applyRecordOdometer } from "../lib/vehicleMileage.js";
 import { parentBreadcrumb } from "./logsController.js";
@@ -358,31 +358,6 @@ type LineTracking = { serial?: MovementInput["serial"]; batch_allocations?: Move
 // an opaque error from recordMovements or Postgres. Takes the base number
 // schema because .refine() yields a ZodEffects that loses .min()/.positive().
 const stockQtyField = (base: z.ZodNumber) => base.refine(isStorableStockQty, STOCK_QTY_MESSAGE);
-
-const createVehicleSchema = z.object({
-	name:          z.string().min(1).max(100),
-	type:          z.string().min(1).max(50),
-	license_plate: z.string().min(1).max(50),
-	year:          z.number().int().min(1900).max(2100).nullable().optional(),
-	make:          z.string().max(50).nullable().optional(),
-	model:         z.string().max(50).nullable().optional(),
-	color:         z.string().max(50).nullable().optional(),
-	status:        z.enum(["active", "inactive"]).default("active"),
-	notes:         z.string().max(1000).nullable().optional(),
-	current_odometer_mi: z.number().int().min(0).nullable().optional(),
-	stored_at: z.string().nullable().optional(),
-	stored_at_coords: z
-		.object({
-			lat: z.number(),
-			lon: z.number(),
-		})
-		.nullable()
-		.optional()
-		// Prisma Json columns reject plain null
-		.transform((v) => (v === null ? Prisma.DbNull : v)),
-});
-
-const updateVehicleSchema = createVehicleSchema.partial();
 
 const addStockItemSchema = z.object({
 	inventory_item_id: z.string().uuid(),

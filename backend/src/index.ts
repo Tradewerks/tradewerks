@@ -45,6 +45,8 @@ import { refreshAccessToken, verifyToken as verifyAccessToken } from "./services
 // ============================================
 // Routers
 // ============================================
+import { apiReference } from "@scalar/express-api-reference";
+import { docsCss, openApiDocument } from "./openapi.js";
 import clientsContactsRouter from "./routes/clientsContacts.js";
 import dispatchersRouter from "./routes/dispatchers.js";
 import disputesRouter from "./routes/disputes.js";
@@ -551,6 +553,27 @@ app.post("/integrations/postmark/webhook", handlePostmarkWebhook);
 // OAUTH2 AUTHORIZATION SERVER 
 // ================================================================================
 app.use("/oauth", oauthRouter);
+
+// ================================================================================
+// API documentation 
+// ================================================================================
+
+app.get("/favicon.ico", (_req, res) => res.status(204).end());
+app.get("/openapi.json", (_req, res) => res.json(openApiDocument));
+app.use(
+	"/docs",
+	apiReference({
+		url: "/openapi.json",
+		pageTitle: "TradeWerks API",
+		favicon: `${frontend}/favicon.svg`,
+		layout: "modern",
+		pathRouting: { basePath: "/docs" },
+		hideModels: true,
+		authentication: { preferredSecurityScheme: "bearerAuth" },
+		customCss: docsCss,
+		telemetry: false,
+	}),
+);
 
 // ================================================================================
 // MFA (public mount — the router applies its own per-route auth guards)
