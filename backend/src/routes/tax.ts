@@ -90,7 +90,7 @@ router.get("/rates", requirePermission("manage_taxes"), async (req, res, next) =
 router.post("/rates", requirePermission("manage_taxes"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
-		const result = await createTaxRate(req.body, orgId);
+		const result = await createTaxRate(req.body, orgId, getUserContext(req));
 		sendTaxResult(res, result, 201);
 	} catch (err) {
 		next(err);
@@ -101,7 +101,7 @@ router.patch("/rates/:id", requirePermission("manage_taxes"), async (req, res, n
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
-		const result = await updateTaxRate(id, req.body, orgId);
+		const result = await updateTaxRate(id, req.body, orgId, getUserContext(req));
 		sendTaxResult(res, result);
 	} catch (err) {
 		next(err);
@@ -112,7 +112,7 @@ router.delete("/rates/:id", requirePermission("manage_taxes"), async (req, res, 
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
-		const result = await deleteTaxRate(id, orgId);
+		const result = await deleteTaxRate(id, orgId, getUserContext(req));
 		sendTaxResult(res, result);
 	} catch (err) {
 		next(err);
@@ -148,7 +148,7 @@ router.get("/groups", requirePermission("manage_taxes"), async (req, res, next) 
 router.post("/groups", requirePermission("manage_taxes"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
-		const result = await createTaxGroup(req.body, orgId);
+		const result = await createTaxGroup(req.body, orgId, getUserContext(req));
 		sendTaxResult(res, result, 201);
 	} catch (err) {
 		next(err);
@@ -159,7 +159,7 @@ router.patch("/groups/:id", requirePermission("manage_taxes"), async (req, res, 
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
-		const result = await updateTaxGroup(id, req.body, orgId);
+		const result = await updateTaxGroup(id, req.body, orgId, getUserContext(req));
 		sendTaxResult(res, result);
 	} catch (err) {
 		next(err);
@@ -170,7 +170,7 @@ router.delete("/groups/:id", requirePermission("manage_taxes"), async (req, res,
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
-		const result = await deleteTaxGroup(id, orgId);
+		const result = await deleteTaxGroup(id, orgId, getUserContext(req));
 		sendTaxResult(res, result);
 	} catch (err) {
 		next(err);

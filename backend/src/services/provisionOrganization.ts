@@ -25,6 +25,11 @@ export function defaultDispatcherPermissions(): string[] {
 	return getAllPermissions("dispatcher").filter((p) => !DEFAULT_DISPATCHER_WITHHELD.has(p));
 }
 
+// Techs see only jobs they're assigned to by default.
+export function defaultTechnicianPermissions(): string[] {
+	return getAllPermissions("technician").filter((p) => p !== "view_all_jobs");
+}
+
 export interface ProvisionInput {
 	org: {
 		name: string;
@@ -123,7 +128,7 @@ export async function provisionOrganization(tx: Tx, input: ProvisionInput) {
 				organization_id: org.id,
 				name: "Default Technician",
 				base_tier: "technician",
-				permissions: getAllPermissions("technician"),
+				permissions: defaultTechnicianPermissions(),
 				is_default: true,
 			},
 		],

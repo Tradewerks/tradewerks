@@ -39,6 +39,7 @@ vi.mock("../../services/wasabiService.js", () => ({
 }));
 
 import { db } from "../../db.js";
+import { deleteFile } from "../../services/wasabiService.js";
 import { logActivity } from "../../services/logger.js";
 import { deleteInvoicePayment, deleteInvoiceNote } from "../invoicesController.js";
 import { deleteJobLineItem, deleteJob } from "../jobsController.js";
@@ -54,6 +55,7 @@ const lastLog = () => {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	fake.job_note_photo.findMany.mockResolvedValue([]);
 });
 
 describe("child *.deleted log rows carry a parent breadcrumb (review P2-7 / L2)", () => {
@@ -105,7 +107,12 @@ describe("child *.deleted log rows carry a parent breadcrumb (review P2-7 / L2)"
 	});
 
 	it("quote_line_item.deleted → quote, and the row is org-scoped", async () => {
-		fake.quote_line_item.findFirst.mockResolvedValue({ id: "qli-1", quote_id: "q-1", name: "Coil" });
+		fake.quote_line_item.findFirst.mockResolvedValue({
+			id: "qli-1",
+			quote_id: "q-1",
+			name: "Coil",
+			quote: { status: "Draft", job: null },
+		});
 		fake.quote_line_item.delete.mockResolvedValue({});
 		const result = await deleteQuoteItem("q-1", "qli-1", "org-1", { dispatcherId: "disp-1" });
 		expect(result.err).toBe("");
@@ -151,5 +158,31 @@ describe("child *.deleted log rows carry a parent breadcrumb (review P2-7 / L2)"
 				_parent_id: { old: null, new: "plan-1" },
 			},
 		});
+	});
+});
+
+describe("job delete — note photo files are removed from storage after the cascade", () => {
+	it("deletes every photo on the job's notes once the job is gone", async () => {
+		fake.job.findFirst.mockResolvedValue({ id: "job-1", job_number: "J-0001", name: "J", status: "Scheduled", project_id: null });
+		fake.job.delete.mockResolvedValue({});
+		fake.job_note_photo.findMany.mockResolvedValue([{ photo_url: "https://x/a.jpg" }, { photo_url: "https://x/b.jpg" }]);
+		vi.mocked(deleteFile).mockResolvedValue(undefined);
+
+		const r = await deleteJob("job-1", "org-1", { dispatcherId: "disp-1" });
+
+		expect(r.err).toBe("");
+		// getScopedDb ANDs an org filter onto the job filter.
+		expect(fake.job_note_photo.findMany.mock.calls[0][0].where.AND[0]).toEqual({ note: { job_id: "job-1" } });
+		expect(vi.mocked(deleteFile).mock.calls).toEqual([["https://x/a.jpg"], ["https://x/b.jpg"]]);
+	});
+
+	it("leaves the files when the delete is refused", async () => {
+		fake.job.findFirst.mockResolvedValue({ id: "job-1", job_number: "J-0001", name: "J", status: "Scheduled", project_id: null });
+		fake.job.delete.mockRejectedValue(Object.assign(new Error("fk"), { code: "P2003" }));
+		fake.job_note_photo.findMany.mockResolvedValue([{ photo_url: "https://x/a.jpg" }]);
+
+		await deleteJob("job-1", "org-1", { dispatcherId: "disp-1" }).catch(() => undefined);
+
+		expect(deleteFile).not.toHaveBeenCalled();
 	});
 });

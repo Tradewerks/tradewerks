@@ -29,6 +29,6 @@ export const verifyEmail = async (token: string, organizationId: string) => {
                     .join(", ")}`,
             };
         }
-        return { err: "Internal server error" };
+        throw e;
     }
 };

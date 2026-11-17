@@ -722,7 +722,7 @@ export const insertRecurringPlan = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert recurring plan error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1166,7 +1166,7 @@ export const updateRecurringPlan = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Update recurring plan error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1249,7 +1249,7 @@ export const updateRecurringPlanLineItems = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Update recurring plan line items error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1333,7 +1333,7 @@ export const upsertInvoiceSchedule = async (
 			};
 		}
 		log.error({ err: e }, "Upsert invoice schedule error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1438,7 +1438,7 @@ export const cancelRecurringPlan = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "Cancel recurring plan error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1552,7 +1552,7 @@ export const generateOccurrences = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Generate occurrences error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1617,7 +1617,7 @@ export const skipOccurrence = async (
 			};
 		}
 		log.error({ err: e }, "Skip occurrence error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1752,7 +1752,7 @@ export const rescheduleOccurrence = async (
 		if (e instanceof Error) {
 			return { err: e.message };
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1817,7 +1817,7 @@ export const bulkSkipOccurrences = async (
 			};
 		}
 		log.error({ err: e }, "Bulk skip occurrences error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1979,6 +1979,6 @@ export const generateVisitFromOccurrence = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Generate visit from occurrence error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

@@ -137,7 +137,7 @@ export const clockInVisit = async (
 		return { err: "", item: entry };
 	} catch (e) {
 		log.error({ err: e }, "clockInVisit failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -303,6 +303,6 @@ export const clockOutVisit = async (
 		return { err: "", item: result };
 	} catch (e) {
 		log.error({ err: e }, "clockOutVisit failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

@@ -219,7 +219,7 @@ router.post(
 );
 
 
-router.put("/:id", requirePermission("manage_technicians"), async (req, res, next) => {
+router.put("/:id", requirePermission("manage_vehicles"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const context = getUserContext(req);

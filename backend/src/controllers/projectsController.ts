@@ -12,6 +12,7 @@ import { logActivity, buildChanges } from "../services/logger.js";
 import { emitToOrg } from "../services/socketService.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { log } from "../services/appLogger.js";
+import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 import { generateProjectNumber } from "../db.js";
 
 // Expected, user-facing failures (not found / conflict). Anything else that
@@ -320,6 +321,12 @@ export const deleteProject = async (orgId: string, id: string, context?: UserCon
             return { err: "Project not found" };
         }
 
+        // The cascade drops these rows; read the files to clean up first.
+        const photos = await sdb.project_note_photo.findMany({
+            where: { note: { project_id: id } },
+            select: { photo_url: true },
+        });
+
         await sdb.$transaction(async (tx) => {
             await tx.project.delete({
                 where: {id}
@@ -346,6 +353,7 @@ export const deleteProject = async (orgId: string, id: string, context?: UserCon
             })
         })
 
+        deleteStoredFiles(photos.map((p) => p.photo_url), { projectId: id });
         emitToOrg(orgId, "project:updated", { projectId: id });
         return { err: "" };
     } catch(error) {

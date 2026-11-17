@@ -102,7 +102,7 @@ export const insertRequestNote = async (
 			};
 		}
 		log.error({ err: e }, "Error inserting request note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -185,7 +185,7 @@ export const updateRequestNote = async (
 			};
 		}
 		log.error({ err: e }, "Error updating request note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -232,6 +232,6 @@ export const deleteRequestNote = async (
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Error deleting request note");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

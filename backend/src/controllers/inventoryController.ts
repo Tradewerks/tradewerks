@@ -358,7 +358,7 @@ export const ensureItemCode = async (itemId: string, organizationId: string) => 
 		return { item: withStockStatus(final) };
 	} catch (e) {
 		console.error("Ensure item code error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -501,7 +501,7 @@ export const createInventoryItem = async (
 			return { err: conflictMessage(createConflict) };
 		}
 		console.error("Create inventory item error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -663,7 +663,7 @@ export const updateInventoryItem = async (
 			return { err: conflictMessage(updateConflict) };
 		}
 		console.error("Update inventory item error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -713,7 +713,7 @@ export const deleteInventoryItem = async (itemId: string, organizationId: string
 		return { err: "", message: "Inventory item deleted successfully" };
 	} catch (e) {
 		console.error("Delete inventory item error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -842,7 +842,7 @@ export const adjustInventoryStock = async (
 			return { err: e.message };
 		}
 		console.error("Adjust inventory stock error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1030,7 +1030,7 @@ export const receiveInventoryItem = async (
 			return { err: "One or more serial numbers already exist for this item", conflict: true };
 		}
 		console.error("Receive inventory item error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1264,7 +1264,7 @@ export const updateItemTracking = async (
 			return { err: e.message };
 		}
 		console.error("Update item tracking error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1451,7 +1451,7 @@ export const updateInventoryThreshold = async (
 				err: zodMessage(e),
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -3144,7 +3144,7 @@ export const deleteBatch = async (
 	} catch (e) {
 		if (e instanceof BatchNotDeletableError) return { err: e.message };
 		console.error("Delete batch error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -3517,7 +3517,7 @@ export const updateSerial = async (
 			return { err: e.message };
 		}
 		console.error("Update serial error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -3613,7 +3613,7 @@ export const deleteSerial = async (
 			return { err: e.message };
 		}
 		console.error("Delete serial error:", e);
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 

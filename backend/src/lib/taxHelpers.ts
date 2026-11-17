@@ -1,4 +1,5 @@
 import { Prisma } from "../../generated/prisma/client.js";
+import { httpError, ErrorCodes } from "../types/responses.js";
 import {
 	mapPrismaTaxGroup,
 	dollarsToCents,
@@ -138,7 +139,8 @@ export async function assertTaxGroupsInOrg(
 	const found = await tx.tax_group.count({
 		where: { id: { in: wanted }, organization_id: organizationId },
 	});
-	if (found !== wanted.length) throw new Error("Tax group not found");
+	if (found !== wanted.length)
+		throw httpError(400, ErrorCodes.VALIDATION_ERROR, "Tax group not found");
 }
 
 interface TaxGroupReader {

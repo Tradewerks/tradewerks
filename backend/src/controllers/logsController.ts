@@ -359,6 +359,7 @@ export const getActorHistory = async (orgId: string, type: actor, id: string, li
         const [rows, total] = await Promise.all([
             sdb.log.findMany({
                 where: scopedWhere,
+                omit: { ip_address: true, user_agent: true },
                 orderBy: [{ timestamp: "desc" }, { id: "desc"}],
                 take: limit + 1,
             }),
@@ -375,7 +376,7 @@ export const getActorHistory = async (orgId: string, type: actor, id: string, li
             return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
         }
         log.error({ err }, "Get actor history error");
-        return { err: "Internal server error", rows: [] as log_row[], hasMore: false, total: 0 };
+        throw err;
     }
 };
 
@@ -439,6 +440,7 @@ export const getEntityHistory = async (orgId: string, type: entity, id: string, 
         const [rows, total] = await Promise.all([
             sdb.log.findMany({
                 where: scopedWhere,
+                omit: { ip_address: true, user_agent: true },
                 orderBy: [{ timestamp: "desc" }, { id: "desc"}],
                 take: limit + 1,
             }),
@@ -454,7 +456,7 @@ export const getEntityHistory = async (orgId: string, type: entity, id: string, 
             return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
         }
         log.error({ err }, "Get entity history error");
-        return { err: "Internal server error", rows: [] as log_row[], hasMore: false, total: 0 };
+        throw err;
     }
 };
 
@@ -484,6 +486,7 @@ export const getUserHistory = async (orgId: string, type: actor, id: string, lim
         const [rows, total] = await Promise.all([
             sdb.log.findMany({
                 where: scopedWhere,
+                omit: { ip_address: true, user_agent: true },
                 orderBy: [{ timestamp: "desc" }, { id: "desc"}],
                 take: limit + 1,
             }),
@@ -499,7 +502,7 @@ export const getUserHistory = async (orgId: string, type: actor, id: string, lim
             return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
         }
         log.error({ err }, "Get user history error");
-        return { err: "Internal server error", rows: [] as log_row[], hasMore: false, total: 0 };
+        throw err;
     }
 };
 
@@ -580,6 +583,7 @@ export const getRecentActivity = async (req: Request, res: Response, next: NextF
                 ...(cursor ? { timestamp: { lt: new Date(cursor) } } : {}),
                 ...(userId ? { OR: [{ actor_id: userId }, { entity_id: userId }] } : {}),
             },
+            omit: { ip_address: true, user_agent: true },
             orderBy: { timestamp: "desc" },
             take: limit,
         });

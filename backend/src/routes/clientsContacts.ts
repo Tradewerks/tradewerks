@@ -4,6 +4,7 @@ import {
 	ErrorCodes,
 	createSuccessResponse,
 	createErrorResponse,
+	sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from "../lib/context.js";
 import { isAddressTaxChoiceRefusal } from "../lib/addressTaxChoice.js";
@@ -124,16 +125,9 @@ router.put("/clients/:id", requirePermission("edit_clients"), async (req, res, n
             const isDuplicate = result.err
                 .toLowerCase()
                 .includes("already exists");
-            return res
-                .status(isDuplicate ? 409 : 400)
-                .json(
-                    createErrorResponse(
-                        isDuplicate
-                            ? ErrorCodes.CONFLICT
-                            : ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return isDuplicate
+                ? res.status(409).json(createErrorResponse(ErrorCodes.CONFLICT, result.err))
+                : sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -150,9 +144,7 @@ router.delete("/clients/:id", requirePermission("delete_clients"), async (req, r
         const result = await deleteClient(id, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(
@@ -536,14 +528,7 @@ router.post("/clients/:clientId/notes", requirePermission("edit_clients"), async
         const result = await insertNote(clientId, req.body, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.status(201).json(createSuccessResponse(result.item));
@@ -560,14 +545,7 @@ router.put("/clients/:clientId/notes/:noteId", requirePermission("edit_clients")
         const result = await updateNote(clientId, noteId, req.body, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -584,9 +562,7 @@ router.delete("/clients/:clientId/notes/:noteId", requirePermission("edit_client
         const result = await deleteNote(clientId, noteId, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(

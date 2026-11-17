@@ -1,12 +1,14 @@
 import { requireModule } from "../lib/entitlements/requireModule.js";
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import {
     ErrorCodes,
     createSuccessResponse,
     createErrorResponse,
+    sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
-import { requirePermission, requireAnyPermission } from '../lib/requirePermissions.js';
+import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
+import { requireAssigned } from '../lib/requireAssigned.js';
 import {
     getAllJobVisits,
     getMyJobsForPurchase,
@@ -29,10 +31,16 @@ import { db } from "../db.js";
 
 const router = Router();
 
+const assignedVisit = requireAssigned("visit", ["edit_jobs"], "id");
+
+// Caller's id when they may only see visits they're assigned to; undefined means every visit.
+const ownVisitsOnly = (req: Request) =>
+    hasPermission(req, "view_jobs") || hasPermission(req, "view_visits") ? undefined : (req.user!.uid as string);
+
 router.get("/", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const visits = await getAllJobVisits(orgId);
+        const visits = await getAllJobVisits(orgId, { techId: ownVisitsOnly(req) });
         res.json(createSuccessResponse(visits, { count: visits.length }));
     } catch (err) {
         next(err);
@@ -55,14 +63,14 @@ router.get("/mine", requireAnyPermission("view_assigned_jobs", "view_visits", "v
 router.get("/recent-status-events", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const events = await getRecentStatusEvents(orgId);
+        const events = await getRecentStatusEvents(orgId, ownVisitsOnly(req));
         res.json(createSuccessResponse(events));
     } catch (err) {
         next(err);
     }
 });
 
-router.get("/:id", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
+router.get("/:id", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("visit", ["view_jobs", "view_visits"], "id"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
@@ -106,7 +114,7 @@ router.get(
                     );
             }
 
-            const visits = await getJobVisitsByDateRange(start, end, orgId);
+            const visits = await getJobVisitsByDateRange(start, end, orgId, ownVisitsOnly(req));
             res.json(createSuccessResponse(visits, { count: visits.length }));
         } catch (err) {
             next(err);
@@ -137,21 +145,14 @@ router.post("/", requireAnyPermission("create_jobs", "edit_jobs"), async (req, r
     }
 });
 
-router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
         const result = await updateJobVisit(req, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -183,14 +184,7 @@ router.put("/:id/technicians", requirePermission("edit_jobs"), async (req, res, 
         const result = await assignTechniciansToVisit(id, tech_ids, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -218,18 +212,18 @@ router.post("/:id/accept", requireAnyPermission("edit_jobs", "update_visit_statu
                     ),
                 );
         }
+        // Technicians claim visits for themselves; dispatchers and admins can assign anyone.
+        if (context.techId && tech_id !== context.techId) {
+            return res
+                .status(403)
+                .json(createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians can only accept a visit for themselves", null, "tech_id"));
+        }
 
         const result = await acceptJobVisit(id, tech_id, orgId, context);
 
+        // Closed or already-claimed visits are a state conflict, not bad input.
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err, 409, ErrorCodes.CONFLICT);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -240,7 +234,7 @@ router.post("/:id/accept", requireAnyPermission("edit_jobs", "update_visit_statu
 
 // ── Time tracking ─────────────────────────────────────────────────────────────
 
-router.post("/:id/clock-in", requirePermission("check_in"), async (req, res, next) => {
+router.post("/:id/clock-in", requirePermission("check_in"), assignedVisit, async (req, res, next) => {
     try {
         const { tech_id } = req.body as { tech_id?: string };
         if (!tech_id) {
@@ -248,6 +242,13 @@ router.post("/:id/clock-in", requirePermission("check_in"), async (req, res, nex
                 createErrorResponse(ErrorCodes.INVALID_INPUT, "tech_id is required", null, "tech_id"),
             );
         }
+        const callerTechId = getUserContext(req).techId;
+        if (callerTechId && tech_id !== callerTechId) {
+            return res.status(403).json(
+                createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians can only clock themselves in", null, "tech_id"),
+            );
+        }
+
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await clockInVisit(id, tech_id, orgId, getUserContext(req));
@@ -263,7 +264,7 @@ router.post("/:id/clock-in", requirePermission("check_in"), async (req, res, nex
     }
 });
 
-router.post("/:id/clock-out", requirePermission("check_out"), async (req, res, next) => {
+router.post("/:id/clock-out", requirePermission("check_out"), assignedVisit, async (req, res, next) => {
     try {
         const { tech_id, pause_reason } = req.body as { tech_id?: string; pause_reason?: string };
         if (!tech_id) {
@@ -271,6 +272,13 @@ router.post("/:id/clock-out", requirePermission("check_out"), async (req, res, n
                 createErrorResponse(ErrorCodes.INVALID_INPUT, "tech_id is required", null, "tech_id"),
             );
         }
+        const callerTechId = getUserContext(req).techId;
+        if (callerTechId && tech_id !== callerTechId) {
+            return res.status(403).json(
+                createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians can only clock themselves out", null, "tech_id"),
+            );
+        }
+
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await clockOutVisit(id, tech_id, orgId, getUserContext(req), pause_reason);
@@ -285,13 +293,13 @@ router.post("/:id/clock-out", requirePermission("check_out"), async (req, res, n
 
 // ── Lifecycle actions ────────────────────────────────────────────────────────
 
-router.post("/:id/start", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.post("/:id/start", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "start", orgId, getUserContext(req));
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
@@ -299,13 +307,13 @@ router.post("/:id/start", requireAnyPermission("edit_jobs", "update_visit_status
     }
 });
 
-router.post("/:id/pause", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.post("/:id/pause", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "pause", orgId, getUserContext(req));
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
@@ -313,13 +321,13 @@ router.post("/:id/pause", requireAnyPermission("edit_jobs", "update_visit_status
     }
 });
 
-router.post("/:id/resume", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.post("/:id/resume", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "resume", orgId, getUserContext(req));
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
@@ -327,13 +335,13 @@ router.post("/:id/resume", requireAnyPermission("edit_jobs", "update_visit_statu
     }
 });
 
-router.post("/:id/complete", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.post("/:id/complete", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "complete", orgId, getUserContext(req));
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
@@ -341,14 +349,14 @@ router.post("/:id/complete", requireAnyPermission("edit_jobs", "update_visit_sta
     }
 });
 
-router.post("/:id/cancel", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.post("/:id/cancel", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const { cancellation_reason } = req.body as { cancellation_reason?: string };
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await cancelJobVisit(id, cancellation_reason ?? "", orgId, getUserContext(req));
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
@@ -356,13 +364,13 @@ router.post("/:id/cancel", requireAnyPermission("edit_jobs", "update_visit_statu
     }
 });
 
-router.post("/:id/delay", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
+router.post("/:id/delay", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "delay", orgId, getUserContext(req));
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
@@ -378,9 +386,7 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
         const result = await deleteJobVisit(id, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(
@@ -394,11 +400,11 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
     }
 });
 
-router.post("/:id/parts-used", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), async (req, res, next) => {
+router.post("/:id/parts-used", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), assignedVisit, async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
-        const result = await addPartsUsed(id, req.body, orgId);
+        const result = await addPartsUsed(id, req.body, orgId, getUserContext(req));
         if (result.err) {
             if (result.err.toLowerCase().includes("not found")) {
                 return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
@@ -411,7 +417,7 @@ router.post("/:id/parts-used", requireModule("vehicle_stock"), requireAnyPermiss
     }
 });
 
-router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), async (req, res, next) => {
+router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), assignedVisit, async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const lineItemId = req.params.lineItemId as string;
@@ -436,7 +442,7 @@ router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requ
 
 const LIFECYCLE_ACTIONS = Object.keys(LIFECYCLE_TRANSITIONS) as (keyof typeof LIFECYCLE_TRANSITIONS)[];
 
-router.post("/:id/transition", requireAnyPermission("edit_jobs", "update_visit_status", "check_in", "check_out"), async (req, res, next) => {
+router.post("/:id/transition", requireAnyPermission("edit_jobs", "update_visit_status", "check_in", "check_out"), assignedVisit, async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const { action, pause_reason, tech_coords } = req.body;
@@ -455,7 +461,7 @@ router.post("/:id/transition", requireAnyPermission("edit_jobs", "update_visit_s
         const context = getUserContext(req);
         const result = await applyVisitTransition(id, action, orgId, context, pause_reason, techCoords);
         if (result.err) {
-            return res.status(409).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+            return sendResultErr(res, result.err, 409);
         }
         res.json(createSuccessResponse(result.item));
     } catch (err) {

@@ -27,6 +27,14 @@ export const getUserContext = (req: Request): UserContext => {
 	};
 };
 
+// Spread into logActivity() params.
+export const getActorInfo = (context?: UserContext) => ({
+	actor_type: context?.techId ? "technician" : context?.dispatcherId ? "dispatcher" : "system",
+	actor_id: context?.techId || context?.dispatcherId,
+	ip_address: context?.ipAddress,
+	user_agent: context?.userAgent,
+});
+
 // Models that carry an organization_id column and are filtered per-org directly.
 const ORG_SCOPED_MODELS = new Set([
 	"contact",

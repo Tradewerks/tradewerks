@@ -111,7 +111,7 @@ export const insertRecurringPlanNote = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert recurring plan note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -190,7 +190,7 @@ export const updateRecurringPlanNote = async (
 			};
 		}
 		log.error({ err: e }, "Update recurring plan note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -246,6 +246,6 @@ export const deleteRecurringPlanNote = async (
 		return { err: "", message: "Note deleted successfully" };
 	} catch (e) {
 		log.error({ err: e }, "Delete recurring plan note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

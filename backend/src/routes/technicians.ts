@@ -25,6 +25,7 @@ import {
 	ErrorCodes,
 	createSuccessResponse,
 	createErrorResponse,
+	sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
 import { getJobVisitsByTechId } from '../controllers/jobVisitsController.js';
@@ -263,9 +264,7 @@ router.delete("/:id", requirePermission("manage_technicians"), async (req, res, 
         const result = await deleteTechnician(id, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(
@@ -398,8 +397,7 @@ router.post("/:id/offline", requirePermissionOrSelf("manage_technicians"), async
 				: undefined;
 		const result = await goOffline(id, orgId, techCoords);
 		if (result.err) {
-			const status = result.err.includes("clocked into") ? 409 : 400;
-			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err, result.err.includes("clocked into") ? 409 : 400);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -426,8 +424,7 @@ router.post("/:id/break", requirePermissionOrSelf("manage_technicians"), async (
 		}
 		const result = await goOnBreak(id, orgId, reason);
 		if (result.err) {
-			const status = result.err.includes("clocked into") ? 409 : 400;
-			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err, result.err.includes("clocked into") ? 409 : 400);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -454,7 +451,7 @@ router.post("/:id/done", requirePermissionOrSelf("manage_technicians"), async (r
 		}).catch(() => {});
 		const result = await markAvailable(id, orgId, getUserContext(req));
 		if (result.err) {
-			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -480,7 +477,7 @@ router.post("/:id/head-back", requirePermissionOrSelf("manage_technicians"), asy
 		}).catch(() => {});
 		const result = await returnFromJob(orgId, id, getUserContext(req));
 		if (result.err) {
-			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -496,7 +493,7 @@ router.post("/:id/head-back", requirePermissionOrSelf("manage_technicians"), asy
 	}
 });
 
-router.post("/:id/mfa/reset", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
+router.post("/:id/mfa/reset", requirePermission("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;

@@ -32,6 +32,8 @@ vi.mock("../../services/logger.js", () => ({
 	buildChanges: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock("../../services/socketService.js", () => ({ emitToOrg: vi.fn() }));
+
 vi.mock("../../services/stockMovements.js", () => ({
 	recordMovements: vi.fn().mockResolvedValue({ lowStockItemIds: [] }),
 }));
@@ -81,7 +83,9 @@ function makeExistingVisit(status: string, jobStatus: string) {
 function setupTransaction(allVisits: { id: string; status: string }[]) {
 	const updatedVisit = {
 		id: "visit-1",
+		job_id: "job-1",
 		status: "Completed",
+		scheduled_start_at: new Date(),
 		job: { id: "job-1", client: {} },
 		visit_techs: [],
 		notes: [],
@@ -91,6 +95,7 @@ function setupTransaction(allVisits: { id: string; status: string }[]) {
 			update: vi.fn().mockResolvedValue(updatedVisit),
 			findMany: vi.fn().mockResolvedValue(allVisits),
 			findUnique: vi.fn().mockResolvedValue(updatedVisit),
+			findFirst: vi.fn().mockResolvedValue(updatedVisit),
 		},
 		job: {
 			update: vi.fn().mockResolvedValue(undefined),

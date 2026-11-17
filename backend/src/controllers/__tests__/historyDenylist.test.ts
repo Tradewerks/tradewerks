@@ -6,7 +6,12 @@ vi.mock("../../db.js", async () => {
 });
 
 import { db } from "../../db.js";
-import { redactSensitiveChanges, getActorHistory, getEntityHistory } from "../logsController.js";
+import {
+	redactSensitiveChanges,
+	getActorHistory,
+	getEntityHistory,
+	getUserHistory,
+} from "../logsController.js";
 import { leaves, notClauses, makeLogRow as row, type FakeDb } from "../../routes/__tests__/harness.js";
 
 const fake = db as unknown as FakeDb;
@@ -111,5 +116,24 @@ describe("getEntityHistory — same denylist and redaction (review B3 / L1)", ()
 		const where = fake.log.findMany.mock.calls.at(-1)![0].where;
 		expect(notClauses(where)).toEqual(expect.arrayContaining([{ event_type: { contains: ".password." } }]));
 		expect(leaves(where)).toEqual(expect.arrayContaining([{ organization_id: "org-1" }, { entity_type: "job" }]));
+	});
+});
+
+describe("history never returns ip_address or user_agent", () => {
+	it.each([
+		["getActorHistory", () => getActorHistory("org-1", "dispatcher", "disp-1", 20)],
+		["getEntityHistory", () => getEntityHistory("org-1", "job", "job-1", 20)],
+		["getUserHistory", () => getUserHistory("org-1", "dispatcher", "disp-1", 20)],
+	])("%s omits them in the query", async (_name, call) => {
+		fake.job_visit.findMany.mockResolvedValue([]);
+		fake.job_line_item.findMany.mockResolvedValue([]);
+		fake.job_note.findMany.mockResolvedValue([]);
+		const r = await call();
+
+		expect(r.err).toBe("");
+		expect(fake.log.findMany.mock.calls.at(-1)![0].omit).toEqual({
+			ip_address: true,
+			user_agent: true,
+		});
 	});
 });

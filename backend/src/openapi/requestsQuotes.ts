@@ -305,7 +305,8 @@ authed(
 	"edit_quotes",
 	{
 		summary: "Update a quote",
-		description: "Requires the `edit_quotes` permission.",
+		description:
+			"Requires the `edit_quotes` permission. `Approved`, `Disputed` and `Expired` quotes only take `status` (and `rejection_reason`); `Cancelled`, `Rejected`, `Revised` and converted quotes take nothing.",
 		request: {
 			params: z.object({ id: z.uuid() }),
 			body: {
@@ -321,7 +322,7 @@ authed(
 			200: json(envelope(quote), "Quote updated"),
 			400: json(
 				errorEnvelope,
-				"Validation failed, quote is Cancelled, Rejected or Revised, already converted to a job, has an open dispute, or status change not allowed (`VALIDATION_ERROR`)",
+				"Validation failed, quote is Cancelled, Rejected or Revised, already converted to a job, has an open dispute, a field other than `status` sent to an Approved, Disputed or Expired quote, or status change not allowed (`VALIDATION_ERROR`)",
 			),
 			404: json(errorEnvelope, "Quote not found (`VALIDATION_ERROR`)"),
 			409: json(
@@ -868,7 +869,7 @@ authed(
 	{
 		summary: "Add a quote line item",
 		description:
-			"Requires the `edit_quotes` permission. The quote's totals and tax are recomputed. The quote's status isn't checked.",
+			"Requires the `edit_quotes` permission. The quote's totals and tax are recomputed. Only `Draft`, `Issued`, `Sent` and `Viewed` quotes not converted to a job can change line items.",
 		request: {
 			params: quoteParams,
 			body: {
@@ -885,7 +886,7 @@ authed(
 			201: json(envelope(quoteLineItem), "Line item added"),
 			400: json(
 				errorEnvelope,
-				'Validation failed, or the insert failed, including an unknown `inventory_item_id` or `tax_group_id` (`VALIDATION_ERROR`, message "Internal server error")',
+				'Validation failed, the quote is locked (status or converted to a job), or the insert failed, including an unknown `inventory_item_id` or `tax_group_id` (`VALIDATION_ERROR`, message "Internal server error")',
 			),
 			404: json(errorEnvelope, "Quote not found (`VALIDATION_ERROR`)"),
 		},
@@ -901,7 +902,7 @@ authed(
 	{
 		summary: "Update a quote line item",
 		description:
-			"Requires the `edit_quotes` permission. Send only the fields to change. The quote's totals and tax are recomputed. The quote's status isn't checked.",
+			"Requires the `edit_quotes` permission. Send only the fields to change. The quote's totals and tax are recomputed. Only `Draft`, `Issued`, `Sent` and `Viewed` quotes not converted to a job can change line items.",
 		request: {
 			params: quoteItemParams,
 			body: {
@@ -918,7 +919,7 @@ authed(
 			200: json(envelope(quoteLineItem), "Line item updated"),
 			400: json(
 				errorEnvelope,
-				'Validation failed, or the update failed, including an unknown `inventory_item_id` or `tax_group_id` (`VALIDATION_ERROR`, message "Internal server error")',
+				'Validation failed, the quote is locked (status or converted to a job), or the update failed, including an unknown `inventory_item_id` or `tax_group_id` (`VALIDATION_ERROR`, message "Internal server error")',
 			),
 			404: json(
 				errorEnvelope,
@@ -937,14 +938,17 @@ authed(
 	{
 		summary: "Delete a quote line item",
 		description:
-			"Requires the `edit_quotes` permission. The quote's totals and tax are recomputed. The quote's status isn't checked.",
+			"Requires the `edit_quotes` permission. The quote's totals and tax are recomputed. Only `Draft`, `Issued`, `Sent` and `Viewed` quotes not converted to a job can change line items.",
 		request: { params: quoteItemParams },
 		responses: {
 			200: json(
 				envelope(z.object({ message: z.string() })),
 				"Line item deleted",
 			),
-			400: json(errorEnvelope, "The delete failed (`DELETE_ERROR`)"),
+			400: json(
+				errorEnvelope,
+				"The quote is locked (status or converted to a job), or the delete failed (`DELETE_ERROR`)",
+			),
 			404: json(
 				errorEnvelope,
 				"Line item not found on this quote (`DELETE_ERROR`)",

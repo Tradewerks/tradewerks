@@ -235,7 +235,7 @@ export const insertRequest = async (req: Request, organizationId: string, contex
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert request error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -360,7 +360,7 @@ export const updateRequest = async (req: Request, organizationId: string, contex
 			return { err: formatZodError(e) };
 		}
 		log.error({ err: e }, "Update request error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -426,7 +426,7 @@ export const deleteRequest = async (id: string, organizationId: string, context?
 		return { err: "", item: { id } };
 	} catch (error) {
 		log.error({ err: error }, "Delete request error");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };
 
@@ -553,7 +553,7 @@ export const insertRequestNote = async (
 			return { err: formatZodError(e) };
 		}
 		log.error({ err: e }, "Insert request note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -649,7 +649,7 @@ export const updateRequestNote = async (
 			return { err: formatZodError(e) };
 		}
 		log.error({ err: e }, "Update request note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -701,6 +701,6 @@ export const deleteRequestNote = async (
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Delete request note error");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

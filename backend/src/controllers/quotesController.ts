@@ -52,6 +52,17 @@ import {
 	keptFamily,
 } from "../lib/addressTaxChoice.js";
 
+// Matches the frontend's isQuoteEditable.
+const EDITABLE_QUOTE_STATUSES: ReadonlySet<string> = new Set(["Draft", "Issued", "Sent", "Viewed"]);
+const LOCK_SELECT = { status: true, job: { select: { id: true } } } as const;
+
+const lineItemsLocked = (q: { status: string; job: unknown }) =>
+	q.job
+		? "Line items can't be changed on a quote that has been converted to a job"
+		: !EDITABLE_QUOTE_STATUSES.has(q.status)
+			? `Line items can't be changed on a ${q.status} quote`
+			: null;
+
 // ============================================================================
 // TAX HELPERS (quotes)
 // ============================================================================
@@ -401,7 +412,7 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert quote error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -456,6 +467,14 @@ export const updateQuote = async (
 			return {
 				err: "Cannot modify quote that has been converted to a job",
 			};
+		}
+
+		// Locked quotes still take status moves (reject, cancel, revise, dispute).
+		const statusOnly = Object.keys(req.body ?? {}).every(
+			(k) => k === "status" || k === "rejection_reason",
+		);
+		if (!EDITABLE_QUOTE_STATUSES.has(existing.status) && !statusOnly) {
+			return { err: `${existing.status} quotes can only change status` };
 		}
 
 		if (isQuoteFinalizingTransition(existing.status, parsed.status)) {
@@ -934,7 +953,7 @@ export const updateQuote = async (
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Update quote error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1020,7 +1039,7 @@ export const deleteQuote = async (id: string, organizationId: string, context?: 
 		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
 			return { err: "This quote is part of a dispute, so it can't be deleted." };
 		}
-		return { err: "Internal server error" };
+		throw error;
 	}
 };
 
@@ -1058,11 +1077,15 @@ export const insertQuoteItem = async (
 
 		const quote = await sdb.quote.findFirst({
 			where: { id: quoteId },
+			select: LOCK_SELECT,
 		});
 
 		if (!quote) {
 			return { err: "Quote not found" };
 		}
+
+		const locked = lineItemsLocked(quote);
+		if (locked) return { err: locked };
 
 		const created = await sdb.$transaction(async (tx) => {
 			await assertInventoryItemsInOrg(tx, organizationId, [
@@ -1131,7 +1154,7 @@ export const insertQuoteItem = async (
 			};
 		}
 		log.error({ err: e }, "Insert quote line item error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1147,11 +1170,15 @@ export const updateQuoteItem = async (
 		const sdb = getScopedDb(organizationId);
 		const existing = await sdb.quote_line_item.findFirst({
 			where: { id: itemId, quote_id: quoteId },
+			include: { quote: { select: LOCK_SELECT } },
 		});
 
 		if (!existing) {
 			return { err: "Item not found" };
 		}
+
+		const locked = lineItemsLocked(existing.quote);
+		if (locked) return { err: locked };
 
 		const changes = buildChanges(existing, parsed, [
 			"name",
@@ -1246,7 +1273,7 @@ export const updateQuoteItem = async (
 			};
 		}
 		log.error({ err: e }, "Update quote line item error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1263,11 +1290,15 @@ export const deleteQuoteItem = async (
 				id: itemId,
 				quote_id: quoteId,
 			},
+			include: { quote: { select: LOCK_SELECT } },
 		});
 
 		if (!existing) {
 			return { err: "Item not found" };
 		}
+
+		const locked = lineItemsLocked(existing.quote);
+		if (locked) return { err: locked };
 
 		await sdb.$transaction(async (tx) => {
 			await logActivity({
@@ -1302,6 +1333,6 @@ export const deleteQuoteItem = async (
 		return { err: "", message: "Item deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Delete quote line item error");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

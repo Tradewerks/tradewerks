@@ -37,7 +37,7 @@ export const listSavedReports = async (organizationId: string, uid: string) => {
 		return { err: "", items };
 	} catch (e) {
 		log.error({ err: e }, "List saved reports error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -53,7 +53,7 @@ export const getSavedReport = async (id: string, organizationId: string, uid: st
 		return { err: "", item };
 	} catch (e) {
 		log.error({ err: e }, "Get saved report error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -100,7 +100,7 @@ export const insertSavedReport = async (
 			return { err: "A report with that name already exists" };
 		}
 		log.error({ err: e }, "Insert saved report error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -151,7 +151,7 @@ export const updateSavedReport = async (
 			return { err: "A report with that name already exists" };
 		}
 		log.error({ err: e }, "Update saved report error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -184,7 +184,7 @@ export const deleteSavedReport = async (
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Delete saved report error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -200,7 +200,7 @@ export const listFavorites = async (organizationId: string, uid: string) => {
 		return { err: "", items };
 	} catch (e) {
 		log.error({ err: e }, "List report favorites error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -257,7 +257,7 @@ export const addFavorite = async (
 			}
 		}
 		log.error({ err: e }, "Add report favorite error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -293,6 +293,6 @@ export const removeFavorite = async (
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Remove report favorite error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

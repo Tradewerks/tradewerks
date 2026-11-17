@@ -128,12 +128,14 @@ const errorHandler = (
 	// DocumentRuleError carry status. Reading only one turned a deliberate
 	// refusal that reached this handler into a 500.
 	const statusCode = err.statusCode || err.status || 500;
+	// No status means nobody meant this for the client (e.g. a raw Prisma error).
+	const expose = Boolean(err.statusCode || err.status);
 
 	res.status(statusCode).json(
 		createErrorResponse(
-			err.code ||
+			(expose && err.code) ||
 				(statusCode < 500 ? ErrorCodes.VALIDATION_ERROR : ErrorCodes.SERVER_ERROR),
-			err.message || "An unexpected error occurred",
+			(expose && err.message) || "An unexpected error occurred",
 			process.env.NODE_ENV === "development" ? err.stack : undefined,
 		),
 	);
@@ -203,33 +205,21 @@ const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
 				),
 			);
 
+	let decoded;
 	try {
-		const decoded = checkToken(token);
-		if ((decoded as any).stage) {
-			return res
-				.status(401)
-				.json(
-					createErrorResponse(
-						ErrorCodes.INVALID_TOKEN,
-						"Invalid or expired token",
-					),
-				);
-		}
-		if (!(await isUserActive(decoded.uid, decoded.role))) {
-			return res
-				.status(401)
-				.json(createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid or expired token"));
-		}
-		req.user = { ...decoded, permissions: decoded.permissions ?? null };
-		next();
+		decoded = checkToken(token);
 	} catch {
-		res.status(401).json(
-			createErrorResponse(
-				ErrorCodes.INVALID_TOKEN,
-				"Invalid or expired token",
-			),
-		);
+		return res
+			.status(401)
+			.json(createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid or expired token"));
 	}
+	if ((decoded as any).stage || !(await isUserActive(decoded.uid, decoded.role))) {
+		return res
+			.status(401)
+			.json(createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid or expired token"));
+	}
+	req.user = { ...decoded, permissions: decoded.permissions ?? null };
+	next();
 };
 
 // replaced with role based permissions, keeping in case its needed at a future date
@@ -286,6 +276,11 @@ app.use(
 		},
 	}),
 );
+// Express 5 leaves req.body undefined when no body is sent; routes destructure it.
+app.use((req, _res, next) => {
+	req.body ??= {};
+	next();
+});
 // Tokens, cookies and query strings must not reach stdout or Loki.
 app.use(pinoHttp({ logger: log, redact: httpLogRedact }));
 app.use(httpMetricsMiddleware);

@@ -69,15 +69,6 @@ export const updateDispatcherSchema = z
 		description: z.string().optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
 		muted_notification_types: z.array(DispatcherNotificationTypeEnum).optional(),
-		last_login: z
-			.preprocess(
-				(val) =>
-					typeof val === "string" || val instanceof Date
-						? new Date(val)
-						: val,
-				z.date()
-			)
-			.optional(),
 		dashboard_layout: gridLayoutSchema.nullable().optional(),
 		report_layout: reportLayoutSchema.nullable().optional(),
 		kpi_layout: gridLayoutSchema.nullable().optional(),
@@ -91,7 +82,6 @@ export const updateDispatcherSchema = z
 			data.description !== undefined ||
 			data.theme !== undefined ||
 			data.muted_notification_types !== undefined ||
-			data.last_login !== undefined ||
 			data.dashboard_layout !== undefined ||
 			data.report_layout !== undefined ||
 			data.kpi_layout !== undefined,

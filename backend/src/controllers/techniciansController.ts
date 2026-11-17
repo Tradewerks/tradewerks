@@ -217,7 +217,7 @@ export const insertTechnician = async (
 			};
 		}
 		log.error({ err: e }, "Error inserting technician");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -233,7 +233,8 @@ export const updateTechnician = async (
 		if (parsed.email) parsed.email = parsed.email.toLowerCase();
 		const sdb = getScopedDb(organizationId);
 
-		const existing = await sdb.technician.findFirst({ where: { id } });
+		// cost_rate is globally omitted; the history diff needs the old value.
+		const existing = await sdb.technician.findFirst({ where: { id }, omit: { cost_rate: false } });
 
 		if (!existing) {
 			return { err: "Technician not found" };
@@ -310,7 +311,7 @@ export const updateTechnician = async (
 			};
 		}
 		log.error({ err: e }, "Error updating technician");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -393,7 +394,7 @@ export const updateTechnicianLocation = async (
 			};
 		}
 		log.error({ err: e }, "Error updating technician");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -458,7 +459,7 @@ export const deleteTechnician = async (
 		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
             return { err: "This technician has work history. Deactivate them instead." };
         }
-		return { err: "Internal server error" };
+		throw error;
 	}
 };
 
@@ -499,7 +500,7 @@ export const startShift = async (techId: string, organizationId: string) => {
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "startShift failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -644,7 +645,7 @@ export const goOffline = async (techId: string, organizationId: string, techCord
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "goOffline failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -715,7 +716,7 @@ export const goOnBreak = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "goOnBreak failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -786,7 +787,7 @@ export const returnFromBreak = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "returnFromBreak failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -904,7 +905,7 @@ export const returnFromJob = async(orgId: string, technicianId: string, context?
 		return { item: result, err: ""};
 	} catch (err) {
 		log.error({ err }, "returnFromJob failed");
-		return { err: "Internal server error" };
+		throw err;
 	}
 }
 

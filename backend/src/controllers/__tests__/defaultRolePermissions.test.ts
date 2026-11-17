@@ -12,6 +12,14 @@ vi.mock("../../services/appLogger.js", () => ({
 vi.mock("../../services/emailService.js", () => ({ sendEmailVerificationEmail: vi.fn() }));
 
 import { defaultDispatcherPermissions } from "../organizationsController.js";
+import { defaultTechnicianPermissions } from "../../services/provisionOrganization.js";
+
+describe("Default Technician template", () => {
+	it("sees assigned jobs only", () => {
+		expect(defaultTechnicianPermissions()).toContain("view_assigned_jobs");
+		expect(defaultTechnicianPermissions()).not.toContain("view_all_jobs");
+	});
+});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationSql = readFileSync(

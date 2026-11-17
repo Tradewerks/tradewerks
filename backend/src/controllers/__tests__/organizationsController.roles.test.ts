@@ -30,8 +30,11 @@ import { getScopedDb } from "../../lib/context.js";
 const mockGetScopedDb = vi.mocked(getScopedDb);
 
 const ORG_ID = "org-1";
-const USER_ID = "user-1";
-const ROLE_ID = "role-1";
+const USER_ID = "11111111-1111-4111-8111-111111111111";
+const ROLE_ID = "22222222-2222-4222-8222-222222222222";
+
+const assign = (user_type: string, role_id: string | null) =>
+	assignOrgRole({ user_id: USER_ID, user_type, role_id }, ORG_ID);
 
 function makeSdb(role: { base_tier: string; name: string } | null) {
 	const tx = {
@@ -64,7 +67,7 @@ describe("assignOrgRole — base_tier must match the user type", () => {
 
 	it("refuses to put a technician-tier role on a dispatcher", async () => {
 		const sdb = makeSdb({ base_tier: "technician", name: "Field Tech" });
-		const result = await assignOrgRole(USER_ID, "dispatcher", ROLE_ID, ORG_ID);
+		const result = await assign("dispatcher", ROLE_ID);
 
 		expect(result.err).toMatch(/technician role.*cannot be assigned to a dispatcher/i);
 		expect(sdb.$transaction).not.toHaveBeenCalled();
@@ -73,7 +76,7 @@ describe("assignOrgRole — base_tier must match the user type", () => {
 
 	it("refuses to put a dispatcher-tier role on a technician", async () => {
 		const sdb = makeSdb({ base_tier: "dispatcher", name: "Coordinator" });
-		const result = await assignOrgRole(USER_ID, "technician", ROLE_ID, ORG_ID);
+		const result = await assign("technician", ROLE_ID);
 
 		expect(result.err).toMatch(/dispatcher role.*cannot be assigned to a technician/i);
 		expect(sdb._tx.technician.update).not.toHaveBeenCalled();
@@ -81,7 +84,7 @@ describe("assignOrgRole — base_tier must match the user type", () => {
 
 	it("assigns a role whose tier matches the user type", async () => {
 		const sdb = makeSdb({ base_tier: "dispatcher", name: "Coordinator" });
-		const result = await assignOrgRole(USER_ID, "dispatcher", ROLE_ID, ORG_ID);
+		const result = await assign("dispatcher", ROLE_ID);
 
 		expect(result.err).toBe("");
 		expect(sdb._tx.dispatcher.update).toHaveBeenCalledWith({
@@ -92,7 +95,7 @@ describe("assignOrgRole — base_tier must match the user type", () => {
 
 	it("still allows clearing the role (roleId null) without a tier check", async () => {
 		const sdb = makeSdb(null);
-		const result = await assignOrgRole(USER_ID, "technician", null, ORG_ID);
+		const result = await assign("technician", null);
 
 		expect(result.err).toBe("");
 		expect(sdb.organization_role.findFirst).not.toHaveBeenCalled();
@@ -104,9 +107,17 @@ describe("assignOrgRole — base_tier must match the user type", () => {
 
 	it("reports an unknown role before checking the tier", async () => {
 		const sdb = makeSdb(null);
-		const result = await assignOrgRole(USER_ID, "dispatcher", ROLE_ID, ORG_ID);
+		const result = await assign("dispatcher", ROLE_ID);
 
 		expect(result.err).toBe("Role not found");
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unknown user_type before touching the DB", async () => {
+		const sdb = makeSdb(null);
+		const result = await assign("customer", null);
+
+		expect(result.err).toMatch(/^Validation failed/);
 		expect(sdb.$transaction).not.toHaveBeenCalled();
 	});
 });

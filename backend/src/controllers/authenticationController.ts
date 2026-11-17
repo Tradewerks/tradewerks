@@ -366,7 +366,7 @@ export const requestPasswordReset = async (email: string, role: string) => {
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -484,6 +484,6 @@ export const resetPassword = async (
 			};
 		}
 		log.error({ err: e }, "Password reset error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

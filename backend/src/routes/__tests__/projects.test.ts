@@ -164,6 +164,7 @@ function makeSdb(opts: { existingProject?: unknown; txJob?: unknown } = {}) {
 	};
 	const sdb = {
 		project: { findFirst: vi.fn().mockResolvedValue(existing) },
+		project_note_photo: { findMany: vi.fn().mockResolvedValue([]) },
 		dispatcher: { findFirst: vi.fn().mockResolvedValue(null) },
 		$transaction: vi.fn().mockImplementation(async (fn: (client: typeof tx) => unknown) => fn(tx)),
 		_tx: tx,

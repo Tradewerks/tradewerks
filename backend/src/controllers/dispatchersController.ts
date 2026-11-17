@@ -144,7 +144,7 @@ export const insertDispatcher = async (
             };
         }
         log.error({ err: e }, "Error inserting dispatcher");
-        return { err: "Internal server error" };
+        throw e;
     }
 };
 
@@ -250,9 +250,15 @@ export const updateDispatcher = async (
             };
         }
         log.error({ err: e }, "Error updating dispatcher");
-        return { err: "Internal server error" };
+        throw e;
     }
 };
+
+export const isOrgAdmin = async (id: string, organizationId: string) =>
+    !!(await getScopedDb(organizationId).dispatcher.findFirst({
+        where: { id, role: "admin" },
+        select: { id: true },
+    }));
 
 export const deleteDispatcher = async (id: string, organization_id: string, context?: UserContext) => {
     try {
@@ -300,7 +306,7 @@ export const deleteDispatcher = async (id: string, organization_id: string, cont
         return { message: "Dispatcher deleted successfully" };
     } catch (error) {
         log.error({ err: error }, "Error deleting dispatcher");
-        return { err: "Internal server error" };
+        throw error;
     }
 };
 

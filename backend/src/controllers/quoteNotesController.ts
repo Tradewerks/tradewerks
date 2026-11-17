@@ -102,7 +102,7 @@ export const insertQuoteNote = async (
 			};
 		}
 		log.error({ err: e }, "Error inserting quote note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -185,7 +185,7 @@ export const updateQuoteNote = async (
 			};
 		}
 		log.error({ err: e }, "Error updating quote note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -232,6 +232,6 @@ export const deleteQuoteNote = async (
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Error deleting quote note");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

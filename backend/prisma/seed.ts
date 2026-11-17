@@ -12,7 +12,7 @@ import {
 	type TaxGroupConfig,
 	type LineItemTaxInput,
 } from "../src/services/taxEngine.js";
-import { provisionOrganization } from "../src/services/provisionOrganization.js";
+import { provisionOrganization, defaultTechnicianPermissions } from "../src/services/provisionOrganization.js";
 import { hashInviteToken } from "../src/lib/inviteToken.js";
 import { DAY_MS } from "../src/lib/dayRange.js";
 import { buildOcrFlags } from "../src/services/receiptOcr/flags.js";
@@ -332,7 +332,7 @@ async function main() {
 				organization_id: org.id,
 				name: "Default Technician",
 				base_tier: "technician",
-				permissions: getAllPermissions("technician"),
+				permissions: defaultTechnicianPermissions(),
 				is_default: true,
 			},
 		}),

@@ -91,9 +91,8 @@ router.delete("/:id", requirePermission("manage_roles"), async (req, res, next) 
 router.post("/assign", requirePermission("manage_roles"), async (req, res, next) => {
     try {  
         const orgId = req.user!.organization_id as string;
-        const { user_id: userId, role_id: roleId, user_type: userType } = req.body;
         const context = getUserContext(req);
-        const result = await assignOrgRole(userId, userType, roleId, orgId, context);
+        const result = await assignOrgRole(req.body, orgId, context);
         if (result == undefined || result.err) {
             return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result?.err || "Failed to assign organization role"));
         }

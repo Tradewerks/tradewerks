@@ -1,5 +1,6 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import { normalizeUnitCode } from "./units.js";
+import { httpError, ErrorCodes } from "../types/responses.js";
 
 export type StockStatus = "sufficient" | "low" | "out_of_stock" | null;
 
@@ -69,7 +70,7 @@ export async function assertInventoryItemsInOrg(
 ): Promise<void> {
 	const foreign = await findForeignInventoryItemIds(client, organizationId, ids);
 	if (foreign.length > 0) {
-		throw new Error(unknownInventoryItemsMessage(foreign));
+		throw httpError(400, ErrorCodes.VALIDATION_ERROR, unknownInventoryItemsMessage(foreign));
 	}
 }
 
