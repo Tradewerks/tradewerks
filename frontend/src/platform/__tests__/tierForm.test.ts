@@ -9,6 +9,7 @@ const base = {
 		ai_calls_month: 500,
 		tax_lookups_month: 0,
 		receipt_scans_month: 300,
+		sms_segments_month: 500,
 	},
 };
 
@@ -22,6 +23,7 @@ describe("tier form draft", () => {
 			ai_calls_month: "500",
 			tax_lookups_month: "0",
 			receipt_scans_month: "300",
+			sms_segments_month: "500",
 		});
 	});
 	it("reads blank as unlimited and rejects non-whole numbers", () => {

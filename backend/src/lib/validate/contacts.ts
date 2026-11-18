@@ -57,14 +57,21 @@ export const updateClientContactSchema = z
 		relationship: z.string().optional(),
 		is_primary: z.boolean().optional(),
 		is_billing: z.boolean().optional(),
+		notify_visits: z.boolean().optional(),
 	})
 	.refine(
 		(data) =>
 			data.relationship !== undefined ||
 			data.is_primary !== undefined ||
-			data.is_billing !== undefined,
+			data.is_billing !== undefined ||
+			data.notify_visits !== undefined,
 		{ message: "At least one field must be provided for update" }
 	);
+
+export const setContactConsentSchema = z.object({
+	channel: z.enum(["email", "sms"]),
+	status: z.enum(["subscribed", "unsubscribed"]),
+});
 
 export type CreateContactInput = z.infer<typeof createContactSchema>;
 export type UpdateContactInput = z.infer<typeof updateContactSchema>;

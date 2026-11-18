@@ -221,7 +221,7 @@ describe("classifyTaxReadback", () => {
 import { qbFetch } from "../quickbooksService.js";
 import { getQBTaxPrefs } from "../qb/qbTax.js";
 import { log } from "../appLogger.js";
-import { pushInvoice, sendInvoiceEmail } from "../qb/qbInvoices.js";
+import { pushInvoice, sendQbInvoiceEmail } from "../qb/qbInvoices.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -727,7 +727,7 @@ describe("pushInvoice tax handling", () => {
 	});
 });
 
-describe("sendInvoiceEmail", () => {
+describe("sendQbInvoiceEmail", () => {
 	beforeEach(() => vi.clearAllMocks());
 
 	it("refuses an invoice whose QuickBooks tax differs from ours", async () => {
@@ -736,7 +736,7 @@ describe("sendInvoiceEmail", () => {
 			qb_sync_status: "tax_mismatch",
 		});
 
-		await expect(sendInvoiceEmail("inv1", "org1", "a@b.co")).rejects.toMatchObject({
+		await expect(sendQbInvoiceEmail("inv1", "org1", "a@b.co")).rejects.toMatchObject({
 			statusCode: 422,
 			message: expect.stringContaining("different tax"),
 		});
@@ -752,7 +752,7 @@ describe("sendInvoiceEmail", () => {
 			qb_sync_status: "synced",
 		});
 
-		await expect(sendInvoiceEmail("inv1", "org1", "a@b.co")).rejects.toMatchObject({
+		await expect(sendQbInvoiceEmail("inv1", "org1", "a@b.co")).rejects.toMatchObject({
 			statusCode: 422,
 			message: "Create or send this invoice before sending it from QuickBooks.",
 		});

@@ -100,3 +100,52 @@ will silently receive nothing while enrollments complete.
 Unit suites: `npx vitest run src/services/__tests__/followup*.test.ts src/services/__tests__/templateRenderer.test.ts src/controllers/__tests__/followupsController.test.ts`.
 Runtime integration smoke (needs a live DB):
 `DATABASE_URL=postgresql://hvac_user:hvac_pass@localhost:5433/hvac_db npx tsx scripts/followupsSmoke.ts`.
+
+## Customer messages
+
+Transactional notices to a visit's customer, separate from the followup sequences above.
+Module `customer_comms` (Admin → Customer messages tab). Permissions: `view_customer_comms`
+(read) and `manage_customer_comms` (write).
+
+**Events** (`services/customerComms/events.ts`): `visit_confirmed`, `visit_reminder`,
+`visit_rescheduled`, `visit_cancelled`, `tech_on_the_way`, `tech_running_late`,
+`visit_completed`, `review_request`. A setting row per org and event holds `email_enabled`,
+`sms_enabled` and `config`. **No row means off.**
+
+**Defaults.** An org provisioned with `customer_comms` on (in its plan and its business-type
+defaults) gets email on for `visit_confirmed`, `visit_reminder` (`lead_hours: [24]`),
+`visit_rescheduled` and `visit_cancelled`; nothing else, and SMS is never defaulted. Existing
+orgs got no rows. An org that turns the module on later starts all-off: the Admin tab is where
+it switches events on.
+
+**Dedupe keys** (`customer_message.dedupe_key`; a repeat call with the same key queues nothing):
+
+| Event | Key |
+|---|---|
+| `visit_confirmed` | `visit_confirmed:<visitId>` |
+| `visit_reminder` | `visit_reminder:<visitId>:<leadHours>:<startISO>` (a new start time is a new reminder) |
+| `visit_rescheduled` | `visit_rescheduled:<visitId>:<editEpochMs>` (one per edit) |
+| `visit_cancelled` | `visit_cancelled:<visitId>:<cancelEpochMs>` (one per cancellation) |
+| `tech_on_the_way` | `tech_on_the_way:<visitId>:<orgLocalDate>` (one per visit per local day) |
+| `review_request` | `review_request:<jobId>` (one per job, ever) |
+
+**Quiet hours.** SMS only, 08:00–20:00 in the org's timezone. A text due outside the window is
+held to the next 08:00 (reminders are moved back to the previous 20:00 instead, so they
+never arrive after the visit starts). Exempt: `visit_rescheduled`, `visit_cancelled`,
+`tech_on_the_way`, `tech_running_late`. Email is never held.
+
+**How it differs from followup sequences.** A followup enrollment is a multi-step chase that
+stops when the client opens, pays or approves; the scheduler advances it every 5 minutes.
+A customer message is a single outbox row per channel and recipient, written when the
+event happens and sent by the outbox sweeper, with a per-event dedupe key instead of
+enrollment state. Followups also have a visit reminder trigger, so an org running both can send
+two reminders. The Customer messages tab shows a banner when the `visit_reminder` email is on
+and a Followups sequence is active; turn one of them off.
+
+**Review requests.** Queued when a job moves into Completed (visit transition, a dispatcher
+editing a visit's status, cancelling the last open visit, or setting the job's status), sent
+`delay_hours` later (1–72, default 2). Needs the org's review link (Admin → Customer messages →
+Review request → paste the link, then switch on). Not queued while the job's quote or invoice
+has an Open dispute or an invoice billing it is Disputed, or when the client already got one in
+the last 180 days (checked again at send time). The key is per job, so a job that is reopened
+and completed again never gets a second request.

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { db } from "../db.js";
 import { signImageUrl } from "./wasabiService.js";
 
@@ -8,6 +9,8 @@ export interface OrgBrand {
 	address: string | null;
 	phone: string | null;
 	website: string | null;
+	reply_to: string | null;
+	review_url: string | null;
 }
 
 const DEFAULT_BRAND_COLOR = "#1e3a5f";
@@ -30,8 +33,11 @@ export async function getOrgBrand(orgId: string): Promise<OrgBrand> {
 			address: true,
 			phone: true,
 			website: true,
+			email: true,
+			review_url: true,
 		},
 	});
+	const replyTo = z.string().email().safeParse(org?.email);
 	return {
 		name: org?.name ?? "",
 		logo_url: await signImageUrl(org?.logo_url ?? null, EMAIL_LOGO_TTL_SECONDS),
@@ -40,6 +46,9 @@ export async function getOrgBrand(orgId: string): Promise<OrgBrand> {
 		address: org?.address ?? null,
 		phone: org?.phone ?? null,
 		website: org?.website ?? null,
+		// The org email is free text; only a valid address may become Reply-To.
+		reply_to: replyTo.success ? replyTo.data : null,
+		review_url: org?.review_url ?? null,
 	};
 }
 

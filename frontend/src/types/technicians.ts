@@ -138,6 +138,8 @@ export interface Technician {
 	permissions: string[];
 	theme: "dark" | "light" | "system";
 	mfaEnabled?: boolean;
+	/** Signed, short-lived; only on the single-technician read. */
+	photo_url?: string | null;
 }
 
 export interface CreateTechnicianInput {

@@ -5,7 +5,18 @@ import {
 	updateContactSchema,
 	linkContactSchema,
 	updateClientContactSchema,
+	setContactConsentSchema,
 } from "../lib/validate/contacts.js";
+import {
+	CONSENT_SELECT,
+	CUSTOMER_EMAIL_OPT_OUT,
+	CUSTOMER_SMS_OPT_OUT,
+	isEmailResubscribable,
+	isSuppressionSource,
+	linkWithConsent,
+	withConsent,
+} from "../lib/contactConsent.js";
+import { setConsent } from "../services/consentService.js";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
@@ -17,20 +28,22 @@ import { httpError, ErrorCodes } from "../types/responses.js";
 
 export const getClientContacts = async (clientId: string, organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
-	return await sdb.client_contact.findMany({
+	const links = await sdb.client_contact.findMany({
 		where: { client_id: clientId },
 		include: {
-			contact: true,
+			contact: { include: { consents: CONSENT_SELECT } },
 		},
 		orderBy: { contact: { name: "asc" } },
 	});
+	return links.map(linkWithConsent);
 };
 
 export const getContactById = async (contactId: string, organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
-	return await sdb.contact.findFirst({
+	const contact = await sdb.contact.findFirst({
 		where: { id: contactId },
 		include: {
+			consents: CONSENT_SELECT,
 			client_contacts: {
 				include: {
 					client: {
@@ -43,13 +56,15 @@ export const getContactById = async (contactId: string, organizationId: string) 
 			},
 		},
 	});
+	return contact ? withConsent(contact) : null;
 };
 
 export const getAllContacts = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
-	return await sdb.contact.findMany({
+	const contacts = await sdb.contact.findMany({
 		where: { is_active: true },
 		include: {
+			consents: CONSENT_SELECT,
 			client_contacts: {
 				include: {
 					client: {
@@ -63,6 +78,7 @@ export const getAllContacts = async (organizationId: string) => {
 		},
 		orderBy: { name: "asc" },
 	});
+	return contacts.map(withConsent);
 };
 
 export const insertContact = async (data: unknown, organizationId: string, context?: UserContext) => {
@@ -163,6 +179,7 @@ export const insertContact = async (data: unknown, organizationId: string, conte
 			return tx.contact.findFirst({
 				where: { id: contact.id },
 				include: {
+					consents: CONSENT_SELECT,
 					client_contacts: {
 						include: {
 							client: true,
@@ -172,7 +189,7 @@ export const insertContact = async (data: unknown, organizationId: string, conte
 			});
 		});
 
-		return { err: "", item: created };
+		return { err: "", item: created ? withConsent(created) : created };
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {
@@ -278,6 +295,7 @@ export const updateContact = async (
 			return tx.contact.findFirst({
 				where: { id: contactId },
 				include: {
+					consents: CONSENT_SELECT,
 					client_contacts: {
 						include: {
 							client: true,
@@ -287,7 +305,7 @@ export const updateContact = async (
 			});
 		});
 
-		return { err: "", item: updated };
+		return { err: "", item: updated ? withConsent(updated) : updated };
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {
@@ -483,6 +501,7 @@ export const updateClientContact = async (
 			"relationship",
 			"is_primary",
 			"is_billing",
+			"notify_visits",
 		] as const);
 
 		const updated = await sdb.$transaction(async (tx) => {
@@ -502,6 +521,9 @@ export const updateClientContact = async (
 					}),
 					...(parsed.is_billing !== undefined && {
 						is_billing: parsed.is_billing,
+					}),
+					...(parsed.notify_visits !== undefined && {
+						notify_visits: parsed.notify_visits,
 					}),
 				},
 			});
@@ -644,4 +666,78 @@ export const searchContacts = async (
 		log.error({ err: error }, "Search contacts error");
 		throw error;
 	}
+};
+
+export type ConsentResult =
+	| { err: ""; code?: undefined; errorCode?: undefined }
+	| {
+			err: string;
+			code: 400 | 404 | 409;
+			errorCode?: "SMS_OPTED_OUT_BY_CUSTOMER" | "EMAIL_OPTED_OUT_BY_CUSTOMER";
+	  };
+
+export const setContactConsent = async (
+	contactId: string,
+	data: unknown,
+	organizationId: string,
+	context?: UserContext,
+): Promise<ConsentResult> => {
+	const parsed = setContactConsentSchema.safeParse(data);
+	if (!parsed.success) {
+		return { err: "Invalid channel or status", code: 400 };
+	}
+	const { channel, status } = parsed.data;
+
+	const sdb = getScopedDb(organizationId);
+	const contact = await sdb.contact.findFirst({
+		where: { id: contactId },
+		select: { id: true, email: true },
+	});
+	if (!contact) return { err: "Contact not found", code: 404 };
+
+	if (status === "subscribed") {
+		const existing = await sdb.contact_consent.findFirst({
+			where: { contact_id: contactId, channel },
+			select: { status: true, source: true, source_detail: true },
+		});
+		if (existing?.status === "unsubscribed") {
+			if (
+				channel === "sms" &&
+				CUSTOMER_SMS_OPT_OUT.has(existing.source)
+			) {
+				return {
+					err: "The customer opted out of texts. Only the customer can agree to texts again.",
+					code: 409,
+					errorCode: "SMS_OPTED_OUT_BY_CUSTOMER",
+				};
+			}
+			if (channel === "email") {
+				if (CUSTOMER_EMAIL_OPT_OUT.has(existing.source)) {
+					return {
+						err: "The customer unsubscribed themselves. Only the customer can resubscribe.",
+						code: 409,
+						errorCode: "EMAIL_OPTED_OUT_BY_CUSTOMER",
+					};
+				}
+				if (
+					isSuppressionSource(existing.source) &&
+					!isEmailResubscribable(existing, contact.email)
+				) {
+					return {
+						err: "This address bounced or was reported as spam. Change the email address before re-subscribing.",
+						code: 409,
+					};
+				}
+			}
+		}
+	}
+
+	await setConsent(organizationId, {
+		contactId,
+		channel,
+		status,
+		source: "dispatcher",
+		dispatcherId: context?.dispatcherId,
+	});
+	return { err: "" };
 };

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import ImageCarousel from "../inventory/ImageCarousel";
 import type { JobNotePhoto } from "../../types/jobs";
-import { Camera } from "lucide-react";
+import { Camera, Users } from "lucide-react";
 
 export default function NotePhotoGallery({ photos }: {photos: JobNotePhoto[] }){
     const [active, setActive] = useState(0);
@@ -32,6 +32,14 @@ export default function NotePhotoGallery({ photos }: {photos: JobNotePhoto[] }){
 						<Camera size={10} aria-hidden="true" />
 						{p.photo_label}
 						{p.photo_name && <span className="max-w-[140px] truncate">· {p.photo_name}</span>}
+						{p.share_with_customer && (
+							<>
+								<span title="Shared with customer" className="inline-flex">
+									<Users size={10} className="text-primary-text" aria-hidden="true" />
+								</span>
+								<span className="sr-only">shared with customer</span>
+							</>
+						)}
 					</button>
 				))}
 			</div>

@@ -221,3 +221,28 @@ const useTechnicianStatusMutation = (fn: (id: string) => Promise<Technician>) =>
 
 export const useDeactivateTechnicianMutation = () => useTechnicianStatusMutation(technicianApi.deactivateTechnician);
 export const useReactivateTechnicianMutation = () => useTechnicianStatusMutation(technicianApi.reactivateTechnician);
+
+export const useUploadTechnicianPhotoMutation = (): UseMutationResult<
+	string | null,
+	Error,
+	{ id: string; file: File }
+> => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, file }: { id: string; file: File }) =>
+			technicianApi.uploadTechnicianPhoto(id, file),
+		onSuccess: (_url, { id }) => {
+			queryClient.invalidateQueries({ queryKey: ["technicians", id] });
+		},
+	});
+};
+
+export const useDeleteTechnicianPhotoMutation = (): UseMutationResult<void, Error, string> => {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (id: string) => technicianApi.deleteTechnicianPhoto(id),
+		onSuccess: (_v, id) => {
+			queryClient.invalidateQueries({ queryKey: ["technicians", id] });
+		},
+	});
+};

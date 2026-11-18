@@ -23,6 +23,15 @@ import { log } from "../services/appLogger.js";
 import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 import { deductInventoryForVisit } from "./inventoryController.js";
 import { onVisitScheduled, onVisitRescheduled, onVisitCancelled } from "../services/followupTriggers.js";
+import {
+	notifyJobCompleted,
+	notifyVisitCancelled,
+	notifyVisitCompleted,
+	notifyVisitRescheduled,
+	notifyTechOnTheWay,
+	notifyVisitScheduled,
+	retimeVisitReminders,
+} from "../services/customerComms/visitEvents.js";
 import { fireLowStockAlerts } from "../services/lowStockAlerts.js";
 import { createNotification, notifyDispatchers } from "./notificationsController.js";
 import { emitToOrg } from "../services/socketService.js";
@@ -37,6 +46,7 @@ import {
 	unknownInventoryItemsMessage,
 } from "../lib/inventory.js";
 import { applyOdometerIncrement, fetchRouteDistanceMiles } from "../lib/vehicleMileage.js";
+import { formatLocalDate, formatLocalTime } from "../lib/formatLocal.js";
 
 const VALID_PAUSE_REASONS = new Set<string>(["AwaitingMaterials", "EquipmentIssue", "Break", "Other"]);
 function toPauseReason(v: string | undefined): pause_reason_type | undefined {
@@ -602,6 +612,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 			emitToOrg(organization_id, "job_visit:created", { visitId: created.id, organizationId: organization_id });
 			// Best-effort: schedule client reminders from any active visit_scheduled sequences.
 			onVisitScheduled(created.id, organization_id);
+			void notifyVisitScheduled(created.id, organization_id);
 		}
 		return { err: "", item: created ?? undefined };
 	} catch (e) {
@@ -699,6 +710,9 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		}
 
 		let deductLowStockIds: string[] = [];
+		let jobJustCompleted = false;
+		const completing =
+			parsed.status === "Completed" && existingVisit.status !== "Completed";
 		const updated = await sdb.$transaction(async (tx) => {
 			// ── Scalar field update ───────────────────────────────────────
 			const visit = await tx.job_visit.update({
@@ -741,6 +755,14 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 					...(parsed.status !== undefined && {
 						status: parsed.status,
 					}),
+					// Same stamps as the "complete" action: the completed-visit
+					// link lifetime is measured from actual_end_at.
+					...(completing &&
+						parsed.actual_end_at === undefined &&
+						!existingVisit.actual_end_at && { actual_end_at: new Date() }),
+					...(completing &&
+						parsed.actual_start_at === undefined &&
+						!existingVisit.actual_start_at && { actual_start_at: new Date() }),
 				},
 				include: {
 					job: true,
@@ -884,6 +906,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 						where: { id: existingVisit.job_id },
 						data: { status: newJobStatus, status_changed_at: new Date() },
 					});
+					jobJustCompleted = newJobStatus === "Completed";
 				}
 
 				// Inventory consumption is event-driven: it fires once per visit on
@@ -1081,6 +1104,9 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 						),
 					);
 					emitToOrg(organizationId, "job_visit:updated", { visitId: null, organizationId });
+					// One notice for the edited visit is enough; the rest only
+					// need their reminders moved off the old times.
+					for (const v of futureVisits) void retimeVisitReminders(v.id, organizationId);
 				}
 			}
 		}
@@ -1092,10 +1118,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			existingVisit.scheduled_start_at.getTime() !== parsed.scheduled_start_at.getTime()
 		) {
 			const clientName = updated.job.client.name;
-			const newTime = parsed.scheduled_start_at.toLocaleString("en-US", {
-				weekday: "short", month: "short", day: "numeric",
-				hour: "numeric", minute: "2-digit",
+			// The server's own zone is not the org's; format in the org's.
+			const orgRow = await db.organization.findUniqueOrThrow({
+				where: { id: organizationId },
+				select: { timezone: true },
 			});
+			const tz = orgRow.timezone;
+			const newTime = `${formatLocalDate(parsed.scheduled_start_at, tz)} at ${formatLocalTime(parsed.scheduled_start_at, tz)}`;
 			const techIds = updated.visit_techs.map((vt: { tech_id: string }) => vt.tech_id);
 			for (const techId of techIds) {
 				await createNotification({
@@ -1124,12 +1153,23 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		// Best-effort: keep visit reminders in sync with reschedules / cancellations.
 		if (parsed.status === "Cancelled" && existingVisit.status !== "Cancelled") {
 			onVisitCancelled(id, organizationId);
-		} else if (
-			parsed.scheduled_start_at !== undefined &&
-			existingVisit.scheduled_start_at.getTime() !== parsed.scheduled_start_at.getTime()
-		) {
-			onVisitRescheduled(id, organizationId, parsed.scheduled_start_at);
+			void notifyVisitCancelled(id, organizationId);
+		} else {
+			const moved =
+				parsed.scheduled_start_at !== undefined &&
+				existingVisit.scheduled_start_at.getTime() !== parsed.scheduled_start_at.getTime();
+			// The customer was told it was cancelled; reinstating it is news too.
+			const reinstated =
+				existingVisit.status === "Cancelled" &&
+				parsed.status !== undefined &&
+				parsed.status !== "Cancelled";
+			if (moved && parsed.scheduled_start_at)
+				onVisitRescheduled(id, organizationId, parsed.scheduled_start_at);
+			if (moved || reinstated) void notifyVisitRescheduled(id, organizationId);
 		}
+		if (updated && parsed.status === "Completed" && existingVisit.status !== "Completed")
+			void notifyVisitCompleted(id, organizationId);
+		if (jobJustCompleted) void notifyJobCompleted(existingVisit.job_id, organizationId);
 		return { err: "", item: updated };
 	} catch (e) {
 		if (e instanceof ZodError) {
@@ -1828,6 +1868,14 @@ export const applyVisitTransition = async (
 			);
 		}
 
+		if (action === "drive") {
+			void notifyTechOnTheWay(id, actingTechIds[0], organizationId).catch((err) =>
+				log.warn({ err, visitId: id }, "on-the-way notice failed"),
+			);
+		}
+
+		if (action === "complete" && updated) void notifyVisitCompleted(id, organizationId);
+
 		if (jobJustCompleted && updated) {
 			notifyDispatchers({
 				type: "job_finished",
@@ -1835,6 +1883,7 @@ export const applyVisitTransition = async (
 				body: `${updated.job.client.name}: all visits are complete.`,
 				actionUrl: `/dispatch/jobs/${existingVisit.job_id}`,
 			}, organizationId, context?.dispatcherId).catch(() => {});
+			void notifyJobCompleted(existingVisit.job_id, organizationId);
 		}
 
 		if (action === "delay" && updated) {
@@ -1887,6 +1936,7 @@ export const cancelJobVisit = async (
 		if (existingVisit.status === "Completed" || existingVisit.status === "Cancelled")
 			return { err: `${existingVisit.status} visits can't be cancelled` };
 
+		let jobJustCompleted = false;
 		await sdb.$transaction(async (tx) => {
 			await tx.job_visit.update({
 				where: { id },
@@ -1909,6 +1959,7 @@ export const cancelJobVisit = async (
 					where: { id: existingVisit.job_id },
 					data: { status: newJobStatus, status_changed_at: new Date() },
 				});
+				jobJustCompleted = newJobStatus === "Completed";
 			}
 
 			// ── Step 1: Close open time entries ──────────────────────────────────
@@ -2020,6 +2071,10 @@ export const cancelJobVisit = async (
 			});
 
 		});
+
+		onVisitCancelled(id, organizationId);
+		void notifyVisitCancelled(id, organizationId);
+		if (jobJustCompleted) void notifyJobCompleted(existingVisit.job_id, organizationId);
 
 		const updated = await sdb.job_visit.findFirst({
 			where: { id },

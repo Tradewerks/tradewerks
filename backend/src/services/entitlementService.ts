@@ -617,6 +617,7 @@ const LIMIT_COPY: Record<string, string> = {
 	ai_calls_month: "AI requests per month",
 	tax_lookups_month: "Tax lookups per month",
 	receipt_scans_month: "Receipt scans per month",
+	sms_segments_month: "Text segments per month",
 };
 
 function describeLoss(diff: EntitlementDiff): string {

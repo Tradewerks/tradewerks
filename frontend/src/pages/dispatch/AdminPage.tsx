@@ -5,9 +5,11 @@ import SettingsSection from "../../components/admin/SettingsSection";
 import EntitlementsSection from "../../components/admin/EntitlementsSection";
 import RolesSection from "../../components/admin/RolesSection";
 import IntegrationSection from "../../components/admin/IntegrationSection";
+import CustomerMessagesSection from "../../components/admin/CustomerMessagesSection";
 import { usePermission } from "../../hooks/usePermission";
+import { useModuleOn } from "../../hooks/useEntitlements";
 
-export type AdminTab = "users" | "settings" | "entitlements" | "roles" | "integrations";
+export type AdminTab = "users" | "settings" | "entitlements" | "roles" | "integrations" | "customer_messages";
 
 const STORAGE_KEY = "adminPage_activeTab";
 
@@ -17,6 +19,7 @@ const TABS: { id: AdminTab; label: string; permission?: string }[] = [
 	{ id: "entitlements", label: "Subscription", permission: "manage_organization" },
 	{ id: "roles", label: "Roles", permission: "manage_roles" },
 	{ id: "integrations", label: "Integrations", permission: "manage_organization" },
+	{ id: "customer_messages", label: "Customer messages", permission: "view_customer_comms" },
 ];
 
 export default function AdminPage() {
@@ -24,10 +27,13 @@ export default function AdminPage() {
 	const MANAGE_ORGANIZATION = usePermission("manage_organization");
 	const MANAGE_ROLES = usePermission("manage_roles");
 	const MANAGE_TAXES = usePermission("manage_taxes");
+	const VIEW_CUSTOMER_COMMS = usePermission("view_customer_comms");
+	const customerCommsOn = useModuleOn("customer_comms");
 	const permMap = {
 		view_admin: VIEW_ADMIN,
 		manage_organization: MANAGE_ORGANIZATION || MANAGE_TAXES,
 		manage_roles: MANAGE_ROLES,
+		view_customer_comms: VIEW_CUSTOMER_COMMS && customerCommsOn,
 	}
 	const visibleTabs = TABS.filter((tab) => permMap[tab.permission as keyof typeof permMap]);
 	const [searchParams, setSearchParams] = useSearchParams();
@@ -90,6 +96,11 @@ export default function AdminPage() {
 			{activeTab === "integrations" && (
 				<div role="tabpanel" id="tabpanel-integrations" aria-labelledby="tab-integrations">
 					<IntegrationSection />
+				</div>
+			)}
+			{activeTab === "customer_messages" && (
+				<div role="tabpanel" id="tabpanel-customer_messages" aria-labelledby="tab-customer_messages">
+					<CustomerMessagesSection />
 				</div>
 			)}
 		</div>

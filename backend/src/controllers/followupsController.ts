@@ -5,7 +5,7 @@ import {
 	UpdateSequenceInput,
 	EnrollInput,
 } from "../lib/validate/followups.js";
-import { resolveStepSendAt, resolveContactEmail } from "../services/followupEngine.js";
+import { resolveStepSendAt, resolveContact } from "../services/followupEngine.js";
 
 // Errors below carry a `status` so route handlers can map them to the right
 // HTTP response (see routes/followups.ts), mirroring the pattern already used
@@ -201,7 +201,31 @@ export async function enroll(input: EnrollInput, orgId: string, dispatcherId: st
 	});
 	if (!client) throw notFound("Client not found");
 
-	const recipientEmail = input.recipient_email ?? resolveContactEmail(client.contacts);
+	// The stored contact_id is what lets each send carry an unsubscribe link, so
+	// an overridden address is tied back to the client's contact holding it.
+	const eligible = client.contacts.filter(
+		(c) => !!c.contact?.email && c.contact.is_active !== false && c.contact.type !== "vendor",
+	);
+	const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+	let contactId: string | null = null;
+	let recipientEmail: string | null = null;
+	if (input.contact_id) {
+		const picked = eligible.find((c) => c.contact_id === input.contact_id);
+		if (!picked) throw badRequest("Contact is not an active contact of this client");
+		if (input.recipient_email && !sameEmail(input.recipient_email, picked.contact!.email!)) {
+			throw badRequest("recipient_email does not match the selected contact");
+		}
+		contactId = picked.contact_id;
+		recipientEmail = input.recipient_email ?? picked.contact!.email!;
+	} else if (input.recipient_email) {
+		recipientEmail = input.recipient_email;
+		contactId =
+			eligible.find((c) => sameEmail(c.contact!.email!, input.recipient_email!))?.contact_id ?? null;
+	} else {
+		const resolved = resolveContact(client.contacts);
+		contactId = resolved?.contact_id ?? null;
+		recipientEmail = resolved?.email ?? null;
+	}
 	if (!recipientEmail) throw badRequest("No recipient email available for this client");
 
 	const firstStep = seq.steps[0];
@@ -223,7 +247,7 @@ export async function enroll(input: EnrollInput, orgId: string, dispatcherId: st
 				organization_id: orgId,
 				sequence_id: input.sequence_id,
 				client_id: input.client_id,
-				contact_id: input.contact_id ?? null,
+				contact_id: contactId,
 				recipient_email: recipientEmail,
 				status: "active",
 				current_step_order: 0,

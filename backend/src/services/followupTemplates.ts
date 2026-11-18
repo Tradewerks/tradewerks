@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import type { email_template_category } from "../../generated/prisma/client.js";
 import { DEFAULT_TEMPLATES } from "./followupTemplateDefaults.js";
+import type { EmailTemplateCategoryValue } from "../lib/validate/emailTemplates.js";
 
 export interface EffectiveTemplate {
 	category: email_template_category;
@@ -9,6 +10,8 @@ export interface EffectiveTemplate {
 	html: string;
 	/** Editable plain-text alternative. null = auto-generate from the HTML at send time. */
 	text: string | null;
+	/** Text-message body. Only customer-message templates use it; null otherwise. */
+	sms_body: string | null;
 	/** true when the org has saved an override; false when this is the built-in default. */
 	is_customized: boolean;
 	updated_at: Date | null;
@@ -33,7 +36,8 @@ export async function getEffectiveTemplate(
 	// For a saved override, honor its text as-is (null → send path auto-generates
 	// from the HTML). For the default, ship the default's plain-text body.
 	if (row) return { subject: row.subject, html: row.html, text: row.text };
-	const def = DEFAULT_TEMPLATES[category] ?? DEFAULT_TEMPLATES.followup;
+	const def =
+		DEFAULT_TEMPLATES[category as EmailTemplateCategoryValue] ?? DEFAULT_TEMPLATES.followup;
 	return { subject: def.subject, html: def.html, text: def.text };
 }
 
@@ -45,7 +49,7 @@ export async function listEffectiveTemplates(orgId: string): Promise<EffectiveTe
 	const byCategory = new Map(rows.map((r) => [r.category, r]));
 
 	return TEMPLATE_CATEGORIES.map((category) => {
-		const def = DEFAULT_TEMPLATES[category];
+		const def = DEFAULT_TEMPLATES[category as EmailTemplateCategoryValue];
 		const row = byCategory.get(category);
 		return row
 			? {
@@ -54,6 +58,7 @@ export async function listEffectiveTemplates(orgId: string): Promise<EffectiveTe
 					subject: row.subject,
 					html: row.html,
 					text: row.text,
+					sms_body: row.sms_body,
 					is_customized: true,
 					updated_at: row.updated_at,
 				}
@@ -63,6 +68,7 @@ export async function listEffectiveTemplates(orgId: string): Promise<EffectiveTe
 					subject: def.subject,
 					html: def.html,
 					text: def.text,
+					sms_body: null,
 					is_customized: false,
 					updated_at: null,
 				};

@@ -50,6 +50,8 @@ import { log } from "../services/appLogger.js";
 import { isClientMessage } from "../types/responses.js";
 import { generateJobNumber } from "../db.js";
 import { assertValidRecurringPlanTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
+import { onVisitScheduled } from "../services/followupTriggers.js";
+import { notifyVisitScheduled } from "../services/customerComms/visitEvents.js";
 
 // ─── Timezone-safe date helpers ───────────────────────────────────────────────
 // All occurrence generation works with "YYYY-MM-DD" calendar-date strings in the
@@ -1986,6 +1988,10 @@ export const generateVisitFromOccurrence = async (
 				template_version: occurrence.template_version,
 			};
 		});
+
+		// Post-commit so a rolled-back generation never messages the customer.
+		void onVisitScheduled(result.visit_id, organizationId);
+		void notifyVisitScheduled(result.visit_id, organizationId);
 
 		return { err: "", item: result };
 	} catch (e) {

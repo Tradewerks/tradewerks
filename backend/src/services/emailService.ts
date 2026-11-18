@@ -1,4 +1,5 @@
 import postmark, { TemplatedMessage } from "postmark";
+import { htmlToText } from "./htmlToText.js";
 import { db } from "../db.js";
 import { create } from "node:domain";
 import {
@@ -13,6 +14,9 @@ import { getQuoteById } from "../controllers/quotesController.js";
 import { getInvoiceById } from "../controllers/invoicesController.js";
 import { SUBSCRIPTION_PATH } from "../lib/entitlements/registry.js";
 import { getOrgBrand, type OrgBrand } from "./emailBranding.js";
+import { isModuleOn } from "./entitlementService.js";
+import { getScopedDb } from "../lib/context.js";
+import { issueMessageLink, linkExpiry } from "../lib/publicLink.js";
 
 // ============================================================================
 // EMAIL TEMPORARILY DISABLED — pending Postmark sender approval.
@@ -38,13 +42,14 @@ export const sendEmail = async (
 	to: string,
 	templateAlias: string,
 	templateModel: Record<string, unknown>,
-) => {
+): Promise<boolean> => {
 	if (EMAIL_DISABLED) {
 		log.info(
 			{ to, templateAlias },
 			"[EMAIL DISABLED] Skipping templated email — pending Postmark approval",
 		);
-		return;
+		// Disabled is a deliberate no-op, not a delivery failure.
+		return true;
 	}
 	try {
 		await client.sendEmailWithTemplate({
@@ -54,8 +59,10 @@ export const sendEmail = async (
 			MessageStream: "outbound",
 			TemplateModel: templateModel,
 		} as TemplatedMessage);
+		return true;
 	} catch (error) {
 		log.error({ err: error }, "Failed to send templated email");
+		return false;
 	}
 };
 
@@ -92,24 +99,7 @@ export const sendTemplatedTracked = async (
 	return { messageId: result.MessageID ?? null };
 };
 
-// Naive HTML→text fallback for the multipart body: strip tags, collapse
-// whitespace, and drop the invisible preheader. Good enough for the text/plain
-// alternative Postmark includes for clients that don't render HTML.
-const htmlToText = (html: string): string =>
-	html
-		.replace(/<style[\s\S]*?<\/style>/gi, "")
-		.replace(/<head[\s\S]*?<\/head>/gi, "")
-		.replace(/<br\s*\/?>/gi, "\n")
-		.replace(/<\/p>/gi, "\n\n")
-		.replace(/<[^>]+>/g, "")
-		.replace(/&amp;/g, "&")
-		.replace(/&nbsp;/g, " ")
-		.replace(/&middot;/g, "·")
-		.replace(/&#39;/g, "'")
-		.replace(/&quot;/g, '"')
-		.replace(/[ \t]+/g, " ")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
+export { htmlToText };
 
 /**
  * Send a fully-rendered HTML email (subject + body already substituted) with
@@ -125,7 +115,12 @@ export const sendRenderedTracked = async (
 	subject: string,
 	html: string,
 	text?: string | null,
-	options?: { metadata?: Record<string, string> },
+	options?: {
+		metadata?: Record<string, string>;
+		fromName?: string;
+		replyTo?: string | null;
+		headers?: { Name: string; Value: string }[];
+	},
 ): Promise<{ messageId: string | null }> => {
 	if (EMAIL_DISABLED) {
 		log.info(
@@ -137,7 +132,9 @@ export const sendRenderedTracked = async (
 		};
 	}
 	const result = await client.sendEmail({
-		From: POSTMARK_FROM_EMAIL,
+		From: options?.fromName
+			? fromWithName(options.fromName)
+			: POSTMARK_FROM_EMAIL,
 		To: to,
 		Subject: subject,
 		HtmlBody: html,
@@ -145,6 +142,8 @@ export const sendRenderedTracked = async (
 		MessageStream: "outbound",
 		TrackOpens: true,
 		...(options?.metadata ? { Metadata: options.metadata } : {}),
+		...(options?.replyTo ? { ReplyTo: options.replyTo } : {}),
+		...(options?.headers?.length ? { Headers: options.headers } : {}),
 	});
 	return { messageId: result.MessageID ?? null };
 };
@@ -237,10 +236,24 @@ const escapeHtml = (v: unknown): string =>
 const safeColor = (c: string): string => (/^#[0-9a-f]{3,8}$/i.test(c) ? c : "#1e3a5f");
 
 // "Acme Heating <quotes@…>" so the client sees who the email is from, not our shared sender.
-const fromWithName = (name: string): string => {
+export const fromWithName = (name: string): string => {
 	const clean = name.replace(/["<>\r\n]/g, "").trim();
 	return clean ? `"${clean}" <${POSTMARK_FROM_EMAIL}>` : POSTMARK_FROM_EMAIL;
 };
+
+// Replies reach the org only when Reply-To is set; otherwise point at the phone.
+// The phone is org free text and `closing` is written unescaped, so escape here.
+export const contactLine = (
+	brand: OrgBrand,
+	replyText: string,
+	phoneText: string,
+	fallbackText: string,
+): string =>
+	brand.reply_to
+		? replyText
+		: brand.phone
+			? `${phoneText} ${escapeHtml(brand.phone)}.`
+			: fallbackText;
 
 const brandFooter = (brand: OrgBrand): string =>
 	[brand.name, brand.address, brand.phone, brand.website].filter(Boolean).join(" · ");
@@ -253,6 +266,7 @@ const generateDocumentEmailHtml = (
 	intro: string,
 	rows: [label: string, value: string, emphasis?: boolean][],
 	closing: string,
+	action?: { label: string; url: string },
 ): string => {
 	const color = safeColor(brand.color);
 	const logo = brand.logo_url
@@ -287,7 +301,14 @@ const generateDocumentEmailHtml = (
           <table style="width: 100%; border-collapse: collapse;">
             ${tableRows}
           </table>
-        </div>
+        </div>${
+			action
+				? `
+        <p style="margin: 0 0 24px;">
+          <a href="${escapeHtml(action.url)}" style="display: inline-block; background: ${color}; color: white; font-size: 14px; font-weight: bold; text-decoration: none; padding: 12px 20px; border-radius: 6px;">${escapeHtml(action.label)}</a>
+        </p>`
+				: ""
+		}
         <p style="color: #6b7280; font-size: 13px; line-height: 1.6; margin: 0;">
           ${closing}
         </p>
@@ -305,14 +326,62 @@ const generateDocumentEmailHtml = (
 `;
 };
 
-const fmtDate = (d: Date | string | null | undefined): string | null => {
+// Default UTC: invoice.due_date is a UTC-midnight "YYYY-MM-DD". Quote
+// valid_until is the picker's browser-local midnight, so callers pass the org tz.
+export const fmtDate = (
+	d: Date | string | null | undefined,
+	timeZone = "UTC",
+): string | null => {
 	if (!d) return null;
 	return new Date(d).toLocaleDateString("en-US", {
-		timeZone: "UTC",
+		timeZone,
 		month: "long",
 		day: "numeric",
 		year: "numeric",
 	});
+};
+
+/**
+ * The public page for a sent quote or invoice, or null: customer_comms off, no
+ * FRONTEND_URL, or a link that would already be expired. The recipient is matched
+ * to the client's contact so an approval records who it came from.
+ */
+const documentLink = async (
+	orgId: string,
+	purpose: "quote" | "invoice",
+	doc: { id: string; client_id: string | null },
+	recipientEmail: string,
+	expiresAt: Date | null,
+): Promise<string | null> => {
+	if (expiresAt && expiresAt.getTime() <= Date.now()) return null;
+	// The link is an extra; a failure to make one must not stop the document going out.
+	try {
+		if (!(await isModuleOn(orgId, "customer_comms"))) return null;
+		const contact = doc.client_id
+			? await getScopedDb(orgId).contact.findFirst({
+					where: {
+						email: { equals: recipientEmail.trim(), mode: "insensitive" },
+						is_active: true,
+						// type is nullable, and SQL's <> drops NULLs.
+						OR: [{ type: null }, { type: { not: "vendor" } }],
+						client_contacts: { some: { client_id: doc.client_id } },
+					},
+					select: { id: true },
+				})
+			: null;
+		return await issueMessageLink(orgId, {
+			purpose,
+			entityId: doc.id,
+			contactId: contact?.id,
+			expiresAt,
+		});
+	} catch (err) {
+		log.warn(
+			{ err, orgId, purpose, entityId: doc.id },
+			"public link not issued; sending without it",
+		);
+		return null;
+	}
 };
 
 /**
@@ -323,13 +392,13 @@ export const sendQuoteEmail = async (
 	quoteId: string,
 	recipientEmail: string,
 	organizationId: string,
-): Promise<void> => {
+): Promise<{ messageId: string | null }> => {
 	if (EMAIL_DISABLED) {
 		log.info(
 			{ quoteId, recipientEmail },
 			"[EMAIL DISABLED] Skipping quote email — pending Postmark approval",
 		);
-		return;
+		return { messageId: null };
 	}
 	const [quote, pdfBuffer, brand] = await Promise.all([
 		getQuoteById(quoteId, organizationId),
@@ -344,11 +413,24 @@ export const sendQuoteEmail = async (
 		(quote as typeof quote & { client: { name: string } | null }).client
 			?.name ?? "Valued Customer";
 	const total = fmt(quote.total);
-	const validUntil = fmtDate(quote.valid_until);
+	const { timezone: orgTz } = await db.organization.findUniqueOrThrow({
+		where: { id: organizationId },
+		select: { timezone: true },
+	});
+	const validUntil = fmtDate(quote.valid_until, orgTz);
+	const link = await documentLink(
+		organizationId,
+		"quote",
+		quote,
+		recipientEmail,
+		linkExpiry("quote", { ...quote, timezone: orgTz }),
+	);
 
+	let sent: Awaited<ReturnType<typeof client.sendEmail>>;
 	try {
-		await client.sendEmail({
+		sent = await client.sendEmail({
 			From: fromWithName(brand.name),
+			ReplyTo: brand.reply_to ?? undefined,
 			To: recipientEmail,
 			Subject: brand.name
 				? `Quote ${quote.quote_number} from ${brand.name}`
@@ -363,10 +445,17 @@ export const sendQuoteEmail = async (
 					["Total", total],
 					...(validUntil ? [["Valid Until", validUntil] as [string, string]] : []),
 				],
-				"If you have any questions or would like to proceed, please reply to this email or call us directly.",
+				contactLine(
+					brand,
+					"If you have any questions or would like to proceed, please reply to this email or call us directly.",
+					"If you have any questions or would like to proceed, please call us at",
+					"If you have any questions or would like to proceed, please contact us.",
+				),
+				link ? { label: "View and approve online", url: link } : undefined,
 			),
-			TextBody: `Hi ${clientName},\n\nPlease find your quote ${quote.quote_number} attached. Total: ${total}${validUntil ? `. Valid until: ${validUntil}` : ""}.\n\n${brandFooter(brand)}`,
+			TextBody: `Hi ${clientName},\n\nPlease find your quote ${quote.quote_number} attached. Total: ${total}${validUntil ? `. Valid until: ${validUntil}` : ""}.${link ? `\n\nView and approve online: ${link}` : ""}\n\n${brandFooter(brand)}`,
 			MessageStream: "outbound",
+			TrackOpens: true,
 			Attachments: [
 				{
 					Name: `${quote.quote_number}.pdf`,
@@ -391,6 +480,7 @@ export const sendQuoteEmail = async (
 	}
 
 	log.info({ quoteId, recipientEmail }, "Quote email sent");
+	return { messageId: sent.MessageID ?? null };
 };
 
 /**
@@ -401,13 +491,13 @@ export const sendInvoiceEmail = async (
 	invoiceId: string,
 	recipientEmail: string,
 	organizationId: string,
-): Promise<void> => {
+): Promise<{ messageId: string | null }> => {
 	if (EMAIL_DISABLED) {
 		log.info(
 			{ invoiceId, recipientEmail },
 			"[EMAIL DISABLED] Skipping invoice email — pending Postmark approval",
 		);
-		return;
+		return { messageId: null };
 	}
 	const [invoice, pdfBuffer, brand] = await Promise.all([
 		getInvoiceById(invoiceId, organizationId),
@@ -422,10 +512,19 @@ export const sendInvoiceEmail = async (
 	const total = fmt(invoice.total);
 	const balanceDue = fmt(invoice.balance_due);
 	const dueDate = fmtDate(invoice.due_date);
+	const link = await documentLink(
+		organizationId,
+		"invoice",
+		invoice,
+		recipientEmail,
+		linkExpiry("invoice"),
+	);
 
+	let sent: Awaited<ReturnType<typeof client.sendEmail>>;
 	try {
-		await client.sendEmail({
+		sent = await client.sendEmail({
 			From: fromWithName(brand.name),
+			ReplyTo: brand.reply_to ?? undefined,
 			To: recipientEmail,
 			Subject: brand.name
 				? `Invoice ${invoice.invoice_number} from ${brand.name}`
@@ -441,10 +540,17 @@ export const sendInvoiceEmail = async (
 					["Balance Due", balanceDue, true],
 					...(dueDate ? [["Due Date", dueDate] as [string, string]] : []),
 				],
-				"Please reply to this email if you have any questions regarding this invoice.",
+				contactLine(
+					brand,
+					"Please reply to this email if you have any questions regarding this invoice.",
+					"If you have any questions regarding this invoice, please call us at",
+					"If you have any questions regarding this invoice, please contact us.",
+				),
+				link ? { label: "View invoice online", url: link } : undefined,
 			),
-			TextBody: `Hi ${clientName},\n\nPlease find invoice ${invoice.invoice_number} attached. Total: ${total}. Balance due: ${balanceDue}${dueDate ? `. Due: ${dueDate}` : ""}.\n\n${brandFooter(brand)}`,
+			TextBody: `Hi ${clientName},\n\nPlease find invoice ${invoice.invoice_number} attached. Total: ${total}. Balance due: ${balanceDue}${dueDate ? `. Due: ${dueDate}` : ""}.${link ? `\n\nView invoice online: ${link}` : ""}\n\n${brandFooter(brand)}`,
 			MessageStream: "outbound",
+			TrackOpens: true,
 			Attachments: [
 				{
 					Name: `${invoice.invoice_number}.pdf`,
@@ -469,6 +575,7 @@ export const sendInvoiceEmail = async (
 	}
 
 	log.info({ invoiceId, recipientEmail }, "Invoice email sent");
+	return { messageId: sent.MessageID ?? null };
 };
 
 export const sendEmailVerificationEmail = async (

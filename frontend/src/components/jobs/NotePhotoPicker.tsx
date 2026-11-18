@@ -4,6 +4,7 @@ import axios from "axios";
 import { useUploadNotePhotoMutation } from "../../hooks/useJobs";
 import type { NotePhoto, JobNotePhoto } from "../../types/jobs";
 import ImageCarousel from "../inventory/ImageCarousel";
+import ToggleSwitch from "../ui/ToggleSwitch";
 
 const PHOTO_LABELS = ["Before", "After", "Other"] as const;
 type PhotoLabel = (typeof PHOTO_LABELS)[number];
@@ -48,6 +49,9 @@ interface NotePhotoPickerProps {
 	 * photo library; "environment" skips straight to the rear camera.
 	 */
 	capture?: "environment" | "user" | false;
+	/** Job notes only: lets a photo be shown on the customer's visit page. */
+	shareable?: boolean;
+	onToggleShareExisting?: (id: string) => void;
 }
 
 export default function NotePhotoPicker({
@@ -59,11 +63,14 @@ export default function NotePhotoPicker({
 	existingPhotos,
 	onRemoveExisting,
 	capture = false,
+	shareable = false,
+	onToggleShareExisting,
 }: NotePhotoPickerProps) {
 	const [pendingFile, setPendingFile] = useState<File | null>(null);
 	const [labelPickerOpen, setLabelPickerOpen] = useState(false);
 	const [selectedLabel, setSelectedLabel] = useState<PhotoLabel>("Before");
 	const [photoName, setPhotoName] = useState("");
+	const [shareWithCustomer, setShareWithCustomer] = useState(false);
 	const [isUploading, setIsUploading] = useState(false);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const [pendingUpload, setPendingUpload] = useState<{ url: string; raw_url: string } | null>(null);
@@ -87,6 +94,7 @@ export default function NotePhotoPicker({
 		setLabelPickerOpen(true);
 		setPendingFile(file);
 		setSelectedLabel("Before");
+		setShareWithCustomer(false);
 		setPhotoName(file.name.replace(/\.[^.]+$/, "").slice(0, PHOTO_NAME_MAX));
 
 		try {
@@ -107,7 +115,13 @@ export default function NotePhotoPicker({
 		if (!pendingFile || !pendingUpload) return;
 		onPhotosChange([
 			...photos,
-			{ photo_url: pendingUpload.raw_url, photo_label: selectedLabel, photo_name: photoName.trim(), preview_url: pendingUpload.url },
+			{
+				photo_url: pendingUpload.raw_url,
+				photo_label: selectedLabel,
+				photo_name: photoName.trim(),
+				preview_url: pendingUpload.url,
+				...(shareable && { share_with_customer: shareWithCustomer }),
+			},
 		]);
 		setPendingFile(null);
 		setLabelPickerOpen(false);
@@ -126,6 +140,19 @@ export default function NotePhotoPicker({
 		onPhotosChange(photos.filter((_, i) => i !== idx));
 	};
 
+	const toggleSharePhoto = (idx: number) => {
+		onPhotosChange(
+			photos.map((p, i) => (i === idx ? { ...p, share_with_customer: !p.share_with_customer } : p))
+		);
+	};
+
+	const shareSwitch = (checked: boolean, name: string, onChange: () => void) => (
+		<span className="flex items-center gap-1 ml-0.5 text-[10px] text-text-muted">
+			<ToggleSwitch checked={checked} onChange={onChange} ariaLabel={`Share ${name} with customer`} />
+			{checked && <span aria-hidden="true">Shared</span>}
+		</span>
+	);
+
 	return (
 		<>
 			{existingPhotos && existingPhotos.length > 0 && (
@@ -142,6 +169,11 @@ export default function NotePhotoPicker({
 							{p.photo_name && (
 								<span className="max-w-[100px] truncate text-text-tertiary">{p.photo_name}</span>
 							)}
+							{shareable &&
+								onToggleShareExisting &&
+								shareSwitch(!!p.share_with_customer, p.photo_name || `${p.photo_label} photo`, () =>
+									onToggleShareExisting(p.id)
+								)}
 							{onRemoveExisting && (
 								<button
 									type="button"
@@ -171,6 +203,10 @@ export default function NotePhotoPicker({
 							{p.photo_name && (
 								<span className="max-w-[100px] truncate text-text-tertiary">{p.photo_name}</span>
 							)}
+							{shareable &&
+								shareSwitch(!!p.share_with_customer, p.photo_name || `${p.photo_label} photo`, () =>
+									toggleSharePhoto(i)
+								)}
 							<button
 								type="button"
 								onClick={() => handleRemovePhoto(i)}
@@ -270,6 +306,24 @@ export default function NotePhotoPicker({
 										</button>
 									))}
 								</div>
+								{shareable && (
+									<div className="flex items-center justify-between gap-3 mb-4">
+										<div className="min-w-0">
+											<p className="text-sm text-text-primary">
+												Share with customer
+											</p>
+											<p id="share-photo-hint" className="text-xs text-text-muted">
+												Shown on their visit page.
+											</p>
+										</div>
+										<ToggleSwitch
+											checked={shareWithCustomer}
+											onChange={() => setShareWithCustomer((v) => !v)}
+											ariaLabel="Share with customer"
+											ariaDescribedBy="share-photo-hint"
+										/>
+									</div>
+								)}
 								<div className="flex gap-2">
 									<button
 										type="button"

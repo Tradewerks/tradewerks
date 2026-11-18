@@ -24,6 +24,8 @@ type Catalog = import("../orgPurge.js").PurgeCatalog;
 const NOT_FILES = new Set([
 	"dispatcher_notification.action_url",
 	"technician_notification.action_url",
+	// The org's public review page, a link out, not a stored file.
+	"organization.review_url",
 	// Paired with storage_url, which is the one queued.
 	"inventory_import_source.storage_key",
 	"data_import_source.storage_key",

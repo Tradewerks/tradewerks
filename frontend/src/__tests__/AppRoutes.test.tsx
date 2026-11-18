@@ -70,6 +70,7 @@ const ROUTES: RouteCase[] = [
 	{ path: "/accept-invite", url: "/accept-invite", page: "AcceptInvitePage" },
 	{ path: "/quickbooks/callback", url: "/quickbooks/callback", page: "QBCallbackPage" },
 	{ path: "/auth/sso/complete", url: "/auth/sso/complete", page: "SSOCompletePage" },
+	{ path: "/c/:token", url: "/c/abc123", page: "PublicLinkPage" },
 	{ path: "/platform/*", url: "/platform/login", page: "PlatformRoutes" },
 	// dispatch shell
 	{ path: "/dispatch/*", url: "/dispatch", page: "DispatchLayout" },

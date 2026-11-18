@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockDb, taxMode, orgCtx, loadRateSet, resolveAddressTax, recomputeJobTotals } = vi.hoisted(
+const {
+	mockDb,
+	taxMode,
+	orgCtx,
+	loadRateSet,
+	resolveAddressTax,
+	recomputeJobTotals,
+	notifyJobCompleted,
+	notifyJobCancelled,
+} = vi.hoisted(
 	() => {
 		const $extends = vi.fn();
 		const mockDb: Record<string, any> = {
@@ -15,6 +24,8 @@ const { mockDb, taxMode, orgCtx, loadRateSet, resolveAddressTax, recomputeJobTot
 			loadRateSet: vi.fn(),
 			resolveAddressTax: vi.fn(),
 			recomputeJobTotals: vi.fn(),
+			notifyJobCompleted: vi.fn(async () => undefined),
+			notifyJobCancelled: vi.fn(async () => undefined),
 		};
 	},
 );
@@ -37,6 +48,10 @@ vi.mock("../../services/appLogger.js", () => ({
 vi.mock("../../services/socketService.js", () => ({
 	getSocket: vi.fn(() => ({ emit: vi.fn() })),
 	emitToOrg: vi.fn(),
+}));
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyJobCompleted,
+	notifyJobCancelled,
 }));
 vi.mock("../../services/entitlementService.js", () => ({ isModuleOn: vi.fn() }));
 vi.mock("../../services/disputeService.js", () => ({ hasOpenDispute: vi.fn(async () => false) }));
@@ -303,5 +318,61 @@ describe("updateJob — kept address rate in manual mode", () => {
 
 		expect(recomputeJobTotals).not.toHaveBeenCalled();
 		expect(state.job!.tax_amount).toBe(34.65);
+	});
+});
+
+describe("updateJob — review request", () => {
+	const job = (status: string) => ({
+		id: "j1",
+		client_id: CLIENT,
+		quote_id: null,
+		address: ADDRESS,
+		coords: null,
+		status,
+		tax_snapshot: null,
+		tax_source: null,
+		line_items: [],
+	});
+	const setStatus = (status: string) =>
+		updateJob({ params: { id: "j1" }, body: { status } } as unknown as Request, "org1", {
+			dispatcherId: "d1",
+		});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		orgCtx.mockResolvedValue(MANUAL_ORG);
+	});
+
+	it("setting a job's status to Completed queues the review request after the commit", async () => {
+		seed(null, job("InProgress"));
+		const result = await setStatus("Completed");
+		expect(result.err).toBe("");
+		expect(notifyJobCompleted).toHaveBeenCalledWith("j1", "org1");
+		expect(notifyJobCompleted.mock.invocationCallOrder[0]).toBeGreaterThan(
+			mockDb.$transaction.mock.invocationCallOrder[0],
+		);
+	});
+
+	it("re-saving a job that was already Completed, or another status, queues nothing", async () => {
+		seed(null, job("Completed"));
+		await setStatus("Completed");
+		seed(null, job("Scheduled"));
+		await setStatus("InProgress");
+		expect(notifyJobCompleted).not.toHaveBeenCalled();
+	});
+
+	it("cancelling a job skips its visits' queued customer messages after the commit", async () => {
+		seed(null, job("Scheduled"));
+		const result = await setStatus("Cancelled");
+		expect(result.err).toBe("");
+		expect(notifyJobCancelled).toHaveBeenCalledWith("j1", "org1");
+		expect(notifyJobCancelled.mock.invocationCallOrder[0]).toBeGreaterThan(
+			mockDb.$transaction.mock.invocationCallOrder[0],
+		);
+
+		vi.clearAllMocks();
+		seed(null, job("Cancelled"));
+		await setStatus("Cancelled");
+		expect(notifyJobCancelled).not.toHaveBeenCalled();
 	});
 });

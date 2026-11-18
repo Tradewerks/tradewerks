@@ -94,6 +94,11 @@ const ORG_SCOPED_MODELS = new Set([
 	"supplier_item",
 	"unmapped_part_decision",
 	"purchase_event",
+	"contact_consent",
+	"public_link",
+	"customer_message",
+	"customer_notification_setting",
+	"org_sms_account",
 ]);
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import JobNoteManager from "../JobNoteManager";
 
@@ -26,16 +26,24 @@ vi.mock("../NotePhotoPicker", () => ({
 		photos: unknown[];
 		onPhotosChange: (p: unknown[]) => void;
 		existingPhotos?: { id: string }[];
+		onToggleShareExisting?: (id: string) => void;
 		disabled?: boolean;
+		shareable?: boolean;
 	}) => (
 		<div data-testid={props.existingPhotos ? "edit-picker" : "composer-picker"}>
 			<span>photo strip</span>
+			<span data-testid="shareable">{String(!!props.shareable)}</span>
 			<span data-testid="disabled">{String(!!props.disabled)}</span>
 			<span data-testid="count">{props.photos.length}</span>
 			<span data-testid="existing">{props.existingPhotos?.map((p) => p.id).join(",")}</span>
 			<button type="button" onClick={() => props.onPhotosChange([NEW_PHOTO])}>
 				add photo
 			</button>
+			{props.existingPhotos?.[0] && (
+				<button type="button" onClick={() => props.onToggleShareExisting?.(props.existingPhotos![0].id)}>
+					toggle share
+				</button>
+			)}
 		</div>
 	),
 }));
@@ -79,7 +87,7 @@ describe("JobNoteManager", () => {
 		await user.click(screen.getByRole("button", { name: "Add Note" }));
 		expect(create.mutateAsync).toHaveBeenCalledWith({
 			jobId: "j1",
-			data: { content: "Hello", visit_id: null, photos: [NEW_PHOTO] },
+			data: { content: "Hello", visit_id: null, photos: [{ ...NEW_PHOTO, share_with_customer: false }] },
 		});
 		expect(await screen.findByText("0", { selector: "[data-testid=count]" })).toBeInTheDocument();
 	});
@@ -182,6 +190,52 @@ describe("JobNoteManager", () => {
 		});
 		await waitFor(() => expect(screen.queryByLabelText("Edit note text")).not.toBeInTheDocument());
 		expect(screen.getByPlaceholderText(PLACEHOLDER).closest("[hidden]")).toBeNull();
+	});
+
+	it("offers Share with customer only where the note belongs to a visit", async () => {
+		const user = userEvent.setup();
+		notesResult = {
+			data: [note("n1", "Job note"), note("n2", "Visit note", { visit_id: "v1" })],
+			isLoading: false,
+		};
+		const { unmount } = render(<JobNoteManager jobId="j1" />);
+		expect(
+			within(screen.getByTestId("composer-picker")).getByTestId("shareable").textContent
+		).toBe("false");
+		await user.click(screen.getAllByRole("button", { name: "Edit note" })[0]);
+		expect(
+			within(screen.getByTestId("edit-picker")).getByTestId("shareable").textContent
+		).toBe("false");
+		unmount();
+
+		render(<JobNoteManager jobId="j1" visitId="v1" />);
+		expect(
+			within(screen.getByTestId("composer-picker")).getByTestId("shareable").textContent
+		).toBe("true");
+		await user.click(screen.getByRole("button", { name: "Edit note" }));
+		expect(
+			within(screen.getByTestId("edit-picker")).getByTestId("shareable").textContent
+		).toBe("true");
+	});
+
+	it("an edit sends a kept photo's toggled share flag", async () => {
+		const user = userEvent.setup();
+		notesResult = {
+			data: [
+				note("n1", "First note", {
+					visit_id: "v1",
+					photos: [{ id: "p1", photo_url: "x", photo_label: "After", share_with_customer: false }],
+				}),
+			],
+			isLoading: false,
+		};
+		render(<JobNoteManager jobId="j1" />);
+		await user.click(screen.getByRole("button", { name: "Edit note" }));
+		await user.click(screen.getByRole("button", { name: "toggle share" }));
+		await user.click(screen.getByRole("button", { name: "Update Note" }));
+		expect(update.mutateAsync.mock.calls[0][0].data.photos).toEqual([
+			{ id: "p1", photo_url: "x", photo_label: "After", share_with_customer: true },
+		]);
 	});
 
 	it("keeps the edit open on an outside click", async () => {

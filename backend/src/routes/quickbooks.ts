@@ -13,7 +13,7 @@ import {
 } from "../services/quickbooksService.js";
 import { 
 	pushInvoice,
-	sendInvoiceEmail,
+	sendQbInvoiceEmail,
 } from "../services/qb/qbInvoices.js"
 import { qbFaultDetail } from "../services/qb/qbCreditMemos.js";
 import { findAllQBCustomers, pushClient } from "../services/qb/qbCustomers.js"
@@ -50,6 +50,7 @@ import {
 	unlinkQBEmployee,
 	pushEmployee,
 } from "../services/qb/qbEmployees.js";
+import { recipientEmailSchema } from "../lib/validate/shared.js";
 import { linkQBEmployeeSchema, linkQBItemSchema, linkQBVendorSchema, qbReportQuerySchema, qbReportTypeSchema } from "../lib/validate/quickbooks.js"
 import { db } from "../db.js";
 import { getScopedDb } from "../lib/context.js";
@@ -163,14 +164,14 @@ router.post("/invoices/:id/email", requirePermission("send_invoices"), async (re
 	try {
 		const invoiceId = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
-		const { sendTo } = req.body;
+		const parsed = recipientEmailSchema.safeParse(req.body?.sendTo);
 
-		if (!sendTo){
+		if (!parsed.success){
 			return res.status(400).json(
-				createErrorResponse(ErrorCodes.VALIDATION_ERROR, "sendTo email is required")
+				createErrorResponse(ErrorCodes.VALIDATION_ERROR, "sendTo must be a valid email address")
 			);
 		}
-		await sendInvoiceEmail(invoiceId, orgId, sendTo);
+		await sendQbInvoiceEmail(invoiceId, orgId, parsed.data);
 		res.json(createSuccessResponse({sent: true}));
 	} catch(err) {
 		next(err);

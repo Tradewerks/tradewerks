@@ -8,6 +8,7 @@ import {
 import { logActivity, buildChanges } from "../services/logger.js";
 import { log } from "../services/appLogger.js";
 import { insertContact } from "./contactsController.js"
+import { CONSENT_SELECT, clientWithConsent } from "../lib/contactConsent.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { getEffectiveTaxMode } from "../services/tax/taxMode.js";
@@ -41,6 +42,7 @@ const buildClientInclude = () => ({
 					email: true,
 					phone: true,
 					type: true,
+					consents: CONSENT_SELECT,
 				},
 			},
 		},
@@ -93,18 +95,20 @@ const buildClientInclude = () => ({
 
 export const getAllClients = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
-	return await sdb.client.findMany({
+	const clients = await sdb.client.findMany({
 		include: buildClientInclude(),
 		orderBy: { last_activity: "desc" },
 	});
+	return clients.map(clientWithConsent);
 };
 
 export const getClientById = async (id: string, organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
-	return await sdb.client.findFirst({
+	const client = await sdb.client.findFirst({
 		where: { id },
 		include: buildClientInclude(),
 	});
+	return client ? clientWithConsent(client) : null;
 };
 
 export const insertClient = async (
@@ -202,7 +206,7 @@ export const insertClient = async (
 			}
 		}
 
-		return { err: "", item: created };
+		return { err: "", item: created ? clientWithConsent(created) : created };
 	} catch (e) {
 		log.error({ err: e }, "Insert client error");
 		if (e instanceof ZodError) {
@@ -310,7 +314,7 @@ export const updateClient = async (
 			});
 		});
 
-		return { err: "", item: updated ?? undefined };
+		return { err: "", item: updated ? clientWithConsent(updated) : undefined };
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {

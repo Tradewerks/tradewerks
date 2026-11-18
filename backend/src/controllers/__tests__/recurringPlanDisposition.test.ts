@@ -7,6 +7,15 @@ import { updateRecurringPlanLineItems } from "../recurringPlansController.js";
 import { templateDispositionFields } from "../../lib/inventory.js";
 import { getScopedDb } from "../../lib/context.js";
 
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyVisitScheduled: vi.fn(async () => undefined),
+	notifyVisitRescheduled: vi.fn(async () => undefined),
+	notifyVisitCancelled: vi.fn(async () => undefined),
+	retimeVisitReminders: vi.fn(async () => undefined),
+	notifyJobCompleted: vi.fn(async () => undefined),
+	notifyVisitCompleted: vi.fn(async () => undefined),
+	notifyTechOnTheWay: vi.fn(async () => undefined),
+}));
 vi.mock("../../db.js", () => ({
 	db: {},
 	generateJobNumber: vi.fn().mockResolvedValue("J-0001"),

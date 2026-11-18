@@ -8,7 +8,11 @@ import {
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
-import { Prisma } from "../../generated/prisma/client.js";
+import {
+	Prisma,
+	type quote_status,
+	type request_status,
+} from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
 import {
 	assertValidQuoteTransition,
@@ -857,7 +861,10 @@ export const updateQuote = async (
 					...(issuedAt !== undefined && { issued_at: issuedAt }),
 					...(isFirstSent && { sent_at: new Date() }),
 					...(isFirstViewed && { viewed_at: new Date() }),
-					...(isFirstApproved && { approved_at: new Date() }),
+					...(isFirstApproved && {
+						approved_at: new Date(),
+						approved_via: "staff",
+					}),
 					...(isFirstRejected && { rejected_at: new Date() }),
 				},
 				include: quoteDetailInclude,
@@ -873,38 +880,30 @@ export const updateQuote = async (
 				);
 			}
 
-			// Sync request status if linked
-			if (quote.request_id && parsed.status) {
-				const requestStatusSync = async (newStatus: "QuoteApproved" | "QuoteRejected") => {
-					await tx.request.update({
-						where: { id: quote.request_id! },
-						data: { status: newStatus },
-					});
-					await logActivity({
-						event_type: newStatus === "QuoteApproved" ? "request.quote_approved" : "request.quote_rejected",
-						action: "updated",
-						entity_type: "request",
-						entity_id: quote.request_id!,
-						organization_id: organizationId,
+			let notifyDecision: (() => void) | null = null;
+			if (parsed.status === "Approved" || parsed.status === "Rejected") {
+				notifyDecision = await applyQuoteDecision(
+					tx as unknown as Prisma.TransactionClient,
+					organizationId,
+					parsed.status,
+					quote,
+					{
 						actor_type: context?.techId
 							? "technician"
 							: context?.dispatcherId
 								? "dispatcher"
 								: "system",
 						actor_id: context?.techId || context?.dispatcherId,
-						changes: {
-							status: { old: quote.request?.status ?? null, new: newStatus },
-						},
 						ip_address: context?.ipAddress,
 						user_agent: context?.userAgent,
-					});
-				};
-
-				if (parsed.status === "Approved") {
-					await requestStatusSync("QuoteApproved");
-				} else if (parsed.status === "Rejected") {
-					await requestStatusSync("QuoteRejected");
-				}
+					},
+					{
+						quoteNumber: existing.quote_number,
+						total: existing.total,
+						rejectionReason: parsed.rejection_reason,
+						excludeDispatcherId: context?.dispatcherId,
+					},
+				);
 			}
 
 			if (Object.keys(changes).length > 0) {
@@ -926,22 +925,12 @@ export const updateQuote = async (
 				});
 			}
 
-			return quote;
+			return { quote, notifyDecision };
 		});
 
-		if (parsed.status !== existing.status && (parsed.status === "Approved" || parsed.status === "Rejected")) {
-			const approved = parsed.status === "Approved";
-			notifyDispatchers({
-				type: approved ? "quote_accepted" : "quote_declined",
-				title: `Quote ${existing.quote_number} ${approved ? "accepted" : "declined"}`,
-				body: approved
-					? `${formatCurrency(Number(existing.total))} quote was accepted.`
-					: (parsed.rejection_reason ?? "The client declined the quote."),
-				actionUrl: `/dispatch/quotes/${quoteId}`,
-			}, organizationId, context?.dispatcherId).catch(() => {});
-		}
+		if (parsed.status !== existing.status) updated.notifyDecision?.();
 
-		return { err: "", item: updated };
+		return { err: "", item: updated.quote };
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {
@@ -957,6 +946,242 @@ export const updateQuote = async (
 		throw e;
 	}
 };
+
+interface QuoteDecisionActor {
+	actor_type: string;
+	actor_id?: string | null;
+	actor_name?: string | null;
+	ip_address?: string;
+	user_agent?: string;
+}
+
+/**
+ * The side effects of a quote becoming Approved or Rejected, for staff edits and
+ * customer links alike: syncs the linked request inside `tx` (only from a status
+ * REQUEST_TRANSITIONS allows), and returns the dispatcher notification, which
+ * the caller sends only after commit.
+ */
+async function applyQuoteDecision(
+	tx: Prisma.TransactionClient,
+	organizationId: string,
+	decision: "Approved" | "Rejected",
+	quote: {
+		id: string;
+		request_id: string | null;
+		request?: { status: string } | null;
+	},
+	actor: QuoteDecisionActor,
+	notice: {
+		quoteNumber: string;
+		total: Prisma.Decimal | number;
+		rejectionReason?: string | null;
+		body?: string;
+		excludeDispatcherId?: string;
+	},
+): Promise<() => void> {
+	const approved = decision === "Approved";
+	if (quote.request_id) {
+		const newStatus = approved ? "QuoteApproved" : "QuoteRejected";
+		const { count } = await tx.request.updateMany({
+			where: {
+				id: quote.request_id,
+				status: { notIn: CLOSED_REQUEST_STATUSES },
+			},
+			data: { status: newStatus },
+		});
+		if (count > 0) {
+			await logActivity({
+				event_type: approved
+					? "request.quote_approved"
+					: "request.quote_rejected",
+				action: "updated",
+				entity_type: "request",
+				entity_id: quote.request_id,
+				organization_id: organizationId,
+				...actor,
+				changes: {
+					status: {
+						old: quote.request?.status ?? null,
+						new: newStatus,
+					},
+				},
+			});
+		}
+	}
+	return () => {
+		notifyDispatchers(
+			{
+				type: approved ? "quote_accepted" : "quote_declined",
+				title: `Quote ${notice.quoteNumber} ${approved ? "accepted" : "declined"}`,
+				body:
+					notice.body ??
+					(approved
+						? `${formatCurrency(Number(notice.total))} quote was accepted.`
+						: (notice.rejectionReason ??
+							"The client declined the quote.")),
+				actionUrl: `/dispatch/quotes/${quote.id}`,
+			},
+			organizationId,
+			notice.excludeDispatcherId,
+		).catch(() => {});
+	};
+}
+
+/** Statuses a customer can still approve or decline from a public link. */
+export const QUOTE_RESPONDABLE_STATUSES = [
+	"Issued",
+	"Sent",
+	"Viewed",
+] as const satisfies readonly quote_status[];
+
+// Work already became a job, or the request was dropped: an online answer to a
+// sibling quote would contradict it.
+const CLOSED_REQUEST_STATUSES: request_status[] = ["ConvertedToJob", "Cancelled"];
+
+export function quoteCanRespond(
+	q: {
+		status: string;
+		expires_at: Date | null;
+		request?: { status: string } | null;
+	},
+	now = new Date(),
+): boolean {
+	return (
+		(QUOTE_RESPONDABLE_STATUSES as readonly string[]).includes(q.status) &&
+		(!q.expires_at || q.expires_at > now) &&
+		!(CLOSED_REQUEST_STATUSES as string[]).includes(q.request?.status ?? "")
+	);
+}
+
+/**
+ * A customer's approve/decline from a public link. The status change is one
+ * conditional update, so when two arrive at once only the first changes the row;
+ * the other sees zero rows, fires nothing, and gets the current status back.
+ * Null when the quote is not in the org.
+ */
+export async function respondToQuote(
+	organizationId: string,
+	quoteId: string,
+	p: {
+		action: "approve" | "decline";
+		name: string;
+		reason?: string;
+		ip?: string;
+		userAgent?: string;
+		linkId?: string;
+		contactId?: string | null;
+	},
+): Promise<{ status: quote_status } | null> {
+	const sdb = getScopedDb(organizationId);
+	const now = new Date();
+	const approve = p.action === "approve";
+	const name = p.name.trim();
+	const typedReason = p.reason?.trim() || null;
+	const reason = typedReason ?? "Declined online";
+	const actor: QuoteDecisionActor = {
+		actor_type: "customer",
+		actor_name: name,
+		ip_address: p.ip,
+		user_agent: p.userAgent,
+	};
+
+	const outcome = await sdb.$transaction(async (tx) => {
+		const before = await tx.quote.findFirst({
+			where: { id: quoteId },
+			select: { status: true },
+		});
+		if (!before) return null;
+		const { count } = await tx.quote.updateMany({
+			where: {
+				id: quoteId,
+				status: { in: [...QUOTE_RESPONDABLE_STATUSES] },
+				AND: [
+					{ OR: [{ expires_at: null }, { expires_at: { gt: now } }] },
+					{
+						OR: [
+							{ request_id: null },
+							{
+								request: {
+									status: { notIn: CLOSED_REQUEST_STATUSES },
+								},
+							},
+						],
+					},
+				],
+			},
+			data: approve
+				? {
+						status: "Approved",
+						approved_at: now,
+						approved_by_name: name,
+						approved_via: "customer_link",
+					}
+				: {
+						status: "Rejected",
+						rejected_at: now,
+						rejection_reason: reason,
+					},
+		});
+		const after = await tx.quote.findFirst({
+			where: { id: quoteId },
+			select: {
+				id: true,
+				status: true,
+				quote_number: true,
+				total: true,
+				request_id: true,
+				request: { select: { status: true } },
+			},
+		});
+		if (!after) return null;
+		if (count === 0) return { status: after.status, notify: null };
+
+		await logActivity({
+			event_type: "quote.updated",
+			action: "updated",
+			entity_type: "quote",
+			entity_id: quoteId,
+			organization_id: organizationId,
+			...actor,
+			changes: {
+				status: { old: before.status, new: after.status },
+				...(approve
+					? {
+							approved_by_name: { old: null, new: name },
+							approved_total: {
+								old: null,
+								new: Number(after.total),
+							},
+						}
+					: { rejection_reason: { old: null, new: reason } }),
+				_quote_number: { old: null, new: after.quote_number },
+				_public_link_id: { old: null, new: p.linkId ?? null },
+				_contact_id: { old: null, new: p.contactId ?? null },
+			},
+		});
+		const notify = await applyQuoteDecision(
+			tx as unknown as Prisma.TransactionClient,
+			organizationId,
+			approve ? "Approved" : "Rejected",
+			after,
+			actor,
+			{
+				quoteNumber: after.quote_number,
+				total: after.total,
+				body: approve
+					? `${name} accepted the ${formatCurrency(Number(after.total))} quote online.`
+					: typedReason
+						? `${name} declined online: ${typedReason}`
+						: `${name} declined the quote online.`,
+			},
+		);
+		return { status: after.status, notify };
+	});
+
+	if (!outcome) return null;
+	outcome.notify?.();
+	return { status: outcome.status };
+}
 
 export const deleteQuote = async (id: string, organizationId: string, context?: UserContext) => {
 	try {

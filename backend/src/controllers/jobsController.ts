@@ -24,6 +24,10 @@ import {
 } from "../lib/inventoryTaxable.js";
 import { log } from "../services/appLogger.js";
 import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
+import {
+	notifyJobCancelled,
+	notifyJobCompleted,
+} from "../services/customerComms/visitEvents.js";
 import { generateJobNumber } from "../db.js";
 import { DocumentRuleError } from "../lib/statusTransitions.js";
 import {
@@ -1322,6 +1326,10 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		if (updated) {
 			emitToOrg(organizationId, "job:updated", { jobId: id, organizationId });
 		}
+		if (statusChanged && parsed.status === "Completed")
+			void notifyJobCompleted(id, organizationId);
+		if (statusChanged && parsed.status === "Cancelled")
+			void notifyJobCancelled(id, organizationId);
 		return { err: "", item: updated };
 	} catch (e) {
 		if (e instanceof ZodError) {

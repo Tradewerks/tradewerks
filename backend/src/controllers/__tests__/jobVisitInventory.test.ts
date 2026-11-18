@@ -11,6 +11,15 @@ import { recordMovements } from "../../services/stockMovements.js";
 import type { Request } from "express";
 
 // Module gating is not under test here: every module reads as on.
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyVisitScheduled: vi.fn(async () => undefined),
+	notifyVisitRescheduled: vi.fn(async () => undefined),
+	notifyVisitCancelled: vi.fn(async () => undefined),
+	retimeVisitReminders: vi.fn(async () => undefined),
+	notifyJobCompleted: vi.fn(async () => undefined),
+	notifyVisitCompleted: vi.fn(async () => undefined),
+	notifyTechOnTheWay: vi.fn(async () => undefined),
+}));
 vi.mock("../../services/entitlementService.js", () => ({
 	isModuleOn: vi.fn(async () => true),
 	getEntitlements: vi.fn(),

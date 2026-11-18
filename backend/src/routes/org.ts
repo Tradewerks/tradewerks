@@ -17,6 +17,7 @@ import {
 } from "../services/wasabiService.js";
 import { z } from "zod";
 import { coordsSchema as orgCoordsSchema } from "../lib/validate/shared.js";
+import { reviewUrlSchema } from "../lib/validate/organizations.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { getUserContext, getActorInfo } from "../lib/context.js";
@@ -32,6 +33,7 @@ const orgSelect = {
 	coords: true,
 	email: true,
 	website: true,
+	review_url: true,
 	tax_rate: true,
 	// UX default only — which restock workflow the UI leads with.
 	// Never read by any backend guard (capability is permission-driven).
@@ -58,6 +60,7 @@ const AUDITED_FIELDS = [
 	"coords",
 	"email",
 	"website",
+	"review_url",
 	"restock_mode",
 	"measurement_system",
 	"mfa_required",
@@ -122,6 +125,7 @@ router.patch("/", requirePermission("manage_organization"), async (req, res, nex
 			coords: coordsSchema,
 			email: z.string().email().nullable().optional(),
 			website: z.string().max(100).nullable().optional(),
+			review_url: reviewUrlSchema.optional(),
 			restock_mode: z.enum(["tech_self_serve", "dispatch_prepared"]).optional(),
 			measurement_system: z.enum(["imperial", "metric"]).optional(),
 			mfa_required: z.boolean().optional(),

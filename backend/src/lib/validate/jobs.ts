@@ -236,6 +236,7 @@ export const createJobNoteSchema = z
 					photo_url:   notePhotoUrl,
 					photo_label: z.enum(["Before", "After", "Other"]),
 					photo_name:  z.string().trim().max(120).nullish(),
+					share_with_customer: z.boolean().optional(),
 				}),
 			)
 			.optional()
@@ -261,6 +262,8 @@ export const updateJobNoteSchema = z.object({
 			photo_url: notePhotoUrl,
 			photo_label: z.enum(["Before", "After", "Other"]),
 			photo_name: z.string().trim().max(120).nullish(),
+			// Omitted on a kept photo leaves its current setting alone.
+			share_with_customer: z.boolean().optional(),
 		}),
 	).optional(),
 });

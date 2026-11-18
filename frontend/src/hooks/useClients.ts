@@ -14,6 +14,7 @@ import type {
 	CreateContactInput,
 	UpdateContactInput,
 	UpdateClientContactInput,
+	ConsentChannel,
 	ClientNote,
 	CreateClientNoteInput,
 	UpdateClientNoteInput,
@@ -390,6 +391,32 @@ export const useUpdateClientContactMutation = (): UseMutationResult<
 		},
 		onError: (error: Error) => {
 			console.error("Failed to update client-contact relationship:", error);
+		},
+	});
+};
+
+export const useSetContactConsentMutation = (): UseMutationResult<
+	Contact,
+	Error,
+	{
+		clientId: string;
+		contactId: string;
+		data: { channel: ConsentChannel; status: "subscribed" | "unsubscribed" };
+	}
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ contactId, data }) => clientApi.setContactConsent(contactId, data),
+		onSuccess: (_, variables) => {
+			queryClient.invalidateQueries({
+				queryKey: ["clients", variables.clientId, "contacts"],
+			});
+			queryClient.invalidateQueries({ queryKey: ["clients", variables.clientId] });
+			queryClient.invalidateQueries({ queryKey: ["contacts"] });
+		},
+		onError: (error: Error) => {
+			console.error("Failed to update contact consent:", error);
 		},
 	});
 };

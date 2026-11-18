@@ -29,6 +29,7 @@ const LIMITS = {
 	ai_calls_month: 0,
 	tax_lookups_month: 0,
 	receipt_scans_month: 0,
+	sms_segments_month: 0,
 };
 const actor = { id: "pg-staff", name: "PG" };
 const KEYS = ["pg_a", "pg_b"];

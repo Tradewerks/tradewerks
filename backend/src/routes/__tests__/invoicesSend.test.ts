@@ -81,6 +81,8 @@ const mockUpdateInvoice = vi.mocked(updateInvoice);
 const mockSendInvoiceEmail = vi.mocked(sendInvoiceEmail);
 const mockQbTaxFinalizeRefusal = vi.mocked(qbTaxFinalizeRefusal);
 import { logActivity } from "../../services/logger.js";
+import { getScopedDb } from "../../lib/context.js";
+const mockGetScopedDb = vi.mocked(getScopedDb);
 const mockLogActivity = vi.mocked(logActivity);
 
 beforeEach(() => {
@@ -559,5 +561,61 @@ describe("QuickBooks $0 block responses", () => {
 		});
 		expect(res.status).toBe(409);
 		expect(res.body.error.code).toBe("QB_TAX_ZERO");
+	});
+});
+
+describe("POST /invoices/:id/send recipient validation", () => {
+	it('returns 400 VALIDATION_ERROR for "not-an-email" and does not call the sender', async () => {
+		const res = await send({ recipient_email: "not-an-email" });
+
+		expect(res.status).toBe(400);
+		expect(res.body.error.code).toBe("VALIDATION_ERROR");
+		expect(mockSendInvoiceEmail).not.toHaveBeenCalled();
+	});
+});
+
+describe("POST /invoices/:id/send tracking row", () => {
+	const create = vi.fn().mockResolvedValue({});
+	beforeEach(() => {
+		create.mockClear();
+		mockGetScopedDb.mockReturnValue({
+			contact: { findFirst: vi.fn().mockResolvedValue({ id: "ct1" }) },
+			customer_message: { create },
+		} as never);
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Issued", client_id: "cl1" } as never);
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+	});
+
+	it("sending an invoice writes a customer_message row with the Postmark message id", async () => {
+		mockSendInvoiceEmail.mockResolvedValueOnce({ messageId: "pm-9" });
+
+		const res = await send();
+
+		expect(res.body.success).toBe(true);
+		expect(create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				organization_id: "org-1",
+				direction: "out",
+				event: "invoice_sent",
+				channel: "email",
+				status: "sent",
+				recipient: "client@example.com",
+				entity_type: "invoice",
+				entity_id: "i1",
+				client_id: "cl1",
+				contact_id: "ct1",
+				provider_message_id: "pm-9",
+				dedupe_key: "invoice_sent:i1:pm-9",
+			}),
+		});
+	});
+
+	it("still answers success when the tracking row cannot be written", async () => {
+		mockSendInvoiceEmail.mockResolvedValueOnce({ messageId: "pm-9" });
+		create.mockRejectedValueOnce(new Error("db down"));
+
+		const res = await send();
+
+		expect(res.body.success).toBe(true);
 	});
 });

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../generated/prisma/client.js";
+import { PrismaClient, type Prisma } from "../generated/prisma/client.js";
 import bcryptjs from "bcryptjs";
 import crypto from "crypto";
 import { getAllPermissions } from "../src/lib/permissionCatalogs.js";
@@ -13,6 +13,7 @@ import {
 	type LineItemTaxInput,
 } from "../src/services/taxEngine.js";
 import { provisionOrganization, defaultTechnicianPermissions } from "../src/services/provisionOrganization.js";
+import { NEW_ORG_EMAIL_DEFAULTS } from "../src/services/customerComms/events.js";
 import { hashInviteToken } from "../src/lib/inviteToken.js";
 import { DAY_MS } from "../src/lib/dayRange.js";
 import { buildOcrFlags } from "../src/services/receiptOcr/flags.js";
@@ -199,7 +200,7 @@ async function main() {
 	// migration; real tier contents are undecided.
 	const OPTIONAL_MODULES = [
 		"quotes", "recurring_plans", "projects", "inventory", "fleet", "vehicle_stock",
-		"purchasing", "field_purchases", "followups", "disputes",
+		"purchasing", "field_purchases", "followups", "customer_comms", "disputes",
 	];
 	const PRO_MODULES = [
 		...OPTIONAL_MODULES, "advanced_reporting", "quickbooks", "tax_auto",
@@ -217,17 +218,17 @@ async function main() {
 			{
 				id: "pv_starter_1", plan_key: "starter", version: 1, note: "seed",
 				modules: OPTIONAL_MODULES,
-				limits: { dispatchers: 3, technicians: 5, tax_lookups_month: 0, ai_calls_month: 0, receipt_scans_month: 0 },
+				limits: { dispatchers: 3, technicians: 5, tax_lookups_month: 0, ai_calls_month: 0, receipt_scans_month: 0, sms_segments_month: 0 },
 			},
 			{
 				id: "pv_pro_1", plan_key: "pro", version: 1, note: "seed",
 				modules: PRO_MODULES,
-				limits: { dispatchers: 10, technicians: 25, tax_lookups_month: 2000, ai_calls_month: 500, receipt_scans_month: 300 },
+				limits: { dispatchers: 10, technicians: 25, tax_lookups_month: 2000, ai_calls_month: 500, receipt_scans_month: 300, sms_segments_month: 500 },
 			},
 			{
 				id: "pv_enterprise_1", plan_key: "enterprise", version: 1, note: "seed",
 				modules: [...PRO_MODULES, "security_plus"],
-				limits: { dispatchers: null, technicians: null, tax_lookups_month: 20000, ai_calls_month: 5000, receipt_scans_month: 3000 },
+				limits: { dispatchers: null, technicians: null, tax_lookups_month: 20000, ai_calls_month: 5000, receipt_scans_month: 3000, sms_segments_month: 5000 },
 			},
 		],
 	});
@@ -241,9 +242,18 @@ async function main() {
 			module_choices: {
 				quotes: true, recurring_plans: true, projects: true, inventory: true,
 				fleet: true, vehicle_stock: true, purchasing: true, field_purchases: true,
-				disputes: true, followups: true,
+				disputes: true, followups: true, customer_comms: true,
 			},
 		},
+	});
+	// Same defaults a newly provisioned org gets.
+	await db.customer_notification_setting.createMany({
+		data: NEW_ORG_EMAIL_DEFAULTS.map((d) => ({
+			organization_id: org.id,
+			event: d.event,
+			email_enabled: true,
+			config: d.config as Prisma.InputJsonValue,
+		})),
 	});
 
 	// ============================================================================

@@ -54,6 +54,7 @@ const LIMITS = {
 	ai_calls_month: 500,
 	tax_lookups_month: null,
 	receipt_scans_month: null,
+	sms_segments_month: 500,
 };
 const plan = (over: Record<string, unknown> = {}) => ({
 	key: "pro",

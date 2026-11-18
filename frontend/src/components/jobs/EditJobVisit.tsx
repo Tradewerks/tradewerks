@@ -26,6 +26,7 @@ import {
 } from "../../hooks/useJobs";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
+import { useModuleOn } from "../../hooks/useEntitlements";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 import { roundingFor } from "../../lib/taxRounding";
 import {
@@ -127,6 +128,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId
 	const { data: vehicles = [] } = useVehiclesQuery("active");
 
 	const { data: taxGroups = [] } = useTaxGroups();
+	const customerCommsOn = useModuleOn("customer_comms");
 	const autoModeLoaded = useAutoTaxMode();
 	const autoMode = autoModeLoaded === true;
 	const keptEstimate = docKeptEstimate(visit.tax_snapshot, jobKeptSource(job), autoModeLoaded);
@@ -593,6 +595,11 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId
 								/>
 							</div>
 							<ErrorDisplay path="description" />
+							{customerCommsOn && (
+								<p className="mt-0.5 text-xs text-text-muted">
+									Customers see this in their visit summary.
+								</p>
+							)}
 						</div>
 
 						<div
@@ -814,6 +821,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId
 	}, [
 		currentStep,
 		autoMode,
+		customerCommsOn,
 		getValue,
 		updateField,
 		undoField,

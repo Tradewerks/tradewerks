@@ -20,6 +20,7 @@ const METER_COPY: Record<MeterKey, { name: string; unit: string }> = {
 	ai_calls_month: { name: "AI assistant", unit: "requests" },
 	tax_lookups_month: { name: "Tax lookups", unit: "lookups" },
 	receipt_scans_month: { name: "Receipt scanning", unit: "scans" },
+	sms_segments_month: { name: "Text messaging", unit: "text segments" },
 };
 
 const WARN_AT = 0.8;

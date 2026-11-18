@@ -14,6 +14,7 @@ const ROWS: {
 	{ key: "ai_calls_month", label: "AI assistant requests", monthly: true, module: "ai_assistant" },
 	{ key: "tax_lookups_month", label: "Tax lookups", monthly: true, module: "tax_auto" },
 	{ key: "receipt_scans_month", label: "Receipt scans", monthly: true, module: "field_purchases" },
+	{ key: "sms_segments_month", label: "Text segments", monthly: true, module: "sms" },
 ];
 
 const BAR: Record<ReturnType<typeof meterTone>, string> = {

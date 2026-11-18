@@ -416,6 +416,7 @@ enum followup_send_status {
   sent
   skipped
   failed
+  sending
 }
 
 enum email_template_category {
@@ -425,6 +426,14 @@ enum email_template_category {
   invoice_chase
   request_ack
   custom
+  visit_confirmed
+  visit_reminder
+  visit_rescheduled
+  visit_cancelled
+  tech_on_the_way
+  tech_running_late
+  visit_completed
+  review_request
 }
 
 enum project_status {
@@ -445,7 +454,9 @@ model organization {
   coords    Json?
   email     String?
   website   String?
-  tax_rate            Decimal @default(0) @db.Decimal(8, 6)
+  // https only (validated in the route); review requests stay off until it is set.
+  review_url String?
+  tax_rate           Decimal @default(0) @db.Decimal(8, 6)
   // "auto" | "manual" (Zod enum + DB CHECK). "auto" takes effect only while the org has the
   // tax_auto module; otherwise documents resolve exactly as in manual mode.
   tax_mode              String   @default("manual")
@@ -553,6 +564,11 @@ model organization {
   followup_enrollments followup_enrollment[]
   followup_sends       followup_send[]
   email_templates      email_template[]
+  contact_consents     contact_consent[]
+  public_links         public_link[]
+  customer_messages    customer_message[]
+  customer_notification_settings customer_notification_setting[]
+  sms_account          org_sms_account?
 
   assistant_conversations assistant_conversation[]
   document_disputes document_dispute[]
@@ -626,6 +642,7 @@ model contact {
   updated_at DateTime @updatedAt
 
   client_contacts client_contact[]
+  consents        contact_consent[]
 
   @@unique([organization_id, email])
   @@unique([organization_id, phone])
@@ -645,6 +662,7 @@ model client_contact {
   relationship String  @default("contact")
   is_primary   Boolean @default(false)
   is_billing   Boolean @default(false)
+  notify_visits Boolean @default(false)
 
   @@id([client_id, contact_id])
   @@index([contact_id])
@@ -841,6 +859,9 @@ model quote {
   expires_at  DateTime? //The deadline for when the quote is invalid/expired
 
   rejection_reason String?
+
+  approved_by_name String?
+  approved_via     String? // "staff" | "customer_link"
 
   tax_snapshot Json?
   tax_source        String?   // provider | cached_stale | manual_override | org_default | legacy | qb_ast
@@ -1332,6 +1353,8 @@ model job_note_photo {
   photo_url   String
   photo_label String
   photo_name  String?
+  // Shown on the customer's visit page for the note's visit when set.
+  share_with_customer Boolean @default(false)
   created_at  DateTime @default(now())
 
   @@index([note_id])
@@ -3007,6 +3030,8 @@ model technician {
   password_reset_token       String?   @unique
   password_reset_token_expires_at DateTime?
   theme       String            @default("system")
+  // Raw storage URL. Signed before it reaches customers (visit page) or message templates.
+  photo_url   String?
 
   organization_role_id String?
   organization_role    organization_role? @relation("TechnicianRole", fields: [organization_role_id], references: [id])
@@ -3600,8 +3625,13 @@ model followup_send {
   opened_at           DateTime?
   open_count          Int      @default(0)
   error               String?
+  // The enrollment's anchor_at when this send began; lets a rescheduled visit send the same step again.
+  anchor_at           DateTime?
   created_at          DateTime @default(now())
 
+  // Partial unique index followup_send_one_live_per_step (enrollment_id, step_id,
+  // COALESCE(anchor_at, epoch)) WHERE status NOT IN ('failed','skipped') lives only in
+  // migrations/20261117120000_followup_send_sending; Prisma can't express it.
   @@index([enrollment_id])
   @@index([organization_id])
   @@index([step_id])
@@ -3623,12 +3653,130 @@ model email_template {
   // Editable plain-text alternative (text/plain MIME part). NULL = auto-generate
   // from the HTML at send time.
   text                     String?  @db.Text
+  sms_body                 String?  @db.Text
   updated_by_dispatcher_id String?
   created_at               DateTime @default(now())
   updated_at               DateTime @updatedAt
 
   @@unique([organization_id, category])
   @@index([organization_id])
+}
+
+// One row per contact+channel. No row: email is allowed, sms is not.
+// CHECKs channel IN ('email','sms'), status IN ('subscribed','unsubscribed') and
+// source IN (...) live only in migrations/20261118120000_contact_consent_public_link.
+model contact_consent {
+  id              String   @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  contact_id      String
+  contact         contact  @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  channel         String   // "email" | "sms"
+  status          String   // "subscribed" | "unsubscribed"
+  source          String   // "dispatcher" | "unsubscribe_link" | "sms_keyword" | "bounce" | "spam_complaint" | "provider"
+  source_detail   String?
+  changed_by_dispatcher_id String?
+  changed_at      DateTime @default(now())
+  created_at      DateTime @default(now())
+
+  @@unique([contact_id, channel])
+  @@index([organization_id])
+}
+
+// Public (unauthenticated) link tokens. Only the sha256 hash is stored.
+// CHECK purpose IN ('unsubscribe','quote','invoice','visit') lives only in
+// migrations/20261118120000_contact_consent_public_link.
+model public_link {
+  id              String    @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  token_hash      String    @unique // sha256 hex; the token itself is never stored
+  purpose         String    // "unsubscribe" | "quote" | "invoice" | "visit"
+  entity_id       String    // contact id for unsubscribe; otherwise the document/visit id
+  contact_id      String?
+  expires_at      DateTime?
+  revoked_at      DateTime?
+  first_used_at   DateTime?
+  created_at      DateTime  @default(now())
+
+  @@index([organization_id, purpose, entity_id])
+}
+
+// Outbox for automatic customer messages. A row is claimed by the sweeper
+// (status queued -> sending) and never re-sent once the provider call started:
+// a row stuck in sending becomes unknown. CHECKs on direction, channel and status
+// live only in migrations/20261119120000_customer_message_outbox.
+model customer_message {
+  id              String   @id @default(uuid())
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  direction       String   @default("out") // "out" | "in"
+  event           String   // a CUSTOMER_EVENTS key, or "quote_sent" | "invoice_sent" | "inbound_sms"
+  channel         String   // "email" | "sms"
+  client_id       String?
+  contact_id      String?
+  recipient       String   // address or E.164 number at send time
+  entity_type     String   // "job_visit" | "job" | "quote" | "invoice" | "client" | "phone" (inbound text from an unknown number; entity_id is the E.164)
+  entity_id       String
+  dedupe_key      String
+  status          String   @default("queued") // queued | sending | sent | delivered | failed | skipped | unknown
+  skip_reason     String?
+  send_after      DateTime @default(now())
+  claimed_at      DateTime?
+  send_started_at DateTime? // set just before the provider call; only these rows can go stale as unknown
+  attempts        Int      @default(0)
+  provider_message_id String? @unique
+  subject         String?
+  body            String?  @db.Text // rendered text actually sent (sms body, or email text part)
+  segments        Int?
+  error           String?
+  sent_at         DateTime?
+  delivered_at    DateTime?
+  opened_at       DateTime?
+  created_at      DateTime @default(now())
+
+  @@unique([organization_id, dedupe_key, channel, recipient])
+  @@index([status, send_after])
+  @@index([organization_id, entity_type, entity_id])
+  @@index([organization_id, client_id, created_at])
+  @@index([organization_id, channel, recipient])
+}
+
+// No row for an event means both channels are off.
+model customer_notification_setting {
+  organization_id String
+  organization    organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  event           String
+  email_enabled   Boolean @default(false)
+  sms_enabled     Boolean @default(false)
+  config          Json    @default("{}")
+
+  @@id([organization_id, event])
+}
+
+// One Twilio subaccount per org (ISV model). Status moves forward through A2P
+// 10DLC registration; only "active" can send.
+model org_sms_account {
+  organization_id       String       @id
+  organization          organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  provider              String       @default("twilio")
+  status                String       @default("draft") // draft | submitted | brand_pending | campaign_pending | active | failed | suspended (CHECK in migration 20261120120000_org_sms_account)
+  failure_reason        String?
+  failed_step           String? // brand | campaign | number: which step a resubmit redoes (CHECK in migration 20261120120000_org_sms_account)
+  registration          Json         @default("{}") // the form the org filled in
+  subaccount_sid        String?      @unique
+  auth_token_enc        String? // encryptSecret(), key from SMS_TOKEN_ENCRYPTION_KEY
+  profile_sid           String?
+  brand_sid             String?
+  messaging_service_sid String?      @unique
+  campaign_sid          String?
+  phone_number          String? // E.164
+  phone_number_sid      String?
+  submitted_at          DateTime?
+  activated_at          DateTime?
+  last_polled_at        DateTime?
+  created_at            DateTime     @default(now())
+  updated_at            DateTime     @updatedAt
 }
 
 // ============================================================================

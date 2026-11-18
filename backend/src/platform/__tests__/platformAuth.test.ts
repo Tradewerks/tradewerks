@@ -17,6 +17,7 @@ vi.hoisted(() => {
 
 import {
 	platformProxyWarning,
+	publicLinkProxyWarning,
 	platformSecret,
 	signStaffToken,
 	trustProxySetting,
@@ -97,6 +98,16 @@ describe("proxy configuration", () => {
 		expect(trustProxySetting("10.0.0.0/8, loopback")).toBe(
 			"10.0.0.0/8, loopback",
 		);
+	});
+
+	it("warns in production when TRUST_PROXY is unset, for the public link limiters", () => {
+		expect(publicLinkProxyWarning({ NODE_ENV: "production" })).toMatch(
+			/TRUST_PROXY/,
+		);
+		expect(
+			publicLinkProxyWarning({ NODE_ENV: "production", TRUST_PROXY: "1" }),
+		).toBeNull();
+		expect(publicLinkProxyWarning({ NODE_ENV: "development" })).toBeNull();
 	});
 
 	it("warns when an IP allow-list is set without TRUST_PROXY", () => {

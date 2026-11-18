@@ -117,7 +117,7 @@ vi.mock("../../services/logger.js", () => ({
 }));
 
 vi.mock("../../services/emailService.js", () => ({
-	sendEmail: vi.fn().mockResolvedValue(undefined),
+	sendEmail: vi.fn().mockResolvedValue(true),
 }));
 
 // vi.mock factories are hoisted before imports. Use vi.hoisted so refs are

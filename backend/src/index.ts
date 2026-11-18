@@ -19,6 +19,8 @@ import { registerTaxReviewGauge } from "./services/tax/taxMetrics.js";
 import { startTaxRateRefreshInterval } from "./services/taxRateRefreshScheduler.js";
 import { startReceiptOcrSweeper } from "./services/receiptOcrSweeper.js";
 import { startOrgPurgeSweeper } from "./services/orgPurge.js";
+import { startOutboxSweeperInterval } from "./services/customerComms/outboxSweeper.js";
+import { startRegistrationPollerInterval } from "./services/sms/registrationPoller.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
 import multer from "multer";
@@ -80,9 +82,18 @@ import quickbooksRouter from "./routes/quickbooks.js";
 import oauthRouter from "./routes/oauth.js";
 import mfaRouter from "./routes/mfa.js";
 import platformRouter from "./routes/platform/index.js";
-import { platformProxyWarning, trustProxySetting } from "./platform/staffToken.js";
+import {
+	platformProxyWarning,
+	publicLinkProxyWarning,
+	trustProxySetting,
+} from "./platform/staffToken.js";
+import { publicUrlWarning } from "./lib/publicLink.js";
 import ssoRouter from "./routes/sso.js"
+import publicLinksRouter from "./routes/publicLinks.js";
 import followupsRouter from "./routes/followups.js";
+import customerCommsRouter from "./routes/customerComms.js";
+import smsAccountRouter from "./routes/smsAccount.js";
+import twilioWebhooksRouter from "./routes/twilioWebhooks.js";
 import projectsRouter from "./routes/projects.js";
 import searchRouter from "./routes/search.js";
 import assistantRouter from "./routes/assistant.js";
@@ -265,6 +276,10 @@ const trustProxy = trustProxySetting(process.env.TRUST_PROXY);
 if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
 const proxyWarning = platformProxyWarning(process.env);
 if (proxyWarning) log.warn(proxyWarning);
+const publicProxyWarning = publicLinkProxyWarning(process.env);
+if (publicProxyWarning) log.warn(publicProxyWarning);
+const urlWarning = publicUrlWarning(process.env);
+if (urlWarning) log.error(urlWarning);
 
 assertRegistry();
 assertBusinessTypes();
@@ -325,6 +340,8 @@ startTrialSchedulerInterval();
 startTaxRateRefreshInterval();
 startReceiptOcrSweeper();
 startOrgPurgeSweeper();
+startOutboxSweeperInterval();
+startRegistrationPollerInterval();
 registerTaxReviewGauge();
 startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>
@@ -547,6 +564,13 @@ app.post("/integrations/quickbooks/webhook", (req, res) => {
 	return handleQBWebhook(req, res);
 });
 app.post("/integrations/postmark/webhook", handlePostmarkWebhook);
+// Twilio posts form-encoded and signs it; the router checks the signature.
+// No rate limit: callbacks come in bursts from Twilio's shared IPs.
+app.use(
+	"/integrations/twilio",
+	express.urlencoded({ extended: false }),
+	twilioWebhooksRouter,
+);
 
 // ================================================================================
 // OAUTH2 AUTHORIZATION SERVER 
@@ -584,6 +608,11 @@ app.use("/platform", platformRouter);
 // SSO 
 // ================================================================================
 app.use("/auth/sso", ssoRouter);
+
+// ================================================================================
+// PUBLIC CUSTOMER LINKS (unauthenticated; token in body/query, never the path)
+// ================================================================================
+app.use("/public", publicLinksRouter);
 
 // ================================================================================
 // ORGANIZATION (unlike org this is used for registration and doesn't require auth)
@@ -722,6 +751,18 @@ app.use("/integrations/quickbooks", verifyToken, requireModule("quickbooks"), qu
 // AUTOMATED FOLLOWUPS
 // ============================================
 app.use("/followups", verifyToken, requireModule("followups"), followupsRouter);
+
+// ============================================
+// CUSTOMER MESSAGES (automatic visit emails and texts)
+// ============================================
+app.use(
+	"/customer-comms",
+	verifyToken,
+	requireModule("customer_comms"),
+	customerCommsRouter,
+);
+// Registration for the org's own texting number (A2P 10DLC).
+app.use("/sms-account", verifyToken, requireModule("sms"), smsAccountRouter);
 
 // ============================================
 // PROJECTS

@@ -8,7 +8,12 @@ export interface UsageMeter {
 export interface UsageSummary {
 	period_start: string;
 	meters: Record<
-		"dispatchers" | "technicians" | "ai_calls_month" | "tax_lookups_month" | "receipt_scans_month",
+		| "dispatchers"
+		| "technicians"
+		| "ai_calls_month"
+		| "tax_lookups_month"
+		| "receipt_scans_month"
+		| "sms_segments_month",
 		UsageMeter
 	>;
 }

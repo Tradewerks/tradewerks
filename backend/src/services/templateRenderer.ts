@@ -117,18 +117,18 @@ function stringify(value: unknown): string {
 	return String(value);
 }
 
-function renderNodes(nodes: Node[], model: Model): string {
+function renderNodes(nodes: Node[], model: Model, escape: boolean): string {
 	let out = "";
 	for (const node of nodes) {
 		if (node.type === "text") {
 			out += node.value;
 		} else if (node.type === "var") {
 			const value = stringify(resolve(model, node.name));
-			out += node.raw ? value : escapeHtml(value);
+			out += node.raw || !escape ? value : escapeHtml(value);
 		} else {
 			const value = resolve(model, node.name);
 			if (node.inverted) {
-				if (!isTruthy(value)) out += renderNodes(node.children, model);
+				if (!isTruthy(value)) out += renderNodes(node.children, model, escape);
 			} else if (isTruthy(value)) {
 				if (Array.isArray(value)) {
 					for (const item of value) {
@@ -136,10 +136,10 @@ function renderNodes(nodes: Node[], model: Model): string {
 							item && typeof item === "object"
 								? { ...model, ...(item as Model) }
 								: model;
-						out += renderNodes(node.children, scope);
+						out += renderNodes(node.children, scope, escape);
 					}
 				} else {
-					out += renderNodes(node.children, model);
+					out += renderNodes(node.children, model, escape);
 				}
 			}
 		}
@@ -147,10 +147,17 @@ function renderNodes(nodes: Node[], model: Model): string {
 	return out;
 }
 
-/** Render a template string against a model. Never throws on a malformed template. */
-export function renderTemplate(template: string, model: Model): string {
+/**
+ * Render a template string against a model. Never throws on a malformed template.
+ * `escape: false` is for text/plain bodies, where HTML entities would show literally.
+ */
+export function renderTemplate(
+	template: string,
+	model: Model,
+	opts: { escape?: boolean } = {},
+): string {
 	try {
-		return renderNodes(parse(template), model);
+		return renderNodes(parse(template), model, opts.escape !== false);
 	} catch {
 		return template;
 	}

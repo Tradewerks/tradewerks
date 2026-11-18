@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { runArrivalTick } from "../arrivalTracker.js";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
-const { dbMock, createNotification, notifyDispatchers, fetchTrafficLegs, emitToOrg } = vi.hoisted(() => ({
+const { dbMock, createNotification, notifyDispatchers, fetchTrafficLegs, emitToOrg, notifyRunningLate } = vi.hoisted(() => ({
 	dbMock: {
 		job_visit_technician: { findMany: vi.fn(), findUnique: vi.fn() },
 		visit_tech_arrival: { findMany: vi.fn(), upsert: vi.fn(), update: vi.fn(), delete: vi.fn() },
@@ -13,6 +13,7 @@ const { dbMock, createNotification, notifyDispatchers, fetchTrafficLegs, emitToO
 	notifyDispatchers: vi.fn(),
 	fetchTrafficLegs: vi.fn(),
 	emitToOrg: vi.fn(),
+	notifyRunningLate: vi.fn(),
 }));
 
 vi.mock("../../db.js", () => ({ db: dbMock }));
@@ -22,6 +23,7 @@ vi.mock("../../lib/mapboxDirections.js", async (orig) => ({
 	fetchTrafficLegs,
 }));
 vi.mock("../socketService.js", () => ({ emitToOrg }));
+vi.mock("../customerComms/visitEvents.js", () => ({ notifyRunningLate }));
 vi.mock("../appLogger.js", () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 const NOW = new Date("2026-10-01T19:00:00Z"); // 2:00 PM CDT
@@ -83,6 +85,7 @@ beforeEach(() => {
 	dbMock.visit_tech_arrival.findMany.mockResolvedValue([]);
 	notifyDispatchers.mockResolvedValue([]);
 	createNotification.mockResolvedValue({});
+	notifyRunningLate.mockResolvedValue(undefined);
 });
 
 describe("arrival tracker", () => {
@@ -272,5 +275,70 @@ describe("arrival tracker", () => {
 		await runArrivalTick(NOW);
 
 		expect(dbMock.visit_tech_arrival.delete).toHaveBeenCalledWith({ where: { id: "r1" } });
+	});
+});
+
+describe("customer running-late notice", () => {
+	it('a "late" alert at 25 minutes queues one customer notice; "worse" and a second "late" the same day queue none', async () => {
+		// The tracker hands every late first-stop tick to the notifier, which owns
+		// the threshold and the once-per-day dedupe (see visitEvents.test.ts).
+		dbMock.job_visit_technician.findMany.mockResolvedValue([candidate({ tech_status: "EnRoute" })]);
+		fetchTrafficLegs.mockResolvedValue(legs(36));
+		await runArrivalTick(NOW);
+		expect(notifyRunningLate).toHaveBeenLastCalledWith("v1", "org1", { etaAt: at(36), delayMinutes: 6 });
+
+		dbMock.visit_tech_arrival.findMany.mockResolvedValue([
+			row({ en_route: true, routed_at: at(-5), status: "late", alerted_late_minutes: 6 }),
+		]);
+		fetchTrafficLegs.mockResolvedValue(legs(55));
+		await runArrivalTick(NOW);
+		expect(notifyRunningLate).toHaveBeenLastCalledWith("v1", "org1", { etaAt: at(55), delayMinutes: 25 });
+
+		dbMock.visit_tech_arrival.findMany.mockResolvedValue([
+			row({ en_route: true, routed_at: at(-5), status: "late", alerted_late_minutes: 25 }),
+		]);
+		fetchTrafficLegs.mockResolvedValue(legs(70));
+		await runArrivalTick(NOW);
+		expect(notifyDispatchers.mock.calls.at(-1)?.[0].title).toMatch(/now ~40 min late/);
+		expect(notifyRunningLate).toHaveBeenLastCalledWith("v1", "org1", { etaAt: at(70), delayMinutes: 40 });
+		expect(notifyRunningLate).toHaveBeenCalledTimes(3);
+	});
+
+	it("stop_index > 0 (a later stop, forecast only) queues nothing", async () => {
+		dbMock.job_visit_technician.findMany.mockResolvedValue([
+			candidate(),
+			candidate({
+				visit: {
+					id: "v2",
+					arrival_time: "15:10",
+					scheduled_start_at: new Date("2026-10-01T20:30:00Z"),
+					scheduled_end_at: new Date("2026-10-01T21:30:00Z"),
+				},
+			}),
+		]);
+		fetchTrafficLegs.mockResolvedValue([...legs(20), ...legs(20)]);
+		await runArrivalTick(NOW);
+		expect(upserted().map((u) => [u.stop_index, u.status])).toEqual([
+			[0, "on_time"],
+			[1, "late"],
+		]);
+		expect(notifyDispatchers).toHaveBeenCalledTimes(1);
+		expect(notifyRunningLate).not.toHaveBeenCalled();
+	});
+
+	it('basis "no_location" queues nothing', async () => {
+		dbMock.job_visit_technician.findMany.mockResolvedValue([
+			candidate({ tech: { coords: null, last_ping_at: null } }),
+		]);
+		await runArrivalTick(NOW);
+		expect(notifyRunningLate).not.toHaveBeenCalled();
+
+		// An overdue visit with no location is late by the clock only: no ETA to give.
+		dbMock.job_visit_technician.findMany.mockResolvedValue([
+			candidate({ tech: { last_ping_at: at(-90) }, visit: { arrival_time: "13:00" } }),
+		]);
+		await runArrivalTick(NOW);
+		expect(notifyDispatchers).toHaveBeenCalled();
+		expect(notifyRunningLate).not.toHaveBeenCalled();
 	});
 });

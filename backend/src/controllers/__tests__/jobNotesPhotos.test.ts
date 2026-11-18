@@ -21,7 +21,7 @@ vi.mock("../../services/socketService.js", () => ({ getSocket: vi.fn(() => ({ em
 
 import { db } from "../../db.js";
 import { deleteFile } from "../../services/wasabiService.js";
-import { logActivity } from "../../services/logger.js";
+import { buildChanges, logActivity } from "../../services/logger.js";
 import { updateJobNote, deleteJobNote } from "../jobNotesController.js";
 import type { FakeDb } from "../../routes/__tests__/harness.js";
 
@@ -101,6 +101,122 @@ describe("updateJobNote — removed photos are deleted from storage after commit
 		expect(result.err).toBe("");
 		expect(fake.job_note_photo.findMany).not.toHaveBeenCalled();
 		expect(deleteFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("share with customer", () => {
+	it("a kept photo's share flag is updated and a new photo is stored with it", async () => {
+		fake.job_note_photo.findMany.mockResolvedValue([
+			{ id: KEEP_ID, photo_url: `${RAW}keep.jpg` },
+			{ id: GONE_ID, photo_url: `${RAW}other.jpg` },
+		]);
+		fake.job_note_photo.updateMany.mockResolvedValue({ count: 1 });
+
+		const result = await updateJobNote(
+			"job-1",
+			"note-1",
+			{
+				photos: [
+					{ id: KEEP_ID, photo_url: `${RAW}keep.jpg?signed=1`, photo_label: "After", share_with_customer: true },
+					{ id: GONE_ID, photo_url: `${RAW}other.jpg?signed=1`, photo_label: "After" },
+					{ photo_url: `${RAW}new.jpg`, photo_label: "After", share_with_customer: true },
+				],
+			},
+			"org-1",
+			{ techId: "tech-1" },
+		);
+
+		expect(result.err).toBe("");
+		const calls = fake.job_note_photo.updateMany.mock.calls.map((c: unknown[]) => c[0]);
+		expect(calls).toHaveLength(1);
+		expect(JSON.stringify(calls[0].where)).toContain(KEEP_ID);
+		expect(JSON.stringify(calls[0].where)).toContain("note-1");
+		expect(JSON.stringify(calls[0].where)).not.toContain(GONE_ID);
+		expect(calls[0].data).toEqual({ share_with_customer: true });
+		expect(fake.job_note_photo.createMany.mock.calls[0][0].data[0].share_with_customer).toBe(true);
+	});
+
+	it("a new photo defaults to not shared", async () => {
+		fake.job_note_photo.findMany.mockResolvedValue([]);
+		await updateJobNote(
+			"job-1",
+			"note-1",
+			{ photos: [{ photo_url: `${RAW}new.jpg`, photo_label: "Before" }] },
+			"org-1",
+			{ dispatcherId: "disp-1" },
+		);
+		expect(fake.job_note_photo.createMany.mock.calls[0][0].data[0].share_with_customer).toBe(false);
+		expect(fake.job_note_photo.updateMany).not.toHaveBeenCalled();
+	});
+});
+
+describe("share with customer — activity log", () => {
+	it("a share-only change logs which photos are shared before and after", async () => {
+		vi.mocked(buildChanges).mockReturnValueOnce({});
+		fake.job_note_photo.findMany.mockResolvedValue([
+			{ id: KEEP_ID, photo_url: `${RAW}keep.jpg`, photo_label: "After", photo_name: "Coil", share_with_customer: false },
+			{ id: GONE_ID, photo_url: `${RAW}other.jpg`, photo_label: "Before", photo_name: null, share_with_customer: true },
+		]);
+		fake.job_note_photo.updateMany.mockResolvedValue({ count: 1 });
+
+		const result = await updateJobNote(
+			"job-1",
+			"note-1",
+			{
+				photos: [
+					{ id: KEEP_ID, photo_url: `${RAW}keep.jpg`, photo_label: "After", share_with_customer: true },
+					{ id: GONE_ID, photo_url: `${RAW}other.jpg`, photo_label: "Before" },
+				],
+			},
+			"org-1",
+			{ techId: "tech-1" },
+		);
+
+		expect(result.err).toBe("");
+		expect(vi.mocked(logActivity)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(logActivity).mock.calls[0][0]).toMatchObject({
+			event_type: "job_note.updated",
+			entity_id: "note-1",
+			actor_type: "technician",
+			changes: { shared_photos: { old: ["Before photo"], new: ["Coil", "Before photo"] } },
+		});
+	});
+
+	it("an update that leaves every share flag as it was logs no share change", async () => {
+		vi.mocked(buildChanges).mockReturnValueOnce({});
+		fake.job_note_photo.findMany.mockResolvedValue([
+			{ id: KEEP_ID, photo_url: `${RAW}keep.jpg`, photo_label: "After", photo_name: "Coil", share_with_customer: true },
+		]);
+		await updateJobNote(
+			"job-1",
+			"note-1",
+			{ photos: [{ id: KEEP_ID, photo_url: `${RAW}keep.jpg`, photo_label: "After", share_with_customer: true }] },
+			"org-1",
+			{ techId: "tech-1" },
+		);
+		expect(vi.mocked(logActivity)).not.toHaveBeenCalled();
+	});
+
+	it("reordering shared photos without changing what is shared logs nothing", async () => {
+		vi.mocked(buildChanges).mockReturnValueOnce({});
+		fake.job_note_photo.findMany.mockResolvedValue([
+			{ id: KEEP_ID, photo_url: `${RAW}keep.jpg`, photo_label: "After", photo_name: "Coil", share_with_customer: true },
+			{ id: GONE_ID, photo_url: `${RAW}other.jpg`, photo_label: "Before", photo_name: null, share_with_customer: true },
+		]);
+		fake.job_note_photo.updateMany.mockResolvedValue({ count: 1 });
+		await updateJobNote(
+			"job-1",
+			"note-1",
+			{
+				photos: [
+					{ id: GONE_ID, photo_url: `${RAW}other.jpg`, photo_label: "Before" },
+					{ id: KEEP_ID, photo_url: `${RAW}keep.jpg`, photo_label: "After" },
+				],
+			},
+			"org-1",
+			{ techId: "tech-1" },
+		);
+		expect(vi.mocked(logActivity)).not.toHaveBeenCalled();
 	});
 });
 

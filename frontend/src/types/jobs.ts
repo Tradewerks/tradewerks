@@ -436,6 +436,7 @@ export interface JobNotePhoto {
 	photo_url: string;
 	photo_label: "Before" | "After" | "Other";
 	photo_name?: string | null;
+	share_with_customer?: boolean;
 	created_at: string;
 }
 
@@ -444,6 +445,7 @@ export interface NotePhoto {
 	photo_label: "Before" | "After" | "Other";
 	photo_name: string;
 	preview_url: string;
+	share_with_customer?: boolean;
 }
 
 export interface JobNote extends BaseNote {
@@ -456,13 +458,24 @@ export interface JobNote extends BaseNote {
 export interface CreateJobNoteInput {
 	content: string;
 	visit_id?: string | null;
-	photos?: { photo_url: string; photo_label: string; photo_name?: string | null }[];
+	photos?: {
+		photo_url: string;
+		photo_label: string;
+		photo_name?: string | null;
+		share_with_customer?: boolean;
+	}[];
 }
 
 export interface UpdateJobNoteInput {
 	content: string;
 	visit_id?: string | null;
-	photos?: { id?: string; photo_url: string; photo_label: string; photo_name?: string | null }[];
+	photos?: {
+		id?: string;
+		photo_url: string;
+		photo_label: string;
+		photo_name?: string | null;
+		share_with_customer?: boolean;
+	}[];
 }
 
 // ============================================================================
@@ -835,6 +848,7 @@ export const UpdateJobNoteSchema = z.object({
 			photo_url: z.string().url(),
 			photo_label: z.enum(["Before", "After", "Other"]),
 			photo_name: z.string().max(120).nullish(),
+			share_with_customer: z.boolean().optional(),
 		}),
 	).optional(),
 });

@@ -184,6 +184,12 @@ async function anonymizeAccount(account: Account, context: ActorContext) {
 	const orgName = (await db.organization.findUnique({ where: { id: orgId }, select: { name: true } }))?.name ?? "your organization";
 
 	await db.$transaction(async (tx) => {
+		// A face photo is personal data: drop it with the rest and queue the file.
+		if (account.table === "technician") {
+			const tech = await tx.technician.findUnique({ where: { id }, select: { photo_url: true } });
+			if (tech?.photo_url && /^https?:\/\//.test(tech.photo_url))
+				await tx.storage_purge.create({ data: { url: tech.photo_url } });
+		}
 		const scrubbed = {
 			name: DELETED_USER_NAME,
 			email: tombstoneEmail,
@@ -208,6 +214,7 @@ async function anonymizeAccount(account: Account, context: ActorContext) {
 							last_ping_at: null,
 							status: "Offline",
 							current_vehicle_id: null,
+							photo_url: null,
 						},
 					})
 				: await tx.dispatcher.updateMany({

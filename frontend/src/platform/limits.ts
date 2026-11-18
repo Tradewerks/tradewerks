@@ -6,5 +6,6 @@ export const LIMIT_LABELS: Record<LimitKey, string> = {
 	ai_calls_month: "AI requests / month",
 	tax_lookups_month: "Tax lookups / month",
 	receipt_scans_month: "Receipt scans / month",
+	sms_segments_month: "Text segments / month",
 };
 export const LIMIT_KEYS = Object.keys(LIMIT_LABELS) as LimitKey[];

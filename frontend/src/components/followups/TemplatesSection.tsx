@@ -7,7 +7,11 @@ import {
 	useUpdateTemplateMutation,
 	useResetTemplateMutation,
 } from "../../hooks/useEmailTemplates";
-import { EmailTemplateCategoryLabels } from "../../types/followups";
+import {
+	EmailTemplateCategoryLabels,
+	EmailTemplateCategoryValues,
+	type EmailTemplateCategory,
+} from "../../types/followups";
 import type { EmailTemplate } from "../../types/emailTemplates";
 import { useFeedback, FeedbackBanner } from "./shared";
 import TemplateEditorModal from "./TemplateEditorModal";
@@ -25,19 +29,22 @@ export default function TemplatesSection() {
 
 	const handleSave = async (data: { name: string; subject: string; html: string; text: string }) => {
 		if (!editing) return;
-		await updateMutation.mutateAsync({ category: editing.category, data });
+		await updateMutation.mutateAsync({ category: editing.category as EmailTemplateCategory, data });
 		setEditing(null);
 		showFeedback("success", "Template saved.");
 	};
 
 	const handleReset = async () => {
 		if (!editing) return;
-		await resetMutation.mutateAsync(editing.category);
+		await resetMutation.mutateAsync(editing.category as EmailTemplateCategory);
 		setEditing(null);
 		showFeedback("success", "Template reverted to the built-in default.");
 	};
 
-	const items = templates ?? [];
+	// Customer-message categories are edited under Admin > Customer messages.
+	const items = (templates ?? []).filter((t) =>
+		EmailTemplateCategoryValues.includes(t.category as EmailTemplateCategory),
+	);
 
 	return (
 		<div className="rounded-lg border border-border-subtle bg-base">
@@ -76,7 +83,7 @@ export default function TemplatesSection() {
 										<Mail size={14} />
 									</span>
 									<span className="text-xs font-medium uppercase tracking-wider text-text-muted">
-										{EmailTemplateCategoryLabels[tpl.category]}
+										{EmailTemplateCategoryLabels[tpl.category as EmailTemplateCategory]}
 									</span>
 								</div>
 								{tpl.is_customized ? (

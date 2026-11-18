@@ -36,6 +36,7 @@ export interface ClientContactLink {
 	relationship: string;
 	is_primary: boolean;
 	is_billing: boolean;
+	notify_visits: boolean;
 	contact: Contact;
 }
 
@@ -174,7 +175,19 @@ export interface Contact {
 	created_at: Date | string;
 	updated_at: Date | string;
 	client_contacts: ClientContactLink[];
+	consent: ContactConsent;
 }
+
+export interface ContactConsent {
+	email: "subscribed" | "unsubscribed";
+	sms: "subscribed" | "unsubscribed";
+	sms_changed_at: string | null;
+	email_source: string | null;
+	email_resubscribable: boolean;
+	sms_source: string | null;
+}
+
+export type ConsentChannel = "email" | "sms";
 
 export interface CreateContactInput {
 	name: string;
@@ -206,6 +219,7 @@ export interface UpdateClientContactInput {
 	relationship?: string;
 	is_primary?: boolean;
 	is_billing?: boolean;
+	notify_visits?: boolean;
 }
 
 export const CreateContactSchema = z.object({

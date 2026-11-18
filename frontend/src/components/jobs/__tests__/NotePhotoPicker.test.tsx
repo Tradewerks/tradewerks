@@ -112,3 +112,53 @@ describe("NotePhotoPicker (07-F9)", () => {
 		expect(fileInput()).toHaveAttribute("capture", "environment");
 	});
 });
+
+describe("NotePhotoPicker share with customer", () => {
+	it("a shareable picker's Share with customer switch attaches the photo as shared; off by default", async () => {
+		const onPhotosChange = vi.fn();
+		const { unmount } = render(
+			<NotePhotoPicker jobId="job-1" shareable photos={[]} onPhotosChange={onPhotosChange} />
+		);
+		pick(fakeFile("a.jpg", "image/jpeg", 10));
+		const share = await screen.findByRole("switch", { name: "Share with customer" });
+		expect(share).toHaveAttribute("aria-checked", "false");
+		fireEvent.click(share);
+		fireEvent.click(await screen.findByText("Attach Photo →"));
+		expect(onPhotosChange.mock.calls[0][0][0]).toMatchObject({ share_with_customer: true });
+		unmount();
+
+		render(<NotePhotoPicker jobId="job-1" photos={[]} onPhotosChange={vi.fn()} />);
+		pick(fakeFile("b.jpg", "image/jpeg", 10));
+		await screen.findByText("Attach Photo →");
+		expect(screen.queryByRole("switch")).toBeNull();
+	});
+
+	it("an existing photo's switch reports its id and shows its current state", () => {
+		const onToggle = vi.fn();
+		render(
+			<NotePhotoPicker
+				jobId="job-1"
+				shareable
+				photos={[]}
+				onPhotosChange={vi.fn()}
+				existingPhotos={[
+					{
+						id: "p1",
+						note_id: "n1",
+						photo_url: "u",
+						photo_label: "After",
+						photo_name: "Coil",
+						share_with_customer: true,
+						created_at: "",
+					},
+				]}
+				onToggleShareExisting={onToggle}
+			/>
+		);
+		const sw = screen.getByRole("switch", { name: "Share Coil with customer" });
+		expect(sw).toHaveAttribute("aria-checked", "true");
+		fireEvent.click(sw);
+		expect(onToggle).toHaveBeenCalledWith("p1");
+	});
+});
+

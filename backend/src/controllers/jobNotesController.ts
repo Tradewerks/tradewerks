@@ -168,6 +168,7 @@ export const insertJobNote = async (
 						photo_url: p.photo_url,
 						photo_label: p.photo_label,
 						photo_name: p.photo_name || null,
+						share_with_customer: p.share_with_customer ?? false,
 					})),
 				});
 			}
@@ -284,7 +285,7 @@ export const updateJobNote = async (
 			}
 		}
 
-		const changes = buildChanges(existing, parsed, [
+		const changes: Record<string, unknown> = buildChanges(existing, parsed, [
 			"content",
 			"visit_id",
 		] as const);
@@ -329,7 +330,13 @@ export const updateJobNote = async (
 			if (parsed.photos !== undefined) {
 				const existingPhotos = await tx.job_note_photo.findMany({
 					where: { note_id: noteId},
-					select: { id: true, photo_url: true },
+					select: {
+						id: true,
+						photo_url: true,
+						photo_label: true,
+						photo_name: true,
+						share_with_customer: true,
+					},
 				});
 				const incomingPhotos = new Set(parsed.photos.filter((p) => p.id).map((p) => p.id!));
 				const photosToDelete = existingPhotos.filter((p) => !incomingPhotos.has(p.id));
@@ -348,8 +355,44 @@ export const updateJobNote = async (
 							photo_url: p.photo_url,
 							photo_label: p.photo_label,
 							photo_name: p.photo_name || null,
+							share_with_customer: p.share_with_customer ?? false,
 						}))
 					});
+				}
+
+				for (const share of [true, false]) {
+					const ids = parsed.photos
+						.filter((p) => p.id && p.share_with_customer === share)
+						.map((p) => p.id!);
+					if (ids.length > 0) {
+						await tx.job_note_photo.updateMany({
+							where: { id: { in: ids }, note_id: noteId },
+							data: { share_with_customer: share },
+						});
+					}
+				}
+
+				// What the customer can see is worth an audit line even when
+				// nothing else on the note changed.
+				const title = (p: { photo_label: string; photo_name?: string | null }) =>
+					p.photo_name || `${p.photo_label} photo`;
+				const sharedBefore = existingPhotos.filter((p) => p.share_with_customer);
+				const byId = new Map(existingPhotos.map((p) => [p.id, p]));
+				const sharedAfter = parsed.photos.filter((p) => {
+					const kept = p.id ? byId.get(p.id) : undefined;
+					if (p.id && !kept) return false;
+					return p.share_with_customer ?? kept?.share_with_customer ?? false;
+				});
+				// Compared as sets: a reorder alone changes nothing the customer sees.
+				const key = (p: { id?: string | null; photo_url: string }) =>
+					p.id ?? `new:${p.photo_url}`;
+				const sorted = (ps: { id?: string | null; photo_url: string }[]) =>
+					ps.map(key).sort().join("\n");
+				if (sorted(sharedBefore) !== sorted(sharedAfter)) {
+					changes.shared_photos = {
+						old: sharedBefore.map(title),
+						new: sharedAfter.map((p) => title(p.id ? byId.get(p.id)! : p)),
+					};
 				}
 			}
 

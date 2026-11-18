@@ -14,6 +14,7 @@ const initial = {
 		ai_calls_month: 500,
 		tax_lookups_month: 0,
 		receipt_scans_month: 300,
+		sms_segments_month: 500,
 	},
 };
 const renderForm = (onSubmit = vi.fn()) =>
@@ -57,6 +58,7 @@ describe("TierContentsForm", () => {
 				ai_calls_month: 500,
 				tax_lookups_month: 0,
 				receipt_scans_month: 300,
+				sms_segments_month: 500,
 			},
 			note: "Add AI",
 		});

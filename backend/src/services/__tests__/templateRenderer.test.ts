@@ -7,6 +7,11 @@ describe("renderTemplate", () => {
 		expect(renderTemplate("{{x}}", { x: "<b> & \"'" })).toBe("&lt;b&gt; &amp; &quot;&#39;");
 	});
 
+	it('renderTemplate with escape:false leaves "Smith & Sons" unescaped', () => {
+		expect(renderTemplate("{{n}}", { n: "Smith & Sons" }, { escape: false })).toBe("Smith & Sons");
+		expect(renderTemplate("{{n}}", { n: "Smith & Sons" })).toBe("Smith &amp; Sons");
+	});
+
 	it("does not escape triple-stache", () => {
 		expect(renderTemplate("{{{html}}}", { html: "<b>x</b>" })).toBe("<b>x</b>");
 	});
@@ -65,5 +70,20 @@ describe("extractVariables", () => {
 			"brand.name",
 			"brand.logo_url",
 		]);
+	});
+});
+
+describe("default templates", () => {
+	it("every default carries an unsubscribe footer link in html and text, only when a link exists", async () => {
+		const { DEFAULT_TEMPLATES } = await import("../followupTemplateDefaults.js");
+		const url = "https://app.test/app/c/tok";
+		for (const t of Object.values(DEFAULT_TEMPLATES)) {
+			const withLink = { brand: { name: "Acme" }, unsubscribe_url: url };
+			expect(renderTemplate(t.html, withLink)).toContain(`href="${url}"`);
+			expect(renderTemplate(t.text, withLink, { escape: false })).toContain(`Unsubscribe: ${url}`);
+			const without = { brand: { name: "Acme" }, unsubscribe_url: "" };
+			expect(renderTemplate(t.html, without)).not.toContain("Unsubscribe");
+			expect(renderTemplate(t.text, without, { escape: false })).not.toContain("Unsubscribe");
+		}
 	});
 });

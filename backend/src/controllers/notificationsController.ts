@@ -143,6 +143,9 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	tax_rate_changed: "manage_taxes",
 	qb_tax_code_needed: "manage_taxes",
 	timesheet_issue_reported: "view_timesheet",
+	customer_message_failed: "view_customer_comms",
+	sms_registration_update: "view_customer_comms",
+	customer_sms_reply: "view_customer_comms",
 };
 
 // Notify every dispatcher in the org who can see this type and hasn't muted it

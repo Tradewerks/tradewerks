@@ -20,6 +20,8 @@ export const upsertTemplateSchema = z.object({
 	// Editable plain-text alternative. Blank/omitted → stored as null so the send
 	// path auto-generates it from the HTML.
 	text: z.string().max(100_000).nullable().optional(),
+	// Text-message body, used by customer-message templates. Blank → null (built-in).
+	sms_body: z.string().max(1600).nullable().optional(),
 });
 
 export type UpsertTemplateInput = z.infer<typeof upsertTemplateSchema>;

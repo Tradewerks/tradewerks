@@ -109,6 +109,88 @@ describe("enroll", () => {
 		expect(created.recipient_email).toBe("override@x.com");
 	});
 
+	it("stores the resolved contact's id so sends carry an unsubscribe link", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue(seq());
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [{ contact_id: "ct1", is_primary: true, contact: { email: "primary@x.com" } }],
+		});
+		const created: any = await enroll({ sequence_id: "seq1", client_id: "c1" } as any, "org1", "d1");
+		expect(created.contact_id).toBe("ct1");
+		expect(created.recipient_email).toBe("primary@x.com");
+	});
+
+	it("stores the client contact matching an overridden recipient_email", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue(seq());
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [
+				{ contact_id: "ct1", is_primary: true, contact: { email: "primary@x.com" } },
+				{ contact_id: "ct2", contact: { email: "Other@X.com", is_active: true } },
+				{ contact_id: "ct3", contact: { email: "other@x.com", type: "vendor" } },
+			],
+		});
+		const created: any = await enroll(
+			{ sequence_id: "seq1", client_id: "c1", recipient_email: "other@x.com" } as any,
+			"org1",
+			"d1",
+		);
+		expect(created.contact_id).toBe("ct2");
+		expect(created.recipient_email).toBe("other@x.com");
+	});
+
+	it("stores no contact when an override matches no client contact", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue(seq());
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [{ contact_id: "ct1", is_primary: true, contact: { email: "primary@x.com" } }],
+		});
+		const created: any = await enroll(
+			{ sequence_id: "seq1", client_id: "c1", recipient_email: "stranger@x.com" } as any,
+			"org1",
+			"d1",
+		);
+		expect(created.contact_id).toBeNull();
+	});
+
+	it("uses the given contact_id's email when no override is given", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue(seq());
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [
+				{ contact_id: "ct1", is_primary: true, contact: { email: "primary@x.com" } },
+				{ contact_id: "ct2", contact: { email: "second@x.com" } },
+			],
+		});
+		const created: any = await enroll(
+			{ sequence_id: "seq1", client_id: "c1", contact_id: "ct2" } as any,
+			"org1",
+			"d1",
+		);
+		expect(created.contact_id).toBe("ct2");
+		expect(created.recipient_email).toBe("second@x.com");
+	});
+
+	it("400s when contact_id and recipient_email disagree", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue(seq());
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [{ contact_id: "ct1", is_primary: true, contact: { email: "primary@x.com" } }],
+		});
+		await expect(
+			enroll(
+				{ sequence_id: "seq1", client_id: "c1", contact_id: "ct1", recipient_email: "x@y.com" } as any,
+				"org1",
+				"d1",
+			),
+		).rejects.toMatchObject({ status: 400 });
+	});
+
+	it("400s when contact_id is not one of the client's eligible contacts", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue(seq());
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [{ contact_id: "ct1", is_primary: true, contact: { email: "primary@x.com" } }],
+		});
+		await expect(
+			enroll({ sequence_id: "seq1", client_id: "c1", contact_id: "nope" } as any, "org1", "d1"),
+		).rejects.toMatchObject({ status: 400 });
+	});
+
 	it("date_based: uses scheduled_at as the base so timing is scheduled_at + delay", async () => {
 		const scheduledAt = new Date(Date.now() + 10 * DAY);
 		scoped.followup_sequence.findFirst.mockResolvedValue(

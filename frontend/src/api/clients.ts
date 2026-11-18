@@ -10,6 +10,7 @@ import type {
 	CreateContactInput,
 	UpdateContactInput,
 	UpdateClientContactInput,
+	ConsentChannel,
 	ClientNote,
 	CreateClientNoteInput,
 	UpdateClientNoteInput,
@@ -184,6 +185,22 @@ export const updateClientContact = async (
 			response.data.error?.message ||
 				"Failed to update client-contact relationship"
 		);
+	}
+
+	return response.data.data!;
+};
+
+export const setContactConsent = async (
+	contactId: string,
+	data: { channel: ConsentChannel; status: "subscribed" | "unsubscribed" }
+): Promise<Contact> => {
+	const response = await api.put<ApiResponse<Contact>>(
+		`/contacts/${contactId}/consent`,
+		data
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to update consent");
 	}
 
 	return response.data.data!;

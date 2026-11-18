@@ -75,6 +75,9 @@ export function decideStep(
 	prevSend: { opened_at: Date | null } | null,
 	sequence: SequenceMode,
 ): StepDecision {
+	// A reminder's open is the goal, not a reason to skip the next one: every
+	// reminder is tied to the visit time and must still go out.
+	if (isBeforeAnchor(sequence.trigger_type)) return { action: "send" };
 	const opened = !!prevSend?.opened_at;
 	if (opened && sequence.stop_on_open) return { action: "stop", reason: "recipient_opened" };
 	if (opened && step.condition === "if_previous_not_opened") return { action: "stop", reason: "recipient_opened" };
@@ -84,23 +87,34 @@ export function decideStep(
 // ── Recipient resolution ────────────────────────────────────────────────────
 
 export interface ContactLink {
+	contact_id: string;
 	is_primary?: boolean;
 	is_billing?: boolean;
-	contact?: { email?: string | null } | null;
+	contact?: { email?: string | null; is_active?: boolean; type?: string | null } | null;
 }
 
 /**
- * Pick a client's best followup recipient email. Prefers the primary contact,
- * then the billing contact, then the first contact — but only among contacts that
- * actually HAVE an email, so a primary contact with a null email doesn't block the
- * followup when another contact has a usable address.
+ * Pick a client's followup recipient. Eligible contacts have an email, are active
+ * and are not vendors. Order: primary, then billing, then the lone eligible contact.
+ * With several unflagged candidates there is no safe pick, so none is returned
+ * rather than guessing a person to email. is_active is read as "not false" so a
+ * partial select that omits the column still resolves.
  */
+export function resolveContact(
+	contacts: ContactLink[],
+): { contact_id: string; email: string } | null {
+	const eligible = contacts.filter(
+		(c) => !!c.contact?.email && c.contact.is_active !== false && c.contact.type !== "vendor",
+	);
+	const pick =
+		eligible.find((c) => c.is_primary) ??
+		eligible.find((c) => c.is_billing) ??
+		(eligible.length === 1 ? eligible[0] : undefined);
+	return pick ? { contact_id: pick.contact_id, email: pick.contact!.email! } : null;
+}
+
 export function resolveContactEmail(contacts: ContactLink[]): string | null {
-	const withEmail = contacts.filter((c) => !!c.contact?.email);
-	if (withEmail.length === 0) return null;
-	const primary = withEmail.find((c) => c.is_primary);
-	const billing = withEmail.find((c) => c.is_billing);
-	return (primary ?? billing ?? withEmail[0]).contact!.email!;
+	return resolveContact(contacts)?.email ?? null;
 }
 
 // ── Anchor stop evaluation ──────────────────────────────────────────────────

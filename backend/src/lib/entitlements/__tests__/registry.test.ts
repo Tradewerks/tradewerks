@@ -55,11 +55,12 @@ describe("entitlement registry", () => {
 });
 
 describe("limit keys (build plan 2)", () => {
-	it("names the five limit keys the seed and spec use", () => {
+	it("names the six limit keys the seed and spec use", () => {
 		expect([...LIMIT_KEYS].sort()).toEqual([
 			"ai_calls_month",
 			"dispatchers",
 			"receipt_scans_month",
+			"sms_segments_month",
 			"tax_lookups_month",
 			"technicians",
 		]);
@@ -69,6 +70,7 @@ describe("limit keys (build plan 2)", () => {
 		expect([...METER_KEYS].sort()).toEqual([
 			"ai_calls_month",
 			"receipt_scans_month",
+			"sms_segments_month",
 			"tax_lookups_month",
 		]);
 		for (const m of METER_KEYS) expect(LIMIT_KEYS).toContain(m);
@@ -90,7 +92,9 @@ describe("business types", () => {
 			expect(Object.keys(t.moduleDefaults).sort()).toEqual([...optional].sort());
 	});
 	it("general matches the old signup defaults", () => {
-		expect(getBusinessType("general")?.moduleDefaults).toEqual(full({ followups: false }));
+		expect(getBusinessType("general")?.moduleDefaults).toEqual(
+			full({ followups: false, customer_comms: false }),
+		);
 	});
 	it("flags a missing module, an unknown or non-optional module, a broken requires and a duplicate key", () => {
 		const { quotes: _q, ...missing } = full();

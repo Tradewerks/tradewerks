@@ -68,6 +68,7 @@ export default function WorkPerformedSection({
 					photo_url: p.photo_url,
 					photo_label: p.photo_label,
 					photo_name: p.photo_name,
+					share_with_customer: p.share_with_customer ?? false,
 				})),
 			},
 		});

@@ -28,6 +28,7 @@ import type { HttpError } from "../types/responses.js";
 import { setUserActive } from "../services/userActiveCache.js";
 import { getSocket } from "../services/socketService.js";
 import { generateRefreshToken } from "../services/jwtService.js";
+import { deleteFile, signImageUrl, uploadFile } from "../services/wasabiService.js";
 
 const VALID_BREAK_REASONS = new Set<string>([
 	"Lunch",
@@ -119,11 +120,63 @@ export const getTechnicianById = async (
 	const sdb = getScopedDb(organizationId);
 	const technician = await sdb.technician.findFirst({
 		where: { id },
-		select: selectFor(withCostRate),
+		select: { ...selectFor(withCostRate), photo_url: true },
 	});
 	if (!technician) return null;
 	const permissions: string[] = (technician.organization_role?.permissions as string[] | null) ?? [];
-	return { ...technician, permissions, mfaEnabled: await isMfaEnabled(id) };
+	return {
+		...technician,
+		photo_url: await signImageUrl(technician.photo_url),
+		permissions,
+		mfaEnabled: await isMfaEnabled(id),
+	};
+};
+
+/**
+ * Replaces (or, with no file, clears) the technician's photo and returns its
+ * signed URL. The old object is deleted best-effort after the row changes.
+ */
+export const setTechnicianPhoto = async (
+	id: string,
+	organizationId: string,
+	file: { buffer: Buffer; mimetype: string; originalname: string } | null,
+	context?: UserContext,
+): Promise<{ err: string; url?: string | null }> => {
+	const sdb = getScopedDb(organizationId);
+	const tech = await sdb.technician.findFirst({
+		where: { id },
+		select: { id: true, photo_url: true },
+	});
+	if (!tech) return { err: "Technician not found" };
+	const rawUrl = file
+		? await uploadFile(file.buffer, file.mimetype, file.originalname, "technicians")
+		: null;
+	await sdb.technician.update({ where: { id }, data: { photo_url: rawUrl } });
+	// Storage URLs stay out of the log; whether a photo is set is what matters.
+	await logActivity({
+		event_type: "technician.updated",
+		action: "updated",
+		entity_type: "technician",
+		entity_id: id,
+		organization_id: organizationId,
+		actor_type: context?.techId
+			? "technician"
+			: context?.dispatcherId
+				? "dispatcher"
+				: "system",
+		actor_id: context?.techId || context?.dispatcherId,
+		changes: {
+			photo: { old: tech.photo_url ? "set" : null, new: rawUrl ? "set" : null },
+		},
+		ip_address: context?.ipAddress,
+		user_agent: context?.userAgent,
+	});
+	if (tech.photo_url) {
+		deleteFile(tech.photo_url).catch((err) =>
+			log.warn({ err, technicianId: id }, "Failed to delete old technician photo"),
+		);
+	}
+	return { err: "", url: await signImageUrl(rawUrl) };
 };
 
 export const insertTechnician = async (
