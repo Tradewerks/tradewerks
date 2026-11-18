@@ -110,7 +110,10 @@ api.interceptors.response.use((response) => response, async (error) => {
 		processQueue(err, null);
 		localStorage.removeItem("accessToken");
 		delete api.defaults.headers.common["Authorization"];
-		window.location.href = `${APP_BASE}/login`;
+		// Someone who just deleted their account stays on the page that says so; a
+		// request still in flight then fails its refresh and must not bounce them.
+		if (!window.location.pathname.startsWith(`${APP_BASE}/account-deleted`))
+			window.location.href = `${APP_BASE}/login`;
 		isRefreshing = false;
 		return Promise.reject(err);
 	}

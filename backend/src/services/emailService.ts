@@ -783,3 +783,62 @@ export const sendTrialEndingEmail = async (to: string[], subject: string, text: 
 		}
 	}
 };
+
+// ── Account deletion ────────────────────────────────────────────────────────
+
+const PRIVACY_EMAIL = "privacy@tradewerks.io";
+
+const noticeHtml = (heading: string, paragraphs: string[]) => `
+			<!DOCTYPE html>
+			<html>
+				<body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 40px;">
+					<div style="max-width: 480px; margin: 0 auto; background: white; border-radius: 8px; padding: 32px;">
+						<h2 style="color: #1a1a1a; margin-bottom: 8px;">${escapeHtml(heading)}</h2>
+						${paragraphs.map((p) => `<p style="color: #555; line-height: 1.5;">${escapeHtml(p)}</p>`).join("\n")}
+						<p style="color: #999; font-size: 13px; margin-top: 24px;">
+							Questions? Reply to ${PRIVACY_EMAIL}.
+						</p>
+					</div>
+				</body>
+			</html>`;
+
+// Account-deletion notices are courtesy mail: a send failure is logged, never
+// surfaced, because the deletion has already happened.
+const sendNotice = async (to: string, subject: string, heading: string, paragraphs: string[]) => {
+	if (EMAIL_DISABLED) {
+		log.info({ subject }, "[EMAIL DISABLED] Skipping account deletion notice.");
+		return;
+	}
+	try {
+		await client.sendEmail({
+			From: POSTMARK_FROM_EMAIL,
+			To: to,
+			Subject: subject,
+			HtmlBody: noticeHtml(heading, paragraphs),
+			TextBody: [heading, ...paragraphs, `Questions? Email ${PRIVACY_EMAIL}.`].join("\n\n"),
+			MessageStream: "outbound",
+		});
+	} catch (error) {
+		log.error({ err: error, subject }, "Failed to send account deletion notice");
+	}
+};
+
+export const sendAccountDeletedEmail = (to: string, orgName: string) =>
+	sendNotice(to, "Your TradeWerks account was deleted", "Your account was deleted", [
+		`You deleted your TradeWerks account with ${orgName}. Your name, email address, phone number, sign-in details and personal settings have been removed, and you have been signed out everywhere.`,
+		`Work you did for ${orgName}, such as visits, time entries and notes, stays in their records under "Deleted user", because it belongs to their business.`,
+		`If you didn't do this, email ${PRIVACY_EMAIL} right away.`,
+	]);
+
+export const sendOrganizationClosingEmail = (to: string, orgName: string) =>
+	sendNotice(to, `${orgName} closed its TradeWerks account`, `${orgName} closed its TradeWerks account`, [
+		`The administrator of ${orgName} deleted the organization. Your TradeWerks sign-in no longer works.`,
+		`All of ${orgName}'s data in TradeWerks, including your account, is being permanently deleted. If you have questions about the work records, contact ${orgName} directly.`,
+	]);
+
+export const sendOrganizationDeletedEmail = (to: string, orgName: string) =>
+	sendNotice(to, `${orgName} was deleted from TradeWerks`, `${orgName} was deleted`, [
+		`${orgName} and all of its data have been permanently deleted from TradeWerks, including every user account, client, job, invoice and uploaded file. Your account was deleted with it.`,
+		`This can't be undone. Any QuickBooks data synced earlier stays in QuickBooks.`,
+		`If you didn't ask for this, email ${PRIVACY_EMAIL} right away.`,
+	]);

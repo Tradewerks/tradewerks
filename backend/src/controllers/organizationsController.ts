@@ -24,7 +24,7 @@ import { isUniqueViolation } from "../platform/errors.js";
 
 export { defaultDispatcherPermissions } from "../services/provisionOrganization.js";
 
-export const registerOrganization = async (data: unknown) => {
+export const registerOrganization = async (data: unknown, signupCountry: string | null = null) => {
 	try {
 		const parsed = registerOrganizationSchema.parse(data);
 		// all emails in db are set to lower case
@@ -69,6 +69,11 @@ export const registerOrganization = async (data: unknown) => {
 			entity_id: result.orgId,
 			organization_id: result.orgId,
 			actor_type: "system",
+			// Country only, never the IP: enough to audit the US-only rule.
+			changes: {
+				signup_country: { old: null, new: signupCountry },
+				us_business_confirmed: { old: null, new: true },
+			},
 		});
 
 		return {

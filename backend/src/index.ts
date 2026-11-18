@@ -17,6 +17,7 @@ import { startTrialSchedulerInterval } from "./services/trialScheduler.js";
 import { registerTaxReviewGauge } from "./services/tax/taxMetrics.js";
 import { startTaxRateRefreshInterval } from "./services/taxRateRefreshScheduler.js";
 import { startReceiptOcrSweeper } from "./services/receiptOcrSweeper.js";
+import { startOrgPurgeSweeper } from "./services/orgPurge.js";
 import { rearmWrappingUpTimers } from "./services/wrappingUpTimer.js";
 import { startInventoryImportProcessor } from "./services/inventoryImport/processor.js";
 import multer from "multer";
@@ -60,6 +61,7 @@ import jobVisitsRouter from "./routes/jobVisits.js";
 import occurrencesRouter from "./routes/occurrences.js";
 import orgRouter from "./routes/org.js";
 import organizationsRouter from "./routes/organizations.js";
+import accountRouter from "./routes/account.js";
 import quotesRouter from "./routes/quotes.js";
 import recurringPlansRouter from "./routes/recurringPlans.js";
 import reportsRouter from "./routes/reports.js";
@@ -321,6 +323,7 @@ startArrivalTrackingInterval();
 startTrialSchedulerInterval();
 startTaxRateRefreshInterval();
 startReceiptOcrSweeper();
+startOrgPurgeSweeper();
 registerTaxReviewGauge();
 startInventoryImportProcessor();
 rearmWrappingUpTimers().catch((e) =>
@@ -585,6 +588,11 @@ app.use("/auth/sso", ssoRouter);
 // ORGANIZATION (unlike org this is used for registration and doesn't require auth)
 // ================================================================================
 app.use("/organizations", organizationsRouter);
+
+// ================================================================================
+// ACCOUNT (the signed-in person's own account: deletion)
+// ================================================================================
+app.use("/account", verifyToken, accountRouter);
 
 // ================================================================================
 // ORGANIZATION ROLES

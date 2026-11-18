@@ -99,6 +99,8 @@ const selectFor = (withCostRate: boolean) =>
 export const getAllTechnicians = async (organizationId: string, withCostRate = false) => {
 	const sdb = getScopedDb(organizationId);
 	const technicians = await sdb.technician.findMany({
+		// Accounts their owners deleted: kept for history, not team members any more.
+		where: { deleted_at: null },
 		select: selectFor(withCostRate),
 	});
 	const mfaEnabledIds = await getMfaEnabledUserIds(technicians.map((t) => t.id));
@@ -239,6 +241,7 @@ export const updateTechnician = async (
 		if (!existing) {
 			return { err: "Technician not found" };
 		}
+		if (existing.deleted_at) return { err: "This account was deleted by its owner and can't be changed." };
 
 		if (parsed.email && parsed.email !== existing.email) {
 			const emailTaken =
@@ -962,6 +965,7 @@ export const reactivateTechnician = async (id: string, organizationId: string, c
 	const sdb = getScopedDb(organizationId);
 	const existing = await sdb.technician.findFirst({ where: { id } });
 	if (!existing) return { err: "Technician not found" };
+	if (existing.deleted_at) return { err: "This account was deleted by its owner and can't be reactivated." };
 	if (!existing.deactivated_at) return { err: `${existing.name} is already active.` };
 
 	const item = await sdb.$transaction(async (tx) => {

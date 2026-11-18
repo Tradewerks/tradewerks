@@ -23,6 +23,8 @@ import { generateRefreshToken } from "../services/jwtService.js";
 export const getAllDispatchers = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
     const dispatchers = await sdb.dispatcher.findMany({
+        // Accounts their owners deleted: kept for history, not team members any more.
+        where: { deleted_at: null },
         include: {
             organization_role: { select: { id: true, name: true } },
         },
@@ -167,6 +169,7 @@ export const updateDispatcher = async (
         if (!existing) {
             return { err: "Dispatcher not found" };
         }
+        if (existing.deleted_at) return { err: "This account was deleted by its owner and can't be changed." };
 
         if (parsed.email && parsed.email !== existing.email) {
             const emailTaken =
@@ -412,6 +415,7 @@ export const reactivateDispatcher = async (id: string, organizationId: string, c
     const sdb = getScopedDb(organizationId);
     const existing = await sdb.dispatcher.findFirst({ where: { id } });
     if (!existing) return { err: "Dispatcher not found" };
+    if (existing.deleted_at) return { err: "This account was deleted by its owner and can't be reactivated." };
     if (!existing.deactivated_at) return { err: `${existing.name} is already active.` };
 
     const item = await sdb.$transaction(async (tx) => {

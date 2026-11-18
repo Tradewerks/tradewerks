@@ -12,6 +12,10 @@ export const registerOrganizationSchema = z.object({
 	org_website:  z.string().url("Must be a valid URL").optional().or(z.literal("")),
 	org_timezone: z.string().optional(),
 	org_tax_rate: z.number().min(0).max(1).optional(),
+	// Self-serve signup is US-only (lib/signupRegion.ts); the IP check cannot see past a VPN.
+	us_business_confirmed: z.literal(true, {
+		error: "Confirm that your business is located in the United States",
+	}),
 });
 
 export type RegisterOrganizationInput = z.infer<typeof registerOrganizationSchema>;

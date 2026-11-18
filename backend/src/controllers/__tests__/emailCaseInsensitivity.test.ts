@@ -179,6 +179,7 @@ describe("registerOrganization — admin_email is lowercased before the dup-chec
 			admin_email: "Jane@Example.COM",
 			admin_password: "password123",
 			business_type: "general",
+			us_business_confirmed: true,
 		});
 
 		expect(result.err).toBe("");
@@ -199,6 +200,7 @@ describe("registerOrganization — admin_email is lowercased before the dup-chec
 			admin_email: "JANE@EXAMPLE.COM",
 			admin_password: "password123",
 			business_type: "general",
+			us_business_confirmed: true,
 		});
 
 		expect(result).toEqual({ err: "An account with this email already exists" });

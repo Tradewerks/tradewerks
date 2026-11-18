@@ -67,6 +67,7 @@ async function fillRegister() {
 	await u.type(screen.getByLabelText(/^email/i), "pat@acme.test");
 	await u.type(screen.getByLabelText(/^password/i), "Sup3r$ecret");
 	await u.type(screen.getByLabelText(/confirm password/i), "Sup3r$ecret");
+	await u.click(screen.getByLabelText(/located in the united states/i));
 	return u;
 }
 
@@ -105,6 +106,40 @@ describe("RegisterPage", () => {
 		await waitFor(() =>
 			expect(api.registerOrganization.mock.calls[0][0].business_type).toBe("hvac"),
 		);
+	});
+
+	it("says up front that signup is for US businesses, and sends the confirmation", async () => {
+		api.registerOrganization.mockResolvedValue({});
+		wrap(<RegisterPage />, "/register");
+		expect(screen.getByText(/available to businesses located in the United States/i)).toBeInTheDocument();
+		const u = await fillRegister();
+		await u.click(screen.getByRole("button", { name: /create/i }));
+		await waitFor(() =>
+			expect(api.registerOrganization.mock.calls[0][0].us_business_confirmed).toBe(true),
+		);
+	});
+
+	it("won't submit until the business is confirmed as US-based", async () => {
+		wrap(<RegisterPage />, "/register");
+		const u = await fillRegister();
+		await u.click(screen.getByLabelText(/located in the united states/i));
+		await u.click(screen.getByRole("button", { name: /create/i }));
+		expect(await screen.findByText("Confirm that your business is located in the United States.")).toBeInTheDocument();
+		expect(api.registerOrganization).not.toHaveBeenCalled();
+	});
+
+	it("explains a refusal from outside the US and lets them go back with the form intact", async () => {
+		api.registerOrganization.mockRejectedValue(
+			apiError(403, "SIGNUP_REGION_UNAVAILABLE", "TradeWerks is currently available only to businesses located in the United States."),
+		);
+		wrap(<RegisterPage />, "/register");
+		const u = await fillRegister();
+		await u.click(screen.getByRole("button", { name: /create/i }));
+		expect(await screen.findByRole("heading", { name: /only available in the U\.S\./i })).toBeInTheDocument();
+		expect(screen.getByText(/VPN/)).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "sales@tradewerks.io" })).toHaveAttribute("href", "mailto:sales@tradewerks.io");
+		await u.click(screen.getByRole("button", { name: /try again/i }));
+		expect(screen.getByLabelText(/organization name/i)).toHaveValue("Acme");
 	});
 
 	it("shows the paused notice for SIGNUPS_PAUSED", async () => {
