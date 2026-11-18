@@ -165,6 +165,24 @@ export const updateJobVisit = async (
 	return response.data.data!;
 };
 
+// The technician's only line write: quantity only, priced server-side. 0 deletes the line.
+export const updateFieldLineQuantity = async (
+	visitId: string,
+	lineItemId: string,
+	quantity: number
+): Promise<JobVisit> => {
+	const response = await api.patch<ApiResponse<JobVisit>>(
+		`/job-visits/${visitId}/field-lines/${lineItemId}`,
+		{ quantity }
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to update line quantity");
+	}
+
+	return response.data.data!;
+};
+
 export const assignTechniciansToVisit = async (
 	visitId: string,
 	techIds: string[]

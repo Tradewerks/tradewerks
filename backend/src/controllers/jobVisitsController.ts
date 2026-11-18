@@ -1330,8 +1330,12 @@ export const acceptJobVisit = async (
 		if (!visit) {
 			return { err: "Job visit not found" };
 		}
-		if (visit.status === "Completed" || visit.status === "Cancelled")
-			return { err: `${visit.status} visits can't be accepted` };
+		if (visit.status === "Completed" || visit.status === "Cancelled") {
+			return {
+				err: `A ${visit.status.toLowerCase()} visit can't be accepted.`,
+				code: "WRONG_STATE" as const,
+			};
+		}
 
 		const tech = await sdb.technician.findFirst({
 			where: { id: techId },

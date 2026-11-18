@@ -196,7 +196,7 @@ describe("job-visit routes — technicians only accept and clock for themselves"
 			body: { tech_id: "tech-2" },
 		});
 		expect(r.status).toBe(403);
-		expect(r.body.error.message).toBe("Technicians can only accept a visit for themselves");
+		expect(r.body.error.message).toBe("Technicians can only act as themselves.");
 		expect(visits.acceptJobVisit).not.toHaveBeenCalled();
 	});
 
@@ -213,8 +213,8 @@ describe("job-visit routes — technicians only accept and clock for themselves"
 	});
 
 	it.each([
-		["/:id/clock-in", clockInVisit, "Technicians can only clock themselves in"],
-		["/:id/clock-out", clockOutVisit, "Technicians can only clock themselves out"],
+		["/:id/clock-in", clockInVisit, "Technicians can only act as themselves."],
+		["/:id/clock-out", clockOutVisit, "Technicians can only act as themselves."],
 	] as const)("%s refuses a tech clocking a teammate", async (path, handler, message) => {
 		vi.mocked(techOnVisit).mockResolvedValueOnce(true);
 		const r = await callRoute(jobVisitsRouter, "post", path, {

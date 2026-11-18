@@ -26,7 +26,18 @@ import {
 } from '../controllers/jobVisitsController.js';
 import { clockInVisit, clockOutVisit } from "../controllers/visitTimeEntriesController.js";
 import { addPartsUsed, updatePartsUsedQty } from "../controllers/vehiclesController.js";
+import { updateFieldLineQuantity } from "../controllers/visitFieldLinesController.js";
+import { z } from "zod";
 import { db } from "../db.js";
+import { isTechnicianCaller, resolveActingTechId } from "../lib/visitActor.js";
+import type { Response } from "express";
+
+const sendActorError = (res: Response, a: { err: string; status: 400 | 403 }) =>
+    res.status(a.status).json(
+        a.status === 403
+            ? createErrorResponse(ErrorCodes.FORBIDDEN, a.err)
+            : createErrorResponse(ErrorCodes.INVALID_INPUT, a.err, null, "tech_id"),
+    );
 
 
 const router = Router();
@@ -145,10 +156,16 @@ router.post("/", requireAnyPermission("create_jobs", "edit_jobs"), async (req, r
     }
 });
 
+const techUseActionsResponse = () =>
+    createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians update visits through the visit actions.");
+
 router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+        if (isTechnicianCaller(context)) {
+            return res.status(403).json(techUseActionsResponse());
+        }
         const result = await updateJobVisit(req, orgId, context);
 
         if (result.err) {
@@ -196,33 +213,20 @@ router.put("/:id/technicians", requirePermission("edit_jobs"), async (req, res, 
 router.post("/:id/accept", requireAnyPermission("edit_jobs", "update_visit_status"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
-        const { tech_id } = req.body;
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
 
-        if (!tech_id) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.INVALID_INPUT,
-                        "tech_id is required",
-                        null,
-                        "tech_id",
-                    ),
-                );
-        }
-        // Technicians claim visits for themselves; dispatchers and admins can assign anyone.
-        if (context.techId && tech_id !== context.techId) {
-            return res
-                .status(403)
-                .json(createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians can only accept a visit for themselves", null, "tech_id"));
-        }
+        const actor = resolveActingTechId(context, req.body?.tech_id);
+        if ("err" in actor) return sendActorError(res, actor);
 
-        const result = await acceptJobVisit(id, tech_id, orgId, context);
+        const result = await acceptJobVisit(id, actor.techId, orgId, context);
 
         // Closed or already-claimed visits are a state conflict, not bad input.
         if (result.err) {
+            const code = "code" in result ? result.code : undefined;
+            if (code === "WRONG_STATE") {
+                return res.status(409).json(createErrorResponse(code, result.err));
+            }
             return sendResultErr(res, result.err, 409, ErrorCodes.CONFLICT);
         }
 
@@ -236,22 +240,12 @@ router.post("/:id/accept", requireAnyPermission("edit_jobs", "update_visit_statu
 
 router.post("/:id/clock-in", requirePermission("check_in"), assignedVisit, async (req, res, next) => {
     try {
-        const { tech_id } = req.body as { tech_id?: string };
-        if (!tech_id) {
-            return res.status(400).json(
-                createErrorResponse(ErrorCodes.INVALID_INPUT, "tech_id is required", null, "tech_id"),
-            );
-        }
-        const callerTechId = getUserContext(req).techId;
-        if (callerTechId && tech_id !== callerTechId) {
-            return res.status(403).json(
-                createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians can only clock themselves in", null, "tech_id"),
-            );
-        }
-
+        const context = getUserContext(req);
+        const actor = resolveActingTechId(context, req.body?.tech_id);
+        if ("err" in actor) return sendActorError(res, actor);
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
-        const result = await clockInVisit(id, tech_id, orgId, getUserContext(req));
+        const result = await clockInVisit(id, actor.techId, orgId, context);
         if (result.err) {
             if (result.err.startsWith("ALREADY_CLOCKED_IN:") || result.err.startsWith("TIMESHEET_LOCKED")) {
                 return res.status(409).json(createErrorResponse(ErrorCodes.CONFLICT, result.err));
@@ -266,22 +260,13 @@ router.post("/:id/clock-in", requirePermission("check_in"), assignedVisit, async
 
 router.post("/:id/clock-out", requirePermission("check_out"), assignedVisit, async (req, res, next) => {
     try {
-        const { tech_id, pause_reason } = req.body as { tech_id?: string; pause_reason?: string };
-        if (!tech_id) {
-            return res.status(400).json(
-                createErrorResponse(ErrorCodes.INVALID_INPUT, "tech_id is required", null, "tech_id"),
-            );
-        }
-        const callerTechId = getUserContext(req).techId;
-        if (callerTechId && tech_id !== callerTechId) {
-            return res.status(403).json(
-                createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians can only clock themselves out", null, "tech_id"),
-            );
-        }
-
+        const { tech_id, pause_reason } = (req.body ?? {}) as { tech_id?: string; pause_reason?: string };
+        const context = getUserContext(req);
+        const actor = resolveActingTechId(context, tech_id);
+        if ("err" in actor) return sendActorError(res, actor);
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
-        const result = await clockOutVisit(id, tech_id, orgId, getUserContext(req), pause_reason);
+        const result = await clockOutVisit(id, actor.techId, orgId, context, pause_reason);
         if (result.err) {
             return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
         }
@@ -351,10 +336,14 @@ router.post("/:id/complete", requireAnyPermission("edit_jobs", "update_visit_sta
 
 router.post("/:id/cancel", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
     try {
+        const context = getUserContext(req);
+        if (isTechnicianCaller(context)) {
+            return res.status(403).json(techUseActionsResponse());
+        }
         const { cancellation_reason } = req.body as { cancellation_reason?: string };
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
-        const result = await cancelJobVisit(id, cancellation_reason ?? "", orgId, getUserContext(req));
+        const result = await cancelJobVisit(id, cancellation_reason ?? "", orgId, context);
         if (result.err) {
             return sendResultErr(res, result.err, 409);
         }
@@ -433,6 +422,38 @@ router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requ
             return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
         }
         res.json(createSuccessResponse("item" in result ? result.item : null));
+    } catch (err) {
+        next(err);
+    }
+});
+
+// The one line write a technician has: quantity only, priced from the stored row.
+const fieldLineQuantitySchema = z.object({ quantity: z.number().finite().min(0) });
+const FIELD_LINE_STATUS = { FORBIDDEN: 403, WRONG_STATE: 409, CONFLICT: 409, NOT_FOUND: 404 } as const;
+
+router.patch("/:id/field-lines/:lineItemId", requireAnyPermission("edit_jobs", "use_inventory", "update_visit_status"), async (req, res, next) => {
+    try {
+        const parsed = fieldLineQuantitySchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json(
+                createErrorResponse(ErrorCodes.VALIDATION_ERROR, parsed.error.issues.map((i) => i.message).join(", ")),
+            );
+        }
+        const orgId = req.user!.organization_id as string;
+        const result = await updateFieldLineQuantity(
+            req.params.id as string,
+            req.params.lineItemId as string,
+            parsed.data.quantity,
+            orgId,
+            getUserContext(req),
+        );
+        if (result.err) {
+            const status = result.code ? FIELD_LINE_STATUS[result.code] : 400;
+            return res.status(status).json(
+                createErrorResponse(result.code ?? ErrorCodes.VALIDATION_ERROR, result.err),
+            );
+        }
+        res.json(createSuccessResponse(result.item ?? null));
     } catch (err) {
         next(err);
     }

@@ -9,6 +9,7 @@ import type { VisitLineItem } from "../../types/jobs";
 const mockAddPartsMutateAsync = vi.fn();
 const mockUpdatePartsQtyMutateAsync = vi.fn();
 const mockUpdateVisitMutateAsync = vi.fn();
+const mockFieldLineMutateAsync = vi.fn();
 const mockStockItems = vi.fn<() => VehicleStockItem[]>();
 vi.mock("../../hooks/useVehicleStock", () => ({
 	useVehicleStockQuery: () => ({ data: mockStockItems() }),
@@ -21,6 +22,10 @@ vi.mock("../../hooks/useVehicleStock", () => ({
 
 vi.mock("../../hooks/useJobs", () => ({
 	useUpdateJobVisitMutation: () => ({ mutateAsync: mockUpdateVisitMutateAsync, isPending: false }),
+	useUpdateFieldLineQuantityMutation: () => ({
+		mutateAsync: mockFieldLineMutateAsync,
+		isPending: false,
+	}),
 }));
 
 vi.mock("../../hooks/useTechnicians", () => ({
@@ -69,6 +74,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mockUpdatePartsQtyMutateAsync.mockResolvedValue(null);
 	mockUpdateVisitMutateAsync.mockResolvedValue({});
+	mockFieldLineMutateAsync.mockResolvedValue({});
 	mockStockItems.mockReturnValue([]);
 	mockSerialsQuery.mockReturnValue({ data: { serials: [], nextCursor: null }, isLoading: false });
 	mockBatchesQuery.mockReturnValue({ data: { batches: [] }, isLoading: false });
@@ -424,40 +430,32 @@ describe("PartsUsedSection — Edit Parts quantity routing", () => {
 		expect(mockUpdateVisitMutateAsync).not.toHaveBeenCalled();
 	});
 
-	test("a non-stock line rewrites the visit's line items with the total recomputed to 2 dp", async () => {
+	test("changes a non-stock line through the field-lines endpoint, not the visit PUT", async () => {
 		await openEditTab([supplierLine]);
 
 		await userEvent.click(screen.getByLabelText("Increase quantity"));
 
-		await waitFor(() => expect(mockUpdateVisitMutateAsync).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(mockFieldLineMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockFieldLineMutateAsync).toHaveBeenCalledWith({
+			visitId: "visit-1",
+			lineItemId: "li-supplier",
+			quantity: 3,
+		});
+		expect(mockUpdateVisitMutateAsync).not.toHaveBeenCalled();
 		expect(mockUpdatePartsQtyMutateAsync).not.toHaveBeenCalled();
-		const { id, data } = mockUpdateVisitMutateAsync.mock.calls[0][0];
-		expect(id).toBe("visit-1");
-		expect(data.line_items).toEqual([
-			expect.objectContaining({
-				id: "li-supplier",
-				quantity: 3,
-				unit_price: 3.333,
-				// 3 × 3.333 = 9.999 → 10.00
-				total: 10,
-			}),
-		]);
 	});
 
-	test("a non-stock line rewrite keeps every line's position", async () => {
+	test("only the touched line is sent when several lines exist", async () => {
 		const laborLine: VisitLineItem = { ...supplierLine, id: "li-labor", name: "Labor" };
 		await openEditTab([laborLine, supplierLine]);
 
 		await userEvent.click(screen.getAllByLabelText("Increase quantity")[1]);
 
-		await waitFor(() => expect(mockUpdateVisitMutateAsync).toHaveBeenCalledTimes(1));
-		expect(mockUpdateVisitMutateAsync.mock.calls[0][0].data.line_items).toEqual([
-			expect.objectContaining({ id: "li-labor", sort_order: 0 }),
-			expect.objectContaining({ id: "li-supplier", sort_order: 1 }),
-		]);
+		await waitFor(() => expect(mockFieldLineMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockFieldLineMutateAsync.mock.calls[0][0].lineItemId).toBe("li-supplier");
 	});
 
-	test("decreasing a non-stock line to zero removes it from the visit", async () => {
+	test("decreasing a non-stock line to zero sends quantity 0 to the field-lines endpoint", async () => {
 		await openEditTab([{ ...supplierLine, quantity: 1, total: 3.33 }]);
 
 		// qty 1 shows a remove control that arms on first click and fires on the second.
@@ -465,8 +463,13 @@ describe("PartsUsedSection — Edit Parts quantity routing", () => {
 		await userEvent.click(remove);
 		await userEvent.click(remove);
 
-		await waitFor(() => expect(mockUpdateVisitMutateAsync).toHaveBeenCalledTimes(1));
-		expect(mockUpdateVisitMutateAsync.mock.calls[0][0].data.line_items).toEqual([]);
+		await waitFor(() => expect(mockFieldLineMutateAsync).toHaveBeenCalledTimes(1));
+		expect(mockFieldLineMutateAsync.mock.calls[0][0]).toEqual({
+			visitId: "visit-1",
+			lineItemId: "li-supplier",
+			quantity: 0,
+		});
+		expect(mockUpdateVisitMutateAsync).not.toHaveBeenCalled();
 		expect(mockUpdatePartsQtyMutateAsync).not.toHaveBeenCalled();
 	});
 

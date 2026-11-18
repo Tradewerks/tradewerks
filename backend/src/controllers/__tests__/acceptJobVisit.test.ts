@@ -59,6 +59,6 @@ describe("acceptJobVisit — technicians only claim unassigned visits", () => {
 	it("refuses a closed visit", async () => {
 		sdb.job_visit.findFirst.mockResolvedValue({ id: "v1", job_id: "j1", status: "Completed" });
 		const r = await acceptJobVisit("v1", "tech-1", "org-1", { techId: "tech-1" });
-		expect(r.err).toBe("Completed visits can't be accepted");
+		expect(r.err).toBe("A completed visit can't be accepted.");
 	});
 });
