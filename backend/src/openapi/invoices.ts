@@ -136,7 +136,7 @@ authed("post", "/invoices", "Invoices", "create_invoices", {
 		201: json(envelope(invoice), "Invoice created"),
 		400: json(
 			errorEnvelope,
-			"Validation failed, or any other error, including client not found (`VALIDATION_ERROR`)",
+			"Validation failed, client not found, or a bad item or tax group reference (`VALIDATION_ERROR`)",
 		),
 	},
 });
@@ -295,7 +295,7 @@ authed("delete", "/invoices/{id}", "Invoices", "delete_invoices", {
 		200: deletedId,
 		400: json(
 			errorEnvelope,
-			"Invoice isn't a Draft or is part of a dispute, or the delete failed (`DELETE_ERROR`)",
+			"Invoice isn't a Draft or is part of a dispute (`DELETE_ERROR`)",
 		),
 		404: json(errorEnvelope, "Invoice not found (`DELETE_ERROR`)"),
 	},
@@ -513,10 +513,7 @@ authed(
 		request: { params: invoiceParams.extend({ paymentId: z.uuid() }) },
 		responses: {
 			200: deletedId,
-			400: json(
-				errorEnvelope,
-				"The invoice is Void, or the delete failed (`DELETE_ERROR`)",
-			),
+			400: json(errorEnvelope, "The invoice is Void (`DELETE_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Payment or invoice not found (`DELETE_ERROR`)",
@@ -590,10 +587,7 @@ authed(
 		},
 		responses: {
 			200: json(envelope(invoiceNoteRow), "Note updated"),
-			400: json(
-				errorEnvelope,
-				"Validation failed, or the update failed (`VALIDATION_ERROR`)",
-			),
+			400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Note not found on this invoice (`VALIDATION_ERROR`)",
@@ -617,7 +611,6 @@ authed(
 				envelope(z.object({ message: z.string() })),
 				"Note deleted",
 			),
-			400: json(errorEnvelope, "The delete failed (`DELETE_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Note not found on this invoice (`DELETE_ERROR`)",

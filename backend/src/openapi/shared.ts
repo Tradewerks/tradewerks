@@ -83,6 +83,10 @@ const authed = (
 		security: [{ bearerAuth: [] }],
 		...rest,
 		responses: {
+			500: json(
+				errorEnvelope,
+				"Unexpected server error (`SERVER_ERROR`)",
+			),
 			...rest.responses,
 			401: json(errorEnvelope, "Missing or invalid token"),
 			...(forbidden && { 403: json(errorEnvelope, forbidden) }),

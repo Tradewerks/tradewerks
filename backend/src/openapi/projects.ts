@@ -240,8 +240,9 @@ authed(
 			201: json(envelope(projectNote), "Note created"),
 			400: json(
 				errorEnvelope,
-				"Validation failed, or project not found (`VALIDATION_ERROR`)",
+				"Validation failed, or the note couldn't be created (`VALIDATION_ERROR`)",
 			),
+			404: json(errorEnvelope, "Project not found (`NOT_FOUND`)"),
 		},
 	},
 	noProjectsForTechs,
@@ -276,12 +277,11 @@ authed(
 	{
 		summary: "Delete a project",
 		description:
-			"Requires the `delete_projects` permission. Its notes are deleted with it; its jobs stay and are detached from it.",
+			"Requires the `delete_projects` permission. Its notes and their photos are deleted with it; its jobs stay and are detached from it.",
 		request: { params: z.object({ id: z.uuid() }) },
 		responses: {
 			200: deletedId,
 			404: json(errorEnvelope, "Project not found (`NOT_FOUND`)"),
-			500: json(errorEnvelope, "The delete failed (`SERVER_ERROR`)"),
 		},
 	},
 	noProjectsForTechs,
@@ -329,7 +329,6 @@ authed(
 				errorEnvelope,
 				"The job isn't on this project (`CONFLICT`)",
 			),
-			500: json(errorEnvelope, "The update failed (`SERVER_ERROR`)"),
 		},
 	},
 	noProjectsForTechs,
@@ -394,8 +393,9 @@ authed(
 			200: json(envelope(projectNote), "Updated"),
 			400: json(
 				errorEnvelope,
-				"Note not found, validation failed, or the update failed (`VALIDATION_ERROR`)",
+				"Validation failed, or the update failed (`VALIDATION_ERROR`)",
 			),
+			404: json(errorEnvelope, "Note not found (`NOT_FOUND`)"),
 		},
 	},
 	noProjectsForTechs,
@@ -409,14 +409,11 @@ authed(
 	{
 		summary: "Delete a project note",
 		description:
-			"Requires the `edit_projects` permission. Any user with the permission can delete any note.",
+			"Requires the `edit_projects` permission. Any user with the permission can delete any note. Its photos are deleted from storage too.",
 		request: { params: projectNoteParams },
 		responses: {
 			200: json(envelope(z.object({ message: z.string() })), "Deleted"),
-			400: json(
-				errorEnvelope,
-				"Note not found, or the delete failed (`DELETE_ERROR`)",
-			),
+			404: json(errorEnvelope, "Note not found (`NOT_FOUND`)"),
 		},
 	},
 	noProjectsForTechs,

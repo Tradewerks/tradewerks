@@ -79,8 +79,9 @@ authed("put", "/clients/{id}", "Clients", "edit_clients", {
 		200: json(envelope(client), "Client updated"),
 		400: json(
 			errorEnvelope,
-			"Validation failed, address couldn't be geocoded, or client not found (`VALIDATION_ERROR`)",
+			"Validation failed, or address couldn't be geocoded (`VALIDATION_ERROR`)",
 		),
+		404: json(errorEnvelope, "Client not found (`NOT_FOUND`)"),
 		409: json(
 			errorEnvelope,
 			"Address change needs a tax choice: resend with `address_tax_choice` (`ADDRESS_TAX_CHOICE_REQUIRED`)",
@@ -137,10 +138,8 @@ authed("post", "/clients/{id}/notes", "Clients", "edit_clients", {
 	},
 	responses: {
 		201: json(envelope(clientNote), "Note created"),
-		400: json(
-			errorEnvelope,
-			"Validation failed, or client not found (`VALIDATION_ERROR`)",
-		),
+		400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
+		404: json(errorEnvelope, "Client not found (`NOT_FOUND`)"),
 	},
 });
 
@@ -232,9 +231,10 @@ authed("post", "/contacts", "Contacts", "create_clients", {
 	},
 	responses: {
 		201: json(envelope(contact), "Contact created"),
-		400: json(
+		400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
+		404: json(
 			errorEnvelope,
-			"Validation failed, or `client_id` not in the caller's organization (`VALIDATION_ERROR`)",
+			"`client_id` not in the caller's organization (`NOT_FOUND`)",
 		),
 		409: json(
 			errorEnvelope,
@@ -280,8 +280,9 @@ authed("delete", "/clients/{id}", "Clients", "delete_clients", {
 		),
 		400: json(
 			errorEnvelope,
-			"Client not found, or it still has related records (`DELETE_ERROR`)",
+			"Client still has related records (`DELETE_ERROR`)",
 		),
+		404: json(errorEnvelope, "Client not found (`NOT_FOUND`)"),
 	},
 });
 
@@ -311,7 +312,7 @@ authed("delete", "/contacts/{id}", "Contacts", "delete_clients", {
 		),
 		400: json(
 			errorEnvelope,
-			"Contact is still linked to a client, or the delete failed (`DELETE_ERROR`)",
+			"Contact is still linked to a client (`DELETE_ERROR`)",
 		),
 		404: json(errorEnvelope, "Contact not found (`DELETE_ERROR`)"),
 	},
@@ -374,10 +375,7 @@ authed("post", "/clients/{clientId}/contacts/link", "Clients", "edit_clients", {
 	},
 	responses: {
 		201: json(envelope(clientContactLink), "Contact linked"),
-		400: json(
-			errorEnvelope,
-			"Validation failed, or the link failed (`VALIDATION_ERROR`)",
-		),
+		400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
 		404: json(
 			errorEnvelope,
 			"Contact or client not found (`VALIDATION_ERROR`)",
@@ -412,10 +410,7 @@ authed(
 		},
 		responses: {
 			200: json(envelope(clientContactLink), "Link updated"),
-			400: json(
-				errorEnvelope,
-				"Validation failed, or the update failed (`VALIDATION_ERROR`)",
-			),
+			400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Contact not linked to this client (`VALIDATION_ERROR`)",
@@ -439,7 +434,6 @@ authed(
 				envelope(z.object({ message: z.string() })),
 				"Contact unlinked",
 			),
-			400: json(errorEnvelope, "The unlink failed (`DELETE_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Contact not linked to this client (`DELETE_ERROR`)",
@@ -489,10 +483,8 @@ authed("put", "/clients/{clientId}/notes/{noteId}", "Clients", "edit_clients", {
 	},
 	responses: {
 		200: json(envelope(clientNoteRow), "Note updated"),
-		400: json(
-			errorEnvelope,
-			"Validation failed, note not found, or the update failed (`VALIDATION_ERROR`)",
-		),
+		400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
+		404: json(errorEnvelope, "Note not found (`NOT_FOUND`)"),
 	},
 });
 
@@ -511,10 +503,7 @@ authed(
 				envelope(z.object({ message: z.string() })),
 				"Note deleted",
 			),
-			400: json(
-				errorEnvelope,
-				"Note not found, or the delete failed (`DELETE_ERROR`)",
-			),
+			404: json(errorEnvelope, "Note not found (`NOT_FOUND`)"),
 		},
 	},
 );

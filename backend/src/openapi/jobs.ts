@@ -24,6 +24,9 @@ import { coords } from "./requestsQuotes.js";
 
 export { jobParams, jobVisitParams, jobVisit };
 
+const notAssigned = (target: string) =>
+	`A technician limited to assigned work isn't assigned to the ${target} (\`FORBIDDEN\`)`;
+
 // ===============================================================================================================================
 // Jobs & Visits
 // ===============================================================================================================================
@@ -75,7 +78,7 @@ authed(
 	{
 		summary: "List jobs",
 		description:
-			"Requires any of `view_jobs`, `view_assigned_jobs` or `view_all_jobs`. Returns every job in the caller's organization, newest first.",
+			"Requires any of `view_jobs`, `view_assigned_jobs` or `view_all_jobs`. Returns every job in the caller's organization, newest first. With only `view_assigned_jobs`, returns just the jobs the caller has a visit on.",
 		responses: {
 			200: json(envelope(z.array(job)), "Jobs (empty array if none)"),
 		},
@@ -100,6 +103,7 @@ authed(
 			),
 		},
 	},
+	notAssigned("job"),
 );
 
 authed("post", "/jobs", "Jobs", "create_jobs", {
@@ -156,8 +160,9 @@ authed("patch", "/jobs/{id}", "Jobs", "edit_jobs", {
 		200: json(envelope(job), "Job updated"),
 		400: json(
 			errorEnvelope,
-			"Validation failed, address couldn't be geocoded, job not found, or the update failed (`VALIDATION_ERROR`)",
+			"Validation failed, or address couldn't be geocoded (`VALIDATION_ERROR`)",
 		),
+		404: json(errorEnvelope, "Job not found (`NOT_FOUND`)"),
 		409: json(
 			errorEnvelope,
 			"Address change needs a tax choice: resend with `address_tax_choice` (`ADDRESS_TAX_CHOICE_REQUIRED`)",
@@ -198,31 +203,41 @@ const jobNote = z
 	})
 	.meta({ id: "JobNote" });
 
-authed("post", "/jobs/{id}/notes", "Jobs", "edit_jobs or add_job_notes", {
-	summary: "Add a note to a job",
-	description:
-		"Requires `edit_jobs` or `add_job_notes`. Needs `content` or at least one photo. The author is the caller, taken from the token. With `visit_id` and `notify_technician: true`, the visit's technicians get a notification.",
-	request: {
-		params: z.object({ id: z.uuid() }),
-		body: {
-			content: {
-				"application/json": {
-					schema: createJobNoteSchema.meta({ id: "CreateJobNote" }),
-					example: {
-						content: "Replaced the igniter; furnace runs fine.",
+authed(
+	"post",
+	"/jobs/{id}/notes",
+	"Jobs",
+	"edit_jobs or add_job_notes",
+	{
+		summary: "Add a note to a job",
+		description:
+			"Requires `edit_jobs` or `add_job_notes`. Needs `content` or at least one photo. The author is the caller, taken from the token. With `visit_id` and `notify_technician: true`, the visit's technicians get a notification.",
+		request: {
+			params: z.object({ id: z.uuid() }),
+			body: {
+				content: {
+					"application/json": {
+						schema: createJobNoteSchema.meta({
+							id: "CreateJobNote",
+						}),
+						example: {
+							content: "Replaced the igniter; furnace runs fine.",
+						},
 					},
 				},
 			},
 		},
+		responses: {
+			201: json(envelope(jobNote), "Note created"),
+			400: json(
+				errorEnvelope,
+				"Validation failed, the visit isn't on this job, or the note couldn't be created (`VALIDATION_ERROR`)",
+			),
+			404: json(errorEnvelope, "Job or visit not found (`NOT_FOUND`)"),
+		},
 	},
-	responses: {
-		201: json(envelope(jobNote), "Note created"),
-		400: json(
-			errorEnvelope,
-			"Validation failed, job or visit not found, or the visit isn't on this job (`VALIDATION_ERROR`)",
-		),
-	},
-});
+	notAssigned("job or visit"),
+);
 
 const jobVisit = z
 	.object({
@@ -278,7 +293,7 @@ authed(
 	{
 		summary: "List visits",
 		description:
-			"Requires any of `view_jobs`, `view_visits` or `view_assigned_jobs`. Returns every visit in the caller's organization, earliest scheduled start first.",
+			"Requires any of `view_jobs`, `view_visits` or `view_assigned_jobs`. Returns every visit in the caller's organization, earliest scheduled start first. With only `view_assigned_jobs`, returns just the caller's visits.",
 		responses: {
 			200: json(
 				envelope(z.array(jobVisit)),
@@ -349,10 +364,12 @@ authed(
 			200: json(envelope(jobVisit), "Visit updated"),
 			400: json(
 				errorEnvelope,
-				"Validation failed, visit not found, a status past `Scheduled` set with no technician assigned, or the update failed (`VALIDATION_ERROR`)",
+				"Validation failed, a tax group or vehicle isn't in the caller's organization, or a status past `Scheduled` set with no technician assigned (`VALIDATION_ERROR`)",
 			),
+			404: json(errorEnvelope, "Visit not found (`NOT_FOUND`)"),
 		},
 	},
+	notAssigned("visit"),
 );
 
 authed("put", "/job-visits/{id}/technicians", "Visits", "edit_jobs", {
@@ -378,7 +395,11 @@ authed("put", "/job-visits/{id}/technicians", "Visits", "edit_jobs", {
 		200: json(envelope(jobVisit), "Technicians updated"),
 		400: json(
 			errorEnvelope,
-			"`tech_ids` isn't an array (`INVALID_INPUT`); or visit not found, a technician not found or deactivated, removing everyone from a visit already underway, or the update failed (`VALIDATION_ERROR`)",
+			"`tech_ids` isn't an array (`INVALID_INPUT`); or removing everyone from a visit already underway, or the update failed (`VALIDATION_ERROR`)",
+		),
+		404: json(
+			errorEnvelope,
+			"Visit not found, or a technician not found or deactivated (`NOT_FOUND`)",
 		),
 	},
 });
@@ -411,12 +432,14 @@ authed(
 		},
 		responses: {
 			200: json(envelope(jobVisit), "Visit cancelled"),
+			404: json(errorEnvelope, "Visit not found (`NOT_FOUND`)"),
 			409: json(
 				errorEnvelope,
-				"Visit not found, or the cancel failed (`VALIDATION_ERROR`)",
+				"The visit is already `Completed` or `Cancelled`, or the cancel failed (`VALIDATION_ERROR`)",
 			),
 		},
 	},
+	notAssigned("visit"),
 );
 
 authed("delete", "/jobs/{id}", "Jobs", "delete_jobs", {
@@ -429,10 +452,8 @@ authed("delete", "/jobs/{id}", "Jobs", "delete_jobs", {
 			envelope(z.object({ message: z.string(), id: z.uuid() })),
 			"Job deleted",
 		),
-		400: json(
-			errorEnvelope,
-			"Job not found, it is on an invoice, or the delete failed (`DELETE_ERROR`)",
-		),
+		400: json(errorEnvelope, "The job is on an invoice (`DELETE_ERROR`)"),
+		404: json(errorEnvelope, "Job not found (`NOT_FOUND`)"),
 	},
 });
 
@@ -454,6 +475,7 @@ authed(
 			),
 		},
 	},
+	notAssigned("visit"),
 );
 
 authed("delete", "/job-visits/{id}", "Visits", "delete_jobs", {
@@ -468,8 +490,9 @@ authed("delete", "/job-visits/{id}", "Visits", "delete_jobs", {
 		),
 		400: json(
 			errorEnvelope,
-			"Visit not found, it is on an invoice or has stock used against it, or the delete failed (`DELETE_ERROR`)",
+			"The visit is on an invoice or has stock used against it (`DELETE_ERROR`)",
 		),
+		404: json(errorEnvelope, "Visit not found (`NOT_FOUND`)"),
 	},
 });
 
@@ -506,8 +529,9 @@ const visitWithRelations = json(
 );
 const transitionRefused = json(
 	errorEnvelope,
-	"Visit not found, the caller isn't assigned to it, no technician is assigned, or the visit's status doesn't allow the action (`VALIDATION_ERROR`)",
+	"No technician is assigned, or the visit's status doesn't allow the action (`VALIDATION_ERROR`)",
 );
+const visitNotFound = json(errorEnvelope, "Visit not found (`NOT_FOUND`)");
 const pauseReason = z
 	.enum(["AwaitingMaterials", "EquipmentIssue", "Break", "Other"])
 	.optional()
@@ -553,8 +577,13 @@ for (const [action, from, to, extra] of [
 			summary,
 			description,
 			request: { params: visitIdParams },
-			responses: { 200: visitWithRelations, 409: transitionRefused },
+			responses: {
+				200: visitWithRelations,
+				404: visitNotFound,
+				409: transitionRefused,
+			},
 		},
+		notAssigned("visit"),
 	);
 }
 
@@ -603,9 +632,11 @@ authed(
 				errorEnvelope,
 				"`action` missing or unknown (`VALIDATION_ERROR`)",
 			),
+			404: visitNotFound,
 			409: transitionRefused,
 		},
 	},
+	notAssigned("visit"),
 );
 
 authed(
@@ -616,7 +647,7 @@ authed(
 	{
 		summary: "Assign a technician to a visit",
 		description:
-			"Requires `edit_jobs` or `update_visit_status`. Adds `tech_id` to the visit's technicians; already assigned is a no-op. The caller isn't checked against `tech_id`.",
+			"Requires `edit_jobs` or `update_visit_status`. Adds `tech_id` to the visit's technicians; already assigned is a no-op. Dispatchers can assign anyone. Technicians can only claim a visit for themselves, and only while it has no technician.",
 		request: {
 			params: visitIdParams,
 			body: {
@@ -629,80 +660,104 @@ authed(
 		},
 		responses: {
 			200: visitWithRelations,
-			400: json(
+			400: json(errorEnvelope, "`tech_id` missing (`INVALID_INPUT`)"),
+			404: json(
 				errorEnvelope,
-				"`tech_id` missing (`INVALID_INPUT`), or visit or technician not found, or the update failed (`VALIDATION_ERROR`)",
+				"Visit or technician not found (`NOT_FOUND`)",
+			),
+			409: json(
+				errorEnvelope,
+				"The visit is `Completed` or `Cancelled`, or a technician is claiming a visit that already has someone (`CONFLICT`)",
 			),
 		},
 	},
+	"A technician sent another technician's `tech_id` (`FORBIDDEN`)",
 );
 
-authed("post", "/job-visits/{id}/clock-in", "Visits", "check_in", {
-	summary: "Clock a technician in",
-	description:
-		"Requires the `check_in` permission. Opens a time entry for `tech_id`, who must be assigned to the visit. The visit must be `OnSite`, `InProgress` or `Paused`; `OnSite` and `Paused` move to `InProgress`. The caller isn't checked against `tech_id`.",
-	request: {
-		params: visitIdParams,
-		body: {
-			content: {
-				"application/json": { schema: z.object({ tech_id: z.uuid() }) },
-			},
-		},
-	},
-	responses: {
-		201: json(envelope(timeEntry.extend({ tech: idName })), "Clocked in"),
-		400: json(
-			errorEnvelope,
-			"`tech_id` missing (`INVALID_INPUT`); or visit not found, not ready (`VISIT_NOT_READY: …`), or the technician isn't assigned (`VALIDATION_ERROR`)",
-		),
-		409: json(
-			errorEnvelope,
-			"The technician is already clocked in somewhere (`ALREADY_CLOCKED_IN:<visit id>`), or their timesheet week is locked (`CONFLICT`)",
-		),
-	},
-});
-
-authed("post", "/job-visits/{id}/clock-out", "Visits", "check_out", {
-	summary: "Clock a technician out",
-	description:
-		"Requires the `check_out` permission. Closes `tech_id`'s open time entry on the visit and records the labor. When the last technician clocks out, the visit moves to `Paused`. The caller isn't checked against `tech_id`.",
-	request: {
-		params: visitIdParams,
-		body: {
-			content: {
-				"application/json": {
-					schema: z.object({
-						tech_id: z.uuid(),
-						pause_reason: pauseReason,
-					}),
+authed(
+	"post",
+	"/job-visits/{id}/clock-in",
+	"Visits",
+	"check_in",
+	{
+		summary: "Clock a technician in",
+		description:
+			"Requires the `check_in` permission. Opens a time entry for `tech_id`, who must be assigned to the visit. The visit must be `OnSite`, `InProgress` or `Paused`; `OnSite` and `Paused` move to `InProgress`. Technicians can only clock themselves in.",
+		request: {
+			params: visitIdParams,
+			body: {
+				content: {
+					"application/json": {
+						schema: z.object({ tech_id: z.uuid() }),
+					},
 				},
 			},
 		},
-	},
-	responses: {
-		200: json(
-			envelope(
-				z.object({
-					entry: timeEntry,
-					line_item: z
-						.record(z.string(), z.unknown())
-						.nullable()
-						.describe("The labor line written for this entry"),
-					is_last_tech: z.boolean(),
-					statusChangedToPaused: z.boolean(),
-				}),
+		responses: {
+			201: json(
+				envelope(timeEntry.extend({ tech: idName })),
+				"Clocked in",
 			),
-			"Clocked out",
-		),
-		400: json(
-			errorEnvelope,
-			"`tech_id` missing (`INVALID_INPUT`); or no open clock-in for this technician on this visit, or technician not found (`VALIDATION_ERROR`)",
-		),
+			400: json(
+				errorEnvelope,
+				"`tech_id` missing (`INVALID_INPUT`); or visit not found, not ready (`VISIT_NOT_READY: …`), or the technician isn't assigned (`VALIDATION_ERROR`)",
+			),
+			409: json(
+				errorEnvelope,
+				"The technician is already clocked in somewhere (`ALREADY_CLOCKED_IN:<visit id>`), or their timesheet week is locked (`CONFLICT`)",
+			),
+		},
 	},
-});
+	"A technician sent another technician's `tech_id`, or isn't assigned to the visit (`FORBIDDEN`)",
+);
 
-const partsUsedOff =
-	"The `vehicle_stock` module is off or not in the plan (`MODULE_DISABLED`, `MODULE_NOT_IN_PLAN`)";
+authed(
+	"post",
+	"/job-visits/{id}/clock-out",
+	"Visits",
+	"check_out",
+	{
+		summary: "Clock a technician out",
+		description:
+			"Requires the `check_out` permission. Closes `tech_id`'s open time entry on the visit and records the labor. When the last technician clocks out, the visit moves to `Paused`. Technicians can only clock themselves out.",
+		request: {
+			params: visitIdParams,
+			body: {
+				content: {
+					"application/json": {
+						schema: z.object({
+							tech_id: z.uuid(),
+							pause_reason: pauseReason,
+						}),
+					},
+				},
+			},
+		},
+		responses: {
+			200: json(
+				envelope(
+					z.object({
+						entry: timeEntry,
+						line_item: z
+							.record(z.string(), z.unknown())
+							.nullable()
+							.describe("The labor line written for this entry"),
+						is_last_tech: z.boolean(),
+						statusChangedToPaused: z.boolean(),
+					}),
+				),
+				"Clocked out",
+			),
+			400: json(
+				errorEnvelope,
+				"`tech_id` missing (`INVALID_INPUT`); or no open clock-in for this technician on this visit, or technician not found (`VALIDATION_ERROR`)",
+			),
+		},
+	},
+	"A technician sent another technician's `tech_id`, or isn't assigned to the visit (`FORBIDDEN`)",
+);
+
+const partsUsedOffOrNotAssigned = `The \`vehicle_stock\` module is off or not in the plan (\`MODULE_DISABLED\`, \`MODULE_NOT_IN_PLAN\`); ${notAssigned("visit")}`;
 
 authed(
 	"post",
@@ -745,15 +800,15 @@ authed(
 			),
 			400: json(
 				errorEnvelope,
-				"Validation failed, or the update failed (`VALIDATION_ERROR`)",
+				"Validation failed, the visit is Completed, Cancelled or invoiced, or the update failed (`VALIDATION_ERROR`)",
 			),
 			404: json(
 				errorEnvelope,
-				"Stock item or visit not found (`NOT_FOUND`)",
+				"Stock item, visit or technician not found (`NOT_FOUND`)",
 			),
 		},
 	},
-	partsUsedOff,
+	partsUsedOffOrNotAssigned,
 );
 
 authed(
@@ -795,7 +850,7 @@ authed(
 			),
 		},
 	},
-	partsUsedOff,
+	partsUsedOffOrNotAssigned,
 );
 
 authed(
@@ -959,6 +1014,7 @@ authed(
 			),
 		},
 	},
+	notAssigned("job"),
 );
 
 authed(
@@ -978,6 +1034,7 @@ authed(
 			),
 		},
 	},
+	notAssigned("job"),
 );
 
 authed(
@@ -997,6 +1054,7 @@ authed(
 			),
 		},
 	},
+	notAssigned("visit"),
 );
 
 authed(
@@ -1025,23 +1083,22 @@ authed(
 			200: json(envelope(jobNote), "Note updated"),
 			400: json(
 				errorEnvelope,
-				"Validation failed, note or visit not found, the visit isn't on this job, or the update failed (`VALIDATION_ERROR`)",
+				"Validation failed, the visit isn't on this job, or the update failed (`VALIDATION_ERROR`)",
 			),
+			404: json(errorEnvelope, "Note or visit not found (`NOT_FOUND`)"),
 		},
 	},
+	notAssigned("note's job"),
 );
 
 authed("delete", "/jobs/{jobId}/notes/{noteId}", "Jobs", "edit_jobs", {
 	summary: "Delete a job note",
 	description:
-		"Requires the `edit_jobs` permission. Any user with the permission can delete any note. Its photos are removed from the note, but the image files stay in storage.",
+		"Requires the `edit_jobs` permission. Any user with the permission can delete any note. Its photos are deleted from storage too.",
 	request: { params: jobNoteParams },
 	responses: {
 		200: json(envelope(z.object({ message: z.string() })), "Note deleted"),
-		400: json(
-			errorEnvelope,
-			"Note not found on this job, or the delete failed (`DELETE_ERROR`)",
-		),
+		404: json(errorEnvelope, "Note not found on this job (`NOT_FOUND`)"),
 	},
 });
 

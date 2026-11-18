@@ -432,7 +432,7 @@ authed("delete", "/requests/{id}", "Requests", "delete_requests", {
 		200: deletedId,
 		400: json(
 			errorEnvelope,
-			"Request has quotes or was converted to a job, or the delete failed (`DELETE_ERROR`)",
+			"Request has quotes or was converted to a job (`DELETE_ERROR`)",
 		),
 		404: json(errorEnvelope, "Request not found (`DELETE_ERROR`)"),
 	},
@@ -473,7 +473,7 @@ authed(
 			200: deletedId,
 			400: json(
 				errorEnvelope,
-				"Quote was converted to a job or is part of a dispute, or the delete failed (`DELETE_ERROR`)",
+				"Quote was converted to a job or is part of a dispute (`DELETE_ERROR`)",
 			),
 			404: json(errorEnvelope, "Quote not found (`DELETE_ERROR`)"),
 		},
@@ -539,10 +539,7 @@ authed(
 		},
 		responses: {
 			200: json(envelope(requestNoteRow), "Note updated"),
-			400: json(
-				errorEnvelope,
-				"Validation failed, or the update failed (`VALIDATION_ERROR`)",
-			),
+			400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Note not found on this request (`VALIDATION_ERROR`)",
@@ -566,7 +563,6 @@ authed(
 				envelope(z.object({ message: z.string() })),
 				"Note deleted",
 			),
-			400: json(errorEnvelope, "The delete failed (`DELETE_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Note not found on this request (`DELETE_ERROR`)",
@@ -886,7 +882,7 @@ authed(
 			201: json(envelope(quoteLineItem), "Line item added"),
 			400: json(
 				errorEnvelope,
-				'Validation failed, the quote is locked (status or converted to a job), or the insert failed, including an unknown `inventory_item_id` or `tax_group_id` (`VALIDATION_ERROR`, message "Internal server error")',
+				"Validation failed, the quote is locked (status or converted to a job), or `inventory_item_id` or `tax_group_id` isn't in the caller's organization (`VALIDATION_ERROR`)",
 			),
 			404: json(errorEnvelope, "Quote not found (`VALIDATION_ERROR`)"),
 		},
@@ -919,7 +915,7 @@ authed(
 			200: json(envelope(quoteLineItem), "Line item updated"),
 			400: json(
 				errorEnvelope,
-				'Validation failed, the quote is locked (status or converted to a job), or the update failed, including an unknown `inventory_item_id` or `tax_group_id` (`VALIDATION_ERROR`, message "Internal server error")',
+				"Validation failed, the quote is locked (status or converted to a job), or `inventory_item_id` or `tax_group_id` isn't in the caller's organization (`VALIDATION_ERROR`)",
 			),
 			404: json(
 				errorEnvelope,
@@ -947,7 +943,7 @@ authed(
 			),
 			400: json(
 				errorEnvelope,
-				"The quote is locked (status or converted to a job), or the delete failed (`DELETE_ERROR`)",
+				"The quote is locked by its status, or was converted to a job (`DELETE_ERROR`)",
 			),
 			404: json(
 				errorEnvelope,
@@ -1021,10 +1017,7 @@ authed(
 		},
 		responses: {
 			200: json(envelope(quoteNoteRow), "Note updated"),
-			400: json(
-				errorEnvelope,
-				"Validation failed, or the update failed (`VALIDATION_ERROR`)",
-			),
+			400: json(errorEnvelope, "Validation failed (`VALIDATION_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Note not found on this quote (`VALIDATION_ERROR`)",
@@ -1049,7 +1042,6 @@ authed(
 				envelope(z.object({ message: z.string() })),
 				"Note deleted",
 			),
-			400: json(errorEnvelope, "The delete failed (`DELETE_ERROR`)"),
 			404: json(
 				errorEnvelope,
 				"Note not found on this quote (`DELETE_ERROR`)",
