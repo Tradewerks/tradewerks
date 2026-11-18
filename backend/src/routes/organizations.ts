@@ -11,6 +11,8 @@ import { BUSINESS_TYPES } from "../lib/entitlements/businessTypes.js";
 import { z } from "zod";
 import { orgInviteLimiter, signupLimiter } from "../platform/rateLimit.js";
 import { acceptOrgInvite, previewOrgInvite } from "../services/orgAdminInvite.js";
+import { SIGNUP_REGION_MESSAGE, signupRegion } from "../lib/signupRegion.js";
+import { log } from "../services/appLogger.js";
 
 const router = Router();
 
@@ -20,7 +22,14 @@ router.get("/business-types", (_req, res) => {
 
 router.post("/register", signupLimiter, async (req, res, next) => {
 	try {
-		const result = await registerOrganization(req.body);
+		const region = signupRegion(req);
+		if (!region.allowed) {
+			log.info({ evt: "signup.region_blocked", country: region.country }, "Signup refused outside the US");
+			return res
+				.status(403)
+				.json(createErrorResponse(ErrorCodes.SIGNUP_REGION_UNAVAILABLE, SIGNUP_REGION_MESSAGE));
+		}
+		const result = await registerOrganization(req.body, region.country);
 
 		if (result.err) {
 			const isDuplicate = result.err.toLowerCase().includes("already exists");

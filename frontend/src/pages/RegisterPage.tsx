@@ -4,8 +4,14 @@ import { isAxiosError } from "axios";
 import { registerOrganization } from "../api/organizations";
 import { useBusinessTypes } from "../hooks/useBusinessTypes";
 import { passwordProblem } from "../lib/passwordRules";
+import { MapPin } from "lucide-react";
 
-type Status = "input" | "loading" | "success" | "error" | "paused";
+type Status = "input" | "loading" | "success" | "error" | "paused" | "region";
+
+// Shown on the form and again if the server refuses the signup's location.
+export const US_ONLY_NOTICE =
+	"TradeWerks is available to businesses located in the United States, including Puerto Rico and other U.S. territories.";
+const SALES_EMAIL = "sales@tradewerks.io";
 
 export default function RegisterPage() {
 	const navigate = useNavigate();
@@ -23,6 +29,7 @@ export default function RegisterPage() {
 	const [password, setPassword] = useState("");
 	const [confirmPassword, setConfirmPassword] = useState("");
 	const [businessType, setBusinessType] = useState("");
+	const [usConfirmed, setUsConfirmed] = useState(false);
 	const types = useBusinessTypes();
 
 	const validate = (): string | null => {
@@ -31,6 +38,7 @@ export default function RegisterPage() {
 		if (!businessType) return "Choose what kind of business you are.";
 		const pw = passwordProblem(password, confirmPassword);
 		if (pw) return pw;
+		if (!usConfirmed) return "Confirm that your business is located in the United States.";
 		return null;
 	};
 
@@ -52,11 +60,16 @@ export default function RegisterPage() {
 				org_address: orgAddress.trim() || undefined,
 				org_website: orgWebsite.trim() || undefined,
 				org_timezone: orgTimezone || undefined,
+				us_business_confirmed: true,
 			});
 			setStatus("success");
 		} catch (e) {
 			if (isAxiosError(e) && e.response?.data?.error?.code === "SIGNUPS_PAUSED") {
 				setStatus("paused");
+				return;
+			}
+			if (isAxiosError(e) && e.response?.data?.error?.code === "SIGNUP_REGION_UNAVAILABLE") {
+				setStatus("region");
 				return;
 			}
 			setErrorMessage(
@@ -107,6 +120,10 @@ export default function RegisterPage() {
 							<h1 className="text-2xl font-semibold text-zinc-900">Create your account</h1>
 							<p className="text-zinc-500 text-sm mt-1">Set up your organization and admin account.</p>
 						</div>
+						<p className="flex items-start gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+							<MapPin size={14} className="mt-px shrink-0 text-zinc-400" aria-hidden />
+							{US_ONLY_NOTICE}
+						</p>
 
 						<p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider pt-2">Organization</p>
 						{field("Organization Name", "text", orgName, setOrgName, "e.g. Acme HVAC")}
@@ -162,6 +179,16 @@ export default function RegisterPage() {
 						{field("Password", "password", password, setPassword, "Min. 8 characters")}
 						{field("Confirm Password", "password", confirmPassword, setConfirmPassword, "Repeat password")}
 
+						<label className="flex items-start gap-2 pt-2 text-sm text-zinc-700 cursor-pointer">
+							<input
+								type="checkbox"
+								checked={usConfirmed}
+								onChange={(e) => { setUsConfirmed(e.target.checked); setErrorMessage(""); }}
+								className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+							/>
+							<span>My business is located in the United States or a U.S. territory.</span>
+						</label>
+
 						{errorMessage && <p className="text-red-600 text-sm">{errorMessage}</p>}
 
 						<button
@@ -211,6 +238,29 @@ export default function RegisterPage() {
 						<h1 className="text-2xl font-semibold text-zinc-900">Signups are paused</h1>
 						<p className="text-sm text-zinc-600">Signups are paused. Contact TradeWerks.</p>
 						<Link to="/login" className="text-sm text-blue-600 hover:underline">Back to sign in</Link>
+					</div>
+				)}
+
+				{status === "region" && (
+					<div className="text-center py-6 space-y-4">
+						<div className="w-14 h-14 bg-zinc-100 rounded-full flex items-center justify-center mx-auto">
+							<MapPin size={26} className="text-zinc-500" aria-hidden />
+						</div>
+						<h2 className="text-xl font-semibold text-zinc-900">TradeWerks is only available in the U.S.</h2>
+						<p className="text-sm text-zinc-600">
+							{US_ONLY_NOTICE} This signup looks like it's coming from outside the U.S., so we didn't create an account.
+						</p>
+						<p className="text-sm text-zinc-600">
+							If your business is in the U.S. and you're traveling or on a VPN, turn the VPN off or try again from your business's network. Still stuck? Email{" "}
+							<a href={`mailto:${SALES_EMAIL}`} className="text-blue-600 hover:underline">{SALES_EMAIL}</a>.
+						</p>
+						<button
+							onClick={() => { setStatus("input"); setErrorMessage(""); }}
+							className="w-full bg-primary hover:bg-primary-hover text-on-primary font-medium py-2 rounded-lg transition-colors"
+						>
+							Try Again
+						</button>
+						<Link to="/login" className="block text-sm text-blue-600 hover:underline">Back to sign in</Link>
 					</div>
 				)}
 

@@ -22,6 +22,8 @@ export interface RegisterOrganizationInput {
     org_website?: string;
     org_timezone?: string;
     org_tax_rate?: number;
+    // Self-serve signup is US-only; the server refuses the request without it.
+    us_business_confirmed: true;
 }
 
 export interface RegisterOrganizationResponse {
