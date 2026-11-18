@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { enroll, stopEnrollment, createSequence } from "../followupsController.js";
+import { enroll, stopEnrollment, createSequence, deleteSequence } from "../followupsController.js";
 
 const { scoped } = vi.hoisted(() => ({
 	scoped: {
-		followup_sequence: { findFirst: vi.fn() },
+		followup_sequence: { findFirst: vi.fn(), delete: vi.fn() },
 		client: { findFirst: vi.fn() },
 		followup_enrollment: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
 		followup_step: { createMany: vi.fn().mockResolvedValue({}), findMany: vi.fn().mockResolvedValue([]) },
@@ -35,6 +35,20 @@ function seq(over: Record<string, unknown> = {}) {
 		...over,
 	};
 }
+
+describe("deleteSequence", () => {
+	it("refuses a sequence with enrollments, keeping their send history", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue({ _count: { enrollments: 1 } });
+		await expect(deleteSequence("seq1", "org1")).rejects.toMatchObject({ status: 409 });
+		expect(scoped.followup_sequence.delete).not.toHaveBeenCalled();
+	});
+
+	it("deletes a sequence that was never used", async () => {
+		scoped.followup_sequence.findFirst.mockResolvedValue({ _count: { enrollments: 0 } });
+		await expect(deleteSequence("seq1", "org1")).resolves.toEqual({ id: "seq1" });
+		expect(scoped.followup_sequence.delete).toHaveBeenCalledWith({ where: { id: "seq1" } });
+	});
+});
 
 describe("enroll", () => {
 	it("rejects an inactive sequence", async () => {

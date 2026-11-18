@@ -132,8 +132,16 @@ export async function updateSequence(id: string, input: UpdateSequenceInput, org
 
 export async function deleteSequence(id: string, orgId: string) {
 	const sdb = getScopedDb(orgId);
-	const existing = await sdb.followup_sequence.findFirst({ where: { id } });
+	const existing = await sdb.followup_sequence.findFirst({
+		where: { id },
+		select: { _count: { select: { enrollments: true } } },
+	});
 	if (!existing) throw notFound("Sequence not found");
+	// Enrollments cascade with their send records, the only record of what was emailed.
+	if (existing._count.enrollments > 0)
+		throw conflict(
+			"This sequence has enrollments, so it can't be deleted. Deactivate it instead.",
+		);
 
 	await sdb.followup_sequence.delete({ where: { id } });
 	return { id };

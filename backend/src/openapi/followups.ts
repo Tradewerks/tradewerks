@@ -339,11 +339,15 @@ authed(
 	{
 		summary: "Delete a follow-up sequence",
 		description:
-			"Requires the `manage_followups` permission. Deletes it with its steps and every enrollment, active or finished.",
+			"Requires the `manage_followups` permission. Deletes it with its steps. Only sequences that were never used can be deleted; deactivate one with enrollments instead.",
 		request: { params: seqParams },
 		responses: {
 			200: json(envelope(z.object({ id: z.uuid() })), "Deleted"),
 			404: seqNotFound,
+			409: json(
+				errorEnvelope,
+				"The sequence has enrollments (`CONFLICT`)",
+			),
 		},
 	},
 	followupsOff,
