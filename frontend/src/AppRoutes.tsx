@@ -87,6 +87,7 @@ const VerifyEmailPage = lazy(() => import("./pages/dispatch/VerifyEmailPage"));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const AccountDeletedPage = lazy(() => import("./pages/AccountDeletedPage"));
 const MyProfilePage = lazy(() => import("./pages/MyProfilePage"));
 const QBCallbackPage = lazy(() => import("./pages/QBCallbackPage"));
 const SSOCompletePage = lazy(() => import("./pages/SSOCompletePage"));
@@ -150,6 +151,7 @@ export default function AppRoutes() {
 			<Routes>
 				<Route path="/login" element={<LoginPage />} />
 			<Route path="/register" element={<RegisterPage />} />
+			<Route path="/account-deleted" element={<AccountDeletedPage />} />
 			<Route path="/verify-email" element={<VerifyEmailPage />} />
 			<Route path="/reset-password" element={<ResetPasswordPage />} />
 			<Route path="/accept-invite" element={<AcceptInvitePage />} />

@@ -120,6 +120,7 @@ export interface CallOptions {
 	query?: Record<string, unknown>;
 	body?: unknown;
 	headers?: Record<string, string>;
+	ip?: string;
 }
 
 export interface CallResult {
@@ -139,6 +140,7 @@ export function makeReq(opts: CallOptions = {}): Request {
 		query: opts.query ?? {},
 		body: opts.body ?? {},
 		headers: opts.headers ?? {},
+		ip: opts.ip,
 		method: "GET",
 		path: "/",
 	} as unknown as Request;

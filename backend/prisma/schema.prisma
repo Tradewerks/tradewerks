@@ -464,6 +464,11 @@ model organization {
   // signer before anything moves. Null disables the second sign-off entirely.
   field_purchase_second_signoff_threshold Decimal? @db.Decimal(10, 2)
   mfa_required        Boolean @default(false) // Require MFA for all users in this org
+  // Set when the admin deletes the organization. Every user is locked out at that
+  // moment; services/orgPurge.ts then removes the org and everything it owns,
+  // retrying on a timer until it succeeds.
+  deletion_requested_at DateTime?
+  deletion_attempts     Int     @default(0)
   entitlement         org_entitlement?
 
   logo_key String?
@@ -2995,6 +3000,10 @@ model technician {
   cost_rate   Decimal?          @db.Decimal(10, 2)
   last_login  DateTime?
   deactivated_at DateTime? // null = active; counts as a technician seat
+  // Set when the person deleted their own account. The row stays, scrubbed of
+  // personal data, so the org's visits, time and pay history keep their owner.
+  // A deleted account is also deactivated and can never be reactivated.
+  deleted_at     DateTime?
   password_reset_token       String?   @unique
   password_reset_token_expires_at DateTime?
   theme       String            @default("system")
@@ -3075,6 +3084,8 @@ model dispatcher {
   description String
   last_login  DateTime?
   deactivated_at DateTime? // null = active; counts as a dispatcher seat
+  // Set when the person deleted their own account; see technician.deleted_at.
+  deleted_at     DateTime?
   email_verified_at         DateTime?
   email_verification_token  String?   @unique
   password_reset_token       String?   @unique
@@ -3684,6 +3695,18 @@ model sso_handoff {
   role        String
   expires_at  DateTime 
   created_at  DateTime  @default(now())
+}
+
+// Stored files whose rows are already gone (an organization purge). Recorded in
+// the purge's own transaction, so a crash between the commit and the storage call
+// cannot leave a deleted customer's files behind; the purge sweeper drains it.
+model storage_purge {
+  id         String   @id @default(uuid())
+  url        String
+  attempts   Int      @default(0)
+  created_at DateTime @default(now())
+
+  @@index([created_at])
 }
 
 // ============================================================================

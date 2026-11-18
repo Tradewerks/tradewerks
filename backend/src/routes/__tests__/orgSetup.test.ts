@@ -30,6 +30,7 @@ import { callRoute } from "./harness.js";
 import { db } from "../../db.js";
 import { hashInviteToken } from "../../lib/inviteToken.js";
 import { resetPassword } from "../../controllers/authenticationController.js";
+import { logActivity } from "../../services/logger.js";
 
 const mockDb = db as any;
 beforeEach(() => vi.clearAllMocks());
@@ -49,6 +50,7 @@ const REGISTER = {
 	admin_email: "Pat@Acme.test",
 	admin_password: "Sup3r$ecret",
 	business_type: "plumbing",
+	us_business_confirmed: true,
 };
 
 describe("POST /organizations/register", () => {
@@ -81,6 +83,52 @@ describe("POST /organizations/register", () => {
 		expect(ent.trial_plan_version_id).toBeUndefined();
 		expect(ent.module_choices.followups).toBe(true);
 		expect(mockDb.dispatcher.create.mock.calls[0][0].data.email).toBe("pat@acme.test");
+	});
+
+	it("refuses a signup from outside the US with 403 SIGNUP_REGION_UNAVAILABLE, before touching the DB", async () => {
+		const r = await callRoute(organizationsRouter, "post", "/register", { body: REGISTER, ip: "81.2.69.142" });
+		expect(r.status).toBe(403);
+		expect(r.body.error).toEqual({
+			code: "SIGNUP_REGION_UNAVAILABLE",
+			message: "TradeWerks is currently available only to businesses located in the United States.",
+		});
+		expect(mockDb.dispatcher.findUnique).not.toHaveBeenCalled();
+		expect(mockDb.organization.create).not.toHaveBeenCalled();
+	});
+
+	it("judges the visitor behind the load balancer by the first X-Forwarded-For entry", async () => {
+		const r = await callRoute(organizationsRouter, "post", "/register", {
+			body: REGISTER,
+			ip: "10.0.4.7",
+			headers: { "x-forwarded-for": "81.2.69.142, 10.0.0.2" },
+		});
+		expect(r.status).toBe(403);
+		expect(r.body.error.code).toBe("SIGNUP_REGION_UNAVAILABLE");
+		expect(mockDb.organization.create).not.toHaveBeenCalled();
+	});
+
+	it("records the signup country, never the IP, on the organization's first log entry", async () => {
+		const r = await callRoute(organizationsRouter, "post", "/register", { body: REGISTER, ip: "::ffff:8.8.8.8" });
+		expect(r.status).toBe(201);
+		const entry = vi.mocked(logActivity).mock.calls.map((c) => c[0]).find((e) => e.event_type === "organization.created");
+		expect(entry?.changes).toEqual({
+			signup_country: { old: null, new: "US" },
+			us_business_confirmed: { old: null, new: true },
+		});
+		expect(JSON.stringify(entry)).not.toContain("8.8.8.8");
+	});
+
+	it("lets Puerto Rico and the other territories sign up", async () => {
+		const r = await callRoute(organizationsRouter, "post", "/register", { body: REGISTER, ip: "66.50.0.1" });
+		expect(r.status).toBe(201);
+	});
+
+	it("requires the business to be confirmed as US-based", async () => {
+		const { us_business_confirmed: _, ...unconfirmed } = REGISTER;
+		const r = await callRoute(organizationsRouter, "post", "/register", { body: unconfirmed });
+		expect(r.status).toBe(400);
+		expect(r.body.error.message).toMatch(/located in the United States/);
+		expect(mockDb.organization.create).not.toHaveBeenCalled();
 	});
 
 	it("refuses with 503 SIGNUPS_PAUSED when no tier is the signup default", async () => {

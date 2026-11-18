@@ -12,8 +12,9 @@ import PermissionsCard from "../components/profile/PermissionsCard";
 import MFACard from "../components/mfa/MFACard"
 import UserActivityCard from "../components/profile/UserActivityCard";
 import NotificationPreferenceCard from "../components/profile/NotificationPreferenceCard";
+import DeleteAccountCard from "../components/profile/DeleteAccountCard";
 
-type ProfileTab = "profile" | "security" | "preferences" | "permissions" | "activity";
+type ProfileTab = "profile" | "security" | "preferences" | "permissions" | "activity" | "account";
 
 const STORAGE_KEY = "myProfilePage_activeTab";
 
@@ -23,6 +24,7 @@ const TABS: { id: ProfileTab; label: string }[] = [
 	{ id: "preferences", label: "Preferences" },
 	{ id: "permissions", label: "Permissions" },
 	{ id: "activity", label: "Activity"},
+	{ id: "account", label: "Account" },
 ];
 
 export default function MyProfilePage() {
@@ -161,6 +163,11 @@ export default function MyProfilePage() {
 			)}
 			{activeTab === "activity" && (
 				<UserActivityCard />
+			)}
+			{activeTab === "account" && (
+				<div role="tabpanel" id="tabpanel-account" aria-labelledby="tab-account">
+					<DeleteAccountCard />
+				</div>
 			)}
 		</div>
 	);
