@@ -72,6 +72,9 @@ export const ErrorCodes = {
 	// Signup from outside the United States. Its own code so the register page can
 	// explain the restriction instead of showing a generic failure.
 	SIGNUP_REGION_UNAVAILABLE: 'SIGNUP_REGION_UNAVAILABLE',
+	// Account deletion refused until the person finishes something (an open visit,
+	// a running shift). The message says what; the UI shows it next to the button.
+	ACCOUNT_DELETION_BLOCKED: 'ACCOUNT_DELETION_BLOCKED',
 	// QuickBooks AST taxed the draft differently from our estimate; finalizing waits on the
 	// existing tax-review acknowledgment, which the UI already offers.
 	QB_TAX_REVIEW: 'QB_TAX_REVIEW',

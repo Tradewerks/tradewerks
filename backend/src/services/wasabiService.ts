@@ -2,6 +2,7 @@ import {
 	S3Client,
 	PutObjectCommand,
 	DeleteObjectCommand,
+	DeleteObjectsCommand,
 	GetObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -155,4 +156,42 @@ export const deleteFile = async (url: string): Promise<void> => {
 			Key: key,
 		}),
 	);
+};
+
+export const storageConfigured = (): boolean => !!(WASABI_ACCESS && WASABI_SECRET && WASABI_BUCKET);
+
+// S3 multi-delete takes at most 1000 keys per request.
+const DELETE_BATCH = 1000;
+
+/**
+ * Deletes many objects with as few requests as possible. Returns the URLs that
+ * could not be deleted; a missing object counts as deleted.
+ */
+export const deleteFiles = async (urls: readonly string[]): Promise<Set<string>> => {
+	const failed = new Set<string>();
+	const byKey = new Map<string, string[]>();
+	for (const url of urls) {
+		const key = keyFromUrl(url);
+		if (!key) continue;
+		byKey.set(key, [...(byKey.get(key) ?? []), url]);
+	}
+	const keys = [...byKey.keys()];
+	for (let i = 0; i < keys.length; i += DELETE_BATCH) {
+		const batch = keys.slice(i, i + DELETE_BATCH);
+		try {
+			const out = await getClient().send(
+				new DeleteObjectsCommand({
+					Bucket: WASABI_BUCKET,
+					Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
+				}),
+			);
+			for (const e of out.Errors ?? []) {
+				if (e.Code === "NoSuchKey" || !e.Key) continue;
+				for (const url of byKey.get(e.Key) ?? []) failed.add(url);
+			}
+		} catch {
+			for (const key of batch) for (const url of byKey.get(key) ?? []) failed.add(url);
+		}
+	}
+	return failed;
 };

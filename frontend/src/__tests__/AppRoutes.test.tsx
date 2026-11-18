@@ -64,6 +64,7 @@ const ROUTES: RouteCase[] = [
 	// public
 	{ path: "/login", url: "/login", page: "LoginPage" },
 	{ path: "/register", url: "/register", page: "RegisterPage" },
+	{ path: "/account-deleted", url: "/account-deleted", page: "AccountDeletedPage" },
 	{ path: "/verify-email", url: "/verify-email", page: "VerifyEmailPage" },
 	{ path: "/reset-password", url: "/reset-password", page: "ResetPasswordPage" },
 	{ path: "/accept-invite", url: "/accept-invite", page: "AcceptInvitePage" },

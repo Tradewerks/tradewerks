@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getBuffer, uploadFile } from "../wasabiService.js";
@@ -34,7 +34,24 @@ export async function storeImportSource(
 	return { url: `local-import://${key}`, key };
 }
 
+const LOCAL_PREFIX = "local-import://";
+
+export const isLocalImportSource = (url: string): boolean => url.startsWith(LOCAL_PREFIX);
+
 export async function loadImportSource(url: string, key: string): Promise<Buffer> {
-	if (url.startsWith("local-import://")) return readFile(path.join(localRoot(), key));
+	if (isLocalImportSource(url)) return readFile(path.join(localRoot(), key));
 	return (await getBuffer(url)).buffer;
+}
+
+/** Removes a locally stored source; one that is already gone counts as removed. */
+export async function deleteImportSource(url: string): Promise<void> {
+	if (!isLocalImportSource(url)) throw new Error("not a local import source");
+	// The key is a generated file name; refuse anything that could leave the root.
+	const key = url.slice(LOCAL_PREFIX.length);
+	if (!key || key !== path.basename(key)) throw new Error("invalid local import source");
+	try {
+		await unlink(path.join(localRoot(), key));
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+	}
 }

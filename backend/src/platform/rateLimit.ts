@@ -39,3 +39,14 @@ export const orgInviteLimiter = rateLimit({
 	legacyHeaders: false,
 	handler: tooMany("Too many attempts. Try again in 15 minutes."),
 });
+
+// Account deletion takes the password; only wrong ones count against the window.
+export const accountDeletionLimiter = rateLimit({
+	windowMs: 15 * 60_000,
+	limit: 5,
+	keyGenerator: (req) => req.user?.uid ?? "anonymous",
+	skipSuccessfulRequests: true,
+	standardHeaders: "draft-8",
+	legacyHeaders: false,
+	handler: tooMany("Too many attempts. Try again in 15 minutes."),
+});
