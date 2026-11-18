@@ -401,6 +401,20 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				throw new Error("Client not found");
 			}
 
+			// Scoped creates don't check foreign parents; resolve the plan in-org first.
+			if (parsed.recurring_plan_id) {
+				const plan = await tx.recurring_plan.findFirst({
+					where: { id: parsed.recurring_plan_id },
+					select: { id: true, client_id: true },
+				});
+				if (!plan) throw new DocumentRuleError("Recurring plan not found");
+				if (plan.client_id !== parsed.client_id) {
+					throw new DocumentRuleError(
+						"This recurring plan belongs to a different client.",
+					);
+				}
+			}
+
 			if (parsed.tech_ids && parsed.tech_ids.length > 0) {
 				const existingTechs = await tx.technician.findMany({
 					where: { id: { in: parsed.tech_ids }, deactivated_at: null },
