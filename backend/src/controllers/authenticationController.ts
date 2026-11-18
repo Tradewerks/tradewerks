@@ -1,4 +1,3 @@
-import { getEntitlements } from "../services/entitlementService.js";
 import { z, ZodError } from "zod";
 import { db } from "../db.js";
 import bcrypt from "bcryptjs";
@@ -7,6 +6,7 @@ import { createErrorResponse, ErrorCodes } from "../types/responses.js";
 import {
 	generateAccessToken,
 	generateRefreshToken,
+	setRefreshToken,
 	verifyToken,
 	verifyRefreshToken,
 	generateOTPToken,
@@ -23,6 +23,7 @@ import {
 import crypto from "crypto";
 import { log } from "../services/appLogger.js";
 import { logActivity } from "../services/logger.js";
+import { mfaChallengeFor } from "../services/mfaService.js";
 
 interface AuthResponse {
 	token: string;
@@ -90,46 +91,11 @@ export const login = async (res: Response, email: string, password: string) => {
 			return await issueAuthTokens(res, user.id, effectiveRole);
 		}
 
-		// MFA takes precedence over email OTP 
-		const mfa_cred = await db.mfa_credential.findFirst({
-			where: {
-				user_id: user.id,
-				role: effectiveRole,
-			},
-		});
-
-		if (mfa_cred?.enabled) {
-			return {
-				data: {
-					challenge: "totp",
-					pendingToken: generatePendingToken(user, effectiveRole, "pending_totp"),
-				},
-			};
-		}
-
-		// Org enforces MFA but this user hasn't enrolled → force 
-		// enrollment at login before any session is issued
-		if (user.organization_id) {
-			const org = await db.organization.findUnique({
-				where: { id: user.organization_id },
-				select: { mfa_required: true },
-			});
-			// Enforced two-step login belongs to Security+; without it the flag is inert.
-			// A failed lookup keeps enforcing: an outage must not relax a login control.
-			const securityPlusOff =
-				!!org?.mfa_required &&
-				(await getEntitlements(user.organization_id)
-					.then((e) => e.modules.security_plus !== "on")
-					.catch(() => false));
-			if (org?.mfa_required && !securityPlusOff) {
-				return {
-					data: {
-						challenge: "enroll",
-						pendingToken: generatePendingToken(user, effectiveRole, "pending_mfa_enroll"),
-					},
-				};
-			}
-		}
+		const challenge = await mfaChallengeFor(user.id, effectiveRole, user.organization_id);
+		if (challenge === "totp") 
+			return { data: { challenge, pendingToken: generatePendingToken(user, effectiveRole, "pending_totp") } };
+		if (challenge === "enroll") 
+			return { data: { challenge, pendingToken: generatePendingToken(user, effectiveRole, "pending_mfa_enroll") } };
 
 		// OTP disabled: bypass the verification step and issue tokens directly
 		if (OTP_DISABLED) {
@@ -265,14 +231,7 @@ export const issueAuthTokens = async (
 		}
 
 		const accessToken = generateAccessToken(user, role, orgTimezone, rolePermissions);
-		const refreshToken = await generateRefreshToken(user, role);
-		// set refresh token in httpOnly cookie
-		res.cookie("refreshToken", refreshToken, {
-			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
-			sameSite: "strict",
-			maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-		});
+		setRefreshToken(res, await generateRefreshToken(user, role));
 
 		await logActivity({
 			event_type: forcePasswordReset ? "auth.first_login" : "auth.login",
@@ -407,7 +366,7 @@ export const requestPasswordReset = async (email: string, role: string) => {
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -502,6 +461,8 @@ export const resetPassword = async (
 					data: { ...data, invite_token_hash: null, invite_expires_at: null },
 				});
 			}
+
+			await tx.jwt_refresh_token.deleteMany({ where: { userId: user.id }});
 		});
 		await logActivity({
 			event_type: "auth.password_reset",
@@ -523,6 +484,6 @@ export const resetPassword = async (
 			};
 		}
 		log.error({ err: e }, "Password reset error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

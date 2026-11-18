@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { createErrorResponse, ErrorCodes } from "../types/responses.js";
 import { verifyOTPToken } from "./jwtService.js";
 import { log } from "./appLogger.js";
+import crypto from "crypto";
 
 // ============================================================================
 // OTP TEMPORARILY DISABLED — needed for test runs while email delivery is
@@ -16,7 +17,7 @@ export const createOTP = async (userid: string, role: string) => {
 		log.info({ userid, role }, "[OTP DISABLED] Skipping OTP creation");
 		return "000000";
 	}
-	const otp = Math.floor(100000 + Math.random() * 900000).toString();
+	const otp = crypto.randomInt(100000, 1000000).toString();
 	// store otp in db with expiration time when db is set up
 	await db.otp_verification.deleteMany({ where: { userId: userid } });
 	await db.otp_verification.create({

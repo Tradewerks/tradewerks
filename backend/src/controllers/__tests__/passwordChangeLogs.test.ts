@@ -15,6 +15,7 @@ vi.mock("../../services/logger.js", () => ({
 	buildChanges: vi.fn(() => ({})),
 }));
 vi.mock("../../services/emailService.js", () => ({ sendEmailVerificationEmail: vi.fn() }));
+vi.mock("../../services/jwtService.js", () => ({ generateRefreshToken: vi.fn(async () => "new-rt") }));
 vi.mock("../../services/mfaService.js", () => ({
 	getMfaEnabledUserIds: vi.fn(async () => new Set<string>()),
 	isMfaEnabled: vi.fn(async () => false),
@@ -47,6 +48,8 @@ describe("change-password flows never write hashes into log.changes (review B3 /
 		);
 
 		expect(result.err).toBe("");
+		expect(result.data).toEqual({ refreshToken: "new-rt" });
+		expect(fake.jwt_refresh_token.deleteMany).toHaveBeenCalledWith({ where: { userId: "disp-1" } });
 		expect(fake.dispatcher.findFirst.mock.calls[0][0].omit).toEqual({ password: false });
 		expect(fake.dispatcher.update.mock.calls[0][0].data).toEqual({ password: "hashed(new-pass-123)" });
 
@@ -65,6 +68,7 @@ describe("change-password flows never write hashes into log.changes (review B3 /
 		const result = await changeDispatcherPassword("disp-1", "org-1", { current_password: "nope", new_password: "new-pass-123" });
 		expect(result).toEqual({ err: "Current password is incorrect" });
 		expect(logActivity).not.toHaveBeenCalled();
+		expect(fake.jwt_refresh_token.deleteMany).not.toHaveBeenCalled();
 	});
 
 	it("technician: logs under technician.password.changed / technician with [hashed] placeholders", async () => {
@@ -79,6 +83,8 @@ describe("change-password flows never write hashes into log.changes (review B3 /
 		);
 
 		expect(result.err).toBe("");
+		expect(result.data).toEqual({ refreshToken: "new-rt" });
+		expect(fake.jwt_refresh_token.deleteMany).toHaveBeenCalledWith({ where: { userId: "tech-1" } });
 		expect(fake.technician.findFirst.mock.calls[0][0].omit).toEqual({ password: false });
 		const entry = logged()[0];
 		expect(entry).toMatchObject({

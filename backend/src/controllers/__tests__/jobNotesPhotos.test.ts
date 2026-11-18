@@ -55,7 +55,9 @@ describe("updateJobNote — removed photos are deleted from storage after commit
 		);
 
 		expect(result.err).toBe("");
-		expect(fake.job_note_photo.deleteMany.mock.calls[0][0]).toEqual({ where: { id: { in: [GONE_ID] } } });
+		expect(fake.job_note_photo.deleteMany.mock.calls[0][0]).toEqual({
+			where: { AND: [{ id: { in: [GONE_ID] } }, { note: { organization_id: "org-1" } }] },
+		});
 		expect(deleteFile).toHaveBeenCalledTimes(1);
 		expect(deleteFile).toHaveBeenCalledWith(`${RAW}gone.jpg`);
 	});
@@ -118,5 +120,37 @@ describe("deleteJobNote — stamps the parent breadcrumb (review P2-7 / L2)", ()
 				_parent_id: { old: null, new: "job-1" },
 			},
 		});
+	});
+});
+
+describe("deleteJobNote — the note's photos are deleted from storage after commit", () => {
+	const withPhotos = () =>
+		fake.job_note.findFirst.mockResolvedValue({
+			id: "note-1", job_id: "job-1", visit_id: null, content: "a",
+			photos: [{ photo_url: `${RAW}one.jpg` }, { photo_url: `${RAW}two.jpg` }],
+		});
+
+	it("deletes every photo file once the note is gone", async () => {
+		withPhotos();
+		fake.job_note.delete.mockResolvedValue({});
+		const result = await deleteJobNote("job-1", "note-1", "org-1", { dispatcherId: "disp-1" });
+		expect(result.err).toBe("");
+		expect(vi.mocked(deleteFile).mock.calls).toEqual([[`${RAW}one.jpg`], [`${RAW}two.jpg`]]);
+	});
+
+	it("keeps the files when the delete fails", async () => {
+		withPhotos();
+		fake.job_note.delete.mockRejectedValue(new Error("db down"));
+		await expect(deleteJobNote("job-1", "note-1", "org-1", { dispatcherId: "disp-1" })).rejects.toThrow("db down");
+		expect(deleteFile).not.toHaveBeenCalled();
+	});
+
+	it("swallows storage errors so the delete still succeeds", async () => {
+		withPhotos();
+		fake.job_note.delete.mockResolvedValue({});
+		vi.mocked(deleteFile).mockRejectedValueOnce(new Error("wasabi down"));
+		const result = await deleteJobNote("job-1", "note-1", "org-1", { dispatcherId: "disp-1" });
+		await new Promise((r) => setImmediate(r));
+		expect(result.err).toBe("");
 	});
 });

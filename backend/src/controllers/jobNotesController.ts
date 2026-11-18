@@ -10,7 +10,8 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
 import { createNotification, notifyDispatchers } from "./notificationsController.js";
 import { emitToOrg } from "../services/socketService.js";
-import { signImageUrl, deleteFile } from "../services/wasabiService.js";
+import { signImageUrl } from "../services/wasabiService.js";
+import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 
 type NoteLike = { photos?: { photo_url: string }[] | null } | null | undefined;
 
@@ -243,7 +244,7 @@ export const insertJobNote = async (
 			};
 		}
 		log.error({ err: e }, "Error inserting job note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -378,11 +379,7 @@ export const updateJobNote = async (
 		});
 
 		if (!updated) return { err: "Failed to update note" };
-		for (const url of removedPhotoUrls) {
-			deleteFile(url).catch((err) =>
-				log.warn({ err, url, noteId }, "Failed to delete removed job note photo from storage"),
-			);
-		}
+		deleteStoredFiles(removedPhotoUrls, { noteId });
 		const signed = await signNotePhotos(updated);
 		return { err: "", item: signed };
 	} catch (e) {
@@ -394,7 +391,7 @@ export const updateJobNote = async (
 			};
 		}
 		log.error({ err: e }, "Error updating job note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -411,6 +408,7 @@ export const deleteJobNote = async (
 				id: noteId,
 				job_id: jobId,
 			},
+			include: { photos: { select: { photo_url: true } } },
 		});
 
 		if (!existing) {
@@ -445,9 +443,11 @@ export const deleteJobNote = async (
 			});
 		});
 
+		deleteStoredFiles(existing.photos.map((p) => p.photo_url), { noteId });
+
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Error deleting job note");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

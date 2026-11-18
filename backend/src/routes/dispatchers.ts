@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import {
     ErrorCodes,
     createSuccessResponse,
@@ -13,14 +13,31 @@ import {
     deleteDispatcher,
     changeDispatcherPassword,
     deactivateDispatcher,
-    reactivateDispatcher
+    reactivateDispatcher,
+    isOrgAdmin
 } from "../controllers/dispatchersController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
-import { requirePermission, requirePermissionOrSelf } from '../lib/requirePermissions.js';
+import { requirePermission, requirePermissionOrSelf, hasPermission } from '../lib/requirePermissions.js';
 import { getUserHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
+import { setRefreshToken } from '../services/jwtService.js';
 
 const router = Router();
+
+// Admin accounts can only be changed by an admin; checks the DB, not the token's role.
+const adminTargetNeedsAdmin = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const orgId = req.user!.organization_id as string;
+        if ((await isOrgAdmin(req.params.id as string, orgId)) && !(await isOrgAdmin(req.user!.uid, orgId))) {
+            return res
+                .status(403)
+                .json(createErrorResponse(ErrorCodes.FORBIDDEN, "Only admins can change admin accounts"));
+        }
+        next();
+    } catch (err) {
+        next(err);
+    }
+};
 
 router.get("/", requirePermission("view_dispatchers"), async (req, res, next) => {
     try {
@@ -61,6 +78,8 @@ router.post("/", requirePermission("manage_dispatchers"), async (req, res, next)
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+        // without manage_roles the org's default role is used
+        if (!hasPermission(req, "manage_roles")) delete req.body?.organization_role_id;
         const result = await insertDispatcher(req.body, orgId, context);
 
         if (result.err) {
@@ -85,7 +104,7 @@ router.post("/", requirePermission("manage_dispatchers"), async (req, res, next)
     }
 });
 
-router.put("/:id", requirePermissionOrSelf("manage_dispatchers"), async (req, res, next) => {
+router.put("/:id", requirePermissionOrSelf("manage_dispatchers"), adminTargetNeedsAdmin, async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
@@ -174,6 +193,7 @@ router.post("/:id/change-password", async (req, res, next) => {
                     ),
                 );
         }
+        setRefreshToken(res, result.data!.refreshToken);
         res.json(createSuccessResponse(null));
     } catch (err) {
         next(err);
@@ -204,7 +224,7 @@ router.delete("/:id", requirePermission("manage_dispatchers"), async (req, res, 
     }
 });
 
-router.post("/:id/deactivate", requirePermission("manage_dispatchers"), async (req, res, next) => {
+router.post("/:id/deactivate", requirePermission("manage_dispatchers"), adminTargetNeedsAdmin, async (req, res, next) => {
     try {
         const result = await deactivateDispatcher(
             req.params.id as string,
@@ -220,7 +240,7 @@ router.post("/:id/deactivate", requirePermission("manage_dispatchers"), async (r
     }
 });
 
-router.post("/:id/reactivate", requirePermission("manage_dispatchers"), async (req, res, next) => {
+router.post("/:id/reactivate", requirePermission("manage_dispatchers"), adminTargetNeedsAdmin, async (req, res, next) => {
     try {
         const result = await reactivateDispatcher(
             req.params.id as string,
@@ -236,7 +256,7 @@ router.post("/:id/reactivate", requirePermission("manage_dispatchers"), async (r
     }
 });
 
-router.post("/:id/mfa/reset", requirePermissionOrSelf("manage_dispatchers"), async (req, res, next) => {
+router.post("/:id/mfa/reset", requirePermission("manage_dispatchers"), adminTargetNeedsAdmin, async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;

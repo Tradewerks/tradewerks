@@ -97,6 +97,30 @@ describe("updateQuote terminal guard", () => {
 
 		expect(result.err).toBeFalsy();
 	});
+
+	it.each(["Approved", "Disputed", "Expired"])(
+		"refuses field edits on a %s quote",
+		async (status) => {
+			mockFn(db.quote.findFirst).mockResolvedValue({ id: "q1", status, line_items: [] });
+
+			const result = await updateQuote(
+				makeReq({ title: "x", line_items: [] }),
+				"org1",
+			);
+
+			expect(result.err).toBe(`${status} quotes can only change status`);
+			expect(db.quote.update).not.toHaveBeenCalled();
+		},
+	);
+
+	it("still lets a locked quote change status", async () => {
+		mockFn(db.quote.findFirst).mockResolvedValue({ id: "q1", status: "Expired", line_items: [] });
+		mockFn(db.quote.update).mockResolvedValue({ id: "q1" });
+
+		const result = await updateQuote(makeReq({ status: "Revised" }), "org1");
+
+		expect(result.err).toBeFalsy();
+	});
 });
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
@@ -177,19 +201,17 @@ describe("quote reject vs cancel", () => {
 		expect(mockFn(db.quote.update)).not.toHaveBeenCalled();
 	});
 
-	// The guard is scoped to status changes: an open dispute must not freeze
-	// ordinary edits like retitling, which the dispute is often about.
-	it("allows a non-status edit while a dispute is open", async () => {
+	// Disputed quotes are locked like the edit screen; fixes go through Revise & Resend.
+	it("refuses a non-status edit while a dispute is open", async () => {
 		mockFn(db.quote.findFirst).mockResolvedValue(
 			aSentQuote({ status: "Disputed" }),
 		);
 		mockFn(db.document_dispute.findFirst).mockResolvedValue({ id: "disp1" });
-		mockFn(db.quote.update).mockResolvedValue({ id: "q1" });
 
 		const result = await updateQuote(makeReq({ title: "clarified" }), "org1");
 
-		expect(result.err).toBeFalsy();
-		expect(mockFn(db.document_dispute.findFirst)).not.toHaveBeenCalled();
+		expect(result.err).toBe("Disputed quotes can only change status");
+		expect(mockFn(db.quote.update)).not.toHaveBeenCalled();
 	});
 });
 

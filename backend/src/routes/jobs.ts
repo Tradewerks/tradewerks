@@ -4,9 +4,11 @@ import {
     ErrorCodes,
     createSuccessResponse,
     createErrorResponse,
+    sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
-import { requirePermission, requireAnyPermission } from '../lib/requirePermissions.js';
+import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
+import { requireAssigned } from '../lib/requireAssigned.js';
 import { acknowledgeTaxReviewRoute } from './tax.js';
 import { isAddressTaxChoiceRefusal } from '../lib/addressTaxChoice.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
@@ -38,14 +40,15 @@ const router = Router();
 router.get("/", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const jobs = await getAllJobs(orgId);
+        const seesAll = hasPermission(req, "view_jobs") || hasPermission(req, "view_all_jobs");
+        const jobs = await getAllJobs(orgId, seesAll ? undefined : req.user!.uid);
         res.json(createSuccessResponse(jobs, { count: jobs.length }));
     } catch (err) {
         next(err);
     }
 });
 
-router.get("/:id", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), async (req, res, next) => {
+router.get("/:id", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), requireAssigned("job", ["view_jobs", "view_all_jobs"], "id"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
@@ -99,14 +102,7 @@ router.patch("/:id", requirePermission("edit_jobs"), async (req, res, next) => {
                 .json(createErrorResponse(result.code, result.err, result.details));
         }
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -129,9 +125,7 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
         const result = await deleteJob(id, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(
@@ -142,7 +136,7 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
     }
 });
 
-router.get("/:jobId/visits", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
+router.get("/:jobId/visits", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("job", ["view_jobs", "view_visits"], "jobId"), async (req, res, next) => {
     try {
         const jobId = req.params.jobId as string;
         const orgId = req.user!.organization_id as string;
@@ -162,7 +156,7 @@ router.get("/:jobId/visits", requireAnyPermission("view_jobs", "view_visits", "v
 // JOB NOTES
 // ============================================
 
-router.get("/:jobId/notes", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), async (req, res, next) => {
+router.get("/:jobId/notes", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), requireAssigned("job", ["view_jobs", "view_all_jobs"], "jobId"), async (req, res, next) => {
     try {
         const jobId = req.params.jobId as string;
         const orgId = req.user!.organization_id as string;
@@ -186,7 +180,7 @@ router.get("/:jobId/visits/:visitId/invoices", requirePermission("view_invoices"
     }
 });
 
-router.get("/:jobId/visits/:visitId/notes", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
+router.get("/:jobId/visits/:visitId/notes", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("visit", ["view_jobs", "view_visits"], "visitId"), async (req, res, next) => {
     try {
         const { jobId, visitId } = req.params as { jobId: string; visitId: string };
         const orgId = req.user!.organization_id as string;
@@ -197,7 +191,7 @@ router.get("/:jobId/visits/:visitId/notes", requireAnyPermission("view_jobs", "v
     }
 });
 
-router.post("/:jobId/notes", requireAnyPermission("edit_jobs", "add_job_notes"), async (req, res, next) => {
+router.post("/:jobId/notes", requireAnyPermission("edit_jobs", "add_job_notes"), requireAssigned("job", ["edit_jobs"], "jobId"), requireAssigned("visit", ["edit_jobs"], "visit_id"), async (req, res, next) => {
     try {
         const jobId = req.params.jobId as string;
         const orgId = req.user!.organization_id as string;
@@ -205,14 +199,7 @@ router.post("/:jobId/notes", requireAnyPermission("edit_jobs", "add_job_notes"),
         const result = await insertJobNote(jobId, req.body, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.status(201).json(createSuccessResponse(result.item));
@@ -221,7 +208,7 @@ router.post("/:jobId/notes", requireAnyPermission("edit_jobs", "add_job_notes"),
     }
 });
 
-router.put("/:jobId/notes/:noteId", requireAnyPermission("edit_jobs", "add_job_notes"), async (req, res, next) => {
+router.put("/:jobId/notes/:noteId", requireAnyPermission("edit_jobs", "add_job_notes"), requireAssigned("note", ["edit_jobs"], "noteId"), async (req, res, next) => {
     try {
         const { jobId, noteId } = req.params as { jobId: string; noteId: string };
         const orgId = req.user!.organization_id as string;
@@ -229,14 +216,7 @@ router.put("/:jobId/notes/:noteId", requireAnyPermission("edit_jobs", "add_job_n
         const result = await updateJobNote(jobId, noteId, req.body, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -253,9 +233,7 @@ router.delete("/:jobId/notes/:noteId", requirePermission("edit_jobs"), async (re
         const result = await deleteJobNote(jobId, noteId, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(

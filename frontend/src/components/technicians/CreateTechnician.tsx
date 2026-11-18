@@ -41,6 +41,8 @@ const CreateTechnician = ({
 	const [isLoading, setIsLoading] = useState(false);
 	const [errors, setErrors] = useState<ZodError | null>(null);
 
+	
+
 	const { data: roles } = useOrgRolesQuery();
 	const technicianRoles = useMemo(() => (roles ?? []).filter((r) => r.base_tier === "technician"), [roles]);
 
@@ -54,7 +56,8 @@ const CreateTechnician = ({
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [seatLimit, setSeatLimit] = useState(false);
 	const canRequestSeats = usePermission("manage_organization");
-
+	const canManageRoles = usePermission("manage_roles");
+	
 	const resetForm = useCallback(() => {
 		setName("");
 		setEmail("");
@@ -228,20 +231,22 @@ const CreateTechnician = ({
 
 				{/* Role + Hire Date */}
 				<div className="grid grid-cols-2 gap-2 lg:gap-3 min-w-0">
-					<div className="min-w-0">
-						<label className={LABEL}>Role</label>
-						<select
-							value={organizationRoleId ?? ""}
-							onChange={(e) => setOrganizationRoleId(e.target.value || null)}
-							className={INPUT}
-							disabled={isLoading}
-						>
-							<option value="">— No Role —</option>
-							{technicianRoles.map((r) => (
-								<option key={r.id} value={r.id}>{r.name}</option>
-							))}
-						</select>
-					</div>
+					{canManageRoles && (
+						<div className="min-w-0">
+							<label className={LABEL}>Role</label>
+							<select
+								value={organizationRoleId ?? ""}
+								onChange={(e) => setOrganizationRoleId(e.target.value || null)}
+								className={INPUT}
+								disabled={isLoading}
+							>
+								<option value="">— No Role —</option>
+								{technicianRoles.map((r) => (
+									<option key={r.id} value={r.id}>{r.name}</option>
+								))}
+							</select>
+						</div>
+					)}
 					<div className="min-w-0">
 						<label className={LABEL}>Hourly Cost</label>
 						<input

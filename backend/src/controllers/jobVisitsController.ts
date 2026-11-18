@@ -20,6 +20,7 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { log } from "../services/appLogger.js";
+import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 import { deductInventoryForVisit } from "./inventoryController.js";
 import { onVisitScheduled, onVisitRescheduled, onVisitCancelled } from "../services/followupTriggers.js";
 import { fireLowStockAlerts } from "../services/lowStockAlerts.js";
@@ -154,12 +155,16 @@ export const getMyJobsForPurchase = async (organization_id: string, technicianId
 	}));
 };
 
-export const getAllJobVisits = async (organization_id: string, filters?: { clientId?: string; limit?: number; sort?: "asc" | "desc" }) => {
+// techId limits results to visits that tech is assigned to.
+const assignedTo = (techId?: string) => (techId ? { visit_techs: { some: { tech_id: techId } } } : {});
+
+export const getAllJobVisits = async (organization_id: string, filters?: { clientId?: string; limit?: number; sort?: "asc" | "desc"; techId?: string }) => {
 	const sdb = getScopedDb(organization_id);
 	return await sdb.job_visit.findMany({
-		where: filters?.clientId
-			? { job: { client_id: filters.clientId } }
-			: undefined,
+		where: {
+			...(filters?.clientId && { job: { client_id: filters.clientId } }),
+			...assignedTo(filters?.techId),
+		},
 		include: {
 			job: {
 				include: {
@@ -360,11 +365,13 @@ export const getJobVisitsByTechId = async (techId: string, organization_id: stri
 export const getJobVisitsByDateRange = async (
 	startDate: Date,
 	endDate: Date,
-	organization_id: string
+	organization_id: string,
+	techId?: string,
 ) => {
 	const sdb = getScopedDb(organization_id);
 	return await sdb.job_visit.findMany({
 		where: {
+			...assignedTo(techId),
 			OR: [
 				{
 					scheduled_start_at: {
@@ -606,7 +613,7 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 			};
 		}
 		log.error({ err: e }, "Error inserting job visit");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1133,7 +1140,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			};
 		}
 		log.error({ err: e }, "Failed to update job visit");
-		return { err: "Failed to update job visit" };
+		throw e;
 	}
 };
 
@@ -1283,6 +1290,8 @@ export const acceptJobVisit = async (
 		if (!visit) {
 			return { err: "Job visit not found" };
 		}
+		if (visit.status === "Completed" || visit.status === "Cancelled")
+			return { err: `${visit.status} visits can't be accepted` };
 
 		const tech = await sdb.technician.findFirst({
 			where: { id: techId },
@@ -1308,7 +1317,13 @@ export const acceptJobVisit = async (
 			return { err: "", item: visit ?? undefined };
 		}
 
-		await sdb.$transaction(async (tx) => {
+		const claimed = await sdb.$transaction(async (tx) => {
+			// Technicians may only claim unassigned visits; the row lock stops two claiming at once.
+			if (context?.techId) {
+				await tx.$queryRaw`SELECT id FROM job_visit WHERE id = ${visitId} FOR UPDATE`;
+				if ((await tx.job_visit_technician.count({ where: { visit_id: visitId } })) > 0) return false;
+			}
+
 			await tx.job_visit_technician.create({
 				data: { visit_id: visitId, tech_id: techId },
 			});
@@ -1335,7 +1350,11 @@ export const acceptJobVisit = async (
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
 			});
+			return true;
 		});
+		if (!claimed) {
+			return { err: "This visit already has a technician. Ask a dispatcher to add you to it." };
+		}
 
 		const updated = await sdb.job_visit.findFirst({
 			where: { id: visitId },
@@ -1355,7 +1374,7 @@ export const acceptJobVisit = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "Failed to accept job visit");
-		return { err: "Failed to accept job visit" };
+		throw e;
 	}
 };
 
@@ -1865,6 +1884,8 @@ export const cancelJobVisit = async (
 		});
 
 		if (!existingVisit) return { err: "Job visit not found" };
+		if (existingVisit.status === "Completed" || existingVisit.status === "Cancelled")
+			return { err: `${existingVisit.status} visits can't be cancelled` };
 
 		await sdb.$transaction(async (tx) => {
 			await tx.job_visit.update({
@@ -2050,6 +2071,12 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 			return { err: "Job visit not found" };
 		}
 
+		// The cascade drops these rows; read the files to clean up first.
+		const photos = await sdb.job_note_photo.findMany({
+			where: { note: { visit_id: id } },
+			select: { photo_url: true },
+		});
+
 		await sdb.$transaction(async (tx) => {
 			await tx.job_visit_technician.deleteMany({
 				where: { visit_id: id },
@@ -2102,6 +2129,7 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 			}
 		});
 
+		deleteStoredFiles(photos.map((p) => p.photo_url), { visitId: id });
 		emitToOrg(organizationId, "job_visit:deleted", { visitId: id, organizationId });
 		return { err: "", message: "Job visit deleted successfully" };
 	} catch (e) {
@@ -2109,11 +2137,11 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
 			return { err: "This visit is on an invoice or has stock used against it, so it can't be deleted. Cancel the visit instead." };
 		}
-		return { err: "Failed to delete job visit" };
+		throw e;
 	}
 };
 
-export const getRecentStatusEvents = async (organizationId: string) => {
+export const getRecentStatusEvents = async (organizationId: string, techId?: string) => {
 	const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
 	const logs = await db.log.findMany({
@@ -2130,7 +2158,7 @@ export const getRecentStatusEvents = async (organizationId: string) => {
 
 	const visitIds = [...new Set(logs.map((l) => l.entity_id))];
 	const visits = await db.job_visit.findMany({
-		where: { id: { in: visitIds } },
+		where: { id: { in: visitIds }, ...assignedTo(techId) },
 		include: { job: { include: { client: { select: { name: true } } } } },
 	});
 	const visitMap = new Map(visits.map((v) => [v.id, v]));

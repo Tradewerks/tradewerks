@@ -15,4 +15,7 @@ export const LEGAL = {
 export const LEGAL_LINKS = [
 	["/terms", "Terms of Service"],
 	["/privacy", "Privacy Policy"],
+	["/eula", "End User License Agreement"],
+	["/acceptable-use", "Acceptable Use Policy"],
+	["/cookies", "Cookie Policy"],
 ] as const;

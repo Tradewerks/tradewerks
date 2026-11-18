@@ -1,4 +1,30 @@
 import {z} from "zod"
+import { Prisma } from "../../../generated/prisma/client.js";
+
+export const createVehicleSchema = z.object({
+	name:          z.string().min(1).max(100),
+	type:          z.string().min(1).max(50),
+	license_plate: z.string().min(1).max(50),
+	year:          z.number().int().min(1900).max(2100).nullable().optional(),
+	make:          z.string().max(50).nullable().optional(),
+	model:         z.string().max(50).nullable().optional(),
+	color:         z.string().max(50).nullable().optional(),
+	status:        z.enum(["active", "inactive"]).default("active"),
+	notes:         z.string().max(1000).nullable().optional(),
+	current_odometer_mi: z.number().int().min(0).nullable().optional(),
+	stored_at: z.string().nullable().optional(),
+	stored_at_coords: z
+		.object({
+			lat: z.number(),
+			lon: z.number(),
+		})
+		.nullable()
+		.optional()
+		// Prisma Json columns reject plain null
+		.transform((v) => (v === null ? Prisma.DbNull : v)),
+});
+
+export const updateVehicleSchema = createVehicleSchema.partial();
 
 const maintenanceCategoryEnum = z.enum([
   "oil_change", "fluids", "tire", "brake", "inspection", "registration", "repair", "other",

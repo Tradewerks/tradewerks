@@ -3,6 +3,7 @@ import {
     ErrorCodes,
     createSuccessResponse,
     createErrorResponse,
+    sendResultErr,
 } from "../types/responses.js";
 import {
     getProjects,
@@ -207,14 +208,7 @@ router.post("/:projectId/notes", requirePermission("edit_projects"), async (req,
         const result = await insertProjectNote(projectId, req.body, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.status(201).json(createSuccessResponse(result.item));
@@ -231,14 +225,7 @@ router.put("/:projectId/notes/:noteId", requirePermission("edit_projects"), asyn
         const result = await updateProjectNote(projectId, noteId, req.body, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(
-                    createErrorResponse(
-                        ErrorCodes.VALIDATION_ERROR,
-                        result.err,
-                    ),
-                );
+            return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
@@ -255,9 +242,7 @@ router.delete("/:projectId/notes/:noteId", requirePermission("edit_projects"), a
         const result = await deleteProjectNote(projectId, noteId, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(

@@ -250,7 +250,7 @@ export const insertInvoice = async (req: Request, organizationId: string, contex
 		}
 		if (e instanceof Error) return { err: e.message };
 		log.error({ err: e }, "Insert invoice error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -821,7 +821,7 @@ export const deleteInvoice = async (id: string, organizationId: string, context?
 		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
 			return { err: "This invoice is part of a dispute, so it can't be deleted." };
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -962,7 +962,7 @@ export const insertInvoicePayment = async (
 			};
 		}
 		log.error({ err: e }, "Insert invoice payment error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -982,7 +982,10 @@ export const deleteInvoicePayment = async (
 		const invoice = await sdb.invoice.findFirst({
 			where: { id: invoiceId },
 		});
-		if (invoice?.status === "Void") {
+		if (!invoice) {
+			return {err: "Invoice not found"};
+		}
+		if (invoice.status === "Void") {
 			return { err: "Cannot modify payments on a void invoice" };
 		}
 
@@ -1032,7 +1035,7 @@ export const deleteInvoicePayment = async (
 		return { err: "", item: { id: paymentId } };
 	} catch (e) {
 		log.error({ err: e }, "Delete invoice payment error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1205,7 +1208,7 @@ export const insertInvoiceNote = async (
 			};
 		}
 		log.error({ err: e }, "Insert invoice note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1279,7 +1282,7 @@ export const updateInvoiceNote = async (
 			};
 		}
 		log.error({ err: e }, "Update invoice note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1322,6 +1325,6 @@ export const deleteInvoiceNote = async (
 		return { err: "", message: "Note deleted successfully" };
 	} catch (e) {
 		log.error({ err: e }, "Delete invoice note error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

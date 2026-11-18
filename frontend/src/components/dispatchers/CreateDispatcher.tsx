@@ -50,6 +50,7 @@ const CreateDispatcher = ({
     const [submitError, setSubmitError] = useState<string | null>(null);
     const [seatLimit, setSeatLimit] = useState(false);
     const canRequestSeats = usePermission("manage_organization");
+	const canManageRoles = usePermission("manage_roles");
 
     const resetForm = useCallback(() => {
         setName("");
@@ -206,20 +207,22 @@ const CreateDispatcher = ({
                 </div>
 
                 {/* Role */}
-                <div className="min-w-0">
-                    <label className={LABEL}>Role</label>
-                    <select
-                        value={organizationRoleId ?? ""}
-                        onChange={(e) => setOrganizationRoleId(e.target.value || null)}
-                        className={INPUT}
-                        disabled={isLoading}
-                    >
-                        <option value="">— No Role —</option>
-                        {dispatcherRoles.map((r) => (
-                            <option key={r.id} value={r.id}>{r.name}</option>
-                        ))}
-                    </select>
-                </div>
+                {canManageRoles && (
+					<div className="min-w-0">
+						<label className={LABEL}>Role</label>
+						<select
+							value={organizationRoleId ?? ""}
+							onChange={(e) => setOrganizationRoleId(e.target.value || null)}
+							className={INPUT}
+							disabled={isLoading}
+						>
+							<option value="">— No Role —</option>
+							{dispatcherRoles.map((r) => (
+								<option key={r.id} value={r.id}>{r.name}</option>
+							))}
+						</select>
+					</div>
+				)}
 
 				{/* Description */}
 				<div className="min-w-0">

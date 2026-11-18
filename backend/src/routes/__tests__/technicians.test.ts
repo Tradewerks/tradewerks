@@ -205,6 +205,29 @@ describe("technician seats and deactivation (build plan 2)", () => {
 		expect(fake.technician.count).not.toHaveBeenCalled();
 	});
 
+	const ROLE_ID = "11111111-1111-4111-8111-111111111111";
+
+	it("without manage_roles, a posted role is ignored and the tier default is used", async () => {
+		const staff = { uid: "disp-2", role: "dispatcher", organization_id: "org-1", permissions: ["manage_technicians"] };
+		fake.organization_role.findFirst.mockResolvedValue({ id: "default-tech" });
+		fake.technician.create.mockResolvedValue({ id: "t-new", ...body, status: "Offline" });
+		await callRoute(techniciansRouter, "post", "/", { user: staff, body: { ...body, organization_role_id: ROLE_ID } });
+		expect(leaves(fake.organization_role.findFirst.mock.calls[0][0].where)).toEqual(
+			expect.arrayContaining([{ base_tier: "technician" }, { is_default: true }]),
+		);
+		expect(fake.technician.create.mock.calls[0][0].data.organization_role_id).toBe("default-tech");
+	});
+
+	it("with manage_roles, a role from another tier is refused", async () => {
+		fake.organization_role.findFirst.mockResolvedValue(null);
+		const r = await callRoute(techniciansRouter, "post", "/", { user: admin, body: { ...body, organization_role_id: ROLE_ID } });
+		expect(r.status).toBe(400);
+		expect(leaves(fake.organization_role.findFirst.mock.calls[0][0].where)).toEqual(
+			expect.arrayContaining([{ id: ROLE_ID }, { base_tier: "technician" }]),
+		);
+		expect(fake.technician.create).not.toHaveBeenCalled();
+	});
+
 	it("counts only active technicians", async () => {
 		entitlementLimits.technicians = 5;
 		fake.technician.count.mockResolvedValue(4);

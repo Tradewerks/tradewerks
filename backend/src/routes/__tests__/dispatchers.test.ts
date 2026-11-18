@@ -17,7 +17,7 @@ vi.mock("../../services/emailService.js", () => ({
 	sendEmailVerificationEmail: vi.fn(),
 }));
 vi.mock("../../services/otpServce.js", () => ({ createOTP: vi.fn(), OTP_DISABLED: true, verifyOTP: vi.fn() }));
-vi.mock("../../controllers/mfaController.js", () => ({ resetMfa: vi.fn() }));
+vi.mock("../../controllers/mfaController.js", () => ({ resetMfa: vi.fn(async () => ({ data: null })) }));
 vi.mock("../../services/mfaService.js", () => ({
 	getMfaEnabledUserIds: vi.fn(async () => new Set<string>()),
 	isMfaEnabled: vi.fn(async () => false),
@@ -46,7 +46,8 @@ vi.mock("../../services/socketService.js", () => ({
 
 import dispatchersRouter from "../dispatchers.js";
 import { db } from "../../db.js";
-import { callRoute, type FakeDb } from "./harness.js";
+import { resetMfa } from "../../controllers/mfaController.js";
+import { callRoute, leaves, type FakeDb } from "./harness.js";
 
 const fake = db as unknown as FakeDb;
 
@@ -221,5 +222,71 @@ describe("dispatcher seats and deactivation (build plan 2)", () => {
 		expect(r.status).toBe(200);
 		expect(fake.dispatcher.update.mock.calls[0][0].data).toEqual({ deactivated_at: expect.any(Date) });
 		expect(fake.jwt_refresh_token.deleteMany).toHaveBeenCalledWith({ where: { userId: "disp-3" } });
+	});
+});
+
+describe("admin accounts can only be changed by an admin", () => {
+	const rows: Record<string, { id: string; name: string; role: string; deactivated_at: null }> = {
+		"disp-admin": { id: "disp-admin", name: "Ada", role: "admin", deactivated_at: null },
+		"disp-admin-2": { id: "disp-admin-2", name: "Al", role: "admin", deactivated_at: null },
+		"disp-mgr": { id: "disp-mgr", name: "Mo", role: "dispatcher", deactivated_at: null },
+		"disp-3": { id: "disp-3", name: "Cy", role: "dispatcher", deactivated_at: null },
+	};
+	const manager = { uid: "disp-mgr", role: "dispatcher", permissions: ["manage_dispatchers"] };
+	const admin = { uid: "disp-admin", role: "admin", permissions: null };
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		fake.dispatcher.findFirst.mockImplementation(async (args: { where: unknown }) => {
+			const l = leaves(args.where);
+			const id = l.find((x) => "id" in x)?.id as string;
+			const role = l.find((x) => "role" in x)?.role;
+			const row = rows[id];
+			return row && (role === undefined || row.role === role) ? row : null;
+		});
+	});
+
+	it.each([
+		["put", "/:id", { name: "Hijacked", email: "me@evil.test" }],
+		["post", "/:id/deactivate", undefined],
+		["post", "/:id/reactivate", undefined],
+		["post", "/:id/mfa/reset", undefined],
+	])("%s %s on an admin returns 403 for a non-admin manager", async (method, path, body) => {
+		const r = await callRoute(dispatchersRouter, method, path, {
+			user: manager,
+			params: { id: "disp-admin-2" },
+			body,
+		});
+		expect(r.status).toBe(403);
+		expect(r.body.error).toMatchObject({ code: "FORBIDDEN", message: "Only admins can change admin accounts" });
+		expect(fake.dispatcher.update).not.toHaveBeenCalled();
+		expect(resetMfa).not.toHaveBeenCalled();
+	});
+
+	it("doesn't trust a token that claims admin", async () => {
+		const r = await callRoute(dispatchersRouter, "post", "/:id/mfa/reset", {
+			user: { ...manager, role: "admin", permissions: null },
+			params: { id: "disp-admin-2" },
+		});
+		expect(r.status).toBe(403);
+		expect(resetMfa).not.toHaveBeenCalled();
+	});
+
+	it("lets an admin reset another admin's MFA", async () => {
+		const r = await callRoute(dispatchersRouter, "post", "/:id/mfa/reset", {
+			user: admin,
+			params: { id: "disp-admin-2" },
+		});
+		expect(r.status).toBe(200);
+		expect(resetMfa).toHaveBeenCalledWith("disp-admin-2", "dispatcher", "disp-admin", "admin");
+	});
+
+	it("lets a manager reset a non-admin's MFA", async () => {
+		const r = await callRoute(dispatchersRouter, "post", "/:id/mfa/reset", {
+			user: manager,
+			params: { id: "disp-3" },
+		});
+		expect(r.status).toBe(200);
+		expect(resetMfa).toHaveBeenCalled();
 	});
 });

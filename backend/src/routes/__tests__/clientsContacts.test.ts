@@ -30,6 +30,7 @@ import clientsContactsRouter from "../clientsContacts.js";
 import { db } from "../../db.js";
 import { getProjectsByClientId } from "../../controllers/projectsController.js";
 import { updateClient } from "../../controllers/clientsController.js";
+import { getJobsByClientId } from "../../controllers/jobsController.js";
 import { callRoute, type FakeDb } from "./harness.js";
 
 const fake = db as unknown as FakeDb;
@@ -75,6 +76,19 @@ describe("GET /clients/:clientId/projects — technicians are hard-denied (revie
 			params: { clientId: "client-1" },
 		});
 		expect(admin.status).toBe(200);
+	});
+});
+
+describe("GET /clients/:clientId/jobs", () => {
+	it("filters by the client in the path", async () => {
+		vi.mocked(getJobsByClientId).mockResolvedValue([] as never);
+		const r = await callRoute(clientsContactsRouter, "get", "/clients/:clientId/jobs", {
+			user: { uid: "disp-1", role: "dispatcher", permissions: ["view_jobs"] },
+			params: { clientId: "client-1" },
+		});
+		expect(r.status).toBe(200);
+		// An undefined id is no filter in Prisma, so it returned every job in the org.
+		expect(getJobsByClientId).toHaveBeenCalledWith("client-1", "org-1");
 	});
 });
 

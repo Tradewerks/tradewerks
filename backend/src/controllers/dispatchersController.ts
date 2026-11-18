@@ -18,6 +18,7 @@ import { assertSeatAvailable } from "../lib/entitlements/seats.js";
 import type { HttpError } from "../types/responses.js";
 import { setUserActive } from "../services/userActiveCache.js";
 import { getSocket } from "../services/socketService.js";
+import { generateRefreshToken } from "../services/jwtService.js";
 
 export const getAllDispatchers = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
@@ -73,6 +74,11 @@ export const insertDispatcher = async (
         if (existing) {
             return { err: "Email already exists" };
         }
+
+        const roleId = parsed.organization_role_id
+            ? (await sdb.organization_role.findFirst({ where: { id: parsed.organization_role_id, base_tier: "dispatcher" }, select: { id: true } }))?.id
+            : (await sdb.organization_role.findFirst({ where: { base_tier: "dispatcher", is_default: true }, select: { id: true } }))?.id ?? null;
+        if (roleId === undefined) return { err: "Role not found" };
         // if no password provided, generate a random one and email it to them
         const tempPassword = passwordProvided ? parsed.password! : randomBytes(8).toString("hex") + "A1!";
         const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -87,6 +93,7 @@ export const insertDispatcher = async (
             const dispatcher = await tx.dispatcher.create({
                 data: {
                     ...parsedWithoutPassword,
+                    organization_role_id: roleId,
                     organization_id: organizationId,
                     password: hashedPassword,
                     email_verification_token: emailVerificationToken,
@@ -137,7 +144,7 @@ export const insertDispatcher = async (
             };
         }
         log.error({ err: e }, "Error inserting dispatcher");
-        return { err: "Internal server error" };
+        throw e;
     }
 };
 
@@ -172,13 +179,11 @@ export const updateDispatcher = async (
         }
 
         const changes = buildChanges(existing, parsed, [
-            "organization_id",
             "name",
             "email",
             "phone",
             "title",
             "description",
-            "role",
             "last_login",
             "theme",
         ] as const);
@@ -245,9 +250,15 @@ export const updateDispatcher = async (
             };
         }
         log.error({ err: e }, "Error updating dispatcher");
-        return { err: "Internal server error" };
+        throw e;
     }
 };
+
+export const isOrgAdmin = async (id: string, organizationId: string) =>
+    !!(await getScopedDb(organizationId).dispatcher.findFirst({
+        where: { id, role: "admin" },
+        select: { id: true },
+    }));
 
 export const deleteDispatcher = async (id: string, organization_id: string, context?: UserContext) => {
     try {
@@ -295,7 +306,7 @@ export const deleteDispatcher = async (id: string, organization_id: string, cont
         return { message: "Dispatcher deleted successfully" };
     } catch (error) {
         log.error({ err: error }, "Error deleting dispatcher");
-        return { err: "Internal server error" };
+        throw error;
     }
 };
 
@@ -330,6 +341,8 @@ export const changeDispatcherPassword = async (
             },
         });
 
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: id }});
+
         await logActivity({
             event_type: "dispatcher.password.changed",
             action: "changed",
@@ -351,7 +364,8 @@ export const changeDispatcherPassword = async (
             user_agent: context?.userAgent,
         });
     });
-    return { message: "Password updated successfully", err: ""};
+    const refreshToken = await generateRefreshToken(dispatcher, dispatcher.role);
+    return { data: { refreshToken }, err: ""};
 };
 
 export const deactivateDispatcher = async (id: string, organizationId: string, context?: UserContext) => {

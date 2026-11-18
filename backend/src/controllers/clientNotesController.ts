@@ -167,7 +167,7 @@ export const insertNote = async (
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -288,7 +288,7 @@ export const updateNote = async (
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -342,6 +342,6 @@ export const deleteNote = async (
 
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

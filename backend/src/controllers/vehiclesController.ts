@@ -36,7 +36,7 @@ import {
 	mapMaintenanceRecord,
 	mapMaintenanceReminder,
 } from "../types/dto/vehicles.js";
-import { createMaintenanceRecordSchema, createMaintenanceReminderSchema, updateMaintenanceRecordSchema, updateMaintenanceReminderSchema } from "../lib/validate/vehicles.js";
+import { createMaintenanceRecordSchema, createMaintenanceReminderSchema, updateMaintenanceRecordSchema, updateMaintenanceReminderSchema, createVehicleSchema, updateVehicleSchema } from "../lib/validate/vehicles.js";
 import { classifyReminder, resolveDueTargets } from "../lib/validate/vehicleMaintenanceStatus.js";
 import { applyRecordOdometer } from "../lib/vehicleMileage.js";
 import { parentBreadcrumb } from "./logsController.js";
@@ -358,31 +358,6 @@ type LineTracking = { serial?: MovementInput["serial"]; batch_allocations?: Move
 // an opaque error from recordMovements or Postgres. Takes the base number
 // schema because .refine() yields a ZodEffects that loses .min()/.positive().
 const stockQtyField = (base: z.ZodNumber) => base.refine(isStorableStockQty, STOCK_QTY_MESSAGE);
-
-const createVehicleSchema = z.object({
-	name:          z.string().min(1).max(100),
-	type:          z.string().min(1).max(50),
-	license_plate: z.string().min(1).max(50),
-	year:          z.number().int().min(1900).max(2100).nullable().optional(),
-	make:          z.string().max(50).nullable().optional(),
-	model:         z.string().max(50).nullable().optional(),
-	color:         z.string().max(50).nullable().optional(),
-	status:        z.enum(["active", "inactive"]).default("active"),
-	notes:         z.string().max(1000).nullable().optional(),
-	current_odometer_mi: z.number().int().min(0).nullable().optional(),
-	stored_at: z.string().nullable().optional(),
-	stored_at_coords: z
-		.object({
-			lat: z.number(),
-			lon: z.number(),
-		})
-		.nullable()
-		.optional()
-		// Prisma Json columns reject plain null
-		.transform((v) => (v === null ? Prisma.DbNull : v)),
-});
-
-const updateVehicleSchema = createVehicleSchema.partial();
 
 const addStockItemSchema = z.object({
 	inventory_item_id: z.string().uuid(),
@@ -1234,10 +1209,16 @@ const addPartsUsedSchema = z.object({
 	batch_id:        z.string().uuid().optional(),
 });
 
-export const addPartsUsed = async (visitId: string, data: unknown, organizationId: string) => {
+export const addPartsUsed = async (
+	visitId: string,
+	data: unknown,
+	organizationId: string,
+	context?: UserContext,
+) => {
 	try {
 		const parsed = addPartsUsedSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
+		const actor = toActor(context);
 
 		const stockItem = await sdb.vehicle_stock_item.findFirst({
 			where: { id: parsed.stock_item_id },
@@ -1245,8 +1226,24 @@ export const addPartsUsed = async (visitId: string, data: unknown, organizationI
 		});
 		if (!stockItem) return { err: "Stock item not found" };
 
-		const visit = await sdb.job_visit.findFirst({ where: { id: visitId } });
+		const visit = await sdb.job_visit.findFirst({
+			where: { id: visitId },
+			select: { status: true, _count: { select: { invoice_visits: true } } },
+		});
 		if (!visit) return { err: "Visit not found" };
+		if (PARTS_FROZEN_VISIT_STATUSES.has(visit.status)) {
+			return { err: `Parts can't be changed on a ${visit.status} visit` };
+		}
+		if (visit._count.invoice_visits > 0) {
+			return { err: "Parts can't be changed on a visit that has been invoiced" };
+		}
+
+		// Body technician_id is attribution only, and only if it's one of ours.
+		const tech = await sdb.technician.findFirst({
+			where: { id: parsed.technician_id },
+			select: { id: true },
+		});
+		if (!tech) return { err: "Technician not found" };
 
 		// Serial/batch tracking (B-T2) — uncapped/strict single line. Resolved
 		// BEFORE the transaction opens so a validation failure never opens one
@@ -1300,7 +1297,7 @@ export const addPartsUsed = async (visitId: string, data: unknown, organizationI
 			await recordMovements(
 				tx as unknown as Prisma.TransactionClient,
 				organizationId,
-				{ actor_type: "technician", actor_id: parsed.technician_id },
+				actor,
 				[
 					{
 						inventory_item_id:  stockItem.inventory_item_id,
@@ -1340,8 +1337,7 @@ export const addPartsUsed = async (visitId: string, data: unknown, organizationI
 			entity_type: "vehicle_stock_item",
 			entity_id: parsed.stock_item_id,
 			organization_id: organizationId,
-			actor_type: "technician",
-			actor_id: parsed.technician_id,
+			...getActorInfo(context),
 			changes: { qty_used: { old: null, new: parsed.qty_used } },
 		});
 		return { err: "", item: result };

@@ -26,7 +26,7 @@ export const createTag = async (data: unknown, organizationId: string) => {
 		return { err: "", tag };
 	} catch (e) {
 		if (e instanceof ZodError) return { err: e.issues.map((i) => i.message).join(", ") };
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -56,7 +56,7 @@ export const updateTag = async (tagId: string, data: unknown, organizationId: st
 		return { err: "", tag };
 	} catch (e) {
 		if (e instanceof ZodError) return { err: e.issues.map((i) => i.message).join(", ") };
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -106,6 +106,6 @@ export const setItemTags = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		if (e instanceof ZodError) return { err: e.issues.map((i) => i.message).join(", ") };
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

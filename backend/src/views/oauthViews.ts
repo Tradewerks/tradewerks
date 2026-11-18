@@ -48,31 +48,57 @@ export const renderConsentPage = (params: {
     code_challenge?: string;
     code_challenge_method?: string;
     error?: string;
+    mfaStep?: boolean;
+    pendingToken?: string;
 }): string => {
     const hidden = (name: string, value?: string) =>
         value ? `<input type="hidden" name="${name}" value="${escapeHtml(value)}" />` : "";
 
     return page("Authorize Access", `
       <h1>Authorize <strong>${escapeHtml(params.client.name)}</strong></h1>
-      <p><strong>${escapeHtml(params.client.name)}</strong> wants to access your EpicIT-Dispatch
-         account. Sign in to allow it.</p>
-      ${params.error ? `<div class="err">${escapeHtml(params.error)}</div>` : ""}
-      <form method="POST" action="/oauth/authorize/decision">
-        ${hidden("client_id", params.client_id)}
-        ${hidden("redirect_uri", params.redirect_uri)}
-        ${hidden("state", params.state)}
-        ${hidden("code_challenge", params.code_challenge)}
-        ${hidden("code_challenge_method", params.code_challenge_method)}
-        <label>Email</label>
-        <input type="email" name="email" required autocomplete="username" />
-        <label>Password</label>
-        <input type="password" name="password" required autocomplete="current-password" />
-        <!-- Allow comes first in the DOM because pressing Enter submits with the first
-             submit button; row-reverse keeps Deny visually on the left. -->
-        <div class="row" style="flex-direction:row-reverse">
-          <button class="allow" type="submit" name="action" value="allow">Allow</button>
-          <button class="deny"  type="submit" name="action" value="deny">Deny</button>
-        </div>
-      </form>
+      ${!params.mfaStep
+        ? `
+          <p><strong>${escapeHtml(params.client.name)}</strong> wants to access your EpicIT-Dispatch
+            account. Sign in to allow it.</p>
+          ${params.error ? `<div class="err">${escapeHtml(params.error)}</div>` : ""}
+          <form method="POST" action="/oauth/authorize/decision">
+            ${hidden("client_id", params.client_id)}
+            ${hidden("redirect_uri", params.redirect_uri)}
+            ${hidden("state", params.state)}
+            ${hidden("code_challenge", params.code_challenge)}
+            ${hidden("code_challenge_method", params.code_challenge_method)}
+            <label>Email</label>
+            <input type="email" name="email" required autocomplete="username" />
+            <label>Password</label>
+            <input type="password" name="password" required autocomplete="current-password" />
+            <!-- Allow comes first in the DOM because pressing Enter submits with the first
+                submit button; row-reverse keeps Deny visually on the left. -->
+            <div class="row" style="flex-direction:row-reverse">
+              <button class="allow" type="submit" name="action" value="allow">Allow</button>
+              <button class="deny"  type="submit" name="action" value="deny" formnovalidate>Deny</button>
+            </div>
+          </form>
+        ` 
+        : `
+          <p>To allow <strong>${escapeHtml(params.client.name)}</strong>, enter the 6-digit code
+            from your authenticator app, or a backup code.</p>
+          ${params.error ? `<div class="err">${escapeHtml(params.error)}</div>` : ""}
+          <form method="POST" action="/oauth/authorize/decision">
+            ${hidden("client_id", params.client_id)}
+            ${hidden("redirect_uri", params.redirect_uri)}
+            ${hidden("state", params.state)}
+            ${hidden("code_challenge", params.code_challenge)}
+            ${hidden("code_challenge_method", params.code_challenge_method)}
+            ${hidden("mfa_token", params.pendingToken)}
+            <label>Code</label>
+            <input name="code" required autofocus autocomplete="one-time-code"
+                  inputmode="text" maxlength="9" pattern="\\d{6}|[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}" />
+            <div class="row" style="flex-direction:row-reverse">
+              <button class="allow" type="submit" name="action" value="allow">Verify</button>
+              <button class="deny"  type="submit" name="action" value="deny" formnovalidate>Deny</button>
+            </div>
+          </form>
+        `}
+      
     `);
 };

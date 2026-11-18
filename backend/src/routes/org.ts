@@ -19,7 +19,7 @@ import { z } from "zod";
 import { coordsSchema as orgCoordsSchema } from "../lib/validate/shared.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { logActivity, buildChanges } from "../services/logger.js";
-import { getUserContext } from "../lib/context.js";
+import { getUserContext, getActorInfo } from "../lib/context.js";
 
 const router = Router();
 
@@ -204,6 +204,7 @@ const costingSelect = {
 	cost_per_mile: true,
 	overhead_rate_per_hour: true,
 } as const;
+const COSTING_FIELDS = ["monthly_overhead", "cost_per_mile", "overhead_rate_per_hour"] as const;
 
 router.get("/costing", requirePermission("view_reports"), async (req, res, next) => {
 	try {
@@ -256,20 +257,30 @@ router.patch("/costing", requirePermission("manage_organization"), async (req, r
 						parsed.error.issues[0].message,
 					),
 				);
+		const existing = await db.organization.findUnique({
+			where: { id: orgId },
+			select: costingSelect,
+		});
+		if (!existing)
+			return res
+				.status(404)
+				.json(createErrorResponse(ErrorCodes.NOT_FOUND, "Organization not found"));
 		const org = await db.organization.update({
 			where: { id: orgId },
 			data: parsed.data,
 			select: costingSelect,
 		});
-		await logActivity({
-			event_type: "organization_costing_updated",
-			action: "update",
-			entity_type: "organization",
-			entity_id: orgId,
-			organization_id: orgId,
-			actor_type: "user",
-			actor_id: req.user!.uid,
-		});
+		const changes = buildChanges(existing, parsed.data, COSTING_FIELDS);
+		if (Object.keys(changes).length > 0)
+			await logActivity({
+				event_type: "organization.costing_updated",
+				action: "updated",
+				entity_type: "organization",
+				entity_id: orgId,
+				organization_id: orgId,
+				...getActorInfo(getUserContext(req)),
+				changes,
+			});
 		res.json(createSuccessResponse(org));
 	} catch (err) {
 		next(err);

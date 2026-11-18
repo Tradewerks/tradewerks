@@ -894,7 +894,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 						    nested button gets double-activated by implicit
 						    click-forwarding. */}
 						<div>
-							<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+							<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 								<label htmlFor="fp-vendor">
 									{isRefund ? "Returned to" : "Vendor"}
 								</label>
@@ -928,7 +928,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							/>
 						</div>
 						<div className="mt-3">
-							<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+							<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 								<label htmlFor="fp-receipt-no">Receipt #</label>
 								<ReceiptValueDiff
 									label="Receipt #"
@@ -949,9 +949,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
 							/>
 						</div>
+						{/* Columns stretch to the taller one and each input sits at the
+						    bottom, so a receipt reading that wraps on one side does not
+						    drop that input below its neighbour. */}
 						<div className="mt-3 flex gap-2">
-							<div className="flex-1">
-								<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+							<div className="flex min-w-0 flex-1 flex-col">
+								<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 									<label htmlFor="fp-total">
 										{copy.totalLabel}
 									</label>
@@ -981,11 +984,11 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 												.value
 										)
 									}
-									className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm tabular-nums text-text-primary disabled:opacity-60"
+									className="mt-auto h-11 w-full rounded-md border border-border bg-surface px-2 text-sm tabular-nums text-text-primary disabled:opacity-60"
 								/>
 							</div>
-							<div className="flex-1">
-								<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+							<div className="flex min-w-0 flex-1 flex-col">
+								<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 									<label htmlFor="fp-tax">
 										Tax
 									</label>
@@ -1015,12 +1018,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 												.value
 										)
 									}
-									className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm tabular-nums text-text-primary disabled:opacity-60"
+									className="mt-auto h-11 w-full rounded-md border border-border bg-surface px-2 text-sm tabular-nums text-text-primary disabled:opacity-60"
 								/>
 							</div>
 						</div>
 						<div className="mt-3">
-							<div className="mb-1 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
+							<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 								<label htmlFor="fp-purchased-at">
 									{copy.dateLabel}
 								</label>

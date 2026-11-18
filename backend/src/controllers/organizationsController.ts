@@ -89,7 +89,7 @@ export const registerOrganization = async (data: unknown) => {
 			};
 		}
 		log.error({ err: e }, "Error registering organization");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -110,7 +110,7 @@ export const getOrgRoles = async (organizationId: string) => {
 			};
 		}
 		log.error({ err: e }, "Error getting organization roles");
-		return { err: "Internal server error" };
+		throw e;
 	}
 }
 
@@ -135,7 +135,7 @@ export const getOrgRoleById = async (id: string, organizationId: string) => {
 			};
 		}
 		log.error({ err: e }, "Error getting organization role");
-		return { err: "Internal server error" };
+		throw e;
 	}
 }
 
@@ -204,7 +204,7 @@ export const createOrgRole = async (
 			};
 		}
 		log.error({ err: e }, "Error creating organization role");
-		return { err: "Internal server error" };
+		throw e;
 	}
 }
 
@@ -295,7 +295,7 @@ export const updateOrgRole = async (
 			};
 		}
 		log.error({ err: e }, "Error updating organization role");
-		return { err: "Internal server error" };
+		throw e;
 	}
 }
 
@@ -354,19 +354,20 @@ export const deleteOrgRole = async (
 			};
 		}
 		log.error({ err: e }, "Error deleting organization role");
-		return { err: "Internal server error" };
+		throw e;
 	}
 }
 
 export const assignOrgRole = async (
-	userId: string,
-	userType: "dispatcher" | "technician",
-	roleId: string | null, // null to remove role
+	data: unknown,
 	organizationId: string,
 	context?: UserContext
 ) => {
 	try {
+		const parsed = assignOrgRoleSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
+
+		const { user_id: userId, role_id: roleId, user_type: userType } = parsed;
 
 		const role = roleId ? await sdb.organization_role.findFirst({
 			where: { id: roleId, organization_id: organizationId },
@@ -387,19 +388,17 @@ export const assignOrgRole = async (
 			return { err: "User not found" };
 		}
 
-	 	const updated = await sdb.$transaction(async (tx) => {
+		const updated = await sdb.$transaction(async (tx) => {
 			if (userType === "technician") {
 				await tx.technician.update({
 					where: { id: userId },
 					data: { organization_role_id: roleId },
 				});
-			} else if (userType === "dispatcher") {
+			} else {
 				await tx.dispatcher.update({
 					where: { id: userId },
 					data: { organization_role_id: roleId },
 				});
-			} else {
-				return { err: "Invalid user type" };
 			}
 
 			const changes = {
@@ -444,6 +443,6 @@ export const assignOrgRole = async (
 			};
 		}
 		log.error({ err: e }, "Error assigning organization role");
-		return { err: "Internal server error" };
+		throw e;
 	}
 }

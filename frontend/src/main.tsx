@@ -12,6 +12,9 @@ const AppRoot = lazy(() => import("./AppRoot"));
 const MARKETING_PAGES: Record<string, ReturnType<typeof lazy>> = {
 	"/terms": lazy(() => import("./components/landing/legal/TermsPage")),
 	"/privacy": lazy(() => import("./components/landing/legal/PrivacyPage")),
+	"/eula": lazy(() => import("./components/landing/legal/EULAPage")),
+	"/acceptable-use": lazy(() => import("./components/landing/legal/AcceptableUsePage")),
+	"/cookies": lazy(() => import("./components/landing/legal/CookiePage")),
 };
 
 const { pathname, search, hash } = window.location;

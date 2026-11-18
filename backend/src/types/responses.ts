@@ -1,3 +1,5 @@
+import type { Response } from "express";
+
 export interface ApiResponse<T = unknown> {
 	success: boolean;
 	data: T | null;
@@ -129,3 +131,14 @@ export const httpError = (
 	err.code = code;
 	return err;
 };
+
+// Controllers report a missing record as "<Thing> not found"; that's a 404 on every route.
+export const sendResultErr = (
+	res: Response,
+	err: string,
+	status = 400,
+	code: ErrorCode = ErrorCodes.VALIDATION_ERROR,
+) =>
+	/ not found$/.test(err)
+		? res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, err))
+		: res.status(status).json(createErrorResponse(code, err));

@@ -9,6 +9,7 @@ import {
 import { logActivity, buildChanges } from "../services/logger.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
+import { httpError, ErrorCodes } from "../types/responses.js";
 
 // ============================================================================
 // CONTACT CRUD
@@ -116,7 +117,7 @@ export const insertContact = async (data: unknown, organizationId: string, conte
 				});
 
 				if (!client) {
-					throw new Error("Client not found");
+					throw httpError(404, ErrorCodes.NOT_FOUND, "Client not found");
 				}
 
 				await tx.client_contact.create({
@@ -181,7 +182,7 @@ export const insertContact = async (data: unknown, organizationId: string, conte
 			};
 		}
 		log.error({ err: e }, "Insert contact error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -295,7 +296,7 @@ export const updateContact = async (
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -354,7 +355,7 @@ export const deleteContact = async (
 		return { err: "", message: "Contact deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Delete contact error");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };
 
@@ -450,7 +451,7 @@ export const linkContactToClient = async (
 			};
 		}
 		log.error({ err: e }, "Link contact error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -535,7 +536,7 @@ export const updateClientContact = async (
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -591,7 +592,7 @@ export const unlinkContactFromClient = async (
 
 		return { err: "", message: "Contact unlinked successfully" };
 	} catch (error) {
-		return { err: "Internal server error" };
+		throw error;
 	}
 };
 
@@ -641,6 +642,6 @@ export const searchContacts = async (
 		return { err: "", items: contacts };
 	} catch (error) {
 		log.error({ err: error }, "Search contacts error");
-		return { err: "Internal server error", items: [] };
+		throw error;
 	}
 };

@@ -5,8 +5,9 @@ import {
 	createTaxGroupSchema,
 	updateTaxGroupSchema,
 } from "../lib/validate/tax.js";
-import { getScopedDb } from "../lib/context.js";
+import { getScopedDb, getActorInfo, type UserContext } from "../lib/context.js";
 import { log } from "../services/appLogger.js";
+import { logActivity, buildChanges } from "../services/logger.js";
 import { computeCombinedRate } from "../services/taxEngine.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 
@@ -57,6 +58,34 @@ async function clearDefaults(
 /** Cast a `$transaction` callback's `tx` to `Prisma.TransactionClient` for `clearDefaults`. */
 const asTx = (tx: unknown) => tx as unknown as Prisma.TransactionClient;
 
+const RATE_FIELDS = [
+	"name",
+	"rate",
+	"description",
+	"jurisdiction",
+	"is_default",
+	"is_active",
+] as const;
+const GROUP_FIELDS = ["name", "description", "is_default", "is_active", "rate_ids"] as const;
+
+const logTax = (
+	entity_type: "tax_rate" | "tax_group",
+	action: "created" | "updated" | "deleted",
+	entity_id: string,
+	organization_id: string,
+	changes: Record<string, { old: unknown; new: unknown }>,
+	context?: UserContext,
+) =>
+	logActivity({
+		event_type: `${entity_type}.${action}`,
+		action,
+		entity_type,
+		entity_id,
+		organization_id,
+		...getActorInfo(context),
+		changes,
+	});
+
 // ============================================================================
 // TAX RATES
 // ============================================================================
@@ -72,6 +101,7 @@ export const getTaxRates = async (organizationId: string, includeInactive = fals
 export const createTaxRate = async (
 	data: unknown,
 	organizationId: string,
+	context?: UserContext,
 ): Promise<TaxResult<Awaited<ReturnType<ReturnType<typeof getScopedDb>["tax_rate"]["create"]>>>> => {
 	try {
 		const parsed = createTaxRateSchema.parse(data);
@@ -91,24 +121,35 @@ export const createTaxRate = async (
 			});
 		});
 
+		const changes = {
+			name: { old: null, new: created.name },
+			rate: { old: null, new: parsed.rate },
+		};
+		await logTax("tax_rate", "created", created.id, organizationId, changes, context);
+
 		return { ok: true, item: created };
 	} catch (e) {
 		return handleTaxError(e, "Create tax rate error");
 	}
 };
 
-export const updateTaxRate = async (id: string, data: unknown, organizationId: string) => {
+export const updateTaxRate = async (
+	id: string,
+	data: unknown,
+	organizationId: string,
+	context?: UserContext,
+) => {
 	try {
 		const parsed = updateTaxRateSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
 
-		const updated = await sdb.$transaction(async (tx) => {
+		const { existing, updated } = await sdb.$transaction(async (tx) => {
 			const existing = await tx.tax_rate.findFirst({ where: { id } });
 			if (!existing) throw Object.assign(new Error("Tax rate not found"), { code: "NOT_FOUND" });
 
 			if (parsed.is_default === true) await clearDefaults(asTx(tx), "tax_rate");
 
-			return tx.tax_rate.update({
+			const updated = await tx.tax_rate.update({
 				where: { id },
 				data: {
 					...(parsed.name !== undefined && { name: parsed.name }),
@@ -119,7 +160,12 @@ export const updateTaxRate = async (id: string, data: unknown, organizationId: s
 					...(parsed.is_active !== undefined && { is_active: parsed.is_active }),
 				},
 			});
+			return { existing, updated };
 		});
+
+		const changes = buildChanges(existing, parsed, RATE_FIELDS);
+		if (Object.keys(changes).length > 0)
+			await logTax("tax_rate", "updated", id, organizationId, changes, context);
 
 		return { ok: true as const, item: updated };
 	} catch (e) {
@@ -129,11 +175,11 @@ export const updateTaxRate = async (id: string, data: unknown, organizationId: s
 	}
 };
 
-export const deleteTaxRate = async (id: string, organizationId: string) => {
+export const deleteTaxRate = async (id: string, organizationId: string, context?: UserContext) => {
 	try {
 		const sdb = getScopedDb(organizationId);
 
-		return await sdb.$transaction(async (tx) => {
+		const result = await sdb.$transaction(async (tx) => {
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const ttx = tx as any;
 
@@ -152,8 +198,13 @@ export const deleteTaxRate = async (id: string, organizationId: string) => {
 				data: { is_active: false },
 			});
 
-			return { ok: true as const, item: { id } };
+			return { ok: true as const, item: { id }, name: existing.name as string };
 		});
+
+		if (!result.ok) return result;
+		const changes = { name: { old: result.name, new: null } };
+		await logTax("tax_rate", "deleted", id, organizationId, changes, context);
+		return { ok: true as const, item: result.item };
 	} catch (e) {
 		return handleTaxError(e, "Delete tax rate error");
 	}
@@ -201,7 +252,11 @@ export const getDefaultTaxGroup = async (organizationId: string) => {
 	};
 };
 
-export const createTaxGroup = async (data: unknown, organizationId: string) => {
+export const createTaxGroup = async (
+	data: unknown,
+	organizationId: string,
+	context?: UserContext,
+) => {
 	try {
 		const parsed = createTaxGroupSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
@@ -239,6 +294,12 @@ export const createTaxGroup = async (data: unknown, organizationId: string) => {
 			});
 		});
 
+		const changes = {
+			name: { old: null, new: created.name },
+			rate_ids: { old: null, new: parsed.rate_ids },
+		};
+		await logTax("tax_group", "created", created.id, organizationId, changes, context);
+
 		return {
 			ok: true as const,
 			item: { ...created, combined_rate: computeCombinedRate(created.rates) },
@@ -248,13 +309,23 @@ export const createTaxGroup = async (data: unknown, organizationId: string) => {
 	}
 };
 
-export const updateTaxGroup = async (id: string, data: unknown, organizationId: string) => {
+export const updateTaxGroup = async (
+	id: string,
+	data: unknown,
+	organizationId: string,
+	context?: UserContext,
+) => {
 	try {
 		const parsed = updateTaxGroupSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
 
-		const updated = await sdb.$transaction(async (tx) => {
-			const existing = await tx.tax_group.findFirst({ where: { id } });
+		const { existing, updated } = await sdb.$transaction(async (tx) => {
+			const existing = await tx.tax_group.findFirst({
+				where: { id },
+				include: {
+					rates: { select: { tax_rate_id: true }, orderBy: { sort_order: "asc" } },
+				},
+			});
 			if (!existing) throw Object.assign(new Error("Tax group not found"), { code: "NOT_FOUND" });
 
 			if (parsed.is_default === true) await clearDefaults(asTx(tx), "tax_group");
@@ -283,7 +354,7 @@ export const updateTaxGroup = async (id: string, data: unknown, organizationId: 
 				}
 			}
 
-			return tx.tax_group.update({
+			const updated = await tx.tax_group.update({
 				where: { id },
 				data: {
 					...(parsed.name !== undefined && { name: parsed.name }),
@@ -293,7 +364,13 @@ export const updateTaxGroup = async (id: string, data: unknown, organizationId: 
 				},
 				include: taxGroupInclude,
 			});
+			return { existing, updated };
 		});
+
+		const before = { ...existing, rate_ids: existing.rates.map((r) => r.tax_rate_id) };
+		const changes = buildChanges(before, parsed, GROUP_FIELDS);
+		if (Object.keys(changes).length > 0)
+			await logTax("tax_group", "updated", id, organizationId, changes, context);
 
 		return {
 			ok: true as const,
@@ -306,11 +383,11 @@ export const updateTaxGroup = async (id: string, data: unknown, organizationId: 
 	}
 };
 
-export const deleteTaxGroup = async (id: string, organizationId: string) => {
+export const deleteTaxGroup = async (id: string, organizationId: string, context?: UserContext) => {
 	try {
 		const sdb = getScopedDb(organizationId);
 
-		return await sdb.$transaction(async (tx) => {
+		const result = await sdb.$transaction(async (tx) => {
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			const ttx = tx as any;
 
@@ -355,8 +432,13 @@ export const deleteTaxGroup = async (id: string, organizationId: string) => {
 				data: { is_active: false },
 			});
 
-			return { ok: true as const, item: { id } };
+			return { ok: true as const, item: { id }, name: existing.name as string };
 		});
+
+		if (!result.ok) return result;
+		const changes = { name: { old: result.name, new: null } };
+		await logTax("tax_group", "deleted", id, organizationId, changes, context);
+		return { ok: true as const, item: result.item };
 	} catch (e) {
 		return handleTaxError(e, "Delete tax group error");
 	}

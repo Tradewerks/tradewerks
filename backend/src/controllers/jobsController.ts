@@ -22,6 +22,7 @@ import {
 	lineTaxFieldsForUpdate,
 } from "../lib/inventoryTaxable.js";
 import { log } from "../services/appLogger.js";
+import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 import { generateJobNumber } from "../db.js";
 import { DocumentRuleError } from "../lib/statusTransitions.js";
 import {
@@ -67,15 +68,50 @@ async function recomputeJobIfServerTaxed(
 	await recomputeJobTotals(jobId, organizationId, ptx);
 }
 
+// Helper functions to check if the tech is assigned to related job or visit
+const onVisit = (techId: string) => ({ visit_techs: { some: { tech_id: techId }}});
+
+export async function techOnJob(orgId: string, techId: string, jobId: string) {
+	const job = await getScopedDb(orgId).job.findFirst({
+		where: { id: jobId, visits: { some: onVisit(techId) }},
+		select: { id: true }
+	});
+	return !!job;
+}
+
+export async function techOnVisit(orgId: string, techId: string, visitId: string) {
+	const visit = await getScopedDb(orgId).job_visit.findFirst({
+		where: { id: visitId, ...onVisit(techId) },
+		select: { id: true },
+	});
+	return !!visit;
+}
+
+export async function techOnNote(orgId: string, techId: string, noteId: string) {
+	const note = await getScopedDb(orgId).job_note.findFirst({
+		where: {
+			id: noteId,
+			OR: [
+				{ visit: onVisit(techId) },
+				{ visit_id: null, job: { visits: { some: onVisit(techId) } } },
+			],
+		},
+		select: { id: true },
+	});
+	return !!note;
+}
+
 // ============================================================================
 // JOB CRUD
 // ============================================================================
 
-export const getAllJobs = async (organizationId: string) => {
+// With techId, only jobs that tech is on a visit of.
+export const getAllJobs = async (organizationId: string, techId?: string) => {
 	const now = new Date();
 	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
 	const sdb = getScopedDb(organizationId);
 	return await sdb.job.findMany({
+		where: techId ? { visits: { some: onVisit(techId) } } : undefined,
 		include: {
 			client: {
 				select: {
@@ -830,7 +866,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert job error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1296,7 +1332,7 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		}
 		if (e instanceof AddressTaxChoiceError) return { err: e.message };
 		log.error({ err: e }, "Update job error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1310,6 +1346,12 @@ export const deleteJob = async (id: string, organizationId: string, context?: Us
 		if (!existing) {
 			return { err: "Job not found" };
 		}
+
+		// The cascade drops these rows; read the files to clean up first.
+		const photos = await sdb.job_note_photo.findMany({
+			where: { note: { job_id: id } },
+			select: { photo_url: true },
+		});
 
 		await sdb.$transaction(async (tx) => {
 			await logActivity({
@@ -1339,13 +1381,14 @@ export const deleteJob = async (id: string, organizationId: string, context?: Us
 			});
 		});
 
+		deleteStoredFiles(photos.map((p) => p.photo_url), { jobId: id });
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Delete job error");
 		if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
 			return { err: "This job is on an invoice, so it can't be deleted. Cancel the job instead, or remove it from the invoice first." };
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1454,7 +1497,7 @@ export const insertJobLineItem = async (
 			};
 		}
 		log.error({ err: e }, "Insert job line item error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1582,7 +1625,7 @@ export const updateJobLineItem = async (
 			};
 		}
 		log.error({ err: e }, "Update job line item error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -1636,6 +1679,6 @@ export const deleteJobLineItem = async (
 		return { err: "", message: "Item deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Delete job line item error");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

@@ -183,7 +183,11 @@ export const insertClient = async (
 				client_id: created!.id,
 				is_primary: true,
 				relationship: "contact",
-			}, organizationId);
+			}, organizationId).catch((ce) => {
+				// The client already exists; a failed contact mustn't turn the create into a 500.
+				log.error({ err: ce }, "QuickBooks contact create failed");
+				return { err: "", existingContact: undefined };
+			});
 
 			// contact already exists in this org — link it instead of failing
 			if (contactResult.existingContact) {
@@ -208,7 +212,7 @@ export const insertClient = async (
 					.join(", ")}`,
 			};
 		}
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -316,7 +320,7 @@ export const updateClient = async (
 			};
 		}
 		if (e instanceof AddressTaxChoiceError) return { err: e.message };
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -392,6 +396,6 @@ export const deleteClient = async (
 		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
 			return { err: "This client has invoices or is linked to QuickBooks, so it can't be deleted. Mark the client inactive instead." };
 		}
-		return { err: "Failed to delete client. It may have related records." };
+		throw error;
 	}
 };

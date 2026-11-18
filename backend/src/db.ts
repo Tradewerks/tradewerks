@@ -20,6 +20,7 @@ export const SECRET_FIELD_OMIT = {
 		password_reset_token: true,
 		password_reset_token_expires_at: true,
 		hourly_rate: true,
+		cost_rate: true,
 	},
 	platform_staff: {
 		password: true,

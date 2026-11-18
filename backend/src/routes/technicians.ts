@@ -20,10 +20,12 @@ import {
 } from "../controllers/techniciansController.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
+import { setRefreshToken } from '../services/jwtService.js';
 import {
 	ErrorCodes,
 	createSuccessResponse,
 	createErrorResponse,
+	sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
 import { getJobVisitsByTechId } from '../controllers/jobVisitsController.js';
@@ -79,6 +81,8 @@ router.post("/", requirePermission("manage_technicians"), async (req, res, next)
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+        // without manage_roles the org's default role is used
+        if (!hasPermission(req, "manage_roles")) delete req.body?.organization_role_id;
         const result = await insertTechnician(req.body, orgId, context);
 
         if (result.err) {
@@ -245,6 +249,7 @@ router.post("/:id/change-password", async (req, res, next) => {
                     ),
                 );
         }
+        setRefreshToken(res, result.data!.refreshToken);
         res.json(createSuccessResponse(null));
     } catch (err) {
         next(err);
@@ -259,9 +264,7 @@ router.delete("/:id", requirePermission("manage_technicians"), async (req, res, 
         const result = await deleteTechnician(id, orgId, context);
 
         if (result.err) {
-            return res
-                .status(400)
-                .json(createErrorResponse(ErrorCodes.DELETE_ERROR, result.err));
+            return sendResultErr(res, result.err, 400, ErrorCodes.DELETE_ERROR);
         }
 
         res.status(200).json(
@@ -339,7 +342,7 @@ router.put("/:id/vehicle", requireModule("fleet"), requireAnyPermissionOrSelf(["
 });
 
 // Shift start (Offline → Available) or return from break
-router.post("/:id/available", async (req, res, next) => {
+router.post("/:id/available", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -381,7 +384,7 @@ router.post("/:id/available", async (req, res, next) => {
 });
 
 // Shift end → Offline
-router.post("/:id/offline", async (req, res, next) => {
+router.post("/:id/offline", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -394,8 +397,7 @@ router.post("/:id/offline", async (req, res, next) => {
 				: undefined;
 		const result = await goOffline(id, orgId, techCoords);
 		if (result.err) {
-			const status = result.err.includes("clocked into") ? 409 : 400;
-			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err, result.err.includes("clocked into") ? 409 : 400);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -412,7 +414,7 @@ router.post("/:id/offline", async (req, res, next) => {
 });
 
 // Take a break
-router.post("/:id/break", async (req, res, next) => {
+router.post("/:id/break", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -422,8 +424,7 @@ router.post("/:id/break", async (req, res, next) => {
 		}
 		const result = await goOnBreak(id, orgId, reason);
 		if (result.err) {
-			const status = result.err.includes("clocked into") ? 409 : 400;
-			return res.status(status).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err, result.err.includes("clocked into") ? 409 : 400);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -441,7 +442,7 @@ router.post("/:id/break", async (req, res, next) => {
 
 
 // Tech explicitly clears WrappingUp → Available
-router.post("/:id/done", async (req, res, next) => {
+router.post("/:id/done", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -450,7 +451,7 @@ router.post("/:id/done", async (req, res, next) => {
 		}).catch(() => {});
 		const result = await markAvailable(id, orgId, getUserContext(req));
 		if (result.err) {
-			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -467,7 +468,7 @@ router.post("/:id/done", async (req, res, next) => {
 });
 
 // Tech explicitly clears WrappingUp → EnRoute (heading back)
-router.post("/:id/head-back", async (req, res, next) => {
+router.post("/:id/head-back", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
@@ -476,7 +477,7 @@ router.post("/:id/head-back", async (req, res, next) => {
 		}).catch(() => {});
 		const result = await returnFromJob(orgId, id, getUserContext(req));
 		if (result.err) {
-			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+			return sendResultErr(res, result.err);
 		}
 		emitToOrg(orgId, "technician-update", result.item);
 		emitToOrg(orgId, "technician:status_changed", {
@@ -492,7 +493,7 @@ router.post("/:id/head-back", async (req, res, next) => {
 	}
 });
 
-router.post("/:id/mfa/reset", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
+router.post("/:id/mfa/reset", requirePermission("manage_technicians"), async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;

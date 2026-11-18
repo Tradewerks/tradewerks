@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { log } from "../services/appLogger.js";
-import { createErrorResponse, ErrorCodes } from "../types/responses.js";
+import { createErrorResponse, ErrorCodes, httpError } from "../types/responses.js";
 import {
     generateSecret,
     buildOtpAuthUri,
@@ -10,7 +10,7 @@ import {
 import { encryptSecret } from "../services/crypto.js";
 import { acceptTotp, spendRecoveryCode } from "../services/mfaCode.js";
 import { issueAuthTokens } from "./authenticationController.js";
-import { verifyPendingToken } from "../services/jwtService.js";
+import { generateRefreshToken, setRefreshToken, verifyPendingToken } from "../services/jwtService.js";
 import { logActivity } from "../services/logger.js";
 import bcrypt from "bcryptjs";
 import { Response } from "express";
@@ -58,6 +58,11 @@ async function getOrgId(userId: string, role: string): Promise<string | null> {
 }
 
 export async function setupTotp(userId: string, role: string): Promise<{ otpAuthUri: string; secret: string }> {
+    const existing = await db.mfa_credential.findUnique({where: { user_id_role: { user_id: userId, role }}});
+    if (existing?.enabled){
+        throw httpError(400, ErrorCodes.VALIDATION_ERROR, "MFA is already enabled");
+    }
+
     const { email, orgName } = await resolveEmailOrg(userId, role);
     const secret = generateSecret();
     await db.mfa_credential.upsert({
@@ -94,6 +99,7 @@ export async function enableTotp(userId: string, role: string, code: string, via
         await tx.mfa_recovery_code.createMany({
             data: hashed_codes.map((code) => ({ user_id: userId, role, code })),
         });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: userId }})
     });
 
     const organization_id = await getOrgId(userId, role);
@@ -111,7 +117,32 @@ export async function enableTotp(userId: string, role: string, code: string, via
         const result = await issueAuthTokens(res, userId, role);
         return { data: { backupCodes: codes, session: result?.data ?? null } };
     }
+    const { email } = await resolveEmailOrg(userId, role);
+    setRefreshToken(res, await generateRefreshToken({ id: userId, email, organization_id }, role));
     return { data: { backupCodes: codes } };
+}
+
+export type MfaCodeResult = "ok" | "invalid" | "locked" | "not_enabled";
+
+export async function checkMfaCode(userId: string, role: string, code?: string, backupCode?: string): Promise<MfaCodeResult> {
+    const credential = await db.mfa_credential.findUnique({
+        where: { user_id_role: { user_id: userId, role: role } }
+    });
+    if (!credential?.enabled) return "not_enabled";
+    if (isLocked(credential)) return "locked";
+
+    const ok = (await acceptTotp(credential, code)) || (await spendRecoveryCode(userId, role, backupCode));
+    if (!ok) {
+        const attempts = await countFailedCode(credential.id);
+        log.info({ userId, role, attempts }, "MFA verify failed");
+        return "invalid";
+    }
+
+    await db.mfa_credential.update({
+        where: { id: credential.id },
+        data: { failed_attempts: 0, locked_until: null}
+    });
+    return "ok";
 }
 
 export async function verifyMfa(res: Response, pendingToken: string, code?: string, backupCode?: string) {
@@ -119,29 +150,10 @@ export async function verifyMfa(res: Response, pendingToken: string, code?: stri
     if (pt.stage !== "pending_totp") {
         return createErrorResponse(ErrorCodes.INVALID_TOKEN, "Invalid session");
     }
-    const credential = await db.mfa_credential.findUnique({
-        where: { user_id_role: { user_id: pt.userId, role: pt.role } }
-    });
-    if (!credential || !credential.enabled) {
-        return createErrorResponse(ErrorCodes.INVALID_TOKEN, "MFA not enabled");
-    }
-    if (isLocked(credential)) {
-        return createErrorResponse(ErrorCodes.TOO_MANY_REQUESTS, "Too many attempts. Try again later.");
-    }
-
-    const ok =
-        (await acceptTotp(credential, code)) ||
-        (await spendRecoveryCode(pt.userId, pt.role, backupCode));
-    if (!ok) {
-        const attempts = await countFailedCode(credential.id);
-        log.info({ userId: pt.userId, role: pt.role, attempts }, "MFA verify failed");
-        return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
-    }
-
-    await db.mfa_credential.update({
-        where: { id: credential.id },
-        data: { failed_attempts: 0, locked_until: null },
-    });
+    const result = await checkMfaCode(pt.userId, pt.role, code, backupCode);
+    if (result === "not_enabled") return createErrorResponse(ErrorCodes.INVALID_TOKEN, "MFA not enabled");
+    if (result === "locked") return createErrorResponse(ErrorCodes.TOO_MANY_REQUESTS, "Too many attempts. Try again later.");
+    if (result === "invalid") return createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid code");
     return issueAuthTokens(res, pt.userId, pt.role);
 }
 
@@ -178,6 +190,7 @@ export async function disableTotp(userId: string, role: string, password?: strin
     await db.$transaction(async (tx) => {
         await tx.mfa_credential.deleteMany({ where: { user_id: userId, role } });
         await tx.mfa_recovery_code.deleteMany({ where: { user_id: userId, role } });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId } });
     });
     await logActivity({
         event_type: "mfa.disabled",
@@ -188,7 +201,8 @@ export async function disableTotp(userId: string, role: string, password?: strin
         actor_type: actorTypeFor(role),
         actor_id: userId,
     });
-    return { data: null };
+    const refreshToken = await generateRefreshToken(user, role);
+    return { data: { refreshToken } };
 }
 
 export async function getMfaStatus(userId: string, role: string) {
@@ -205,6 +219,7 @@ export async function resetMfa(targetUserId: string, targetRole: string, actorId
     await db.$transaction(async (tx) => {
         await tx.mfa_credential.deleteMany({ where: { user_id: targetUserId, role: { in: roles } } });
         await tx.mfa_recovery_code.deleteMany({ where: { user_id: targetUserId, role: { in: roles } } });
+        await tx.jwt_refresh_token.deleteMany({ where: { userId: targetUserId }});
     });
     await logActivity({
         event_type: "mfa.reset",

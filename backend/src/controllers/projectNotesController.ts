@@ -9,7 +9,8 @@ import { emitToOrg } from "../services/socketService.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
-import { signImageUrl, deleteFile } from "../services/wasabiService.js";
+import { signImageUrl } from "../services/wasabiService.js";
+import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 
 type NoteLike = { photos?: { photo_url: string }[] | null } | null | undefined;
 
@@ -134,7 +135,7 @@ export const insertProjectNote = async (
 			};
 		}
 		log.error({ err: e }, "Error inserting project note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -235,11 +236,7 @@ export const updateProjectNote = async (
 		});
 
 		if (!updated) return { err: "Failed to update note" };
-		for (const url of removedPhotoUrls) {
-			deleteFile(url).catch((err) =>
-				log.warn({ err, url, noteId }, "Failed to delete removed project note photo from storage"),
-			);
-		}
+		deleteStoredFiles(removedPhotoUrls, { noteId });
 		const signed = await signNotePhotos(updated);
 		emitToOrg(organizationId, "project:updated", { projectId });
 		return { err: "", item: signed };
@@ -250,7 +247,7 @@ export const updateProjectNote = async (
 			};
 		}
 		log.error({ err: e }, "Error updating project note");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -264,6 +261,7 @@ export const deleteProjectNote = async (
 		const sdb = getScopedDb(organizationId);
 		const existing = await sdb.project_note.findFirst({
 			where: { id: noteId, project_id: projectId },
+			include: { photos: { select: { photo_url: true } } },
 		});
 
 		if (!existing) {
@@ -294,10 +292,11 @@ export const deleteProjectNote = async (
 			await tx.project_note.delete({ where: { id: noteId } });
 		});
 
+		deleteStoredFiles(existing.photos.map((p) => p.photo_url), { noteId });
 		emitToOrg(organizationId, "project:updated", { projectId });
 		return { err: "", message: "Note deleted successfully" };
 	} catch (error) {
 		log.error({ err: error }, "Error deleting project note");
-		return { err: "Internal server error" };
+		throw error;
 	}
 };

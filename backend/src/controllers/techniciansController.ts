@@ -27,6 +27,7 @@ import { assertSeatAvailable, OPEN_VISIT_STATUSES } from "../lib/entitlements/se
 import type { HttpError } from "../types/responses.js";
 import { setUserActive } from "../services/userActiveCache.js";
 import { getSocket } from "../services/socketService.js";
+import { generateRefreshToken } from "../services/jwtService.js";
 
 const VALID_BREAK_REASONS = new Set<string>([
 	"Lunch",
@@ -141,9 +142,13 @@ export const insertTechnician = async (
 			return { err: "Email already exists" };
 		}
 
+		const roleId = parsed.organization_role_id
+            ? (await sdb.organization_role.findFirst({ where: { id: parsed.organization_role_id, base_tier: "technician" }, select: { id: true } }))?.id
+            : (await sdb.organization_role.findFirst({ where: { base_tier: "technician", is_default: true }, select: { id: true } }))?.id ?? null;
+        if (roleId === undefined) return { err: "Role not found" };
+
 		const passwordProvided = parsed.password ? true : false;
-		const tempPassword =
-			parsed.password ?? randomBytes(8).toString("hex") + "A1!";
+		const tempPassword = parsed.password ?? randomBytes(8).toString("hex") + "A1!";
 		const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
 		const created = await sdb.$transaction(async (tx) => {
@@ -152,6 +157,7 @@ export const insertTechnician = async (
 			const technician = await tx.technician.create({
 				data: {
 					...parsedWithoutPassword,
+					organization_role_id: roleId,
 					organization_id: organizationId,
 					password: hashedPassword,
 					...(passwordProvided && { last_login: new Date() }),
@@ -211,7 +217,7 @@ export const insertTechnician = async (
 			};
 		}
 		log.error({ err: e }, "Error inserting technician");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -227,7 +233,8 @@ export const updateTechnician = async (
 		if (parsed.email) parsed.email = parsed.email.toLowerCase();
 		const sdb = getScopedDb(organizationId);
 
-		const existing = await sdb.technician.findFirst({ where: { id } });
+		// cost_rate is globally omitted; the history diff needs the old value.
+		const existing = await sdb.technician.findFirst({ where: { id }, omit: { cost_rate: false } });
 
 		if (!existing) {
 			return { err: "Technician not found" };
@@ -304,7 +311,7 @@ export const updateTechnician = async (
 			};
 		}
 		log.error({ err: e }, "Error updating technician");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -387,7 +394,7 @@ export const updateTechnicianLocation = async (
 			};
 		}
 		log.error({ err: e }, "Error updating technician");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -452,7 +459,7 @@ export const deleteTechnician = async (
 		if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
             return { err: "This technician has work history. Deactivate them instead." };
         }
-		return { err: "Internal server error" };
+		throw error;
 	}
 };
 
@@ -493,7 +500,7 @@ export const startShift = async (techId: string, organizationId: string) => {
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "startShift failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -638,7 +645,7 @@ export const goOffline = async (techId: string, organizationId: string, techCord
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "goOffline failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -709,7 +716,7 @@ export const goOnBreak = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "goOnBreak failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -780,7 +787,7 @@ export const returnFromBreak = async (
 		return { err: "", item: updated };
 	} catch (e) {
 		log.error({ err: e }, "returnFromBreak failed");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -815,6 +822,8 @@ export const changeTechnicianPassword = async (
 			},
 		});
 
+		await tx.jwt_refresh_token.deleteMany({ where: { userId: id }});
+
 		await logActivity({
 			event_type: "technician.password.changed",
 			action: "changed",
@@ -836,7 +845,8 @@ export const changeTechnicianPassword = async (
 			user_agent: context?.userAgent,
 		});
 	});
-	return { message: "Password updated successfully", err: ""};
+	const refreshToken = await generateRefreshToken(technician, "technician");
+	return { data: { refreshToken }, err: ""};
 };
 
 export const returnFromJob = async(orgId: string, technicianId: string, context?: UserContext) => {
@@ -895,7 +905,7 @@ export const returnFromJob = async(orgId: string, technicianId: string, context?
 		return { item: result, err: ""};
 	} catch (err) {
 		log.error({ err }, "returnFromJob failed");
-		return { err: "Internal server error" };
+		throw err;
 	}
 }
 

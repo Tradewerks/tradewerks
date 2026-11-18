@@ -114,7 +114,13 @@ function makeSdb(stockItem: unknown = makeStockItem()) {
 
 	const sdb = {
 		vehicle_stock_item: { findFirst: vi.fn().mockResolvedValue(stockItem) },
-		job_visit: { findFirst: vi.fn().mockResolvedValue({ id: VISIT_ID }) },
+		job_visit: {
+			findFirst: vi.fn().mockResolvedValue({
+				status: "InProgress",
+				_count: { invoice_visits: 0 },
+			}),
+		},
+		technician: { findFirst: vi.fn().mockResolvedValue({ id: TECH_ID }) },
 		$transaction: vi.fn().mockImplementation(
 			async (fn: (tx: typeof tx) => unknown) => fn(tx),
 		),
@@ -314,5 +320,55 @@ describe("addPartsUsed", () => {
 
 		expect(result.err).toBe("");
 		expect(mockRecordMovements).toHaveBeenCalledTimes(1);
+	});
+
+	// ── Frozen visits and attribution ──────────────────────────────────────────
+
+	it.each([
+		[{ status: "Completed", _count: { invoice_visits: 0 } }, /Completed visit/],
+		[{ status: "Cancelled", _count: { invoice_visits: 0 } }, /Cancelled visit/],
+		[{ status: "InProgress", _count: { invoice_visits: 1 } }, /invoiced/],
+	])("refuses a frozen visit %o without touching stock", async (visit, msg) => {
+		const sdb = makeSdb();
+		sdb.job_visit.findFirst.mockResolvedValue(visit);
+
+		const result = await addPartsUsed(
+			VISIT_ID,
+			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: TECH_ID },
+			ORG_ID,
+		);
+
+		expect(result.err).toMatch(msg);
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("refuses a technician_id outside the org", async () => {
+		const sdb = makeSdb();
+		sdb.technician.findFirst.mockResolvedValue(null);
+
+		const result = await addPartsUsed(
+			VISIT_ID,
+			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: TECH_ID },
+			ORG_ID,
+		);
+
+		expect(result.err).toBe("Technician not found");
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("records the caller as the ledger actor, not the body technician_id", async () => {
+		makeSdb();
+
+		await addPartsUsed(
+			VISIT_ID,
+			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: TECH_ID },
+			ORG_ID,
+			{ dispatcherId: "disp-1" } as never,
+		);
+
+		expect(mockRecordMovements.mock.calls.at(-1)![2]).toEqual({
+			actor_type: "dispatcher",
+			actor_id: "disp-1",
+		});
 	});
 });

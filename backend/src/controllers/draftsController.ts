@@ -65,7 +65,7 @@ export const getAllDrafts = async (req: Request) => {
 			};
 		}
 		log.error({ err: e }, "Get all drafts error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -83,7 +83,7 @@ export const getDraftById = async (id: string, organizationId: string) => {
 		return { err: "", item: draft };
 	} catch (e) {
 		log.error({ err: e }, "Get draft by id error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -116,7 +116,7 @@ export const insertDraft = async (req: Request) => {
 			};
 		}
 		log.error({ err: e }, "Insert draft error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -156,7 +156,7 @@ export const updateDraft = async (id: string, req: Request) => {
 			};
 		}
 		log.error({ err: e }, "Update draft error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };
 
@@ -176,6 +176,6 @@ export const deleteDraft = async (id: string, organizationId: string) => {
 		return { err: "", item: { id } };
 	} catch (e) {
 		log.error({ err: e }, "Delete draft error");
-		return { err: "Internal server error" };
+		throw e;
 	}
 };

@@ -377,6 +377,46 @@ describe("org routes — settings audit log", () => {
 	});
 });
 
+describe("PATCH /org/costing — audit log", () => {
+	const stored = {
+		monthly_overhead: new Prisma.Decimal("1000"),
+		cost_per_mile: new Prisma.Decimal("0.65"),
+		overhead_rate_per_hour: null,
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockDb.organization.findUnique.mockResolvedValue(stored as never);
+		mockDb.organization.update.mockResolvedValue(stored as never);
+	});
+
+	it("logs organization.costing_updated with only the changed fields", async () => {
+		const req = makeReq({
+			user: { uid: "disp-1", organization_id: "org-1", role: "admin", permissions: [] },
+			body: { monthly_overhead: "1000", cost_per_mile: "0.70" },
+		} as Partial<Request>);
+		await runChain(getHandlers("patch", "/costing"), req, makeRes());
+
+		expect(logActivity).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event_type: "organization.costing_updated",
+				action: "updated",
+				entity_id: "org-1",
+				actor_type: "dispatcher",
+				actor_id: "disp-1",
+				changes: { cost_per_mile: { old: stored.cost_per_mile, new: 0.7 } },
+			}),
+		);
+	});
+
+	it("writes no log when nothing changed", async () => {
+		const req = makeReq({ body: { monthly_overhead: "1000", cost_per_mile: "0.65" } });
+		await runChain(getHandlers("patch", "/costing"), req, makeRes());
+
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+});
+
 describe("GET /org/entitlements usage (build plan 2)", () => {
 	it("includes usage for admins", async () => {
 		const r = await callRoute(orgEntitlementsRouter, "get", "/", {

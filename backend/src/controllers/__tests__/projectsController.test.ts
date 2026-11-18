@@ -125,6 +125,7 @@ function makeSdb(opts: {
 	};
 	const sdb = {
 		project: { findFirst: vi.fn().mockResolvedValue(existing) },
+		project_note_photo: { findMany: vi.fn().mockResolvedValue([]) },
 		dispatcher: {
 			findFirst: vi.fn().mockResolvedValue("dispatcher" in opts ? opts.dispatcher : { id: DISPATCHER_ID }),
 		},
