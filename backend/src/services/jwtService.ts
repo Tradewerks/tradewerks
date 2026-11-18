@@ -251,17 +251,17 @@ export const refreshAccessToken = async (refreshToken: string) => {
             permissions = [];
         }
         const jwtResult = jwt.sign(
-                    {
-                        uid: user.id,
-                        email: dbUser.email,
-                        role,
-                        organization_id: dbUser.organization_id ?? null,
-                        organization_timezone: orgTimezone,
-                        permissions,
-                    },
-                    JWT_SECRET,
-                    {expiresIn : '24h'}
-                );
+					{
+						uid: user.id,
+						email: dbUser.email,
+						role,
+						organization_id: dbUser.organization_id ?? null,
+						organization_timezone: orgTimezone,
+						permissions,
+					},
+					JWT_SECRET,
+					{expiresIn : '15m'}
+				);
 
 		return jwtResult;
 	} catch (e) {

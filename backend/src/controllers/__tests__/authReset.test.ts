@@ -248,6 +248,8 @@ describe("refreshAccessToken — role/permissions are re-read from the DB (revie
 		expect(claims.permissions).toEqual(["view_jobs"]);
 		expect(claims.email).toBe("d@x.com");
 		expect(claims.organization_timezone).toBe("America/Chicago");
+		// Same 15m life as login, so permission changes and revoked sessions apply quickly.
+		expect((claims.exp as number) - (claims.iat as number)).toBe(15 * 60);
 	});
 
 	it("mints admin permissions only when the row says admin", async () => {
