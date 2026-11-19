@@ -1,6 +1,7 @@
 import { isModuleOn } from "../services/entitlementService.js";
 import { ZodError } from "zod";
 import { db, generatePurchaseNumber } from "../db.js";
+import { isClientMessage } from "../types/responses.js";
 import { getScopedDb, getUserContext, type UserContext } from "../lib/context.js";
 import {
 	createPurchaseSchema,
@@ -229,7 +230,7 @@ function toErr(err: unknown): { err: string } {
 	if (err instanceof ZodError) {
 		return { err: `Validation failed: ${err.issues.map((i) => i.message).join(", ")}` };
 	}
-	if (err instanceof Error) return { err: err.message };
+	if (isClientMessage(err)) return { err: err.message };
 	throw err;
 }
 

@@ -2,6 +2,7 @@ import { ZodError } from "zod";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { fillCoords } from "../lib/geocode.js";
 import { db } from "../db.js";
+import { isClientMessage } from "../types/responses.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { emitToOrg } from "../services/socketService.js";
 import {
@@ -862,7 +863,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					.join(", ")}`,
 			};
 		}
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert job error");

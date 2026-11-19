@@ -37,7 +37,7 @@ import {
 	voidBlockedByPaymentReason,
 } from "../services/disputeAdapters.js";
 import { openDisputeStatusChangeRefusal } from "../services/disputeService.js";
-import { ErrorCodes, createSuccessResponse, createErrorResponse } from "../types/responses.js";
+import { ErrorCodes, createSuccessResponse, createErrorResponse, isClientMessage } from "../types/responses.js";
 import {
 	type CreateInvoicePayload,
 	createInvoiceRecord,
@@ -248,7 +248,7 @@ export const insertInvoice = async (req: Request, organizationId: string, contex
 				err: `Validation failed: ${e.issues.map((i) => i.message).join(", ")}`,
 			};
 		}
-		if (e instanceof Error) return { err: e.message };
+		if (isClientMessage(e)) return { err: e.message };
 		log.error({ err: e }, "Insert invoice error");
 		throw e;
 	}

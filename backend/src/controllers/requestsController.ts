@@ -9,6 +9,7 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { log } from "../services/appLogger.js";
+import { isClientMessage } from "../types/responses.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { fillCoords } from "../lib/geocode.js";
 import { formatZodError } from "../lib/validate/shared.js";
@@ -231,7 +232,7 @@ export const insertRequest = async (req: Request, organizationId: string, contex
 		if (e instanceof ZodError) {
 			return { err: formatZodError(e) };
 		}
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert request error");

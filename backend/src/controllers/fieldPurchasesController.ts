@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { ZodError } from "zod";
 import { Prisma, type line_item_disposition } from "../../generated/prisma/client.js";
 import { db } from "../db.js";
+import { isClientMessage } from "../types/responses.js";
 import { wallClockToInstant } from "../lib/dayRange.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { logActivity } from "../services/logger.js";
@@ -438,7 +439,7 @@ function toErr(err: unknown): { err: string } {
 	if (err instanceof ZodError) {
 		return { err: `Validation failed: ${err.issues.map((i) => i.message).join(", ")}` };
 	}
-	if (err instanceof Error) return { err: err.message };
+	if (isClientMessage(err)) return { err: err.message };
 	throw err;
 }
 

@@ -47,6 +47,7 @@ import {
 	type ScheduleFrequency,
 } from "../lib/invoiceSchedule.js";
 import { log } from "../services/appLogger.js";
+import { isClientMessage } from "../types/responses.js";
 import { generateJobNumber } from "../db.js";
 import { assertValidRecurringPlanTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
 
@@ -719,7 +720,7 @@ export const insertRecurringPlan = async (
 					.join(", ")}`,
 			};
 		}
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert recurring plan error");
@@ -1561,7 +1562,7 @@ export const generateOccurrences = async (
 					.join(", ")}`,
 			};
 		}
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Generate occurrences error");
@@ -1762,7 +1763,7 @@ export const rescheduleOccurrence = async (
 		}
 
 		log.error({ err: e }, "Reschedule occurrence error");
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		throw e;
@@ -1988,7 +1989,7 @@ export const generateVisitFromOccurrence = async (
 
 		return { err: "", item: result };
 	} catch (e) {
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Generate visit from occurrence error");

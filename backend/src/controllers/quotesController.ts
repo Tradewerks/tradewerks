@@ -51,6 +51,7 @@ import {
 	choiceActor,
 	keptFamily,
 } from "../lib/addressTaxChoice.js";
+import { isClientMessage } from "../types/responses.js";
 
 // Matches the frontend's isQuoteEditable.
 const EDITABLE_QUOTE_STATUSES: ReadonlySet<string> = new Set(["Draft", "Issued", "Sent", "Viewed"]);
@@ -408,7 +409,7 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 					.join(", ")}`,
 			};
 		}
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert quote error");

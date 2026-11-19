@@ -148,3 +148,7 @@ export const sendResultErr = (
 	/ not found$/.test(err)
 		? res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, err))
 		: res.status(status).json(createErrorResponse(code, err));
+
+// Prisma's messages carry query and schema internals; let those reach the 500 handler.
+export const isClientMessage = (e: unknown): e is Error =>
+	e instanceof Error && !e.name.startsWith("PrismaClient");

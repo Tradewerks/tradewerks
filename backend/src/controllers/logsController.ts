@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getScopedDb } from "../lib/context.js";
 import { log } from "../services/appLogger.js";
 import { Prisma } from "../../generated/prisma/client.js";
-import { createErrorResponse, createSuccessResponse, ErrorCodes } from "../types/responses.js";
+import { createErrorResponse, createSuccessResponse, ErrorCodes, isClientMessage } from "../types/responses.js";
 import { FEED_EVENT_TYPES } from "../lib/activityFeedEvents.js";
 import { weekRangeIn, weekStartOf } from "../lib/dayRange.js";
 
@@ -372,7 +372,7 @@ export const getActorHistory = async (orgId: string, type: actor, id: string, li
         return { err: "", rows: page, hasMore, total };
 
     } catch (err) {
-        if (err instanceof Error) {
+        if (isClientMessage(err)) {
             return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
         }
         log.error({ err }, "Get actor history error");
@@ -452,7 +452,7 @@ export const getEntityHistory = async (orgId: string, type: entity, id: string, 
 
         return { err: "", rows: page, hasMore, total };
     } catch (err) {
-        if (err instanceof Error) {
+        if (isClientMessage(err)) {
             return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
         }
         log.error({ err }, "Get entity history error");
@@ -498,7 +498,7 @@ export const getUserHistory = async (orgId: string, type: actor, id: string, lim
 
         return { err: "", rows: page, hasMore, total };
     } catch (err) {
-        if (err instanceof Error) {
+        if (isClientMessage(err)) {
             return { err: err.message, rows: [] as log_row[], hasMore: false, total: 0 };
         }
         log.error({ err }, "Get user history error");

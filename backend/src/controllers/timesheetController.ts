@@ -1,6 +1,7 @@
 import z, { ZodError } from "zod";
 import type { technician_shift } from "../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
+import { isClientMessage } from "../types/responses.js";
 import { localDateString, weekRangeIn, weekStartOf } from "../lib/dayRange.js";
 import { approveTimesheetSchema, editShiftSchema, PAID_BREAK_REASONS, reviewCorrectionSchema } from "../lib/validate/timesheets.js";
 import { logActivity } from "../services/logger.js";
@@ -73,7 +74,7 @@ function toErr(err: unknown): { err: string } {
     if (err instanceof ZodError) {
         return { err: `Validation failed: ${err.issues.map((i) => i.message).join(", ")}` };
     }
-    if (err instanceof Error) return { err: err.message };
+    if (isClientMessage(err)) return { err: err.message };
     throw err;
 }
 

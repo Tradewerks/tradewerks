@@ -7,6 +7,7 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { log } from "../services/appLogger.js";
+import { isClientMessage } from "../types/responses.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 
 // ============================================================================
@@ -107,7 +108,7 @@ export const insertRecurringPlanNote = async (
 				err: `Validation failed: ${e.issues.map((err) => err.message).join(", ")}`,
 			};
 		}
-		if (e instanceof Error) {
+		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
 		log.error({ err: e }, "Insert recurring plan note error");
