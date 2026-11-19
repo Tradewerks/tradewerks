@@ -48,6 +48,13 @@ import {
 import { applyOdometerIncrement, fetchRouteDistanceMiles } from "../lib/vehicleMileage.js";
 import { formatLocalDate, formatLocalTime } from "../lib/formatLocal.js";
 
+export class VisitConflictError extends Error {
+	constructor(readonly currentUpdatedAt: Date | null) {
+		super("This visit was changed by someone else.");
+		this.name = "VisitConflictError";
+	}
+}
+
 const VALID_PAUSE_REASONS = new Set<string>(["AwaitingMaterials", "EquipmentIssue", "Break", "Other"]);
 function toPauseReason(v: string | undefined): pause_reason_type | undefined {
 	if (!v || !VALID_PAUSE_REASONS.has(v)) return undefined;
@@ -715,61 +722,71 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 			parsed.status === "Completed" && existingVisit.status !== "Completed";
 		const updated = await sdb.$transaction(async (tx) => {
 			// ── Scalar field update ───────────────────────────────────────
-			const visit = await tx.job_visit.update({
-				where: { id },
-				data: {
-					...(parsed.name !== undefined && { name: parsed.name }),
-					...(parsed.description !== undefined && {
-						description: parsed.description,
-					}),
-					...(parsed.arrival_constraint !== undefined && {
-						arrival_constraint: parsed.arrival_constraint,
-					}),
-					...(parsed.finish_constraint !== undefined && {
-						finish_constraint: parsed.finish_constraint,
-					}),
-					...(parsed.scheduled_start_at !== undefined && {
-						scheduled_start_at: parsed.scheduled_start_at,
-					}),
-					...(parsed.scheduled_end_at !== undefined && {
-						scheduled_end_at: parsed.scheduled_end_at,
-					}),
-					...(parsed.arrival_time !== undefined && {
-						arrival_time: parsed.arrival_time,
-					}),
-					...(parsed.arrival_window_start !== undefined && {
-						arrival_window_start: parsed.arrival_window_start,
-					}),
-					...(parsed.arrival_window_end !== undefined && {
-						arrival_window_end: parsed.arrival_window_end,
-					}),
-					...(parsed.finish_time !== undefined && {
-						finish_time: parsed.finish_time,
-					}),
-					...(parsed.actual_start_at !== undefined && {
-						actual_start_at: parsed.actual_start_at,
-					}),
-					...(parsed.actual_end_at !== undefined && {
-						actual_end_at: parsed.actual_end_at,
-					}),
-					...(parsed.status !== undefined && {
-						status: parsed.status,
-					}),
-					// Same stamps as the "complete" action: the completed-visit
-					// link lifetime is measured from actual_end_at.
-					...(completing &&
-						parsed.actual_end_at === undefined &&
-						!existingVisit.actual_end_at && { actual_end_at: new Date() }),
-					...(completing &&
-						parsed.actual_start_at === undefined &&
-						!existingVisit.actual_start_at && { actual_start_at: new Date() }),
-				},
-				include: {
-					job: true,
-					visit_techs: { include: { tech: true } },
-					notes: true,
-				},
-			});
+			// Runs first so a stale token throws before any line item is
+			// touched; the throw rolls the whole transaction back regardless.
+			const scalarData = {
+				...(parsed.name !== undefined && { name: parsed.name }),
+				...(parsed.description !== undefined && {
+					description: parsed.description,
+				}),
+				...(parsed.arrival_constraint !== undefined && {
+					arrival_constraint: parsed.arrival_constraint,
+				}),
+				...(parsed.finish_constraint !== undefined && {
+					finish_constraint: parsed.finish_constraint,
+				}),
+				...(parsed.scheduled_start_at !== undefined && {
+					scheduled_start_at: parsed.scheduled_start_at,
+				}),
+				...(parsed.scheduled_end_at !== undefined && {
+					scheduled_end_at: parsed.scheduled_end_at,
+				}),
+				...(parsed.arrival_time !== undefined && {
+					arrival_time: parsed.arrival_time,
+				}),
+				...(parsed.arrival_window_start !== undefined && {
+					arrival_window_start: parsed.arrival_window_start,
+				}),
+				...(parsed.arrival_window_end !== undefined && {
+					arrival_window_end: parsed.arrival_window_end,
+				}),
+				...(parsed.finish_time !== undefined && {
+					finish_time: parsed.finish_time,
+				}),
+				...(parsed.actual_start_at !== undefined && {
+					actual_start_at: parsed.actual_start_at,
+				}),
+				...(parsed.actual_end_at !== undefined && {
+					actual_end_at: parsed.actual_end_at,
+				}),
+				...(parsed.status !== undefined && {
+					status: parsed.status,
+				}),
+				// Same stamps as the "complete" action: the completed-visit
+				// link lifetime is measured from actual_end_at.
+				...(completing &&
+					parsed.actual_end_at === undefined &&
+					!existingVisit.actual_end_at && { actual_end_at: new Date() }),
+				...(completing &&
+					parsed.actual_start_at === undefined &&
+					!existingVisit.actual_start_at && { actual_start_at: new Date() }),
+			};
+			if (parsed.expected_updated_at !== undefined) {
+				const { count } = await tx.job_visit.updateMany({
+					where: { id, updated_at: new Date(parsed.expected_updated_at) },
+					// Explicit stamp: a line-items-only save must still move the token.
+					data: { ...scalarData, updated_at: new Date() },
+				});
+				if (count === 0) {
+					const current = await tx.job_visit.findFirst({
+						where: { id },
+						select: { updated_at: true },
+					});
+					throw new VisitConflictError(current?.updated_at ?? null);
+				}
+			} else {
+				await tx.job_visit.update({ where: { id }, data: scalarData });
+			}
 
 			// ── Line item replacement ─────────────────────────────────────
 			// Full replace: incoming array is the source of truth.
@@ -1172,6 +1189,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		if (jobJustCompleted) void notifyJobCompleted(existingVisit.job_id, organizationId);
 		return { err: "", item: updated };
 	} catch (e) {
+		if (e instanceof VisitConflictError) {
+			return {
+				err: e.message,
+				code: "CONFLICT" as const,
+				current_updated_at: e.currentUpdatedAt?.toISOString() ?? null,
+			};
+		}
 		if (e instanceof ZodError) {
 			return {
 				err: `Validation failed: ${e.issues
@@ -1184,9 +1208,49 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 	}
 };
 
-export const assignTechniciansToVisit = async (
+type ScopedDb = ReturnType<typeof getScopedDb>;
+
+// A tech already on the visit stays assignable after deactivation; only new
+// assignments must be active.
+const loadAssignableTechs = async (sdb: ScopedDb, ids: string[], keep: Set<string>) => {
+	if (ids.length === 0) return { techs: [], missing: [] as string[] };
+	const techs = (
+		await sdb.technician.findMany({
+			where: { id: { in: ids } },
+			select: { id: true, name: true, deactivated_at: true },
+		})
+	).filter((t) => t.deactivated_at === null || keep.has(t.id));
+	const found = new Set(techs.map((t) => t.id));
+	return { techs, missing: ids.filter((id) => !found.has(id)) };
+};
+
+const loadVisitWithTechs = (sdb: ScopedDb, visitId: string) =>
+	sdb.job_visit.findFirst({
+		where: { id: visitId },
+		include: {
+			job: { include: { client: true } },
+			visit_techs: { include: { tech: true } },
+			notes: true,
+		},
+	});
+
+class AssignmentRefusal extends Error {
+	constructor(message: string, readonly code?: "WRONG_STATE") {
+		super(message);
+	}
+}
+
+const needsTechMessage = (status: string) =>
+	`Can't remove every technician while the visit is ${status}. Assign someone else first.`;
+const clockedInMessage = (name: string) =>
+	`${name} is clocked in on this visit. Clock them out first.`;
+
+// The only assignment write. Rows not named in add/remove are never touched,
+// so concurrent edits by two dispatchers both land and each tech keeps its
+// tech_status.
+export const patchVisitTechnicians = async (
 	visitId: string,
-	techIds: string[],
+	{ add = [], remove = [] }: { add?: string[]; remove?: string[] },
 	organizationId: string,
 	context?: UserContext,
 ) => {
@@ -1203,48 +1267,85 @@ export const assignTechniciansToVisit = async (
 		});
 
 		if (!visit) {
-			return { err: "Job visit not found" };
+			return { err: "Job visit not found", code: "NOT_FOUND" as const };
 		}
 
-		if (techIds.length === 0 && NEEDS_TECH.includes(visit.status)) {
-			return { err: `Can't remove every technician while the visit is ${visit.status}. Assign someone else first.` };
-		}
+		// This read is unlocked: it only validates and feeds the fast-path
+		// refusals. What actually changes is decided against the locked re-read.
+		const current = new Set(visit.visit_techs.map((vt) => vt.tech_id));
+		const addIds = [...new Set(add)];
+		const removeIds = [...new Set(remove)];
+		const toAdd = addIds.filter((id) => !current.has(id));
+		const toRemove = removeIds.filter((id) => current.has(id));
 
-		const currentlyAssigned = await sdb.job_visit_technician.findMany({
-			where: { visit_id: visitId },
-			select: { tech_id: true },
-		});
-		const keep = new Set(currentlyAssigned.map((r) => r.tech_id));
-		const existingTechs = (
-			await sdb.technician.findMany({
-				where: { id: { in: techIds } },
-				select: { id: true, name: true, deactivated_at: true },
-			})
-		).filter((t) => t.deactivated_at === null || keep.has(t.id));
-
-		const existingIds = new Set(existingTechs.map((t) => t.id));
-		const missing = techIds.filter((id) => !existingIds.has(id));
-
+		const { missing } = await loadAssignableTechs(sdb, addIds, current);
 		if (missing.length > 0) {
 			return {
 				err: `Technicians not found or deactivated: ${missing.join(", ")}`,
 			};
 		}
 
-		const oldTechNames = visit.visit_techs.map((vt) => vt.tech.name);
-		const newTechNames = existingTechs.map((t) => t.name);
+		// Fast path only; the same checks are repeated under lock below.
+		if (current.size - toRemove.length + toAdd.length === 0 && NEEDS_TECH.includes(visit.status)) {
+			return { err: needsTechMessage(visit.status) };
+		}
+		if (toRemove.length > 0) {
+			const clockedIn = await sdb.visit_tech_time_entry.findFirst({
+				where: { visit_id: visitId, tech_id: { in: toRemove }, clocked_out_at: null },
+				select: { tech: { select: { name: true } } },
+			});
+			if (clockedIn) {
+				return { err: clockedInMessage(clockedIn.tech.name), code: "WRONG_STATE" as const };
+			}
+		}
 
-		await sdb.$transaction(async (tx) => {
-			await tx.job_visit_technician.deleteMany({
+		const added = await sdb.$transaction(async (tx) => {
+			const txc = tx as unknown as Prisma.TransactionClient;
+			// Visit first, then its assignment rows: the order clockInVisit and the
+			// lifecycle transitions take them, so none of them can deadlock. The
+			// visit lock serialises every assignment writer and clock-in on it.
+			const [locked] = await txc.$queryRaw<{ status: string }[]>`SELECT status FROM job_visit WHERE id = ${visitId} FOR NO KEY UPDATE`;
+			await txc.$queryRaw`SELECT tech_id FROM job_visit_technician WHERE visit_id = ${visitId} ORDER BY tech_id FOR UPDATE`;
+
+			const before = await tx.job_visit_technician.findMany({
 				where: { visit_id: visitId },
+				select: { tech_id: true, tech: { select: { name: true } } },
 			});
+			const now = new Set(before.map((r) => r.tech_id));
+			const adding = addIds.filter((id) => !now.has(id));
+			const removing = removeIds.filter((id) => now.has(id));
+			if (adding.length === 0 && removing.length === 0) return null;
 
-			await tx.job_visit_technician.createMany({
-				data: techIds.map((tech_id) => ({
-					visit_id: visitId,
-					tech_id,
-				})),
+			const status = locked?.status ?? visit.status;
+			if (now.size - removing.length + adding.length === 0 && NEEDS_TECH.includes(status)) {
+				throw new AssignmentRefusal(needsTechMessage(status));
+			}
+			if (removing.length > 0) {
+				const clockedIn = await tx.visit_tech_time_entry.findFirst({
+					where: { visit_id: visitId, tech_id: { in: removing }, clocked_out_at: null },
+					select: { tech: { select: { name: true } } },
+				});
+				if (clockedIn) {
+					throw new AssignmentRefusal(clockedInMessage(clockedIn.tech.name), "WRONG_STATE");
+				}
+				await tx.job_visit_technician.deleteMany({
+					where: { visit_id: visitId, tech_id: { in: removing } },
+				});
+			}
+			if (adding.length > 0) {
+				await tx.job_visit_technician.createMany({
+					data: adding.map((tech_id) => ({ visit_id: visitId, tech_id })),
+					skipDuplicates: true,
+				});
+			}
+			const oldTechNames = before.map((r) => r.tech.name);
+
+			// Read back rather than derive, so a concurrent edit's techs show in "new".
+			const after = await tx.job_visit_technician.findMany({
+				where: { visit_id: visitId },
+				select: { tech: { select: { name: true } } },
 			});
+			const newTechNames = after.map((r) => r.tech.name);
 
 			await logActivity({
 				event_type: "job_visit.technicians_assigned",
@@ -1269,34 +1370,19 @@ export const assignTechniciansToVisit = async (
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
 			});
+			return adding;
 		});
 
-		const updated = await sdb.job_visit.findFirst({
-			where: { id: visitId },
-			include: {
-				job: {
-					include: {
-						client: true,
-					},
-				},
-				visit_techs: {
-					include: { tech: true },
-				},
-				notes: true,
-			},
-		});
+		const updated = await loadVisitWithTechs(sdb, visitId);
 
 		// Notify newly assigned technicians
-		if (updated) {
+		if (updated && added) {
 			const clientName = updated.job.client.name;
 			const scheduledAt = updated.scheduled_start_at.toLocaleString("en-US", {
 				weekday: "short", month: "short", day: "numeric",
 				hour: "numeric", minute: "2-digit",
 			});
-			const newlyAssigned = techIds.filter(
-				(id) => !visit.visit_techs.some((vt) => vt.tech_id === id),
-			);
-			for (const techId of newlyAssigned) {
+			for (const techId of added) {
 				await createNotification({
 					technicianId: techId,
 					type:         "visit_assigned",
@@ -1309,6 +1395,40 @@ export const assignTechniciansToVisit = async (
 		}
 
 		return { err: "", item: updated };
+	} catch (e) {
+		if (e instanceof AssignmentRefusal) {
+			return e.code ? { err: e.message, code: e.code } : { err: e.message };
+		}
+		log.error({ err: e }, "Failed to assign technicians");
+		return { err: "Failed to assign technicians" };
+	}
+};
+
+// Full-list callers (legacy PUT, assistant tool): turned into a diff so they
+// keep existing rows' tech_status too.
+export const assignTechniciansToVisit = async (
+	visitId: string,
+	techIds: string[],
+	organizationId: string,
+	context?: UserContext,
+) => {
+	try {
+		const sdb = getScopedDb(organizationId);
+		const currentRows = await sdb.job_visit_technician.findMany({
+			where: { visit_id: visitId },
+			select: { tech_id: true },
+		});
+		const current = new Set(currentRows.map((r) => r.tech_id));
+		const wanted = new Set(techIds);
+		return patchVisitTechnicians(
+			visitId,
+			{
+				add: [...wanted].filter((id) => !current.has(id)),
+				remove: [...current].filter((id) => !wanted.has(id)),
+			},
+			organizationId,
+			context,
+		);
 	} catch (e) {
 		log.error({ err: e }, "Failed to assign technicians");
 		return { err: "Failed to assign technicians" };

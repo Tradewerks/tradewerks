@@ -17,6 +17,7 @@ import {
     insertJobVisit,
     updateJobVisit,
     assignTechniciansToVisit,
+    patchVisitTechnicians,
     acceptJobVisit,
     cancelJobVisit,
     deleteJobVisit,
@@ -28,6 +29,7 @@ import { clockInVisit, clockOutVisit } from "../controllers/visitTimeEntriesCont
 import { addPartsUsed, updatePartsUsedQty } from "../controllers/vehiclesController.js";
 import { updateFieldLineQuantity } from "../controllers/visitFieldLinesController.js";
 import { z } from "zod";
+import { patchVisitTechniciansSchema } from "../lib/validate/jobVisits.js";
 import { db } from "../db.js";
 import { isTechnicianCaller, resolveActingTechId } from "../lib/visitActor.js";
 import type { Response } from "express";
@@ -168,11 +170,53 @@ router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), ass
         }
         const result = await updateJobVisit(req, orgId, context);
 
+        if ("code" in result && result.code === "CONFLICT") {
+            return res.status(409).json({
+                ...createErrorResponse(ErrorCodes.CONFLICT, result.err),
+                data: { current_updated_at: result.current_updated_at },
+            });
+        }
         if (result.err) {
             return sendResultErr(res, result.err);
         }
 
         res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+const ASSIGNMENT_STATUS = { NOT_FOUND: 404, WRONG_STATE: 409 } as const;
+
+const sendAssignmentResult = (
+    res: Response,
+    result: { err: string; code?: keyof typeof ASSIGNMENT_STATUS; item?: unknown },
+) => {
+    if (result.err) {
+        if (!result.code) return sendResultErr(res, result.err);
+        return res.status(ASSIGNMENT_STATUS[result.code]).json(createErrorResponse(result.code, result.err));
+    }
+    return res.json(createSuccessResponse(result.item));
+};
+
+const techAssignmentForbidden = () =>
+    createErrorResponse(ErrorCodes.FORBIDDEN, "Only dispatchers can change a visit's technicians.");
+
+router.patch("/:id/technicians", requirePermission("edit_jobs"), async (req, res, next) => {
+    try {
+        const context = getUserContext(req);
+        if (isTechnicianCaller(context)) {
+            return res.status(403).json(techAssignmentForbidden());
+        }
+        const parsed = patchVisitTechniciansSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+            return res.status(400).json(
+                createErrorResponse(ErrorCodes.VALIDATION_ERROR, parsed.error.issues.map((i) => i.message).join(", ")),
+            );
+        }
+        const orgId = req.user!.organization_id as string;
+        const result = await patchVisitTechnicians(req.params.id as string, parsed.data, orgId, context);
+        sendAssignmentResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -184,6 +228,9 @@ router.put("/:id/technicians", requirePermission("edit_jobs"), async (req, res, 
         const { tech_ids } = req.body;
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
+        if (isTechnicianCaller(context)) {
+            return res.status(403).json(techAssignmentForbidden());
+        }
 
         if (!Array.isArray(tech_ids)) {
             return res
@@ -199,12 +246,7 @@ router.put("/:id/technicians", requirePermission("edit_jobs"), async (req, res, 
         }
 
         const result = await assignTechniciansToVisit(id, tech_ids, orgId, context);
-
-        if (result.err) {
-            return sendResultErr(res, result.err);
-        }
-
-        res.json(createSuccessResponse(result.item));
+        sendAssignmentResult(res, result);
     } catch (err) {
         next(err);
     }

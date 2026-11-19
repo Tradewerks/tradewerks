@@ -26,7 +26,7 @@ import {
 import { extractOccurrences, type OccurrenceWithPlan, type VisitWithJob } from "./dashboardCalendarUtils";
 import type { Job } from "../../../types/jobs";
 import type { Technician } from "../../../types/technicians";
-import { useUpdateJobVisitMutation } from "../../../hooks/useJobs";
+import { useConflictGuardedVisitUpdate } from "./useConflictGuardedVisitUpdate";
 import { useRescheduleOccurrenceMutation, useGenerateVisitFromOccurrenceMutation } from "../../../hooks/useRecurringPlans";
 import VisitClickPopup from "./VisitClickPopup";
 import { buildWeekTemplate } from "./weekTemplate";
@@ -119,7 +119,6 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	const weekDragOverTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const weekStartRef           = useRef<Date>(new Date());
 
-	const { mutateAsync: updateVisit } = useUpdateJobVisitMutation();
 	const { mutateAsync: rescheduleOccurrence } = useRescheduleOccurrenceMutation();
 	const { mutateAsync: generateVisitFromOccurrence } = useGenerateVisitFromOccurrenceMutation();
 
@@ -200,6 +199,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 		() => jobs.flatMap((job_obj) => (job_obj.visits ?? []).map((v) => ({ ...v, job_obj }))),
 		[jobs]
 	);
+	const { updateVisit, conflictDialog } = useConflictGuardedVisitUpdate(allVisits);
 
 	const filteredVisits = useMemo(() => {
 		if (isAllSelected) return allVisits;
@@ -1161,6 +1161,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 					/>
 				);
 			})()}
+			{conflictDialog}
 	</div>
 	);
 }

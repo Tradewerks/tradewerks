@@ -424,6 +424,8 @@ export interface UpdateJobVisitInput {
 	tech_ids?: string[];
 	line_items?: UpdateVisitLineItemInput[];
 	reschedule_scope?: "this" | "future";
+	/** The visit's updated_at as loaded; a stale value makes the server answer 409. */
+	expected_updated_at?: string;
 }
 
 // ============================================================================

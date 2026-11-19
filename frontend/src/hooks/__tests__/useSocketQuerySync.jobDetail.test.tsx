@@ -10,6 +10,7 @@ vi.mock("../../lib/socket", () => ({
 	socket: {
 		on: (event: string, fn: (e: unknown) => void) => handlers.set(event, fn),
 		off: (event: string) => handlers.delete(event),
+		io: { on: () => undefined, off: () => undefined },
 	},
 }));
 
@@ -27,6 +28,7 @@ const mount = () => {
 };
 
 describe("visit status changes refresh the owning job page", () => {
+	// The ["jobs"] prefix covers ["jobs", id] and ["jobs", id, "visits"].
 	test("status_changed invalidates that job's queries", () => {
 		const spy = mount();
 		handlers.get("job_visit:status_changed")!({
@@ -41,15 +43,12 @@ describe("visit status changes refresh the owning job page", () => {
 			},
 			changedAt: "2026-10-01T15:00:00Z",
 		});
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["jobs", "j1"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["jobs"] });
 	});
 
-	test("a plain visit update carries no job id and touches no job key", () => {
+	test("a plain visit update carries no job id, so it refreshes the jobs prefix", () => {
 		const spy = mount();
 		handlers.get("job_visit:updated")!({ visitId: "v1", organizationId: "o1" });
-		const jobCalls = spy.mock.calls.filter(
-			([arg]) => (arg as { queryKey?: unknown[] })?.queryKey?.[0] === "jobs",
-		);
-		expect(jobCalls).toEqual([]);
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["jobs"] });
 	});
 });

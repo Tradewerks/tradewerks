@@ -3,6 +3,7 @@ import { getSocket } from "./socketService.js";
 import { redactFeedRow } from "../controllers/logsController.js";
 import { FEED_EVENT_SET } from "../lib/activityFeedEvents.js";
 import { inventoryPostImportEdits } from "./metricsService.js";
+import { recordChangedFromLog } from "./recordChanged.js";
 
 // ============================================================================
 // UNIFIED ACTIVITY LOGGING
@@ -93,6 +94,12 @@ export const logActivity = async (params: LogActivityParams) => {
 			} catch {
 				// socket not yet initialized — skip emission
 			}
+		}
+
+		try {
+			recordChangedFromLog(params);
+		} catch {
+			// Live-refresh hints must never fail an already-written audit event.
 		}
 
 		if (

@@ -44,6 +44,7 @@ import { httpLogRedact } from "./lib/httpLogRedact.js";
 import http from "http";
 import { Server } from "socket.io";
 import { initSocket } from "./services/socketService.js";
+import { changeBufferMiddleware } from "./services/recordChanged.js";
 import { refreshAccessToken, verifyToken as verifyAccessToken } from "./services/jwtService.js";
 
 // ============================================
@@ -308,6 +309,7 @@ app.get("/metrics", (req, res) =>
 	prometheusExporter.getMetricsRequestHandler(req, res),
 );
 app.use(requestLogger);
+app.use(changeBufferMiddleware);
 
 let frontend: string | undefined = process.env["FRONTEND_URL"];
 if (!frontend) {

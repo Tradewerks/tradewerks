@@ -1,10 +1,14 @@
 import { log } from "../services/appLogger.js";
 import { logActivity } from "../services/logger.js";
 import type { pause_reason_type, technician_status } from "../../generated/prisma/client.js";
+import type { Prisma } from "../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { emitToOrg } from "../services/socketService.js";
 import { buildVisitStatusPayload, buildSecondaryEventPayload } from "./jobVisitsController.js";
 import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
+
+const NOT_ASSIGNED = "Technician not assigned to this visit";
+class NotAssignedError extends Error {}
 
 const CLOCK_IN_ALLOWED = ["OnSite", "InProgress", "Paused"];
 const CLOCK_IN_AUTO_ADVANCE = ["OnSite", "Paused"];
@@ -36,7 +40,7 @@ export const clockInVisit = async (
 		const assignment = await sdb.job_visit_technician.findUnique({
 			where: { visit_id_tech_id: { visit_id: visitId, tech_id: techId } },
 		});
-		if (!assignment) return { err: "Technician not assigned to this visit" };
+		if (!assignment) return { err: NOT_ASSIGNED };
 
 		// Enforce global 1-open-entry constraint
 		const existingOpen = await sdb.visit_tech_time_entry.findFirst({
@@ -52,6 +56,14 @@ export const clockInVisit = async (
 		const isPrimaryAdvance = CLOCK_IN_AUTO_ADVANCE.includes(visit.status);
 
 		const entry = await sdb.$transaction(async (tx) => {
+			// Same lock order as patchVisitTechnicians (visit, then assignment), so a
+			// concurrent unassign either commits first and this finds no row, or
+			// waits and then sees this open entry.
+			const txc = tx as unknown as Prisma.TransactionClient;
+			await txc.$queryRaw`SELECT id FROM job_visit WHERE id = ${visitId} FOR NO KEY UPDATE`;
+			const stillAssigned = await txc.$queryRaw<unknown[]>`SELECT 1 FROM job_visit_technician WHERE visit_id = ${visitId} AND tech_id = ${techId} FOR SHARE`;
+			if (stillAssigned.length === 0) throw new NotAssignedError();
+
 			const newEntry = await tx.visit_tech_time_entry.create({
 				data: { visit_id: visitId, tech_id: techId, clocked_in_at: now },
 				include: { tech: { select: { id: true, name: true } } },
@@ -136,6 +148,7 @@ export const clockInVisit = async (
 
 		return { err: "", item: entry };
 	} catch (e) {
+		if (e instanceof NotAssignedError) return { err: NOT_ASSIGNED };
 		log.error({ err: e }, "clockInVisit failed");
 		throw e;
 	}

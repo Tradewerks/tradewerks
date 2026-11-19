@@ -46,7 +46,8 @@ import {
 import { buildStripTemplate } from "./weekTemplate";
 import type { Job, UpdateJobVisitInput } from "../../../types/jobs";
 import type { Technician } from "../../../types/technicians";
-import { useUpdateJobVisitMutation } from "../../../hooks/useJobs";
+import { visitVersion } from "../../../lib/apiErrors";
+import { useConflictGuardedVisitUpdate } from "./useConflictGuardedVisitUpdate";
 import { useRescheduleOccurrenceMutation, useGenerateVisitFromOccurrenceMutation } from "../../../hooks/useRecurringPlans";
 import type { RescheduleOccurrenceInput } from "../../../types/recurringPlans";
 
@@ -218,7 +219,6 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		return () => document.removeEventListener("click", handle);
 	}, [clickedOccurrence]);
 
-	const { mutateAsync: updateVisit } = useUpdateJobVisitMutation();
 	const { mutateAsync: rescheduleOccurrence } = useRescheduleOccurrenceMutation();
 	const { mutateAsync: generateVisitFromOccurrence } = useGenerateVisitFromOccurrenceMutation();
 
@@ -254,6 +254,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		() => extractVisits(jobs) as VisitWithJob[],
 		[jobs]
 	);
+	const { updateVisit, conflictDialog } = useConflictGuardedVisitUpdate(allVisits);
 	const allOccurrences = useMemo(() => extractOccurrences(jobs, todayStr), [jobs, todayStr]);
 
 	const filteredVisits = useMemo(() => {
@@ -876,7 +877,12 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 				technicians={technicians}
 				techColorMap={techColorMap}
 				anchorRect={pendingDrop.anchorRect}
-				onSave={(data) => handleVisitSave(pendingDrop.visit.id, data)}
+				onSave={(data) =>
+					handleVisitSave(pendingDrop.visit.id, {
+						...data,
+						expected_updated_at: visitVersion(pendingDrop.visit),
+					})
+				}
 				onUndo={handleVisitRescheduleCancel}
 			/>
 		)}
@@ -910,7 +916,10 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 					anchorRect={pendingClickReschedule.anchorRect}
 					onSave={async (data) => {
 						try {
-							await updateVisit({ id: v.id, data });
+							await updateVisit({
+								id: v.id,
+								data: { ...data, expected_updated_at: visitVersion(v) },
+							});
 						} catch {
 							// A failed update leaves the visit as-is; dismiss the popover regardless.
 						}
@@ -954,6 +963,7 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 				/>
 			);
 		})()}
+		{conflictDialog}
 		</div>
 	);
 }

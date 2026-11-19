@@ -1,6 +1,7 @@
 import axios, { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
+import { conflictFromResponse } from "../lib/apiErrors";
 import type {
 	CreateJobInput,
 	UpdateJobInput,
@@ -156,7 +157,12 @@ export const updateJobVisit = async (
 	id: string,
 	updates: UpdateJobVisitInput
 ): Promise<JobVisit> => {
-	const response = await api.put<ApiResponse<JobVisit>>(`/job-visits/${id}`, updates);
+	let response;
+	try {
+		response = await api.put<ApiResponse<JobVisit>>(`/job-visits/${id}`, updates);
+	} catch (err) {
+		throw conflictFromResponse(err) ?? err;
+	}
 
 	if (!response.data.success) {
 		throw new Error(response.data.error?.message || "Failed to update job visit");
@@ -196,6 +202,22 @@ export const assignTechniciansToVisit = async (
 		throw new Error(
 			response.data.error?.message || "Failed to assign technicians to visit"
 		);
+	}
+
+	return response.data.data!;
+};
+
+export const patchVisitTechnicians = async (
+	visitId: string,
+	diff: { add?: string[]; remove?: string[] }
+): Promise<JobVisit> => {
+	const response = await api.patch<ApiResponse<JobVisit>>(
+		`/job-visits/${visitId}/technicians`,
+		diff
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to update the visit's technicians");
 	}
 
 	return response.data.data!;

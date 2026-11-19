@@ -34,6 +34,7 @@ vi.mock("../../../hooks/useJobs", () => ({
 	useUpdateJobVisitMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useAssignTechniciansToVisitMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useJobByIdQuery: () => ({ data: job }),
+	useReloadConflictedVisit: () => vi.fn(),
 }));
 vi.mock("../../../hooks/useTechnicians", () => ({ useActiveTechniciansQuery: () => ({ data: [] }) }));
 vi.mock("../../../hooks/useVehicles", () => ({ useVehiclesQuery: () => ({ data: [] }) }));

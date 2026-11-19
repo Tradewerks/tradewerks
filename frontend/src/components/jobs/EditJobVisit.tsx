@@ -23,7 +23,10 @@ import {
 	useUpdateJobVisitMutation,
 	useAssignTechniciansToVisitMutation,
 	useJobByIdQuery,
+	useReloadConflictedVisit,
 } from "../../hooks/useJobs";
+import { isConflict, visitVersion } from "../../lib/apiErrors";
+import VisitConflictDialog from "./VisitConflictDialog";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { useModuleOn } from "../../hooks/useEntitlements";
@@ -84,6 +87,8 @@ const parseHHMMToDate = (hhmm: string | null | undefined, baseDate: Date): Date 
 
 export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId, clientExempt }: EditJobVisitProps) {
 	const updateVisit = useUpdateJobVisitMutation();
+	const reloadConflictedVisit = useReloadConflictedVisit();
+	const [conflictOpen, setConflictOpen] = useState(false);
 	const assignTechs = useAssignTechniciansToVisitMutation();
 	const { data: activeTechnicians } = useActiveTechniciansQuery();
 	// A deactivated technician already on this visit stays listed so the visit can be re-saved.
@@ -474,6 +479,7 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId
 					: null,
 			// Send full line_items array — backend does a full replace
 			line_items: preparedLineItems,
+			expected_updated_at: visitVersion(visit),
 		};
 
 		try {
@@ -492,6 +498,10 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId
 
 			setIsModalOpen(false);
 		} catch (error) {
+			if (isConflict(error)) {
+				setConflictOpen(true);
+				return;
+			}
 			console.error("Failed to update visit:", error);
 		}
 	}, [
@@ -861,6 +871,14 @@ export default function EditJobVisit({ isModalOpen, setIsModalOpen, visit, jobId
 			isEditMode={true}
 		>
 			{stepContent}
+			<VisitConflictDialog
+				open={conflictOpen}
+				onReload={async () => {
+					await reloadConflictedVisit();
+					setConflictOpen(false);
+				}}
+				onClose={() => setConflictOpen(false)}
+			/>
 		</FormWizardContainer>
 	);
 }

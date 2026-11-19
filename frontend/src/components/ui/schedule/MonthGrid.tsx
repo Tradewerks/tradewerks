@@ -8,6 +8,7 @@ import OccurrenceClickPopup from "./OccurrenceClickPopup";
 import { visitStartLabel, visitEndLabel, getPriorityColor, SCROLL_ZONE_W, SCROLL_DELAY_MS, localDateKey, getAnchoredPopupPos, CLICK_POPUP_H } from "./scheduleBoardUtils";
 import { formatTime } from "./dashboardCalendarUtils";
 import type { UpdateJobVisitInput } from "../../../types/jobs";
+import { visitVersion } from "../../../lib/apiErrors";
 import type { Technician } from "../../../types/technicians";
 import type { OccurrenceWithPlan, VisitWithJob } from "./dashboardCalendarUtils";
 import type { RescheduleOccurrenceInput, VisitGenerationResult } from "../../../types/recurringPlans";
@@ -839,7 +840,12 @@ export default function MonthGrid({
 					technicians={technicians}
 					techColorMap={techColorMap}
 					anchorRect={pendingDrop.anchorRect}
-					onSave={(data) => handleSave(pendingDrop.visit.id, data)}
+					onSave={(data) =>
+						handleSave(pendingDrop.visit.id, {
+							...data,
+							expected_updated_at: visitVersion(pendingDrop.visit),
+						})
+					}
 					onUndo={() => { setPendingDrop(null); restoreOriginMonth(); }}
 				/>
 			)}
@@ -892,7 +898,10 @@ export default function MonthGrid({
 						anchorRect={pendingClickReschedule.anchorRect}
 						onSave={async (data) => {
 							try {
-								await updateVisit({ id: v.id, data });
+								await updateVisit({
+									id: v.id,
+									data: { ...data, expected_updated_at: visitVersion(v) },
+								});
 							} catch {
 								// A failed update leaves the visit as-is; dismiss the popover regardless.
 							}
