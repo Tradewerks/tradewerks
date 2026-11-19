@@ -245,7 +245,8 @@ export interface ReconcileTarget {
 	name: string;
 	sku: string | null;
 	unit: string;
-	cost: number | null;
+	// Absent for technicians.
+	cost?: number | null;
 	provisional: boolean;
 }
 

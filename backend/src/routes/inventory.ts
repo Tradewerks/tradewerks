@@ -66,7 +66,7 @@ import {
 } from '../controllers/inventoryTagController.js';
 import { uploadFile, signImageUrl, signImageUrls, toRawUrl } from "../services/wasabiService.js";
 import { imageUpload, spreadsheetUpload } from "../lib/upload.js";
-import { requirePermission, requireAnyPermission } from '../lib/requirePermissions.js';
+import { requirePermission, requireAnyPermission, denyTechnicians } from '../lib/requirePermissions.js';
 import { scanQuerySchema, forecastQuerySchema } from '../lib/validate/inventory.js';
 
 
@@ -786,7 +786,7 @@ router.post(
 
 // ── Low-stock export ──────────────────────────────────────────────────────────
 
-router.get("/export/low-stock", requirePermission("view_inventory"), async (req, res, next) => {
+router.get("/export/low-stock", requirePermission("view_inventory"), denyTechnicians, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const buffer = await exportLowStockToXlsx(orgId);
@@ -1057,7 +1057,7 @@ router.get("/:id/forecast", requireAnyPermission("view_inventory", "manage_inven
     }
 });
 
-router.get("/:id/value-history", requireAnyPermission("view_inventory", "manage_inventory"), async (req, res, next) => {
+router.get("/:id/value-history", requireAnyPermission("view_inventory", "manage_inventory"), denyTechnicians, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
@@ -1072,7 +1072,7 @@ router.get("/:id/value-history", requireAnyPermission("view_inventory", "manage_
     }
 });
 
-router.get("/:id/price-history", requireAnyPermission("view_inventory", "manage_inventory"), async (req, res, next) => {
+router.get("/:id/price-history", requireAnyPermission("view_inventory", "manage_inventory"), denyTechnicians, async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;

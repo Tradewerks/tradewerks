@@ -184,3 +184,12 @@ export const denyTechnicians = (req: Request, res: Response, next: NextFunction)
 	}
 	next();
 }
+
+// Technicians see what parts sell for, never what the company pays.
+export const hideCostFromTechnicians = (req: Request, res: Response, next: NextFunction) => {
+	if (req.user?.role !== "technician") return next();
+	const json = res.json.bind(res);
+	res.json = (body: unknown) =>
+		json(JSON.parse(JSON.stringify(body), (k, v) => (k === "cost" || k === "unit_cost" ? undefined : v)));
+	next();
+};

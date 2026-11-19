@@ -8,6 +8,7 @@ import {
 	createErrorResponse,
 } from "./types/responses.js";
 import * as notificationsController from "./controllers/notificationsController.js";
+import { hideCostFromTechnicians } from "./lib/requirePermissions.js";
 import { startVisitReminderInterval } from "./services/notifications.js";
 import { startInvoiceSchedulerInterval } from "./services/invoiceScheduler.js";
 import { startFollowupSchedulerInterval } from "./services/followupScheduler.js";
@@ -664,7 +665,7 @@ app.use("/email", verifyToken, emailRouter);
 // ============================================
 // Deliberately mounted before the main inventory router and its /:id routes.
 app.use("/inventory/imports", verifyToken, requireModule("inventory"), inventoryImportsRouter);
-app.use("/inventory", verifyToken, requireModule("inventory"), inventoryRouter);
+app.use("/inventory", verifyToken, requireModule("inventory"), hideCostFromTechnicians, inventoryRouter);
 
 // ============================================
 // SUPPLIERS (vendor origin for purchased stock)

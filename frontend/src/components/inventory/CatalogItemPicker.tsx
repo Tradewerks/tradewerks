@@ -175,10 +175,14 @@ export default function CatalogItemPicker({
 						{value.name}
 					</span>
 					<span className="block truncate text-[11px] text-text-muted">
-						{value.sku ? `${value.sku} · ` : ""}
-						{value.cost != null
-							? `${money(value.cost)} / ${unitLabel(value.unit)}`
-							: "No cost yet"}
+						{value.sku ?? ""}
+						{value.cost === undefined
+							? ""
+							: `${value.sku ? " · " : ""}${
+									value.cost != null
+										? `${money(value.cost)} / ${unitLabel(value.unit)}`
+										: "No cost yet"
+								}`}
 						{value.provisional ? " · awaiting detail" : ""}
 					</span>
 				</span>

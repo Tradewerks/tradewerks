@@ -51,12 +51,13 @@ import {
 	requirePermission,
 	requireAnyPermission,
 	requireVehiclePermission,
+	hideCostFromTechnicians,
 } from "../lib/requirePermissions.js";
 import { getEntityHistory, INVALID_HISTORY_LIMIT, parseHistoryLimit } from "../controllers/logsController.js";
 
 const router = Router();
 
-router.get("/", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles"), async (req, res, next) => {
+router.get("/", requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles"), hideCostFromTechnicians, async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
 		const { status } = req.query as { status?: string };
@@ -235,7 +236,7 @@ router.put("/:id", requirePermission("manage_vehicles"), async (req, res, next) 
 	}
 });
 
-router.get("/:id/stock", requireModule("vehicle_stock"), requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle", "complete_own_restock"), async (req, res, next) => {
+router.get("/:id/stock", requireModule("vehicle_stock"), requireAnyPermission("view_vehicles", "manage_vehicles", "use_vehicles", "stock_own_vehicle", "complete_own_restock"), hideCostFromTechnicians, async (req, res, next) => {
 	try {
 		const id = req.params.id as string;
 		const orgId = req.user!.organization_id as string;
