@@ -756,6 +756,9 @@ app.get("/logs/recent", verifyToken, ...recentActivityRoute);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
+// Node exits on an unhandled rejection; a stray background promise shouldn't take every request down.
+process.on("unhandledRejection", (err) => log.error({ err }, "Unhandled promise rejection"));
+
 server.listen(port, () => {
 	log.info({ port }, "Server started");
 });
