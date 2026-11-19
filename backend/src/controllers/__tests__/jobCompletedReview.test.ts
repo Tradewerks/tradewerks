@@ -1,18 +1,49 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { sdb, notifyJob, notifyDone, state } = vi.hoisted(() => {
+const { sdb, notifyJob, notifyDone, state, applyStatusChange } = vi.hoisted(() => {
 	const state = {
-		// What the transaction sees for the job's visits after this change.
-		visits: [] as { status: string; total: number }[],
+		// The job status change the lifecycle service reports for this transition.
+		jobChange: null as { from: string; to: string } | null,
 		// The visit as re-read at the end of the transaction.
 		row: {} as Record<string, unknown>,
 		visitUpdates: [] as unknown[],
 	};
+	const TO: Record<string, string> = {
+		complete: "Completed",
+		record_complete: "Completed",
+		cancel: "Cancelled",
+	};
+	// The real service needs Postgres; its pg tests cover the job derivation.
+	// The real runPostCommit runs, so the controller → notice wiring is tested.
+	const applyStatusChange = vi.fn(
+		async (
+			_tx: unknown,
+			args: { orgId: string; visitId: string; action: string },
+		) => ({
+			orgId: args.orgId,
+			visitId: args.visitId,
+			jobId: "j1",
+			action: args.action,
+			from: (state.row as { status: string }).status,
+			to: TO[args.action] ?? "InProgress",
+			at: new Date(),
+			jobChange: state.jobChange,
+			lowStockItemIds: [],
+			autoInvoicePlanId: null,
+			wrappingUpTechIds: [],
+			activatedTechIds: [],
+			cancelledTechIds: [],
+			suppressCustomerNotice: false,
+			cancellationReason: null,
+		}),
+	);
 	const tx = new Proxy(
 		{},
 		{
 			get: (_t, model: string) =>
-				new Proxy(
+				model.startsWith("$")
+					? vi.fn(async () => [])
+					: new Proxy(
 					{},
 					{
 						get: (_m, method: string) =>
@@ -22,12 +53,7 @@ const { sdb, notifyJob, notifyDone, state } = vi.hoisted(() => {
 									method === "update"
 								)
 									state.visitUpdates.push(args);
-								return model === "job_visit" &&
-									method === "findMany"
-									? state.visits
-									: method === "findMany"
-										? []
-										: state.row;
+								return method === "findMany" ? [] : state.row;
 							}),
 					},
 				),
@@ -43,6 +69,7 @@ const { sdb, notifyJob, notifyDone, state } = vi.hoisted(() => {
 		notifyJob: vi.fn(async () => undefined),
 		notifyDone: vi.fn(async () => undefined),
 		state,
+		applyStatusChange,
 	};
 });
 
@@ -54,6 +81,13 @@ vi.mock("../../services/customerComms/visitEvents.js", () => ({
 	notifyJobCompleted: notifyJob,
 	notifyVisitCompleted: notifyDone,
 	notifyTechOnTheWay: vi.fn(async () => undefined),
+	notifyJobCancelled: vi.fn(async () => undefined),
+	skipVisitReminders: vi.fn(async () => undefined),
+}));
+vi.mock("../../services/visitLifecycle/applyStatusChange.js", () => ({
+	LifecycleRefusal: class extends Error {},
+	syncJobFromVisits: vi.fn(),
+	applyStatusChange,
 }));
 vi.mock("../../db.js", () => ({
 	db: { organization: { findUniqueOrThrow: vi.fn() } },
@@ -127,41 +161,33 @@ beforeEach(() => vi.clearAllMocks());
 describe("review request on job completion", () => {
 	it("a dispatcher setting the last open visit to Completed queues the review request", async () => {
 		seed("InProgress");
-		state.visits = [
-			{ status: "Completed", total: 100 },
-			{ status: "Completed", total: 50 },
-		];
+		state.jobChange = { from: "InProgress", to: "Completed" };
 		const res = await editStatus("Completed");
 		expect(res.err).toBe("");
+		expect(notifyJob).toHaveBeenCalledTimes(1);
 		expect(notifyJob).toHaveBeenCalledWith("j1", "org1");
 	});
 
 	it("a visit edit that leaves the job open, or a job already Completed, queues nothing", async () => {
 		seed("InProgress");
-		state.visits = [
-			{ status: "Completed", total: 100 },
-			{ status: "Scheduled", total: 50 },
-		];
+		state.jobChange = null;
 		await editStatus("Completed");
 		seed("Completed", "Completed");
-		state.visits = [{ status: "Completed", total: 100 }];
 		await editStatus("Completed");
 		expect(notifyJob).not.toHaveBeenCalled();
 	});
 
 	it("cancelling the last open visit when the rest are Completed queues the review request", async () => {
 		seed("Scheduled");
-		state.visits = [
-			{ status: "Completed", total: 100 },
-			{ status: "Cancelled", total: 0 },
-		];
+		state.jobChange = { from: "Scheduled", to: "Completed" };
 		await cancelJobVisit("v1", "not needed", "org1");
+		expect(notifyJob).toHaveBeenCalledTimes(1);
 		expect(notifyJob).toHaveBeenCalledWith("j1", "org1");
 	});
 
 	it("cancelling every visit (job Cancelled) queues nothing", async () => {
 		seed("Scheduled", "Scheduled");
-		state.visits = [{ status: "Cancelled", total: 0 }];
+		state.jobChange = { from: "Scheduled", to: "Cancelled" };
 		await cancelJobVisit("v1", "not needed", "org1");
 		expect(notifyJob).not.toHaveBeenCalled();
 	});
@@ -170,11 +196,9 @@ describe("review request on job completion", () => {
 describe("completion summary on visit completion", () => {
 	it("a dispatcher setting a visit to Completed queues the summary once; Cancelled or already Completed queues none", async () => {
 		seed("InProgress");
-		state.visits = [
-			{ status: "Completed", total: 100 },
-			{ status: "Scheduled", total: 50 },
-		];
+		state.jobChange = null;
 		await editStatus("Completed");
+		expect(notifyDone).toHaveBeenCalledTimes(1);
 		expect(notifyDone).toHaveBeenCalledWith("v1", "org1");
 		notifyDone.mockClear();
 
@@ -186,41 +210,36 @@ describe("completion summary on visit completion", () => {
 	});
 });
 
-describe("completing a visit by status edit", () => {
+describe("changing status by edit", () => {
 	const scalarUpdate = () =>
 		(state.visitUpdates[0] as { data: Record<string, unknown> }).data;
 
-	it("stamps actual_end_at (and a missing actual_start_at) like the complete action", async () => {
+	it("hands the transition to the lifecycle service, which owns status and stamps", async () => {
 		state.visitUpdates = [];
 		seed("InProgress");
-		state.visits = [{ status: "Completed", total: 100 }];
-		const before = Date.now();
+		state.jobChange = null;
 		await editStatus("Completed");
-		const data = scalarUpdate();
-		expect(data.status).toBe("Completed");
-		expect((data.actual_end_at as Date).getTime()).toBeGreaterThanOrEqual(
-			before,
-		);
-		expect(data.actual_start_at).toBeInstanceOf(Date);
+		expect(applyStatusChange).toHaveBeenCalledTimes(1);
+		expect(applyStatusChange.mock.calls[0][1]).toMatchObject({
+			orgId: "org1",
+			visitId: "v1",
+			action: "complete",
+		});
+		expect(scalarUpdate()).not.toHaveProperty("status");
+		expect(scalarUpdate()).not.toHaveProperty("actual_end_at");
 	});
 
-	it("keeps an existing actual_end_at and stamps nothing for other statuses", async () => {
-		state.visitUpdates = [];
-		const ended = new Date("2026-11-18T15:00:00Z");
-		seed("InProgress");
-		sdb.job_visit.findFirst.mockResolvedValue({
-			...visit("InProgress"),
-			actual_start_at: ended,
-			actual_end_at: ended,
-		});
-		state.visits = [{ status: "Completed", total: 100 }];
+	it("an unchanged status is not a transition, and a move with no edge is refused before any write", async () => {
+		seed("Completed");
 		await editStatus("Completed");
-		expect(scalarUpdate()).not.toHaveProperty("actual_end_at");
-		expect(scalarUpdate()).not.toHaveProperty("actual_start_at");
+		expect(applyStatusChange).not.toHaveBeenCalled();
 
-		state.visitUpdates = [];
 		seed("Scheduled");
-		await editStatus("OnSite");
-		expect(scalarUpdate()).not.toHaveProperty("actual_end_at");
+		const res = await editStatus("OnSite");
+		expect(res).toMatchObject({
+			err: "Can't move a visit from Scheduled to OnSite.",
+			code: "WRONG_STATE",
+		});
+		expect(sdb.$transaction).toHaveBeenCalledTimes(1);
 	});
 });

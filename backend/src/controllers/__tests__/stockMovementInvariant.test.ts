@@ -42,8 +42,9 @@ describe("stock movement invariant", () => {
 	});
 
 	it("visit completion is still the path that does deduct", () => {
+		// Every completion (PUT, action routes) goes through the lifecycle service.
 		const source = readFileSync(
-			resolve(src, "controllers/jobVisitsController.ts"),
+			resolve(src, "services/visitLifecycle/applyStatusChange.ts"),
 			"utf8",
 		);
 		expect(source).toContain("deductInventoryForVisit");

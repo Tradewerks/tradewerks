@@ -98,6 +98,7 @@ function setup(existingLines: ExistingLine[], catalogIds: string[] = []) {
 	);
 
 	const mockTx = {
+		$queryRaw: vi.fn().mockResolvedValue([]),
 		job_visit: {
 			update: vi.fn().mockResolvedValue({ id: "visit-1", status: "Scheduled" }),
 			findMany: vi.fn().mockResolvedValue([{ id: "visit-1", status: "Scheduled" }]),

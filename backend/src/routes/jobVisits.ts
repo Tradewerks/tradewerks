@@ -41,6 +41,20 @@ const sendActorError = (res: Response, a: { err: string; status: 400 | 403 }) =>
             : createErrorResponse(ErrorCodes.INVALID_INPUT, a.err, null, "tech_id"),
     );
 
+const REFUSAL_STATUS = { FORBIDDEN: 403, WRONG_STATE: 409, CONFLICT: 409, NOT_FOUND: 404 } as const;
+
+const sendTransitionResult = (
+    res: Response,
+    result: Awaited<ReturnType<typeof applyVisitTransition>>,
+) => {
+    if (!result.err) return res.json(createSuccessResponse(result.item));
+    const refusal = "code" in result ? result.code : undefined;
+    if (!refusal) return sendResultErr(res, result.err, 409);
+    const status = refusal ? REFUSAL_STATUS[refusal] : 409;
+    // 409s keep the code the clients already handle.
+    const code = refusal && status !== 409 ? refusal : ErrorCodes.VALIDATION_ERROR;
+    return res.status(status).json(createErrorResponse(code, result.err));
+};
 
 const router = Router();
 
@@ -175,6 +189,11 @@ router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), ass
                 ...createErrorResponse(ErrorCodes.CONFLICT, result.err),
                 data: { current_updated_at: result.current_updated_at },
             });
+        }
+        if ("code" in result && result.code) {
+            const status = REFUSAL_STATUS[result.code];
+            const code = status === 409 ? ErrorCodes.VALIDATION_ERROR : result.code;
+            return res.status(status).json(createErrorResponse(code, result.err));
         }
         if (result.err) {
             return sendResultErr(res, result.err);
@@ -325,10 +344,7 @@ router.post("/:id/start", requireAnyPermission("edit_jobs", "update_visit_status
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "start", orgId, getUserContext(req));
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -339,10 +355,7 @@ router.post("/:id/pause", requireAnyPermission("edit_jobs", "update_visit_status
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "pause", orgId, getUserContext(req));
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -353,10 +366,7 @@ router.post("/:id/resume", requireAnyPermission("edit_jobs", "update_visit_statu
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "resume", orgId, getUserContext(req));
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -367,10 +377,7 @@ router.post("/:id/complete", requireAnyPermission("edit_jobs", "update_visit_sta
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "complete", orgId, getUserContext(req));
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -386,10 +393,7 @@ router.post("/:id/cancel", requireAnyPermission("edit_jobs", "update_visit_statu
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await cancelJobVisit(id, cancellation_reason ?? "", orgId, context);
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -400,10 +404,7 @@ router.post("/:id/delay", requireAnyPermission("edit_jobs", "update_visit_status
         const orgId = req.user!.organization_id as string;
         const id = req.params.id as string;
         const result = await applyVisitTransition(id, "delay", orgId, getUserContext(req));
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }
@@ -471,7 +472,6 @@ router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requ
 
 // The one line write a technician has: quantity only, priced from the stored row.
 const fieldLineQuantitySchema = z.object({ quantity: z.number().finite().min(0) });
-const FIELD_LINE_STATUS = { FORBIDDEN: 403, WRONG_STATE: 409, CONFLICT: 409, NOT_FOUND: 404 } as const;
 
 router.patch("/:id/field-lines/:lineItemId", requireAnyPermission("edit_jobs", "use_inventory", "update_visit_status"), async (req, res, next) => {
     try {
@@ -490,7 +490,7 @@ router.patch("/:id/field-lines/:lineItemId", requireAnyPermission("edit_jobs", "
             getUserContext(req),
         );
         if (result.err) {
-            const status = result.code ? FIELD_LINE_STATUS[result.code] : 400;
+            const status = result.code ? REFUSAL_STATUS[result.code] : 400;
             return res.status(status).json(
                 createErrorResponse(result.code ?? ErrorCodes.VALIDATION_ERROR, result.err),
             );
@@ -523,10 +523,7 @@ router.post("/:id/transition", requireAnyPermission("edit_jobs", "update_visit_s
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
         const result = await applyVisitTransition(id, action, orgId, context, pause_reason, techCoords);
-        if (result.err) {
-            return sendResultErr(res, result.err, 409);
-        }
-        res.json(createSuccessResponse(result.item));
+        sendTransitionResult(res, result);
     } catch (err) {
         next(err);
     }

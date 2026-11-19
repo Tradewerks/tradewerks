@@ -38,7 +38,74 @@ vi.mock("../../services/customerComms/visitEvents.js", () => ({
 	notifyVisitCompleted: done,
 	notifyTechOnTheWay: notifyTech,
 }));
-vi.mock("../../db.js", () => ({ db: {} }));
+vi.mock("../../db.js", () => ({
+	db: {
+		$transaction: vi.fn(async (fn: (tx: unknown) => unknown) =>
+			fn(new Proxy({}, { get: () => state.model() })),
+		),
+	},
+}));
+// The transition's DB work is the service's (covered by its pg suite); these
+// tests drive the real post-commit runner with the effects it would return.
+vi.mock("../../services/visitLifecycle/applyStatusChange.js", () => {
+	class LifecycleRefusal extends Error {
+		constructor(
+			public code: string,
+			message: string,
+		) {
+			super(message);
+		}
+	}
+	const TO: Record<string, string> = {
+		drive: "Driving",
+		arrive: "OnSite",
+		complete: "Completed",
+		delay: "Delayed",
+		recall: "Scheduled",
+	};
+	return {
+		LifecycleRefusal,
+		syncJobFromVisits: vi.fn(async () => null),
+		applyStatusChange: vi.fn(
+			async (
+				_tx: unknown,
+				args: {
+					orgId: string;
+					visitId: string;
+					action: string;
+					actingTechIds?: string[];
+				},
+			) => ({
+				orgId: args.orgId,
+				visitId: args.visitId,
+				jobId: "j1",
+				action: args.action,
+				from: "Scheduled",
+				to: TO[args.action],
+				at: new Date(),
+				// The fake job has only this visit, so completing it completes the job.
+				jobChange:
+					args.action === "complete"
+						? { from: "InProgress", to: "Completed" }
+						: null,
+				lowStockItemIds: [],
+				autoInvoicePlanId: null,
+				wrappingUpTechIds: [],
+				activatedTechIds:
+					args.action === "drive" || args.action === "arrive"
+						? [...(args.actingTechIds ?? [])]
+						: [],
+				cancelledTechIds: [],
+				suppressCustomerNotice: false,
+				cancellationReason: null,
+			}),
+		),
+	};
+});
+vi.mock("../../services/wrappingUpTimer.js", () => ({
+	scheduleWrappingUpClear: vi.fn(),
+	cancelWrappingUpTimer: vi.fn(),
+}));
 vi.mock("../../lib/context.js", () => ({ getScopedDb: () => sdb }));
 vi.mock("../../services/entitlementService.js", () => ({
 	isModuleOn: vi.fn().mockResolvedValue(true),

@@ -4,11 +4,21 @@ import type { pause_reason_type, technician_status } from "../../generated/prism
 import type { Prisma } from "../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { emitToOrg } from "../services/socketService.js";
-import { buildVisitStatusPayload, buildSecondaryEventPayload } from "./jobVisitsController.js";
+import { buildSecondaryEventPayload } from "./jobVisitsController.js";
+import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
+import {
+	LifecycleRefusal,
+	applyStatusChange,
+	runPostCommit,
+	type PostCommitEffects,
+} from "../services/visitLifecycle/index.js";
 
 const NOT_ASSIGNED = "Technician not assigned to this visit";
 class NotAssignedError extends Error {}
+const NO_OPEN_ENTRY = "No active clock-in found for this technician on this visit";
+class AlreadyClockedOutError extends Error {}
+const VISIT_NOT_READY = "VISIT_NOT_READY: Visit must be OnSite, InProgress, or Paused before clocking in";
 
 const CLOCK_IN_ALLOWED = ["OnSite", "InProgress", "Paused"];
 const CLOCK_IN_AUTO_ADVANCE = ["OnSite", "Paused"];
@@ -34,7 +44,7 @@ export const clockInVisit = async (
 		if (!visit) return { err: "Job visit not found" };
 
 		if (!CLOCK_IN_ALLOWED.includes(visit.status)) {
-			return { err: "VISIT_NOT_READY: Visit must be OnSite, InProgress, or Paused before clocking in" };
+			return { err: VISIT_NOT_READY };
 		}
 
 		const assignment = await sdb.job_visit_technician.findUnique({
@@ -53,8 +63,8 @@ export const clockInVisit = async (
 		if (await isWeekLocked(organizationId, techId)) return { err: TIMESHEET_LOCKED };
 
 		const now = new Date();
-		const isPrimaryAdvance = CLOCK_IN_AUTO_ADVANCE.includes(visit.status);
 
+		let effects: PostCommitEffects | null = null;
 		const entry = await sdb.$transaction(async (tx) => {
 			// Same lock order as patchVisitTechnicians (visit, then assignment), so a
 			// concurrent unassign either commits first and this finds no row, or
@@ -63,6 +73,14 @@ export const clockInVisit = async (
 			await txc.$queryRaw`SELECT id FROM job_visit WHERE id = ${visitId} FOR NO KEY UPDATE`;
 			const stillAssigned = await txc.$queryRaw<unknown[]>`SELECT 1 FROM job_visit_technician WHERE visit_id = ${visitId} AND tech_id = ${techId} FOR SHARE`;
 			if (stillAssigned.length === 0) throw new NotAssignedError();
+			// The status read above predates the lock.
+			const locked = await tx.job_visit.findFirst({
+				where: { id: visitId },
+				select: { status: true },
+			});
+			if (!locked || !CLOCK_IN_ALLOWED.includes(locked.status)) {
+				throw new LifecycleRefusal("WRONG_STATE", VISIT_NOT_READY);
+			}
 
 			const newEntry = await tx.visit_tech_time_entry.create({
 				data: { visit_id: visitId, tech_id: techId, clocked_in_at: now },
@@ -70,31 +88,21 @@ export const clockInVisit = async (
 			});
 
 			// Auto-advance: OnSite → InProgress (begin), Paused → InProgress (resume)
-			if (isPrimaryAdvance) {
-				await tx.job_visit.update({
-					where: { id: visitId },
-					data: {
-						status: "InProgress",
-						...(visit.status === "OnSite" && { actual_start_at: visit.actual_start_at ?? now }),
-					},
+			if (CLOCK_IN_AUTO_ADVANCE.includes(locked.status)) {
+				effects = await applyStatusChange(txc, {
+					orgId: organizationId,
+					visitId,
+					action: locked.status === "OnSite" ? "start" : "resume",
+					context,
+					now,
+					actingTechIds: [techId],
 				});
-				if (visit.job.status !== "InProgress") {
-					await tx.job.update({
-						where: { id: visit.job.id },
-						data: { status: "InProgress", status_changed_at: new Date() },
-					});
-				}
+			} else {
+				await tx.technician.update({
+					where: { id: techId },
+					data: { status: "Working" },
+				});
 			}
-
-			// Update global tech status
-			await tx.technician.update({
-				where: { id: techId },
-				data: { status: "Working" },
-			});
-			// Cancel any pending WrappingUp timer — tech is now actively working
-			import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
-				cancelWrappingUpTimer(techId);
-			}).catch(() => {});
 
 			await logActivity({
 				event_type: "visit_time_entry.clocked_in",
@@ -113,32 +121,22 @@ export const clockInVisit = async (
 			return newEntry;
 		});
 
-		const updatedVisit = await sdb.job_visit.findFirst({
-			where: { id: visitId },
-			include: {
-				job: { include: { client: true } },
-				visit_techs: { include: { tech: true } },
-			},
-		});
-
-		if (updatedVisit) {
-			if (isPrimaryAdvance) {
-				emitToOrg(organizationId,
-					"job_visit:status_changed",
-					buildVisitStatusPayload(updatedVisit, visit.status, true, context),
-				);
-				await logActivity({
-					event_type: "job_visit.updated",
-					action: "updated",
-					entity_type: "job_visit",
-					entity_id: visitId,
-					organization_id: organizationId,
-					actor_type: "technician",
-					actor_id: techId,
-					changes: { status: { old: visit.status, new: "InProgress" } },
-				});
-			} else {
-				// Secondary: tech clocked into an already-InProgress visit
+		const advanced = effects as PostCommitEffects | null;
+		if (advanced) {
+			await runPostCommit(advanced, context);
+		} else {
+			import("../services/wrappingUpTimer.js").then(({ cancelWrappingUpTimer }) => {
+				cancelWrappingUpTimer(techId);
+			}).catch(() => {});
+			const updatedVisit = await sdb.job_visit.findFirst({
+				where: { id: visitId },
+				include: {
+					job: { include: { client: true } },
+					visit_techs: { include: { tech: true } },
+				},
+			});
+			// Secondary: tech clocked into an already-InProgress visit
+			if (updatedVisit) {
 				emitToOrg(organizationId,
 					"job_visit:status_changed",
 					buildSecondaryEventPayload(updatedVisit, "InProgress", context),
@@ -149,6 +147,7 @@ export const clockInVisit = async (
 		return { err: "", item: entry };
 	} catch (e) {
 		if (e instanceof NotAssignedError) return { err: NOT_ASSIGNED };
+		if (e instanceof LifecycleRefusal) return { err: e.message };
 		log.error({ err: e }, "clockInVisit failed");
 		throw e;
 	}
@@ -166,7 +165,7 @@ export const clockOutVisit = async (
 		const openEntry = await sdb.visit_tech_time_entry.findFirst({
 			where: { visit_id: visitId, tech_id: techId, clocked_out_at: null },
 		});
-		if (!openEntry) return { err: "No active clock-in found for this technician on this visit" };
+		if (!openEntry) return { err: NO_OPEN_ENTRY };
 
 		const tech = await sdb.technician.findFirst({
 			where: { id: techId },
@@ -180,11 +179,17 @@ export const clockOutVisit = async (
 		const hourlyRate = Number(tech.hourly_rate);
 		const laborTotal = parseFloat((hoursWorked * hourlyRate).toFixed(2));
 
+		let paused: PostCommitEffects | null = null;
 		const result = await sdb.$transaction(async (tx) => {
-			const closedEntry = await tx.visit_tech_time_entry.update({
-				where: { id: openEntry.id },
+			const txc = tx as unknown as Prisma.TransactionClient;
+			// Visit before entry, the order every lifecycle writer takes, so a
+			// concurrent complete can't deadlock with this or bill the entry twice.
+			await txc.$queryRaw`SELECT id FROM job_visit WHERE id = ${visitId} FOR NO KEY UPDATE`;
+			const claimed = await tx.visit_tech_time_entry.updateMany({
+				where: { id: openEntry.id, clocked_out_at: null },
 				data: { clocked_out_at: now, hours_worked: hoursWorked },
 			});
+			if (claimed.count === 0) throw new AlreadyClockedOutError();
 
 			const lineItem = await tx.job_visit_line_item.create({
 				data: {
@@ -200,29 +205,13 @@ export const clockOutVisit = async (
 				},
 			});
 
-			await tx.visit_tech_time_entry.update({
-				where: { id: closedEntry.id },
+			let closedEntry = await tx.visit_tech_time_entry.update({
+				where: { id: openEntry.id },
 				data: { line_item_id: lineItem.id },
 			});
 
-			// Recalculate visit financials
-			const visitWithItems = await tx.job_visit.findUnique({
-				where: { id: visitId },
-				include: { line_items: true },
-			});
-			if (visitWithItems) {
-				const newSubtotal = visitWithItems.line_items.reduce((s, li) => s + Number(li.total), 0);
-				const taxRate = Number(visitWithItems.tax_rate);
-				const newTaxAmount = parseFloat((newSubtotal * taxRate).toFixed(2));
-				await tx.job_visit.update({
-					where: { id: visitId },
-					data: {
-						subtotal: newSubtotal,
-						tax_amount: newTaxAmount,
-						total: parseFloat((newSubtotal + newTaxAmount).toFixed(2)),
-					},
-				});
-			}
+			// Per-line tax groups, discounts and kept rates live in the recompute, not here.
+			await recomputeVisitTotals(visitId, organizationId, txc);
 
 			// is_last_tech: any other open entries on this visit?
 			const remainingOpen = await tx.visit_tech_time_entry.findFirst({
@@ -234,24 +223,26 @@ export const clockOutVisit = async (
 			});
 
 			// Auto-pause when last tech clocks out of an InProgress visit
-			let statusChangedToPaused = false;
 			if (remainingOpen === null) {
 				const currentVisit = await tx.job_visit.findUnique({
 					where: { id: visitId },
 					select: { status: true },
 				});
 				if (currentVisit?.status === "InProgress") {
-					await tx.job_visit.update({ where: { id: visitId }, data: { status: "Paused" } });
-					statusChangedToPaused = true;
+					paused = await applyStatusChange(txc, {
+						orgId: organizationId,
+						visitId,
+						action: "pause",
+						context,
+						now,
+						pauseReason,
+					});
+					// Only when this clock-out actually paused the visit.
+					closedEntry = await tx.visit_tech_time_entry.update({
+						where: { id: openEntry.id },
+						data: { pause_reason: toPauseReason(pauseReason) },
+					});
 				}
-			}
-
-			// Save pause reason only when this clock-out actually caused the visit to pause
-			if (statusChangedToPaused) {
-				await tx.visit_tech_time_entry.update({
-					where: { id: closedEntry.id },
-					data: { pause_reason: toPauseReason(pauseReason) },
-				});
 			}
 
 			// Update global tech status.
@@ -277,35 +268,27 @@ export const clockOutVisit = async (
 				},
 			});
 
-			return { entry: closedEntry, line_item: lineItem, is_last_tech: remainingOpen === null, statusChangedToPaused };
+			return {
+				entry: closedEntry,
+				line_item: lineItem,
+				is_last_tech: remainingOpen === null,
+				statusChangedToPaused: paused !== null,
+			};
 		});
 
-		const updatedVisit = await sdb.job_visit.findFirst({
-			where: { id: visitId },
-			include: {
-				job: { include: { client: true } },
-				visit_techs: { include: { tech: true } },
-			},
-		});
-
-		if (updatedVisit) {
-			if (result.statusChangedToPaused) {
-				emitToOrg(organizationId,
-					"job_visit:status_changed",
-					buildVisitStatusPayload(updatedVisit, "InProgress", true, context),
-				);
-				await logActivity({
-					event_type: "job_visit.updated",
-					action: "updated",
-					entity_type: "job_visit",
-					entity_id: visitId,
-					organization_id: organizationId,
-					actor_type: "technician",
-					actor_id: techId,
-					changes: { status: { old: "InProgress", new: "Paused" } },
-				});
-			} else if (!result.is_last_tech) {
-				// Secondary: tech clocked out but visit stays InProgress
+		const pause = paused as PostCommitEffects | null;
+		if (pause) {
+			await runPostCommit(pause, context);
+		} else if (!result.is_last_tech) {
+			const updatedVisit = await sdb.job_visit.findFirst({
+				where: { id: visitId },
+				include: {
+					job: { include: { client: true } },
+					visit_techs: { include: { tech: true } },
+				},
+			});
+			// Secondary: tech clocked out but visit stays InProgress
+			if (updatedVisit) {
 				emitToOrg(organizationId,
 					"job_visit:status_changed",
 					buildSecondaryEventPayload(updatedVisit, "Paused", context),
@@ -315,6 +298,8 @@ export const clockOutVisit = async (
 
 		return { err: "", item: result };
 	} catch (e) {
+		if (e instanceof AlreadyClockedOutError) return { err: NO_OPEN_ENTRY };
+		if (e instanceof LifecycleRefusal) return { err: e.message };
 		log.error({ err: e }, "clockOutVisit failed");
 		throw e;
 	}

@@ -16,6 +16,31 @@ vi.mock("../../services/customerComms/visitEvents.js", () => ({
 	notifyJobCompleted: vi.fn(async () => undefined),
 	notifyVisitCompleted: vi.fn(async () => undefined),
 	notifyTechOnTheWay: vi.fn(async () => undefined),
+	notifyJobCancelled: vi.fn(async () => undefined),
+	skipVisitReminders: vi.fn(async () => undefined),
+}));
+// The real service needs Postgres (row locks); its own pg tests cover it.
+// The real runPostCommit runs, so the reminder cleanup wiring is what's tested.
+vi.mock("../../services/visitLifecycle/applyStatusChange.js", () => ({
+	LifecycleRefusal: class extends Error {},
+	syncJobFromVisits: vi.fn(),
+	applyStatusChange: vi.fn(async (_tx: unknown, args: { orgId: string; visitId: string }) => ({
+		orgId: args.orgId,
+		visitId: args.visitId,
+		jobId: "j1",
+		action: "cancel",
+		from: "Scheduled",
+		to: "Cancelled",
+		at: new Date(),
+		jobChange: null,
+		lowStockItemIds: [],
+		autoInvoicePlanId: null,
+		wrappingUpTechIds: [],
+		activatedTechIds: [],
+		cancelledTechIds: [],
+		suppressCustomerNotice: false,
+		cancellationReason: "customer asked",
+	})),
 }));
 vi.mock("../../db.js", () => ({ db: {} }));
 vi.mock("../../lib/context.js", () => ({ getScopedDb: () => sdb }));
@@ -61,10 +86,11 @@ describe("cancelJobVisit", () => {
 			visit_techs: [],
 		};
 		sdb.job_visit.findFirst.mockResolvedValue(visit);
-		sdb.$transaction.mockImplementation(async () => undefined);
+		sdb.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(sdb));
 
 		await cancelJobVisit("v1", "customer asked", "org1");
 
+		expect(onVisitCancelled).toHaveBeenCalledTimes(1);
 		expect(onVisitCancelled).toHaveBeenCalledWith("v1", "org1");
 	});
 });

@@ -233,6 +233,27 @@ const PRE_VISIT_EVENTS: CustomerEvent[] = [
 ];
 
 /**
+ * Skips what is still queued for one visit without telling the customer: the
+ * job-cancel path sends a single notice and silences the rest. Never rejects.
+ */
+export function skipVisitReminders(
+	visitId: string,
+	orgId: string,
+	reason: string,
+): Promise<void> {
+	return run("skipVisitReminders", visitId, orgId, async () => {
+		await (
+			await outbox()
+		).cancelQueued(orgId, {
+			entityType: ENTITY,
+			entityId: visitId,
+			events: PRE_VISIT_EVENTS,
+			reason,
+		});
+	});
+}
+
+/**
  * Skips what is still queued for the job's open visits: cancelling a job
  * leaves its visits' statuses as they were. Never rejects.
  */
