@@ -48,6 +48,7 @@ import {
 } from "../lib/invoiceSchedule.js";
 import { log } from "../services/appLogger.js";
 import { generateJobNumber } from "../db.js";
+import { assertValidRecurringPlanTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
 
 // ─── Timezone-safe date helpers ───────────────────────────────────────────────
 // All occurrence generation works with "YYYY-MM-DD" calendar-date strings in the
@@ -843,6 +844,10 @@ export const updateRecurringPlan = async (
 			return { err: "Recurring plan not found" };
 		}
 
+		if (parsed.status !== undefined) {
+			assertValidRecurringPlanTransition(existing.status, parsed.status);
+		}
+
 		const changes = buildChanges(existing, parsed, [
 			"name",
 			"description",
@@ -960,12 +965,14 @@ export const updateRecurringPlan = async (
 					},
 				});
 
-				// Regenerate occurrences with new schedule and generation window
-				await generateOccurrencesForPlan(
-					existing.id,
-					plan.generation_window_days,
-					tx as unknown as Prisma.TransactionClient,
-				);
+				if (plan.status === "Active" || plan.status === "Paused") {
+					// Regenerate occurrences with new schedule and generation window
+					await generateOccurrencesForPlan(
+						existing.id,
+						plan.generation_window_days,
+						tx as unknown as Prisma.TransactionClient,
+					);
+				}
 			}
 
 			// Update line items if provided
@@ -1165,6 +1172,7 @@ export const updateRecurringPlan = async (
 		if (e instanceof Error && e.message.startsWith("Validation failed:")) {
 			return { err: e.message };
 		}
+		if (e instanceof InvalidTransitionError) throw e;
 		log.error({ err: e }, "Update recurring plan error");
 		throw e;
 	}
@@ -1390,6 +1398,10 @@ export const cancelRecurringPlan = async (
 		if (!plan) {
 			return { err: "Recurring plan not found" };
 		}
+		if (plan.status === "Cancelled") {
+			return { err: "", item: plan };
+		}
+		assertValidRecurringPlanTransition(plan.status, "Cancelled");
 
 		const updated = await sdb.$transaction(async (tx) => {
 			// Cancel all future planned occurrences
@@ -1437,6 +1449,7 @@ export const cancelRecurringPlan = async (
 
 		return { err: "", item: updated };
 	} catch (e) {
+		if (e instanceof InvalidTransitionError) throw e;
 		log.error({ err: e }, "Cancel recurring plan error");
 		throw e;
 	}
