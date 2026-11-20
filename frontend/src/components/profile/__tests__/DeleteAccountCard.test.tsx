@@ -87,7 +87,8 @@ describe("DeleteAccountCard for a dispatcher or technician", () => {
 		await u.click(submit);
 		expect(await screen.findByRole("heading", { name: "Your account was deleted" })).toBeInTheDocument();
 		expect(api.deleteAccount.mock.lastCall?.[0]).toEqual({ password: "right", confirmation: "delete" });
-		expect(useAuthStore.getState().user).toBeNull();
+		// AccountDeletedPage signs out in an effect, after the heading has rendered.
+		await waitFor(() => expect(useAuthStore.getState().user).toBeNull());
 	});
 
 	it("explains what stands in the way and keeps the button off", async () => {
