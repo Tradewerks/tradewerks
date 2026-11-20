@@ -40,6 +40,12 @@ const { onVisitScheduled } = vi.hoisted(() => ({
 }));
 vi.mock("../../services/followupTriggers.js", () => ({ onVisitScheduled }));
 
+const lifecycle = vi.hoisted(() => ({
+	syncJobFromVisits: vi.fn(async (): Promise<unknown> => null),
+	runJobChangePostCommit: vi.fn(async () => undefined),
+}));
+vi.mock("../../services/visitLifecycle/index.js", () => lifecycle);
+
 const ORG = "org-1";
 const ITEM = "11111111-1111-4111-8111-111111111111";
 const LINE = "44444444-4444-4444-8444-444444444444";
@@ -424,6 +430,40 @@ describe("generateVisitFromOccurrence", () => {
 		expect(onVisitScheduled).toHaveBeenCalledTimes(1);
 		expect(onVisitScheduled).toHaveBeenCalledWith("visit-1", ORG);
 		expect(order).toEqual(["commit", "notify"]);
+	});
+
+	it("re-derives the container job in the visit's transaction and runs its post-commit after", async () => {
+		const order: string[] = [];
+		const change = { from: "Completed", to: "Scheduled" };
+		lifecycle.syncJobFromVisits.mockImplementationOnce(async () => {
+			order.push("sync");
+			return change;
+		});
+		lifecycle.runJobChangePostCommit.mockImplementationOnce(async () => {
+			order.push("postCommit");
+		});
+		const { sdb, tx } = occurrenceSdb(vi.fn().mockResolvedValue({ id: "visit-1" }));
+		const realTx = sdb.$transaction;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		sdb.$transaction = vi.fn(async (cb: any) => {
+			const r = await realTx(cb);
+			order.push("commit");
+			return r;
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		vi.mocked(getScopedDb).mockReturnValue(sdb as any);
+
+		const result = await generateVisitFromOccurrence("occ", ORG);
+
+		expect(result.err).toBe("");
+		expect(result.item).not.toHaveProperty("jobChange");
+		const [syncTx, org, jobId] = lifecycle.syncJobFromVisits.mock.calls[0] as unknown[];
+		expect([syncTx === tx, org, jobId]).toEqual([true, ORG, "job-1"]);
+		expect(lifecycle.runJobChangePostCommit).toHaveBeenCalledWith(
+			{ orgId: ORG, jobId: "job-1", change },
+			undefined,
+		);
+		expect(order).toEqual(["sync", "commit", "postCommit"]);
 	});
 
 	it("leaves the visit alone on a container job with no kept rate", async () => {

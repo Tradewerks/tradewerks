@@ -15,7 +15,11 @@ import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { LineItemToCreate, ChangeSet } from "../types/common.js";
-import { assertInventoryItemsInOrg } from "../lib/inventory.js";
+import {
+	assertInventoryItemsInOrg,
+	findForeignInventoryItemIds,
+	unknownInventoryItemsMessage,
+} from "../lib/inventory.js";
 import {
 	applyInventoryTaxable,
 	applyInventoryTaxableToNewLines,
@@ -25,18 +29,26 @@ import {
 import { log } from "../services/appLogger.js";
 import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
 import {
-	notifyJobCancelled,
-	notifyJobCompleted,
+	notifyVisitCancelled,
 } from "../services/customerComms/visitEvents.js";
+import { OPEN_VISIT_STATUSES, actorOf } from "../services/visitLifecycle/transitions.js";
+import type {
+	LifecycleRefusalCode,
+	PostCommitEffects,
+} from "../services/visitLifecycle/index.js";
 import { generateJobNumber } from "../db.js";
-import { DocumentRuleError } from "../lib/statusTransitions.js";
+import { DocumentRuleError, REQUEST_DIRECT_CONVERTIBLE } from "../lib/statusTransitions.js";
 import {
 	SOLD_BY_QUOTE_JOBS,
 	soldJobReason,
 	type DocumentShape,
 } from "../services/disputeAdapters.js";
 import { hasOpenDispute } from "../services/disputeService.js";
-import { holdsKeptRate, recomputeJobTotals } from "../lib/recomputeDocumentTotals.js";
+import {
+	holdsKeptRate,
+	lockDocumentTaxSnapshot,
+	recomputeJobTotals,
+} from "../lib/recomputeDocumentTotals.js";
 import { recomputeOpenVisits } from "../lib/recomputeOpenVisits.js";
 import {
 	AddressTaxChoiceError,
@@ -46,7 +58,7 @@ import {
 	choiceActor,
 	keptFamily,
 } from "../lib/addressTaxChoice.js";
-import { assertTaxGroupsInOrg } from "../lib/taxHelpers.js";
+import { assertTaxGroupsInOrg, findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import {
 	dropClientTaxTotals,
 	getEffectiveTaxMode,
@@ -375,6 +387,22 @@ function quoteConversionRefusal(quote: DocumentShape, hasOpenDispute: boolean): 
 	return null;
 }
 
+/** Why a direct request-to-job conversion lost the conditional write. */
+function requestConversionRefusal(status: string | undefined): string {
+	switch (status) {
+		case "ConvertedToJob":
+			return "This request was already converted to a job.";
+		case "Quoted":
+			return "This request has an open quote — convert the quote instead.";
+		case "QuoteRejected":
+			return "This request's quote was rejected. Reopen the request before converting it.";
+		case "Cancelled":
+			return "This request was cancelled.";
+		default:
+			return "This request can't be converted to a job.";
+	}
+}
+
 export const insertJob = async (req: Request, context?: UserContext) => {
 	try {
 		const organizationId = req.user!.organization_id as string;
@@ -398,7 +426,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 			});
 
 			if (!client) {
-				throw new Error("Client not found");
+				throw new DocumentRuleError("Client not found");
 			}
 
 			// Scoped creates don't check foreign parents; resolve the plan in-org first.
@@ -407,7 +435,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					where: { id: parsed.recurring_plan_id },
 					select: { id: true, client_id: true },
 				});
-				if (!plan) throw new DocumentRuleError("Recurring plan not found");
+				if (!plan) throw new DocumentRuleError("Recurring plan not found", "NOT_FOUND");
 				if (plan.client_id !== parsed.client_id) {
 					throw new DocumentRuleError(
 						"This recurring plan belongs to a different client.",
@@ -425,7 +453,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					(id) => !existingIds.has(id),
 				);
 				if (missing.length > 0) {
-					throw new Error(
+					throw new DocumentRuleError(
 						`Technicians not found or deactivated: ${missing.join(", ")}`,
 					);
 				}
@@ -446,6 +474,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 			let discountValue = parsed.discount_value;
 			let discountAmount = parsed.discount_amount;
 			let lineItemsToCreate: LineItemToCreate[] = [];
+			let requestId = parsed.request_id ?? null;
 
 			// If linked to quote, inherit fields and prepare line items
 			if (parsed.quote_id) {
@@ -461,7 +490,7 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				});
 
 				if (!quote) {
-					throw new Error("Quote not found");
+					throw new DocumentRuleError("Quote not found");
 				}
 
 				const refusal = quoteConversionRefusal(
@@ -472,7 +501,15 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 						quote.id,
 					),
 				);
-				if (refusal) throw new DocumentRuleError(refusal);
+				if (refusal) throw new DocumentRuleError(refusal, "WRONG_STATE");
+				if (quote.client_id !== parsed.client_id) {
+					throw new DocumentRuleError("This quote belongs to a different client.");
+				}
+				// The job's request is the quote's; a body request_id may only agree.
+				if (parsed.request_id && parsed.request_id !== quote.request_id) {
+					throw new DocumentRuleError("This request isn't the quote's request.");
+				}
+				requestId = quote.request_id;
 
 				if (!name) name = quote.title;
 				if (!description) description = quote.description;
@@ -521,10 +558,28 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					taxable: item.taxable,
 				}));
 
+				// A Draft quote converts too, so it must be finalized the way
+				// updateQuote would: dated, approval stamped, tax snapshot frozen.
+				const now = new Date();
+				const issuedAt = quote.issued_at ? undefined : now;
 				await tx.quote.update({
 					where: { id: parsed.quote_id },
-					data: { status: "Approved" },
+					data: {
+						status: "Approved",
+						...(issuedAt && { issued_at: issuedAt }),
+						...(!quote.approved_at && { approved_at: now }),
+						...(!quote.approved_via && { approved_via: "staff" }),
+					},
 				});
+				if (issuedAt) {
+					await lockDocumentTaxSnapshot(
+						"quote",
+						quote.id,
+						organizationId,
+						tx as unknown as Prisma.TransactionClient,
+						issuedAt,
+					);
+				}
 
 				await logActivity({
 					event_type: "quote.converted",
@@ -546,10 +601,25 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				});
 
 				if (quote.request_id) {
-					await tx.request.update({
-						where: { id: quote.request_id },
+					const claimed = await tx.request.updateMany({
+						where: {
+							id: quote.request_id,
+							status: { notIn: ["ConvertedToJob", "Cancelled"] },
+						},
 						data: { status: "ConvertedToJob" },
 					});
+					if (claimed.count === 0) {
+						const fresh = await tx.request.findUnique({
+							where: { id: quote.request_id },
+							select: { status: true },
+						});
+						throw new DocumentRuleError(
+							fresh?.status === "Cancelled"
+								? "This request was cancelled."
+								: "This request already has a job.",
+							"WRONG_STATE",
+						);
+					}
 
 					await logActivity({
 						event_type: "request.converted",
@@ -578,7 +648,10 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 				});
 
 				if (!request) {
-					throw new Error("Request not found");
+					throw new DocumentRuleError("Request not found");
+				}
+				if (request.client_id !== parsed.client_id) {
+					throw new DocumentRuleError("This request belongs to a different client.");
 				}
 
 				if (!name) name = request.title;
@@ -592,10 +665,24 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					estimatedTotal = Number(request.estimated_value);
 				}
 
-				await tx.request.update({
-					where: { id: parsed.request_id },
+				// Conditional write: of two racing conversions only one matches.
+				const claimed = await tx.request.updateMany({
+					where: {
+						id: parsed.request_id,
+						status: { in: [...REQUEST_DIRECT_CONVERTIBLE] },
+					},
 					data: { status: "ConvertedToJob" },
 				});
+				if (claimed.count === 0) {
+					const fresh = await tx.request.findUnique({
+						where: { id: parsed.request_id },
+						select: { status: true },
+					});
+					throw new DocumentRuleError(
+						requestConversionRefusal(fresh?.status),
+						"WRONG_STATE",
+					);
+				}
 
 				await logActivity({
 					event_type: "request.converted",
@@ -619,16 +706,20 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 
 			// If line_items provided directly in request, use those
 			if (parsed.line_items && parsed.line_items.length > 0) {
-				await assertInventoryItemsInOrg(
+				const foreignItems = await findForeignInventoryItemIds(
 					tx,
 					organizationId,
 					parsed.line_items.map((i) => i.inventory_item_id),
 				);
-				await assertTaxGroupsInOrg(
-					tx as unknown as Prisma.TransactionClient,
+				if (foreignItems.length > 0) {
+					throw new DocumentRuleError(unknownInventoryItemsMessage(foreignItems));
+				}
+				const foreignGroups = await findForeignTaxGroupIds(
+					tx,
 					organizationId,
 					parsed.line_items.map((i) => i.tax_group_id),
 				);
+				if (foreignGroups.length > 0) throw new DocumentRuleError("Tax group not found");
 				const bodyLines = await applyInventoryTaxable(
 					tx,
 					organizationId,
@@ -648,16 +739,16 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 			}
 
 			if (!address) {
-				throw new Error("Address is required for job");
+				throw new DocumentRuleError("Address is required for job");
 			}
 			if (!coords) {
-				throw new Error("Coordinates are required for job");
+				throw new DocumentRuleError("Coordinates are required for job");
 			}
 			if (!name) {
-				throw new Error("Job name is required");
+				throw new DocumentRuleError("Job name is required");
 			}
 			if (!description) {
-				throw new Error("Job description is required");
+				throw new DocumentRuleError("Job description is required");
 			}
 
 			const jobNumber = await generateJobNumber(tx, organizationId);
@@ -672,8 +763,8 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					client_id: parsed.client_id,
 					address: address,
 					coords: coords,
-					status: parsed.status || "Unscheduled",
-					request_id: parsed.request_id || null,
+					status: "Unscheduled",
+					request_id: requestId,
 					quote_id: parsed.quote_id || null,
 					recurring_plan_id: parsed.recurring_plan_id || null,
 					...(subtotal !== undefined && { subtotal }),
@@ -881,6 +972,16 @@ export const insertJob = async (req: Request, context?: UserContext) => {
 					.join(", ")}`,
 			};
 		}
+		if (e instanceof DocumentRuleError && e.code) {
+			return { err: e.message, code: e.code };
+		}
+		if (
+			e instanceof Prisma.PrismaClientKnownRequestError &&
+			e.code === "P2002" &&
+			(e.meta?.target as string[] | undefined)?.includes("quote_id")
+		) {
+			return { err: "This quote was already converted to a job.", code: "CONFLICT" as const };
+		}
 		if (isClientMessage(e)) {
 			return { err: e.message };
 		}
@@ -940,20 +1041,15 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 			"description",
 			"priority",
 			"address",
-			"status",
-			"cancellation_reason",
 			"subtotal",
 			"tax_rate",
 			"tax_amount",
 			"discount_value",
 			"discount_amount",
 			"estimated_total",
-			"actual_total",
 			"discount_type",
 			"coords",
 		] as const);
-
-		const statusChanged = parsed.status !== undefined && parsed.status !== existing.status;
 
 		const updated = await sdb.$transaction(async (tx) => {
 			// Recompute reads its inputs from the row, so they land first.
@@ -1234,11 +1330,6 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 					...(parsed.coords !== undefined && {
 						coords: parsed.coords,
 					}),
-					...(parsed.status !== undefined && {
-						status: parsed.status,
-					}),
-					...(statusChanged && { status_changed_at: new Date() }),
-
 					...(parsed.subtotal !== undefined && {
 						subtotal: parsed.subtotal,
 					}),
@@ -1260,18 +1351,6 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 					...(parsed.estimated_total !== undefined && {
 						estimated_total: parsed.estimated_total,
 					}),
-					...(parsed.actual_total !== undefined && {
-						actual_total: parsed.actual_total,
-					}),
-
-					...(parsed.cancellation_reason !== undefined && {
-						cancellation_reason: parsed.cancellation_reason,
-					}),
-
-					...(parsed.status === "Completed" &&
-						!existing.completed_at && { completed_at: new Date() }),
-					...(parsed.status === "Cancelled" &&
-						!existing.cancelled_at && { cancelled_at: new Date() }),
 				},
 				include: {
 					client: true,
@@ -1340,10 +1419,6 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		if (updated) {
 			emitToOrg(organizationId, "job:updated", { jobId: id, organizationId });
 		}
-		if (statusChanged && parsed.status === "Completed")
-			void notifyJobCompleted(id, organizationId);
-		if (statusChanged && parsed.status === "Cancelled")
-			void notifyJobCancelled(id, organizationId);
 		return { err: "", item: updated };
 	} catch (e) {
 		if (e instanceof ZodError) {
@@ -1356,6 +1431,133 @@ export const updateJob = async (req: Request, organizationId: string, context?: 
 		if (e instanceof AddressTaxChoiceError) return { err: e.message };
 		log.error({ err: e }, "Update job error");
 		throw e;
+	}
+};
+
+const JOB_ALREADY_CANCELLED = "This job is already cancelled.";
+const JOB_COMPLETE = "This job is complete. Cancel its invoice instead.";
+
+/**
+ * Cancels every open visit and the job in one transaction. Completed visits
+ * stay, so the job keeps their actual_total and can still be invoiced.
+ */
+export const cancelJob = async (
+	jobId: string,
+	reason: string,
+	organizationId: string,
+	context?: UserContext,
+): Promise<{
+	err: string;
+	code?: LifecycleRefusalCode;
+	item?: Awaited<ReturnType<typeof getJobById>>;
+}> => {
+	try {
+		// Lazy: the lifecycle's imports reach the email service, which throws at
+		// load without Postmark config; this module's load graph stays as it was.
+		const {
+			LifecycleRefusal,
+			applyStatusChange,
+			runJobChangePostCommit,
+			runPostCommit,
+			syncJobFromVisits,
+		} = await import("../services/visitLifecycle/index.js");
+		if (actorOf(context) === "technician")
+			return { err: "Technicians can't cancel jobs.", code: "FORBIDDEN" };
+		const sdb = getScopedDb(organizationId);
+		const job = await sdb.job.findFirst({
+			where: { id: jobId },
+			select: { status: true, recurring_plan: { select: { status: true } } },
+		});
+		if (!job) return { err: "Job not found", code: "NOT_FOUND" };
+		if (job.status === "Cancelled") return { err: JOB_ALREADY_CANCELLED, code: "WRONG_STATE" };
+		if (job.status === "Completed") return { err: JOB_COMPLETE, code: "WRONG_STATE" };
+		// The plan would just generate new visits onto a cancelled job.
+		if (job.recurring_plan?.status === "Active")
+			return { err: "Cancel the recurring plan instead.", code: "WRONG_STATE" };
+
+		const now = new Date();
+		const { effects, noticeVisitId, jobChange } = await sdb.$transaction(async (stx) => {
+			const tx = stx as unknown as Prisma.TransactionClient;
+			// Id order, like every other multi-visit writer, so two cancels can't deadlock.
+			const open = await tx.job_visit.findMany({
+				where: { job_id: jobId, status: { in: [...OPEN_VISIT_STATUSES] } },
+				select: { id: true, scheduled_start_at: true },
+				orderBy: { id: "asc" },
+			});
+			const effects: PostCommitEffects[] = [];
+			for (const v of open) {
+				effects.push(
+					await applyStatusChange(tx, {
+						orgId: organizationId,
+						visitId: v.id,
+						action: "cancel",
+						context,
+						now,
+						cancellationReason: reason,
+						deferJobSync: true,
+						suppressCustomerNotice: true,
+					}),
+				);
+			}
+			const change = await syncJobFromVisits(tx, organizationId, jobId, {
+				now,
+				context,
+				cancel: { reason },
+			});
+			// The checks above and the open-visit read ran before the job lock: the
+			// job may have closed, or gained a visit, since.
+			if (change?.to !== "Cancelled") {
+				if (change?.from === "Completed")
+					throw new LifecycleRefusal("WRONG_STATE", JOB_COMPLETE);
+				const current = change
+					? null
+					: await tx.job.findFirst({ where: { id: jobId }, select: { status: true } });
+				if (current?.status === "Cancelled")
+					throw new LifecycleRefusal("WRONG_STATE", JOB_ALREADY_CANCELLED);
+				throw new LifecycleRefusal(
+					"CONFLICT",
+					"This job changed while you were saving. Reload and try again.",
+				);
+			}
+
+			// One notice for the whole job, about the visit the customer is waiting on.
+			const next = open
+				.filter((v) => v.scheduled_start_at > now)
+				.sort((a, b) => a.scheduled_start_at.getTime() - b.scheduled_start_at.getTime())[0];
+			return { effects, noticeVisitId: next?.id ?? null, jobChange: change };
+		});
+		const previousStatus = jobChange.from;
+
+		for (const e of effects) await runPostCommit(e, context);
+		if (noticeVisitId) void notifyVisitCancelled(noticeVisitId, organizationId);
+		await runJobChangePostCommit({ orgId: organizationId, jobId, change: jobChange }, context);
+		await logActivity({
+			event_type: "job.cancelled",
+			action: "updated",
+			entity_type: "job",
+			entity_id: jobId,
+			organization_id: organizationId,
+			actor_type: actorOf(context),
+			actor_id: context?.techId || context?.dispatcherId,
+			changes: {
+				status: { old: previousStatus, new: "Cancelled" },
+				cancellation_reason: { old: null, new: reason },
+				_cancelled_visits: { old: null, new: effects.length },
+			},
+			ip_address: context?.ipAddress,
+			user_agent: context?.userAgent,
+		});
+
+		return { err: "", item: await getJobById(jobId, organizationId) };
+	} catch (e) {
+		// By name: the class lives in the lazily loaded module, which may be
+		// the very thing that failed to load.
+		if (e instanceof Error && e.name === "LifecycleRefusal") {
+			const refusal = e as Error & { code: LifecycleRefusalCode };
+			return { err: refusal.message, code: refusal.code };
+		}
+		log.error({ err: e }, "Cancel job error");
+		return { err: "Failed to cancel job" };
 	}
 };
 
@@ -1402,6 +1604,54 @@ export const deleteJob = async (id: string, organizationId: string, context?: Us
 			await tx.job.delete({
 				where: { id },
 			});
+
+			// The request was marked converted by this job; with no other job it
+			// is open again, back to where it stood before conversion.
+			// A quote-converted job carries quote_id but no request_id.
+			const requestId =
+				existing.request_id ??
+				(existing.quote_id
+					? (
+							await tx.quote.findUnique({
+								where: { id: existing.quote_id },
+								select: { request_id: true },
+							})
+						)?.request_id
+					: null);
+			if (requestId) {
+				const others = await tx.job.count({
+					where: {
+						id: { not: id },
+						OR: [{ request_id: requestId }, { quote: { request_id: requestId } }],
+					},
+				});
+				const to = existing.quote_id ? "QuoteApproved" : "Reviewing";
+				const reverted =
+					others === 0
+						? await tx.request.updateMany({
+								where: { id: requestId, status: "ConvertedToJob" },
+								data: { status: to },
+							})
+						: { count: 0 };
+				if (reverted.count > 0) {
+					await logActivity({
+						event_type: "request.reverted",
+						action: "updated",
+						entity_type: "request",
+						entity_id: requestId,
+						organization_id: organizationId,
+						actor_type: context?.techId
+							? "technician"
+							: context?.dispatcherId
+								? "dispatcher"
+								: "system",
+						actor_id: context?.techId || context?.dispatcherId,
+						changes: { status: { old: "ConvertedToJob", new: to } },
+						ip_address: context?.ipAddress,
+						user_agent: context?.userAgent,
+					});
+				}
+			}
 		});
 
 		deleteStoredFiles(photos.map((p) => p.photo_url), { jobId: id });

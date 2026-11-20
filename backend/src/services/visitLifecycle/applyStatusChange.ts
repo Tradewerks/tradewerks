@@ -1,11 +1,11 @@
-import type { Prisma, job_status } from "../../../generated/prisma/client.js";
+import type { Prisma } from "../../../generated/prisma/client.js";
 import type { UserContext } from "../../lib/context.js";
 import { deductInventoryForVisit } from "../../controllers/inventoryController.js";
 import { parentBreadcrumb } from "../../controllers/logsController.js";
-import { logActivity } from "../logger.js";
+import { logActivityInTx } from "./activityLog.js";
 import { deriveJobStatus } from "./deriveJobStatus.js";
 import { recomputeJobActualTotal } from "./jobRollup.js";
-import type { PostCommitEffects } from "./postCommit.js";
+import type { JobChange, PostCommitEffects } from "./postCommit.js";
 import { applyTechStatus } from "./techStatus.js";
 import { closeOpenTimeEntries } from "./timeEntries.js";
 import {
@@ -65,6 +65,16 @@ export async function applyStatusChange(
 	const { orgId, visitId, action, context } = args;
 	const now = args.now ?? new Date();
 
+	// Lock first, read second: a read taken before the lock can be stale by
+	// the time we write, which turned compatible concurrent changes into
+	// CONFLICTs. Visit before any assignment, technician or job row.
+	const locked = await tx.$queryRaw<{ id: string }[]>`
+		SELECT v.id FROM job_visit v JOIN job j ON j.id = v.job_id
+		WHERE v.id = ${visitId} AND j.organization_id = ${orgId}
+		FOR NO KEY UPDATE OF v`;
+	if (locked.length === 0)
+		throw new LifecycleRefusal("NOT_FOUND", "Job visit not found");
+
 	const visit = await tx.job_visit.findFirst({
 		where: { id: visitId, job: { organization_id: orgId } },
 		include: {
@@ -77,8 +87,9 @@ export async function applyStatusChange(
 	if (!visit) throw new LifecycleRefusal("NOT_FOUND", "Job visit not found");
 
 	const actor = actorOf(context);
+	const techId = context?.techId;
 	const assignedIds = visit.visit_techs.map((vt) => vt.tech_id);
-	if (actor === "technician" && !assignedIds.includes(context!.techId!)) {
+	if (actor === "technician" && (!techId || !assignedIds.includes(techId))) {
 		throw new LifecycleRefusal(
 			"FORBIDDEN",
 			"You aren't assigned to this visit.",
@@ -89,6 +100,7 @@ export async function applyStatusChange(
 	const from = visit.status;
 	const to = check.to;
 	const noTechMessage = "Assign a technician to this visit first.";
+	// Assignment writers take this visit's lock first, so assignedIds is stable.
 	if (NEEDS_TECH.includes(to) && assignedIds.length === 0) {
 		throw new LifecycleRefusal("WRONG_STATE", noTechMessage);
 	}
@@ -105,7 +117,6 @@ export async function applyStatusChange(
 	if (action === "restore") stamps.cancellation_reason = null;
 	if (action === "reopen") stamps.actual_end_at = null;
 
-	// Read-only, so it may precede the visit lock.
 	const actingTechIds =
 		args.actingTechIds ??
 		(context?.techId
@@ -121,8 +132,7 @@ export async function applyStatusChange(
 					})
 				).map((t) => t.id));
 
-	// First write in the tx: takes the visit row lock before any assignment or
-	// time-entry row, and the status predicate makes a concurrent loser see 0.
+	// The row is locked, so this predicate can't miss; it stays as a belt.
 	const written = await tx.job_visit.updateMany({
 		where: { id: visitId, status: from },
 		data: { status: to, ...stamps },
@@ -131,26 +141,6 @@ export async function applyStatusChange(
 		throw new LifecycleRefusal(
 			"CONFLICT",
 			"This visit changed while you were saving. Refresh and try again.",
-		);
-	}
-	// Assignment writers lock the visit first too, so these reads are now stable.
-	if (
-		NEEDS_TECH.includes(to) &&
-		(await tx.job_visit_technician.count({
-			where: { visit_id: visitId },
-		})) === 0
-	) {
-		throw new LifecycleRefusal("WRONG_STATE", noTechMessage);
-	}
-	if (
-		actor === "technician" &&
-		(await tx.job_visit_technician.count({
-			where: { visit_id: visitId, tech_id: context!.techId! },
-		})) === 0
-	) {
-		throw new LifecycleRefusal(
-			"FORBIDDEN",
-			"You aren't assigned to this visit.",
 		);
 	}
 
@@ -201,7 +191,7 @@ export async function applyStatusChange(
 			{ old: visit[k as keyof typeof visit] ?? null, new: v },
 		]),
 	);
-	await logActivity({
+	const logRow = await logActivityInTx(tx, {
 		event_type: "job_visit.updated",
 		action: "updated",
 		entity_type: "job_visit",
@@ -225,6 +215,7 @@ export async function applyStatusChange(
 		to,
 		at: now,
 		jobChange,
+		logRows: [logRow],
 		lowStockItemIds,
 		autoInvoicePlanId,
 		wrappingUpTechIds: tech.wrappingUpTechIds,
@@ -250,7 +241,7 @@ export async function syncJobFromVisits(
 		cancel?: { reason: string };
 		context?: UserContext;
 	} = {},
-): Promise<{ from: job_status; to: job_status } | null> {
+): Promise<JobChange | null> {
 	const now = opts.now ?? new Date();
 	// Two txs finishing different visits of one job would each still see the
 	// other's visit open and both leave the job InProgress. The job lock
@@ -280,7 +271,7 @@ export async function syncJobFromVisits(
 		: job.cancelled_at;
 	const to = deriveJobStatus(visits, { cancelled_at: cancelledAt });
 
-	let change: { from: job_status; to: job_status } | null = null;
+	let change: JobChange | null = null;
 	if (to !== job.status) {
 		const data: Prisma.jobUpdateInput = {
 			status: to,
@@ -309,7 +300,7 @@ export async function syncJobFromVisits(
 				changes[key] = { old: job[key], new: data[key] };
 			}
 		}
-		await logActivity({
+		const logRow = await logActivityInTx(tx, {
 			event_type: "job.updated",
 			action: "updated",
 			entity_type: "job",
@@ -318,7 +309,7 @@ export async function syncJobFromVisits(
 			...actorFields(opts.context),
 			changes,
 		});
-		change = { from: job.status, to };
+		change = { from: job.status, to, logRow };
 	}
 
 	await recomputeJobActualTotal(tx, jobId);

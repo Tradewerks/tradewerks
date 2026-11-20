@@ -98,7 +98,13 @@ function makeLineItem(overrides: Record<string, unknown> = {}) {
 }
 
 function makeVisit(overrides: Record<string, unknown> = {}) {
-	return { id: VISIT_ID, status: "InProgress", _count: { invoice_visits: 0 }, ...overrides };
+	return {
+		id: VISIT_ID,
+		status: "InProgress",
+		_count: { invoice_visits: 0 },
+		visit_techs: [{ tech_id: TECH_ID }],
+		...overrides,
+	};
 }
 
 /**
@@ -613,8 +619,27 @@ describe("updatePartsUsedQty", () => {
 
 	// ── Actor identity ─────────────────────────────────────────────────────────
 
-	it("records the authenticated technician as the ledger + log actor, not the body technician_id", async () => {
-		makeSdb({ technician: { id: OTHER_TECH_ID } });
+	it("records the authenticated technician as the ledger + log actor and the credited tech", async () => {
+		makeSdb();
+
+		const result = await updatePartsUsedQty(VISIT_ID, LINE_ITEM_ID, { quantity: 1 }, ORG_ID, TECH_CTX);
+
+		expect(result.err).toBe("");
+		const [, , actor] = mockRecordMovements.mock.calls.at(-1)!;
+		expect(actor).toEqual({ actor_type: "technician", actor_id: TECH_ID });
+		expect(mockLogActivity).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actor_type: "technician",
+				actor_id: TECH_ID,
+				changes: expect.objectContaining({
+					technician_id: { old: null, new: TECH_ID },
+				}),
+			}),
+		);
+	});
+
+	it("a technician naming another technician is FORBIDDEN, before any write", async () => {
+		const sdb = makeSdb({ technician: { id: OTHER_TECH_ID } });
 
 		const result = await updatePartsUsedQty(
 			VISIT_ID,
@@ -624,19 +649,17 @@ describe("updatePartsUsedQty", () => {
 			TECH_CTX,
 		);
 
-		expect(result.err).toBe("");
-		const [, , actor] = mockRecordMovements.mock.calls.at(-1)!;
-		expect(actor).toEqual({ actor_type: "technician", actor_id: TECH_ID });
-		expect(mockLogActivity).toHaveBeenCalledWith(
-			expect.objectContaining({
-				actor_type: "technician",
-				actor_id: TECH_ID,
-				// The body tech is kept only as attribution on the audit entry.
-				changes: expect.objectContaining({
-					technician_id: { old: null, new: OTHER_TECH_ID },
-				}),
-			}),
-		);
+		expect(result).toMatchObject({ code: "FORBIDDEN" });
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("a technician not assigned to the visit is FORBIDDEN, before any write", async () => {
+		const sdb = makeSdb({ visit: makeVisit({ visit_techs: [{ tech_id: OTHER_TECH_ID }] }) });
+
+		const result = await updatePartsUsedQty(VISIT_ID, LINE_ITEM_ID, { quantity: 1 }, ORG_ID, TECH_CTX);
+
+		expect(result).toMatchObject({ code: "FORBIDDEN", err: "You are not assigned to this visit" });
+		expect(sdb.$transaction).not.toHaveBeenCalled();
 	});
 
 	it("records a dispatcher caller as a dispatcher actor", async () => {

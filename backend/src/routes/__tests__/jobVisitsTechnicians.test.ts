@@ -71,6 +71,7 @@ import { getUserContext } from "../../lib/context.js";
 import { logActivity } from "../../services/logger.js";
 import { createNotification } from "../../controllers/notificationsController.js";
 import { callRoute, leaves } from "./harness.js";
+import { patchVisitTechnicians } from "../../controllers/jobVisitsController.js";
 
 const VISIT = "11111111-1111-4111-8111-111111111111";
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -318,10 +319,35 @@ describe("legacy PUT /job-visits/:id/technicians runs through the diff", () => {
         expect(assigned.has(A)).toBe(true);
     });
 
+    it("validates tech_ids like PATCH: uuids only, at most 20, and required", async () => {
+        expect((await put(["nope"])).status).toBe(400);
+        const many = Array.from(
+            { length: 21 },
+            (_, i) => `aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, "0")}`,
+        );
+        expect((await put(many)).status).toBe(400);
+        const missing = await callRoute(jobVisitsRouter, "put", "/:id/technicians", {
+            params: { id: VISIT },
+            body: {},
+        });
+        expect(missing.status).toBe(400);
+        expect(missing.body.error.message).toBe("tech_ids must be an array");
+        expect(fake.job_visit_technician.deleteMany).not.toHaveBeenCalled();
+        expect(fake.job_visit_technician.createMany).not.toHaveBeenCalled();
+    });
+
     it("is 403 for a technician caller", async () => {
         vi.mocked(getUserContext).mockReturnValue({ techId: A });
         const res = await put([A, B]);
         expect(res.status).toBe(403);
         expect(fake.job_visit_technician.createMany).not.toHaveBeenCalled();
+    });
+});
+
+describe("patchVisitTechnicians called directly (the assistant's path)", () => {
+    it("refuses a technician context with FORBIDDEN before reading anything", async () => {
+        const res = await patchVisitTechnicians(VISIT, { add: [B], remove: [] }, "org-1", { techId: A });
+        expect(res).toEqual(expect.objectContaining({ code: "FORBIDDEN" }));
+        expect(fake.job_visit.findFirst).not.toHaveBeenCalled();
     });
 });

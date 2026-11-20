@@ -160,4 +160,63 @@ describe.runIf(DB_URL)("job.actual_total rollup against Postgres", () => {
 			),
 		).toBe(40);
 	});
+
+	it("two visits settling at once both land in actual_total: the job is locked before the sum", async () => {
+		const { jobId, visitId: a } = await seed("race", "Completed");
+		await db.job_visit.update({ where: { id: a }, data: { total: 0 } });
+		const b = await db.job_visit.create({
+			data: {
+				job_id: jobId,
+				name: "Second",
+				status: "Completed",
+				total: 0,
+				arrival_constraint: "anytime",
+				finish_constraint: "when_done",
+				scheduled_start_at: new Date("2027-03-03T15:00:00Z"),
+				scheduled_end_at: new Date("2027-03-03T16:00:00Z"),
+			},
+		});
+
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		let summed!: () => void;
+		const firstSummed = new Promise<void>((r) => (summed = r));
+		const first = db.$transaction(
+			async (tx) => {
+				await tx.job_visit.update({
+					where: { id: a },
+					data: { total: 100 },
+				});
+				await rollup.recomputeJobActualTotal(tx, jobId);
+				summed();
+				await gate;
+			},
+			{ timeout: 20_000 },
+		);
+		await firstSummed;
+		// Without the job lock this sum runs now, misses the first visit's
+		// uncommitted 100, and its later write drops it.
+		const second = db.$transaction(
+			async (tx) => {
+				await tx.job_visit.update({
+					where: { id: b.id },
+					data: { total: 50 },
+				});
+				await rollup.recomputeJobActualTotal(tx, jobId);
+			},
+			{ timeout: 20_000 },
+		);
+		for (let i = 0; i < 200; i++) {
+			const [{ n }] = await db.$queryRaw<{ n: number }[]>`
+				SELECT count(*)::int AS n FROM pg_stat_activity
+				WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+			if (n > 0) break;
+			await new Promise((r) => setTimeout(r, 25));
+		}
+		release();
+		await Promise.all([first, second]);
+
+		const job = await db.job.findUniqueOrThrow({ where: { id: jobId } });
+		expect(Number(job.actual_total)).toBe(150);
+	});
 });

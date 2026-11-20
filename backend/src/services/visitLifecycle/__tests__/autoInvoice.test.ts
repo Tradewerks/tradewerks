@@ -69,6 +69,7 @@ beforeEach(() => {
 	vi.mocked(isModuleOn).mockResolvedValue(true);
 	sdb.log.findFirst.mockResolvedValue(null);
 	innerTx.log.findFirst.mockResolvedValue(null);
+	innerTx.invoice_schedule.updateMany.mockResolvedValue({ count: 1 });
 	sdb.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) =>
 		fn(innerTx),
 	);
@@ -131,6 +132,39 @@ describe("maybeAutoInvoiceOnCompletion", () => {
 		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
 		expect(innerTx.log.create).not.toHaveBeenCalled();
 		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	it("a CAS miss from a concurrent same-plan completion retries on the fresh schedule and bills", async () => {
+		const later = new Date("2027-03-01T16:00:00Z");
+		sdb.invoice_schedule.findFirst
+			.mockResolvedValueOnce(schedule())
+			.mockResolvedValueOnce(schedule({ last_invoiced_at: later }));
+		innerTx.invoice_schedule.updateMany.mockResolvedValueOnce({ count: 0 });
+
+		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
+
+		expect(innerTx.invoice_schedule.updateMany).toHaveBeenCalledTimes(2);
+		expect(innerTx.invoice_schedule.updateMany).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				where: { id: "s1", last_invoiced_at: later },
+			}),
+		);
+		expect(innerTx.log.create).toHaveBeenCalledTimes(1);
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	it("logs the failure only once the CAS retries are exhausted", async () => {
+		sdb.invoice_schedule.findFirst.mockResolvedValue(schedule());
+		innerTx.invoice_schedule.updateMany.mockResolvedValue({ count: 0 });
+
+		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
+
+		expect(innerTx.invoice_schedule.updateMany).toHaveBeenCalledTimes(3);
+		expect(innerTx.log.create).not.toHaveBeenCalled();
+		expect(logActivity).toHaveBeenCalledTimes(1);
+		expect(logActivity).toHaveBeenCalledWith(
+			expect.objectContaining({ event_type: "invoice.auto_creation_failed" }),
+		);
 	});
 
 	it("never rejects; a failure is logged against the visit", async () => {

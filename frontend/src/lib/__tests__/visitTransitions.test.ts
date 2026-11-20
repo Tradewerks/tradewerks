@@ -22,7 +22,8 @@ describe("canApplyVisitVerb", () => {
 		const verbs = Object.keys(VISIT_TRANSITIONS) as (keyof typeof VISIT_TRANSITIONS)[];
 		for (const verb of verbs) {
 			expect(canApplyVisitVerb(verb, "Completed")).toBe(false);
-			expect(canApplyVisitVerb(verb, "Cancelled")).toBe(false);
+			// Restore is the one way out of Cancelled.
+			expect(canApplyVisitVerb(verb, "Cancelled")).toBe(verb === "restore");
 		}
 	});
 });

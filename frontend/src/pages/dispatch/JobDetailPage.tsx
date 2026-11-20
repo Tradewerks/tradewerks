@@ -21,7 +21,7 @@ import {
 	useJobVisitsByJobIdQuery,
 	useCreateJobVisitMutation,
 	useDeleteJobMutation,
-	useCancelJobVisitMutation,
+	useCancelJobMutation,
 } from "../../hooks/useJobs";
 import { useInvoicesByJobIdQuery } from "../../hooks/useInvoices";
 import JobMapTab from "../../components/jobs/JobMapTab";
@@ -109,12 +109,8 @@ interface CancelJobModalProps {
 }
 
 /**
- * "Cancel Job" has no direct status write: jobVisitsController recomputes
- * job.status from its visits, so this modal cancels every open visit with the
- * given reason and lets that recompute carry the job to Cancelled.
- *
- * A job with no visits leaves the recompute nothing to act on, so it is an
- * explicit dead end here rather than a reason that cancels nothing.
+ * One POST /jobs/:id/cancel cancels the job and its open visits together, so a
+ * job with no visits is cancellable too.
  */
 function CancelJobModal({
 	open,
@@ -131,7 +127,6 @@ function CancelJobModal({
 		onClose();
 	};
 
-	const nothingToCancel = openVisitCount === 0;
 	const submitDisabled = pending || reason.trim().length === 0;
 
 	const content = (
@@ -152,27 +147,18 @@ function CancelJobModal({
 			</div>
 
 			<div className="px-6 py-5 space-y-5">
-				{nothingToCancel ? (
-					<p className="text-sm text-text-tertiary">
-						This job has no open visits to cancel. Schedule and
-						cancel a visit, or edit the job directly, instead.
-					</p>
-				) : (
-					<>
-						<p className="text-sm text-text-secondary">
-							Cancels every open visit on this job (
-							{openVisitCount}{" "}
-							{openVisitCount === 1 ? "visit" : "visits"})
-							with the reason below. The job moves to
-							Cancelled once none remain open.
-						</p>
-						<ReasonField
-							value={reason}
-							onChange={setReason}
-							placeholder="Why is this job being cancelled?"
-						/>
-					</>
-				)}
+				<p className="text-sm text-text-secondary">
+					{openVisitCount === 0
+						? "Cancels this job with the reason below."
+						: `Cancels this job and its ${openVisitCount} open ${
+								openVisitCount === 1 ? "visit" : "visits"
+							} with the reason below.`}
+				</p>
+				<ReasonField
+					value={reason}
+					onChange={setReason}
+					placeholder="Why is this job being cancelled?"
+				/>
 				{error && (
 					<div className="flex items-center gap-2 p-3 bg-error/10 border border-error/20 rounded-md">
 						<AlertTriangle
@@ -190,23 +176,21 @@ function CancelJobModal({
 					disabled={pending}
 					className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-surface rounded-md transition-colors duration-150 ease-out disabled:opacity-50"
 				>
-					{nothingToCancel ? "Close" : "Never Mind"}
+					Never Mind
 				</button>
-				{!nothingToCancel && (
-					<button
-						onClick={() => onSubmit(reason)}
-						disabled={submitDisabled}
-						className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-error hover:enabled:bg-error-strong disabled:opacity-50 disabled:cursor-not-allowed text-on-primary rounded-md transition-colors duration-150 ease-out"
-					>
-						{pending && (
-							<Loader2
-								size={14}
-								className="animate-spin"
-							/>
-						)}
-						Cancel Job
-					</button>
-				)}
+				<button
+					onClick={() => onSubmit(reason)}
+					disabled={submitDisabled}
+					className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-error hover:enabled:bg-error-strong disabled:opacity-50 disabled:cursor-not-allowed text-on-primary rounded-md transition-colors duration-150 ease-out"
+				>
+					{pending && (
+						<Loader2
+							size={14}
+							className="animate-spin"
+						/>
+					)}
+					Cancel Job
+				</button>
 			</div>
 		</div>
 	);
@@ -247,7 +231,7 @@ export default function JobDetailPage() {
 	const [cancelJobError, setCancelJobError] = useState<string | null>(null);
 
 	const { mutateAsync: createJobVisitMutation } = useCreateJobVisitMutation();
-	const cancelVisitMutation = useCancelJobVisitMutation();
+	const cancelJobMutation = useCancelJobMutation();
 	const deleteJobMutation = useDeleteJobMutation();
 	const toast = useToast();
 
@@ -436,16 +420,7 @@ export default function JobDetailPage() {
 		setIsCancellingJob(true);
 		setCancelJobError(null);
 		try {
-			// Cancel every open visit; jobVisitsController's derive-from-visits
-			// recompute carries the job itself to Cancelled once none remain open.
-			await Promise.all(
-				openVisitsList.map((v) =>
-					cancelVisitMutation.mutateAsync({
-						visitId: v.id,
-						cancellationReason: reason,
-					})
-				)
-			);
+			await cancelJobMutation.mutateAsync({ jobId: job.id, reason: reason.trim() });
 			setCancelJobModalOpen(false);
 		} catch (error) {
 			setCancelJobError(errorMessage(error, "Couldn't cancel this job."));
@@ -459,6 +434,7 @@ export default function JobDetailPage() {
 		visitCount: visits.length,
 		lineItemCount: job.line_items?.length ?? 0,
 		openVisitCount,
+		completedVisitCount: completedVisits,
 		canEdit: EDIT_JOB,
 		canCreateVisit: CREATE_JOB,
 		canCreateInvoice: CREATE_INVOICE,

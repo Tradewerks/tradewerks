@@ -30,8 +30,15 @@ function setup(
 		status?: string;
 		techs?: string[];
 		line?: Record<string, unknown> | null;
+		/** The status seen under the lock; defaults to `status`. */
+		lockedStatus?: string;
+		/** Assigned under the lock; defaults to `techs`. */
+		lockedTechs?: string[];
+		invoiced?: boolean;
+		timeEntryLinked?: boolean;
 	} = {},
 ) {
+	const locks: string[] = [];
 	const line =
 		opts.line === null
 			? null
@@ -44,8 +51,24 @@ function setup(
 					fulfillment_status: null,
 					...opts.line,
 				};
+	const lockedTechs = opts.lockedTechs ?? opts.techs ?? [TECH_ID];
 	const tx = {
-		$queryRaw: vi.fn().mockResolvedValue([]),
+		$queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
+			const text = sql.join("?");
+			if (text.includes("FROM job_visit v")) {
+				locks.push("visit");
+				return [{ status: opts.lockedStatus ?? opts.status ?? "InProgress" }];
+			}
+			locks.push("line");
+			return [];
+		}),
+		job_visit_technician: {
+			count: vi.fn(async ({ where }: { where: { tech_id: string } }) =>
+				lockedTechs.includes(where.tech_id) ? 1 : 0,
+			),
+		},
+		invoice_visit: { count: vi.fn(async () => (opts.invoiced ? 1 : 0)) },
+		visit_tech_time_entry: { count: vi.fn(async () => (opts.timeEntryLinked ? 1 : 0)) },
 		job_visit_line_item: {
 			findFirst: vi.fn().mockResolvedValue(line),
 			update: vi.fn().mockResolvedValue({}),
@@ -62,7 +85,7 @@ function setup(
 		$transaction: vi.fn(async (fn: (t: unknown) => unknown) => fn(tx)),
 	};
 	vi.mocked(getScopedDb).mockReturnValue(sdb as never);
-	return { tx, sdb };
+	return { tx, sdb, locks };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -137,6 +160,52 @@ describe("updateFieldLineQuantity", () => {
 		expect(res.code).toBe("WRONG_STATE");
 		expect(tx.job_visit_line_item.update).not.toHaveBeenCalled();
 		expect(tx.job_visit_line_item.delete).not.toHaveBeenCalled();
+	});
+
+	it("locks the visit before the line, the order completion takes", async () => {
+		const { locks } = setup();
+		const res = await updateFieldLineQuantity(VISIT_ID, LINE_ID, 2, ORG_ID, TECH_CTX);
+		expect(res.err).toBe("");
+		expect(locks).toEqual(["visit", "line"]);
+	});
+
+	it("a visit completed after the unlocked read is refused under the lock", async () => {
+		const { tx, locks } = setup({ status: "InProgress", lockedStatus: "Completed" });
+		const res = await updateFieldLineQuantity(VISIT_ID, LINE_ID, 2, ORG_ID, TECH_CTX);
+		expect(res).toMatchObject({ code: "WRONG_STATE", err: "Lines can't be changed on a Completed visit" });
+		expect(locks).toEqual(["visit"]);
+		expect(tx.job_visit_line_item.update).not.toHaveBeenCalled();
+	});
+
+	it("a technician unassigned after the unlocked read is refused under the lock", async () => {
+		const { tx } = setup({ lockedTechs: [] });
+		const res = await updateFieldLineQuantity(VISIT_ID, LINE_ID, 2, ORG_ID, TECH_CTX);
+		expect(res.code).toBe("FORBIDDEN");
+		expect(tx.job_visit_line_item.update).not.toHaveBeenCalled();
+	});
+
+	it("refuses on a visit that has been invoiced", async () => {
+		const { tx } = setup({ invoiced: true });
+		const res = await updateFieldLineQuantity(VISIT_ID, LINE_ID, 2, ORG_ID, DISPATCHER_CTX);
+		expect(res).toMatchObject({
+			code: "WRONG_STATE",
+			err: "Lines can't be changed on a visit that has been invoiced",
+		});
+		expect(tx.job_visit_line_item.update).not.toHaveBeenCalled();
+	});
+
+	it("refuses a labor line", async () => {
+		const { tx } = setup({ line: { item_type: "labor" } });
+		const res = await updateFieldLineQuantity(VISIT_ID, LINE_ID, 0, ORG_ID, TECH_CTX);
+		expect(res).toMatchObject({ code: "WRONG_STATE", err: "Labor lines follow the time clock." });
+		expect(tx.job_visit_line_item.delete).not.toHaveBeenCalled();
+	});
+
+	it("refuses a line a time entry points at, whatever its item_type", async () => {
+		const { tx } = setup({ line: { item_type: "service" }, timeEntryLinked: true });
+		const res = await updateFieldLineQuantity(VISIT_ID, LINE_ID, 3, ORG_ID, TECH_CTX);
+		expect(res).toMatchObject({ code: "WRONG_STATE", err: "Labor lines follow the time clock." });
+		expect(tx.job_visit_line_item.update).not.toHaveBeenCalled();
 	});
 
 	it("a line that is not on this visit is NOT_FOUND", async () => {

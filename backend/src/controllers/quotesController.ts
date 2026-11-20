@@ -16,19 +16,25 @@ import {
 import { log } from "../services/appLogger.js";
 import {
 	assertValidQuoteTransition,
+	DocumentRuleError,
 	InvalidTransitionError,
 	isQuoteFinalizingTransition,
+	REQUEST_QUOTABLE_INTO,
 } from "../lib/statusTransitions.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { fillCoords } from "../lib/geocode.js";
-import { assertInventoryItemsInOrg } from "../lib/inventory.js";
+import {
+	assertInventoryItemsInOrg,
+	findForeignInventoryItemIds,
+	unknownInventoryItemsMessage,
+} from "../lib/inventory.js";
 import {
 	applyInventoryTaxable,
 	applyInventoryTaxableToNewLines,
 	lineTaxFieldsForCreate,
 	lineTaxFieldsForUpdate,
 } from "../lib/inventoryTaxable.js";
-import { assertTaxGroupsInOrg } from "../lib/taxHelpers.js";
+import { assertTaxGroupsInOrg, findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import { resolveDocumentLineage } from "../lib/documentLineage.js";
 import { formatCurrency } from "../lib/money.js";
 import { SOLD_BY_QUOTE_JOBS } from "../services/disputeAdapters.js";
@@ -207,7 +213,7 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 			});
 
 			if (!client) {
-				throw new Error("Client not found");
+				throw new DocumentRuleError("Client not found");
 			}
 
 			let address = parsed.address;
@@ -224,7 +230,10 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 				});
 
 				if (!request) {
-					throw new Error("Request not found");
+					throw new DocumentRuleError("Request not found");
+				}
+				if (request.client_id !== parsed.client_id) {
+					throw new DocumentRuleError("This request belongs to a different client.");
 				}
 
 				// Inherit fields from request if not explicitly provided
@@ -244,40 +253,65 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 					description = request.description;
 				}
 
-				// Update request status to show it has been quoted
-				await tx.request.update({
-					where: { id: parsed.request_id },
-					data: { status: "Quoted" },
-				});
+				if (request.status === "ConvertedToJob" || request.status === "Cancelled") {
+					throw new DocumentRuleError(
+						"This request is closed. Reopen it before quoting.",
+						"WRONG_STATE",
+					);
+				}
 
-				await logActivity({
-					event_type: "request.quoted",
-					action: "converted",
-					entity_type: "request",
-					entity_id: parsed.request_id,
-					organization_id: organizationId,
-					actor_type: context?.techId
-						? "technician"
-						: context?.dispatcherId
-							? "dispatcher"
-							: "system",
-					actor_id: context?.techId || context?.dispatcherId,
-					changes: {
-						status: { old: request.status, new: "Quoted" },
-					},
-					ip_address: context?.ipAddress,
-					user_agent: context?.userAgent,
-				});
+				// Conditional, as the read above is unlocked: a job conversion or
+				// cancel committing in between must not be overwritten to Quoted.
+				const quoted = (REQUEST_QUOTABLE_INTO as readonly string[]).includes(request.status)
+					? await tx.request.updateMany({
+							where: {
+								id: parsed.request_id,
+								status: { in: [...REQUEST_QUOTABLE_INTO] },
+							},
+							data: { status: "Quoted" },
+						})
+					: { count: 0 };
+				if (quoted.count === 0) {
+					const fresh = await tx.request.findFirst({
+						where: { id: parsed.request_id },
+						select: { status: true },
+					});
+					if (fresh?.status === "ConvertedToJob" || fresh?.status === "Cancelled") {
+						throw new DocumentRuleError(
+							"This request is closed. Reopen it before quoting.",
+							"WRONG_STATE",
+						);
+					}
+				} else {
+					await logActivity({
+						event_type: "request.quoted",
+						action: "converted",
+						entity_type: "request",
+						entity_id: parsed.request_id,
+						organization_id: organizationId,
+						actor_type: context?.techId
+							? "technician"
+							: context?.dispatcherId
+								? "dispatcher"
+								: "system",
+						actor_id: context?.techId || context?.dispatcherId,
+						changes: {
+							status: { old: request.status, new: "Quoted" },
+						},
+						ip_address: context?.ipAddress,
+						user_agent: context?.userAgent,
+					});
+				}
 			}
 
 			if (!address) {
-				throw new Error("Address is required for quote");
+				throw new DocumentRuleError("Address is required for quote");
 			}
 			if (!title) {
-				throw new Error("Title is required for quote");
+				throw new DocumentRuleError("Title is required for quote");
 			}
 			if (!description) {
-				throw new Error("Description is required for quote");
+				throw new DocumentRuleError("Description is required for quote");
 			}
 
 			const quoteNumber = await generateQuoteNumber(tx, organizationId);
@@ -323,16 +357,20 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 				data: quoteData,
 			});
 			if (parsed.line_items && parsed.line_items.length > 0) {
-				await assertInventoryItemsInOrg(
+				const foreignItems = await findForeignInventoryItemIds(
 					tx,
 					organizationId,
 					parsed.line_items.map((i) => i.inventory_item_id),
 				);
-				await assertTaxGroupsInOrg(
-					tx as unknown as Prisma.TransactionClient,
+				if (foreignItems.length > 0) {
+					throw new DocumentRuleError(unknownInventoryItemsMessage(foreignItems));
+				}
+				const foreignGroups = await findForeignTaxGroupIds(
+					tx,
 					organizationId,
 					parsed.line_items.map((i) => i.tax_group_id),
 				);
+				if (foreignGroups.length > 0) throw new DocumentRuleError("Tax group not found");
 				const lineItems = await applyInventoryTaxable(
 					tx,
 					organizationId,
@@ -412,6 +450,9 @@ export const insertQuote = async (req: Request, organizationId: string, context?
 					.map((err) => err.message)
 					.join(", ")}`,
 			};
+		}
+		if (e instanceof DocumentRuleError && e.code) {
+			return { err: e.message, code: e.code };
 		}
 		if (isClientMessage(e)) {
 			return { err: e.message };

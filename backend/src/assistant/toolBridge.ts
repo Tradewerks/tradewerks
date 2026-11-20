@@ -104,12 +104,8 @@ export function describeToolCall(toolName: string, input: unknown): string {
 				? "Remove every technician from this visit"
 				: `Set this visit's technicians — ${plural(techs, "technician")} assigned, replacing whoever is on it now`;
 		}
-		case "update_job_status": {
-			const status = String(args.status ?? "");
-			return status === "Cancelled"
-				? `Cancel this job — ${String(args.cancellation_reason ?? "no reason given")}`
-				: `Set this job's status to ${status}`;
-		}
+		case "update_job_status":
+			return `Cancel this job — ${String(args.cancellation_reason ?? "no reason given")}`;
 		default:
 			return `Run ${toolName.replace(/_/g, " ")}`;
 	}
@@ -146,7 +142,7 @@ export function summariseToolResult(toolName: string, input: unknown, data: unkn
 		}
 		case "update_job_status": {
 			const job = record.job_number ? ` ${String(record.job_number)}` : "";
-			return `Set job${job} to ${String(record.status ?? args.status ?? "a new status")}`;
+			return `Cancelled job${job}`;
 		}
 		case "add_job_note": {
 			// The note's own words identify it far better than its id does.

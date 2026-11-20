@@ -73,6 +73,17 @@ export const deleteJob = async (id: string): Promise<{ message: string; id: stri
 	}
 };
 
+/** One request cancels the job and every open visit in a single transaction. */
+export const cancelJob = async (jobId: string, reason: string): Promise<Job> => {
+	const response = await api.post<ApiResponse<Job>>(`/jobs/${jobId}/cancel`, { reason });
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to cancel job");
+	}
+
+	return response.data.data!;
+};
+
 // ============================================
 // JOB VISIT API
 // ============================================

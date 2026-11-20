@@ -352,6 +352,13 @@ export const updateJobVisitSchema = z
 
 const techIdList = z.array(z.string().uuid("Invalid technician ID")).max(20).default([]);
 
+// No default: a missing list must not read as "remove everyone".
+export const putVisitTechniciansSchema = z.object({
+	tech_ids: z
+		.array(z.string().uuid("Invalid technician ID"), { error: "tech_ids must be an array" })
+		.max(20, "A visit can have at most 20 technicians"),
+});
+
 export const patchVisitTechniciansSchema = z
 	.object({ add: techIdList, remove: techIdList })
 	.refine((d) => !d.add.some((id) => d.remove.includes(id)), {

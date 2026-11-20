@@ -1,5 +1,6 @@
 import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from "express";
+import { REFUSAL_STATUS } from "../lib/refusalStatus.js";
 import { recipientEmailSchema } from "../lib/validate/shared.js";
 import {
 	ErrorCodes,
@@ -276,6 +277,11 @@ router.post("/", requirePermission("create_quotes"), async (req, res, next) => {
 		const context = getUserContext(req);
 		const result = await insertQuote(req, orgId, context);
 
+		if (result.err && result.code) {
+			return res
+				.status(REFUSAL_STATUS[result.code])
+				.json(createErrorResponse(result.code, result.err));
+		}
 		if (result.err) {
 			return res
 				.status(400)

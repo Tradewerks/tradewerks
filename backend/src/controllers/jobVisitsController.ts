@@ -49,6 +49,7 @@ import {
 import {
 	LifecycleRefusal,
 	applyStatusChange,
+	runJobChangePostCommit,
 	runPostCommit,
 	syncJobFromVisits,
 	type PostCommitEffects,
@@ -617,7 +618,12 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 		const created = result?.item;
 		if (created) {
 			emitToOrg(organization_id, "job_visit:created", { visitId: created.id, organizationId: organization_id });
-			if (result?.jobChange) emitToOrg(organization_id, "job:updated", { jobId: created.job_id, organizationId: organization_id });
+			if (result?.jobChange) {
+				await runJobChangePostCommit(
+					{ orgId: organization_id, jobId: created.job_id, change: result.jobChange },
+					context,
+				);
+			}
 			// Best-effort: schedule client reminders from any active visit_scheduled sequences.
 			onVisitScheduled(created.id, organization_id);
 			void notifyVisitScheduled(created.id, organization_id);
@@ -638,6 +644,10 @@ export const insertJobVisit = async (req: Request, organization_id: string, cont
 
 export const updateJobVisit = async (req: Request, organizationId: string, context?: UserContext) => {
 	try {
+		// The route refuses technicians too; the assistant's tools call in here directly.
+		if (context?.techId) {
+			return { err: "Technicians update visits through the visit actions.", code: "FORBIDDEN" as const };
+		}
 		const id = req.params.id as string;
 		const parsed = updateJobVisitSchema.parse(req.body);
 		const sdb = getScopedDb(organizationId);
@@ -737,6 +747,13 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 		if (statusAction === "drive") {
 			return {
 				err: "Use the drive action to start driving to a visit.",
+				code: "WRONG_STATE" as const,
+			};
+		}
+		// The edit form would drop the cancellation reason; cancel has its own endpoint.
+		if (statusAction === "cancel") {
+			return {
+				err: "Use POST /job-visits/:id/cancel to cancel a visit.",
 				code: "WRONG_STATE" as const,
 			};
 		}
@@ -1146,6 +1163,9 @@ export const patchVisitTechnicians = async (
 	context?: UserContext,
 ) => {
 	try {
+		if (context?.techId) {
+			return { err: "Only dispatchers can change a visit's technicians.", code: "FORBIDDEN" as const };
+		}
 		const sdb = getScopedDb(organizationId);
 		const visit = await sdb.job_visit.findFirst({
 			where: { id: visitId, job: { organization_id: organizationId } },
@@ -1339,7 +1359,7 @@ export const acceptJobVisit = async (
 		});
 
 		if (!visit) {
-			return { err: "Job visit not found" };
+			return { err: "Job visit not found", code: "NOT_FOUND" as const };
 		}
 		if (visit.status === "Completed" || visit.status === "Cancelled") {
 			return {
@@ -1349,12 +1369,12 @@ export const acceptJobVisit = async (
 		}
 
 		const tech = await sdb.technician.findFirst({
-			where: { id: techId },
+			where: { id: techId, deactivated_at: null },
 			select: { id: true },
 		});
 
 		if (!tech) {
-			return { err: "Technician not found" };
+			return { err: "Technician not found", code: "NOT_FOUND" as const };
 		}
 
 		const alreadyAssigned = await sdb.job_visit_technician.findFirst({
@@ -1373,14 +1393,19 @@ export const acceptJobVisit = async (
 		}
 
 		const claimed = await sdb.$transaction(async (tx) => {
-			// Technicians may only claim unassigned visits; the row lock stops two claiming at once.
-			if (context?.techId) {
-				await tx.$queryRaw`SELECT id FROM job_visit WHERE id = ${visitId} FOR UPDATE`;
-				if ((await tx.job_visit_technician.count({ where: { visit_id: visitId } })) > 0) return false;
+			const txc = tx as unknown as Prisma.TransactionClient;
+			// Visit first, like every assignment writer; re-checked under the lock.
+			const [locked] = await txc.$queryRaw<{ status: string }[]>`SELECT status FROM job_visit WHERE id = ${visitId} FOR NO KEY UPDATE`;
+			if (locked?.status === "Completed" || locked?.status === "Cancelled") {
+				throw new AssignmentRefusal(`A ${locked.status.toLowerCase()} visit can't be accepted.`, "WRONG_STATE");
 			}
-
-			await tx.job_visit_technician.create({
-				data: { visit_id: visitId, tech_id: techId },
+			// Technicians may only claim unassigned visits; the lock stops two claiming at once.
+			if (context?.techId && (await tx.job_visit_technician.count({ where: { visit_id: visitId } })) > 0) {
+				return false;
+			}
+			await tx.job_visit_technician.createMany({
+				data: [{ visit_id: visitId, tech_id: techId }],
+				skipDuplicates: true,
 			});
 
 			await logActivity({
@@ -1428,6 +1453,7 @@ export const acceptJobVisit = async (
 
 		return { err: "", item: updated };
 	} catch (e) {
+		if (e instanceof AssignmentRefusal && e.code) return { err: e.message, code: e.code };
 		log.error({ err: e }, "Failed to accept job visit");
 		throw e;
 	}
@@ -1448,8 +1474,6 @@ const LIFECYCLE_ORDER: Record<string, number> = {
 	Paused: 4,
 	Completed: 5,
 };
-
-export type LifecycleAction = VisitAction;
 
 const VISIT_DETAIL_INCLUDE = {
 	job: { include: { client: true, quote: true } },
@@ -1495,7 +1519,18 @@ export const applyVisitTransition = async (
 			const targetOrder = LIFECYCLE_ORDER[edge.to] ?? -1;
 			// `restore` targets Scheduled (order 0) but must refuse, not no-op; an
 			// actor the edge doesn't allow (a tech delaying) must get FORBIDDEN.
-			const mayNoOp = action !== "restore" && edge.actors.includes(actorOf(context));
+			// A second Complete must lose with a 409 (the service refuses it).
+			const mayNoOp =
+				action !== "restore" &&
+				action !== "complete" &&
+				edge.actors.includes(actorOf(context));
+			// A closed visit gets no secondary drive/arrive.
+			if (
+				(action === "drive" || action === "arrive") &&
+				(existingVisit.status === "Completed" || existingVisit.status === "Cancelled")
+			) {
+				return { err: `This visit is ${existingVisit.status}.`, code: "WRONG_STATE" as const };
+			}
 			if (mayNoOp && targetOrder >= 0 && currentOrder >= targetOrder) {
 				// Secondary transition: drive or arrive for a tech whose visit is already past that state
 				if ((action === "drive" || action === "arrive") && context?.techId) {
@@ -1510,16 +1545,23 @@ export const applyVisitTransition = async (
 							include: VISIT_DETAIL_INCLUDE,
 						});
 						if (currentVisit) {
-							await sdb.$transaction([
-								sdb.job_visit_technician.update({
-									where: { visit_id_tech_id: { visit_id: id, tech_id: context.techId } },
+							const techId = context.techId;
+							await sdb.$transaction(async (tx) => {
+								const txc = tx as unknown as Prisma.TransactionClient;
+								// Visit, assignment, technician: the lifecycle's lock order.
+								const [locked] = await txc.$queryRaw<{ status: string }[]>`SELECT status FROM job_visit WHERE id = ${id} FOR NO KEY UPDATE`;
+								if (locked?.status === "Completed" || locked?.status === "Cancelled") {
+									throw new LifecycleRefusal("WRONG_STATE", `This visit is ${locked.status}.`);
+								}
+								await tx.job_visit_technician.update({
+									where: { visit_id_tech_id: { visit_id: id, tech_id: techId } },
 									data: { tech_status: techVisitStatus },
-								}),
-								sdb.technician.update({
-									where: { id: context.techId },
+								});
+								await tx.technician.update({
+									where: { id: techId },
 									data: { status: techGlobalStatus },
-								}),
-							]);
+								});
+							});
 							emitToOrg(organizationId,
 								"job_visit:status_changed",
 								buildSecondaryEventPayload(currentVisit, techVisitStatus, context),
@@ -1687,7 +1729,6 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 		const sdb = getScopedDb(organizationId);
 		const visit = await sdb.job_visit.findFirst({
 			where: { id, job: { organization_id: organizationId } },
-			include: { job: { select: { status: true } } },
 		});
 
 		if (!visit) {
@@ -1700,7 +1741,10 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 			select: { photo_url: true },
 		});
 
-		await sdb.$transaction(async (tx) => {
+		const jobChange = await sdb.$transaction(async (tx) => {
+			const txc = tx as unknown as Prisma.TransactionClient;
+			// Visit before its assignment rows and the job, as every lifecycle writer.
+			await txc.$queryRaw`SELECT id FROM job_visit WHERE id = ${id} FOR UPDATE`;
 			await tx.job_visit_technician.deleteMany({
 				where: { visit_id: id },
 			});
@@ -1739,21 +1783,16 @@ export const deleteJobVisit = async (id: string, organizationId: string, context
 				where: { id },
 			});
 
-			// Update job status if no visits remain
-			const remainingVisits = await tx.job_visit.findMany({
-				where: { job_id: visit.job_id },
-			});
-
-			if (remainingVisits.length === 0 && visit.job.status !== "Unscheduled") {
-				await tx.job.update({
-					where: { id: visit.job_id },
-					data: { status: "Unscheduled", status_changed_at: new Date() },
-				});
-			}
+			// The deleted visit may have been the last open one, or the only
+			// completed one: status, stamps and actual_total all follow.
+			return syncJobFromVisits(txc, organizationId, visit.job_id, { context });
 		});
 
 		deleteStoredFiles(photos.map((p) => p.photo_url), { visitId: id });
 		emitToOrg(organizationId, "job_visit:deleted", { visitId: id, organizationId });
+		if (jobChange) {
+			await runJobChangePostCommit({ orgId: organizationId, jobId: visit.job_id, change: jobChange }, context);
+		}
 		return { err: "", message: "Job visit deleted successfully" };
 	} catch (e) {
 		log.error({ err: e }, "Failed to delete job visit");

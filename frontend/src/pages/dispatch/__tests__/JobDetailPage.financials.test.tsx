@@ -17,7 +17,7 @@ vi.mock("../../../hooks/useJobs", () => ({
 	useJobVisitsByJobIdQuery: () => ({ data: visits }),
 	useCreateJobVisitMutation: () => idle,
 	useDeleteJobMutation: () => idle,
-	useCancelJobVisitMutation: () => idle,
+	useCancelJobMutation: () => idle,
 }));
 vi.mock("../../../hooks/useInvoices", () => ({
 	useInvoicesByJobIdQuery: () => ({ data: [], isLoading: false }),

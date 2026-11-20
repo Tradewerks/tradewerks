@@ -8,6 +8,10 @@ export async function recomputeJobActualTotal(
 	tx: Prisma.TransactionClient,
 	jobId: string,
 ): Promise<number> {
+	// Locked before the aggregate, or two visits settling at once each sum
+	// without the other and the later write drops one. Callers already hold
+	// the visit row, so this keeps the visit -> job order.
+	await tx.$queryRaw`SELECT id FROM job WHERE id = ${jobId} FOR NO KEY UPDATE`;
 	const agg = await tx.job_visit.aggregate({
 		where: { job_id: jobId, status: "Completed" },
 		_sum: { total: true },

@@ -102,6 +102,7 @@ describe("job create with a recurring_plan_id", () => {
 		const result = await create();
 
 		expect(result.err).toBe("Recurring plan not found");
+		expect(result.code).toBe("NOT_FOUND");
 		expect(db.recurring_plan.findFirst).toHaveBeenCalledWith({
 			where: { id: PLAN },
 			select: { id: true, client_id: true },
@@ -118,6 +119,7 @@ describe("job create with a recurring_plan_id", () => {
 		const result = await create();
 
 		expect(result.err).toBe("This recurring plan belongs to a different client.");
+		expect(result.code).toBeUndefined();
 		expect(db.job.create).not.toHaveBeenCalled();
 	});
 

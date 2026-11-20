@@ -73,14 +73,12 @@ const dispatcher = {
 
 const routes = [
 	["get", "/:id", visits.getJobVisitById],
-	["put", "/:id", visits.updateJobVisit],
 	["post", "/:id/clock-in", clockInVisit],
 	["post", "/:id/clock-out", clockOutVisit],
 	["post", "/:id/start", visits.applyVisitTransition],
 	["post", "/:id/pause", visits.applyVisitTransition],
 	["post", "/:id/resume", visits.applyVisitTransition],
 	["post", "/:id/complete", visits.applyVisitTransition],
-	["post", "/:id/cancel", visits.cancelJobVisit],
 	["post", "/:id/delay", visits.applyVisitTransition],
 	["post", "/:id/parts-used", addPartsUsed],
 	["patch", "/:id/parts-used/:lineItemId", updatePartsUsedQty],
@@ -88,6 +86,21 @@ const routes = [
 ] as const;
 
 beforeEach(() => vi.clearAllMocks());
+
+// Dispatcher-only: a technician is refused by the permission gate before the assignment check.
+const dispatcherOnly = [
+	["put", "/:id", visits.updateJobVisit],
+	["post", "/:id/cancel", visits.cancelJobVisit],
+] as const;
+
+describe("job-visit routes — dispatcher-only writes", () => {
+	it.each(dispatcherOnly)("%s %s returns 403 for any tech", async (method, path, handler) => {
+		const r = await callRoute(jobVisitsRouter, method, path, { user: tech, params: { id: "v1" } });
+
+		expect(r.status).toBe(403);
+		expect(handler).not.toHaveBeenCalled();
+	});
+});
 
 describe("job-visit routes — technicians only act on visits they're assigned to", () => {
 	it.each(routes)(

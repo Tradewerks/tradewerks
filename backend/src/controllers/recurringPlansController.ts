@@ -1881,8 +1881,13 @@ export const generateVisitFromOccurrence = async (
 
 		const plan = occurrence.recurring_plan;
 		const rule = plan.rules[0];
+		// Lazy, as in cancelJob: the lifecycle's load graph reaches the email service.
+		const { syncJobFromVisits, runJobChangePostCommit } = await import(
+			"../services/visitLifecycle/index.js"
+		);
+		const containerJobId = plan.job_container!.id;
 
-		const result = await sdb.$transaction(async (tx) => {
+		const { jobChange, ...result } = await sdb.$transaction(async (tx) => {
 			// Calculate subtotal from template line items
 			const subtotal = plan.line_items.reduce(
 				(sum, item) =>
@@ -1947,6 +1952,10 @@ export const generateVisitFromOccurrence = async (
 			if (await holdsKeptRate("job", plan.job_container!.id, ptx)) {
 				await recomputeVisitTotals(visit.id, organizationId, ptx);
 			}
+			// A new open visit reopens a container job that had closed out.
+			const jobChange = await syncJobFromVisits(ptx, organizationId, containerJobId, {
+				context,
+			});
 
 			await tx.recurring_occurrence.update({
 				where: { id: occurrenceId },
@@ -1986,12 +1995,19 @@ export const generateVisitFromOccurrence = async (
 				scheduled_start_at: visit.scheduled_start_at,
 				scheduled_end_at: visit.scheduled_end_at,
 				template_version: occurrence.template_version,
+				jobChange,
 			};
 		});
 
 		// Post-commit so a rolled-back generation never messages the customer.
 		void onVisitScheduled(result.visit_id, organizationId);
 		void notifyVisitScheduled(result.visit_id, organizationId);
+		if (jobChange) {
+			await runJobChangePostCommit(
+				{ orgId: organizationId, jobId: containerJobId, change: jobChange },
+				context,
+			);
+		}
 
 		return { err: "", item: result };
 	} catch (e) {

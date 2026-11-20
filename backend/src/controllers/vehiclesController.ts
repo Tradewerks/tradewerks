@@ -4,6 +4,7 @@ import { log } from "../services/appLogger.js";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { db } from "../db.js";
 import { getScopedDb, UserContext } from "../lib/context.js";
+import { resolveActingTechId } from "../lib/visitActor.js";
 import { resolveSupplier, SupplierValidationError } from "../services/suppliers.js";
 import { supplierCaptureFields } from "../lib/validate/suppliers.js";
 import { utcDayRange, localDateString } from "../lib/dayRange.js";
@@ -1204,46 +1205,81 @@ export const setTechnicianVehicle = async (technicianId: string, vehicleId: stri
 const addPartsUsedSchema = z.object({
 	stock_item_id:   z.string().uuid(),
 	qty_used:        stockQtyField(z.number().positive()),
-	technician_id:   z.string().uuid(),
+	// Required from a dispatcher; a technician is always themself.
+	technician_id:   z.string().uuid().optional(),
 	serial_unit_ids: z.array(z.string().uuid()).optional(),
 	batch_id:        z.string().uuid().optional(),
 });
+
+type PartsUsedCode = "FORBIDDEN" | "WRONG_STATE" | "NOT_FOUND";
+
+/**
+ * Who may write parts onto this visit, and whom they're credited to. A
+ * technician must be on the visit and is always the credited tech; a
+ * dispatcher names one, who must be in the org. Billed visits are frozen.
+ */
+async function checkPartsUsedAccess(
+	sdb: ReturnType<typeof getScopedDb>,
+	visitId: string,
+	context: UserContext | undefined,
+	bodyTechId: string | undefined,
+	requireTech: boolean,
+): Promise<{ err: string; code?: PartsUsedCode } | { techId: string | undefined }> {
+	const visit = await sdb.job_visit.findFirst({
+		where: { id: visitId },
+		select: {
+			id: true,
+			status: true,
+			_count: { select: { invoice_visits: true } },
+			visit_techs: { select: { tech_id: true } },
+		},
+	});
+	if (!visit) return { err: "Visit not found", code: "NOT_FOUND" };
+	if (context?.techId && !visit.visit_techs.some((vt) => vt.tech_id === context.techId)) {
+		return { err: "You are not assigned to this visit", code: "FORBIDDEN" };
+	}
+	if (PARTS_FROZEN_VISIT_STATUSES.has(visit.status)) {
+		return { err: `Parts can't be changed on a ${visit.status} visit`, code: "WRONG_STATE" };
+	}
+	if (visit._count.invoice_visits > 0) {
+		return { err: "Parts can't be changed on a visit that has been invoiced", code: "WRONG_STATE" };
+	}
+
+	if (!requireTech && !context?.techId && !bodyTechId) return { techId: undefined };
+	const acting = resolveActingTechId(context ?? {}, bodyTechId);
+	if ("err" in acting) {
+		return acting.status === 403 ? { err: acting.err, code: "FORBIDDEN" } : { err: "technician_id is required" };
+	}
+	if (!context?.techId) {
+		const tech = await sdb.technician.findFirst({
+			where: { id: acting.techId },
+			select: { id: true },
+		});
+		if (!tech) return { err: "Technician not found", code: "NOT_FOUND" };
+	}
+	return { techId: acting.techId };
+}
 
 export const addPartsUsed = async (
 	visitId: string,
 	data: unknown,
 	organizationId: string,
 	context?: UserContext,
-) => {
+): Promise<{ err: string; code?: PartsUsedCode; item?: unknown }> => {
 	try {
 		const parsed = addPartsUsedSchema.parse(data);
 		const sdb = getScopedDb(organizationId);
 		const actor = toActor(context);
 
+		const access = await checkPartsUsedAccess(sdb, visitId, context, parsed.technician_id, true);
+		if ("err" in access) return access;
+		const technicianId = access.techId!;
+
 		const stockItem = await sdb.vehicle_stock_item.findFirst({
 			where: { id: parsed.stock_item_id },
 			include: { inventory_item: true },
 		});
-		if (!stockItem) return { err: "Stock item not found" };
-
-		const visit = await sdb.job_visit.findFirst({
-			where: { id: visitId },
-			select: { status: true, _count: { select: { invoice_visits: true } } },
-		});
-		if (!visit) return { err: "Visit not found" };
-		if (PARTS_FROZEN_VISIT_STATUSES.has(visit.status)) {
-			return { err: `Parts can't be changed on a ${visit.status} visit` };
-		}
-		if (visit._count.invoice_visits > 0) {
-			return { err: "Parts can't be changed on a visit that has been invoiced" };
-		}
-
-		// Body technician_id is attribution only, and only if it's one of ours.
-		const tech = await sdb.technician.findFirst({
-			where: { id: parsed.technician_id },
-			select: { id: true },
-		});
-		if (!tech) return { err: "Technician not found" };
+		if (!stockItem) return { err: "Stock item not found", code: "NOT_FOUND" };
 
 		// Serial/batch tracking (B-T2) — uncapped/strict single line. Resolved
 		// BEFORE the transaction opens so a validation failure never opens one
@@ -1320,7 +1356,7 @@ export const addPartsUsed = async (
 				data: {
 					stock_item_id:      parsed.stock_item_id,
 					visit_id:           visitId,
-					technician_id:      parsed.technician_id,
+					technician_id:      technicianId,
 					qty_used:           qty,
 					visit_line_item_id: lineItem.id,
 				},
@@ -1338,7 +1374,10 @@ export const addPartsUsed = async (
 			entity_id: parsed.stock_item_id,
 			organization_id: organizationId,
 			...getActorInfo(context),
-			changes: { qty_used: { old: null, new: parsed.qty_used } },
+			changes: {
+				qty_used: { old: null, new: parsed.qty_used },
+				technician_id: { old: null, new: technicianId },
+			},
 		});
 		return { err: "", item: result };
 	} catch (e: unknown) {
@@ -1396,26 +1435,11 @@ export const updatePartsUsedQty = async (
 		const sdb = getScopedDb(organizationId);
 		const actor = toActor(context);
 
-		const visit = await sdb.job_visit.findFirst({
-			where: { id: visitId },
-			select: { id: true, status: true, _count: { select: { invoice_visits: true } } },
-		});
-		if (!visit) return { err: "Visit not found" };
-		if (PARTS_FROZEN_VISIT_STATUSES.has(visit.status)) {
-			return { err: `Parts can't be changed on a ${visit.status} visit` };
-		}
-		if (visit._count.invoice_visits > 0) {
-			return { err: "Parts can't be changed on a visit that has been invoiced" };
-		}
-
-		// Body technician_id is attribution only, and only if it's one of ours.
-		if (parsed.technician_id) {
-			const tech = await sdb.technician.findFirst({
-				where: { id: parsed.technician_id },
-				select: { id: true },
-			});
-			if (!tech) return { err: "Technician not found" };
-		}
+		// Body technician_id is attribution only: one of ours, and a
+		// technician can only name themself.
+		const access = await checkPartsUsedAccess(sdb, visitId, context, parsed.technician_id, false);
+		if ("err" in access) return access;
+		const technicianId = access.techId;
 
 		const outcome = await sdb.$transaction(async (tx) => {
 			const txc = tx as unknown as Prisma.TransactionClient;
@@ -1611,9 +1635,7 @@ export const updatePartsUsedQty = async (
 			...getActorInfo(context),
 			changes: {
 				quantity: { old: outcome.currentQty, new: outcome.newQty },
-				...(parsed.technician_id
-					? { technician_id: { old: null, new: parsed.technician_id } }
-					: {}),
+				...(technicianId ? { technician_id: { old: null, new: technicianId } } : {}),
 			},
 		});
 

@@ -333,7 +333,7 @@ describe.runIf(DB_URL)("visit lifecycle service against Postgres", () => {
 		).toBe(1);
 	});
 
-	it("two concurrent completes: one succeeds, the other throws CONFLICT, side effects once", async () => {
+	it("two concurrent completes: one succeeds, the other is refused with a 409, side effects once", async () => {
 		const { orgId, clientId, a, b } = await seedOrg("race");
 		const job = await seedJob(orgId, clientId, "race");
 		const visit = await seedVisit(job.id, "InProgress", [
@@ -348,8 +348,8 @@ describe.runIf(DB_URL)("visit lifecycle service against Postgres", () => {
 			},
 		});
 
-		// B reads the visit as InProgress, then blocks on A's visit row lock;
-		// once A commits, B's conditional write re-checks and matches nothing.
+		// B blocks on A's visit row lock before it reads; once A commits, B
+		// reads Completed and the transition check refuses it.
 		const [won, lost] = await raceWhileHeld(
 			(tx) =>
 				svc.applyStatusChange(tx, {
@@ -369,7 +369,7 @@ describe.runIf(DB_URL)("visit lifecycle service against Postgres", () => {
 		expect(lost.status).toBe("rejected");
 		const reason = (lost as PromiseRejectedResult).reason;
 		expect(reason).toBeInstanceOf(svc.LifecycleRefusal);
-		expect(reason.code).toBe("CONFLICT");
+		expect(reason.code).toBe("WRONG_STATE");
 
 		expect(
 			await db.job_visit_line_item.count({
@@ -490,6 +490,75 @@ describe.runIf(DB_URL)("visit lifecycle service against Postgres", () => {
 		).toBe("Completed");
 	});
 
+	it("a change committed while the writer waits for the visit lock is judged from the fresh status, not a CONFLICT", async () => {
+		const { orgId, clientId, a } = await seedOrg("lockfirst");
+		const job = await seedJob(orgId, clientId, "lockfirst", {
+			status: "Scheduled",
+		});
+		const visit = await seedVisit(job.id, "Scheduled", [
+			{ id: a.id, status: "Assigned" },
+		]);
+
+		// A delays and holds its lock; B (a cancel) queues behind it. Cancel is
+		// valid from Delayed too, so B must win once it reads the fresh row.
+		const [delayed, cancel] = await raceWhileHeld(
+			(tx) =>
+				svc.applyStatusChange(tx, {
+					orgId,
+					visitId: visit.id,
+					action: "delay",
+					context: { dispatcherId: "d-1" },
+				}),
+			() =>
+				apply(orgId, {
+					visitId: visit.id,
+					action: "cancel",
+					context: { dispatcherId: "d-1" },
+					cancellationReason: "Customer called",
+				}),
+		);
+		expect(delayed.to).toBe("Delayed");
+		expect(cancel.status).toBe("fulfilled");
+		expect((cancel as PromiseFulfilledResult<{ from: string }>).value.from).toBe(
+			"Delayed",
+		);
+		expect(
+			(await db.job_visit.findUniqueOrThrow({ where: { id: visit.id } }))
+				.status,
+		).toBe("Cancelled");
+	});
+
+	it("a rolled-back transition leaves no activity rows behind", async () => {
+		const { orgId, clientId, a } = await seedOrg("rollbacklog");
+		const job = await seedJob(orgId, clientId, "rollbacklog");
+		const visit = await seedVisit(job.id, "InProgress", [
+			{ id: a.id, status: "OnSite" },
+		]);
+
+		await expect(
+			db.$transaction(async (tx) => {
+				const e = await svc.applyStatusChange(tx, {
+					orgId,
+					visitId: visit.id,
+					action: "complete",
+					context: { techId: a.id },
+				});
+				expect(e.jobChange).not.toBeNull();
+				expect(e.logRows).toHaveLength(1);
+				throw new Error("caller rolls back");
+			}),
+		).rejects.toThrow("caller rolls back");
+
+		expect(
+			await db.log.count({
+				where: {
+					organization_id: orgId,
+					entity_id: { in: [visit.id, job.id] },
+				},
+			}),
+		).toBe(0);
+	});
+
 	it("job with one Cancelled and one completed-by-tech visit becomes Completed with completed_at set", async () => {
 		const { orgId, clientId, a } = await seedOrg("mixed");
 		const job = await seedJob(orgId, clientId, "mixed");
@@ -505,7 +574,7 @@ describe.runIf(DB_URL)("visit lifecycle service against Postgres", () => {
 			action: "complete",
 			context: { techId: a.id },
 		});
-		expect(effects.jobChange).toEqual({
+		expect(effects.jobChange).toMatchObject({
 			from: "InProgress",
 			to: "Completed",
 		});
@@ -550,7 +619,7 @@ describe.runIf(DB_URL)("visit lifecycle service against Postgres", () => {
 			action: "restore",
 			context: { dispatcherId: "d-1" },
 		});
-		expect(effects.jobChange).toEqual({
+		expect(effects.jobChange).toMatchObject({
 			from: "Cancelled",
 			to: "Scheduled",
 		});

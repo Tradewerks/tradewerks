@@ -1,12 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../lib/requirePermissions.js", () => ({
-    requirePermission: () => (_req: unknown, _res: unknown, next: () => void) =>
-        next(),
-    requireAnyPermission: () =>
-        (_req: unknown, _res: unknown, next: () => void) => next(),
-    hasPermission: () => true,
-}));
+// Tagged so the gate each route closes over is assertable.
+vi.mock("../../lib/requirePermissions.js", () => {
+    const tagged = (permission: string) => {
+        const mw = (_req: unknown, _res: unknown, next: () => void) => next();
+        (mw as unknown as { __permission: string }).__permission = permission;
+        return mw;
+    };
+    return {
+        requirePermission: (p: string) => tagged(p),
+        requireAnyPermission: (...ps: string[]) => tagged(ps.join("|")),
+        hasPermission: () => true,
+    };
+});
 vi.mock("../../lib/requireAssigned.js", () => ({
     requireAssigned: () => (_req: unknown, _res: unknown, next: () => void) =>
         next(),
@@ -144,6 +150,36 @@ describe("technician authorization on visit writes", () => {
         const bad = await call("post", "/:id/accept", { tech_id: "tech-2" });
         expect(bad.status).toBe(403);
         expect(acceptJobVisit).not.toHaveBeenCalled();
+    });
+
+    it("accept maps NOT_FOUND to 404", async () => {
+        asDispatcher();
+        vi.mocked(acceptJobVisit).mockResolvedValue({
+            err: "Job visit not found",
+            code: "NOT_FOUND",
+        } as never);
+        const res = await call("post", "/:id/accept", { tech_id: "tech-1" });
+        expect(res.status).toBe(404);
+        expect(res.body.error.code).toBe("NOT_FOUND");
+    });
+
+    it("PUT /:id and POST /:id/cancel are gated on edit_jobs alone", () => {
+        const gate = (method: string, path: string) => {
+            const layer = (
+                jobVisitsRouter as unknown as {
+                    stack: Array<{
+                        route?: {
+                            path: string;
+                            methods: Record<string, boolean>;
+                            stack: Array<{ handle: { __permission?: string } }>;
+                        };
+                    }>;
+                }
+            ).stack.find((l) => l.route?.path === path && l.route.methods[method]);
+            return layer?.route?.stack.map((s) => s.handle.__permission).filter(Boolean);
+        };
+        expect(gate("put", "/:id")).toEqual(["edit_jobs"]);
+        expect(gate("post", "/:id/cancel")).toEqual(["edit_jobs"]);
     });
 
     it("accept maps WRONG_STATE to 409", async () => {

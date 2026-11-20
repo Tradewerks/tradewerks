@@ -1,6 +1,14 @@
 import type { VisitStatus } from "../types/jobs";
 
-export type VisitVerb = "drive" | "arrive" | "start" | "pause" | "resume" | "complete" | "delay";
+export type VisitVerb =
+	| "drive"
+	| "arrive"
+	| "start"
+	| "pause"
+	| "resume"
+	| "complete"
+	| "delay"
+	| "restore";
 
 /**
  * Mirrors LIFECYCLE_TRANSITIONS in
@@ -22,6 +30,7 @@ export const VISIT_TRANSITIONS: Record<
 	resume: { from: ["Paused"], to: "InProgress" },
 	complete: { from: ["InProgress", "Paused", "OnSite"], to: "Completed" },
 	delay: { from: ["Scheduled", "Driving", "OnSite"], to: "Delayed" },
+	restore: { from: ["Cancelled"], to: "Scheduled" },
 };
 
 export function canApplyVisitVerb(verb: VisitVerb, from: VisitStatus): boolean {

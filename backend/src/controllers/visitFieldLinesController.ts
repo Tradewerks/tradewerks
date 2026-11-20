@@ -29,7 +29,8 @@ const FROZEN_VISIT_STATUSES: ReadonlySet<string> = new Set(["Completed", "Cancel
  * total is always quantity x the stored unit_price. Quantity 0 deletes the line.
  *
  * Stock lines ("used") are refused: their quantity is mirrored in the vehicle
- * stock ledger, which only the parts-used endpoint reverses correctly.
+ * stock ledger, which only the parts-used endpoint reverses correctly. Labor
+ * lines are refused too: clock-out writes them from the time entry.
  */
 export const updateFieldLineQuantity = async (
 	visitId: string,
@@ -59,13 +60,46 @@ export const updateFieldLineQuantity = async (
 		const oldQuantity = await sdb.$transaction(async (tx) => {
 			const txc = tx as unknown as Prisma.TransactionClient;
 
-			// Lock first so two concurrent edits can't both compute from the same row.
-			await txc.$queryRaw`SELECT id FROM job_visit_line_item WHERE id = ${lineItemId} FOR UPDATE`;
+			// Visit, then line: the order completion takes them in, so the two
+			// can't deadlock, and the checks above are re-made under the lock
+			// because completion or an unassign may have committed since.
+			const [locked] = await txc.$queryRaw<{ status: string }[]>`
+				SELECT v.status FROM job_visit v JOIN job j ON j.id = v.job_id
+				WHERE v.id = ${visitId} AND j.organization_id = ${orgId}
+				FOR NO KEY UPDATE OF v`;
+			if (!locked) throw new FieldLineRefusal("Visit not found", "NOT_FOUND");
+			if (FROZEN_VISIT_STATUSES.has(locked.status)) {
+				throw new FieldLineRefusal(`Lines can't be changed on a ${locked.status} visit`, "WRONG_STATE");
+			}
+			if (
+				context.techId &&
+				(await tx.job_visit_technician.count({
+					where: { visit_id: visitId, tech_id: context.techId },
+				})) === 0
+			) {
+				throw new FieldLineRefusal("You are not assigned to this visit", "FORBIDDEN");
+			}
+			// An invoice built from this visit wouldn't follow the change.
+			if ((await tx.invoice_visit.count({ where: { visit_id: visitId } })) > 0) {
+				throw new FieldLineRefusal(
+					"Lines can't be changed on a visit that has been invoiced",
+					"WRONG_STATE",
+				);
+			}
+
+			// Locked so two concurrent edits can't both compute from the same row.
+			await txc.$queryRaw`SELECT id FROM job_visit_line_item WHERE id = ${lineItemId} AND visit_id = ${visitId} FOR UPDATE`;
 
 			const line = await tx.job_visit_line_item.findFirst({
 				where: { id: lineItemId, visit_id: visitId },
 			});
 			if (!line) throw new FieldLineRefusal("Line item not found", "NOT_FOUND");
+			if (
+				line.item_type === "labor" ||
+				(await tx.visit_tech_time_entry.count({ where: { line_item_id: lineItemId } })) > 0
+			) {
+				throw new FieldLineRefusal("Labor lines follow the time clock.", "WRONG_STATE");
+			}
 			if (line.fulfillment_status === "used") {
 				throw new FieldLineRefusal("Use the parts endpoint for stock lines", "WRONG_STATE");
 			}

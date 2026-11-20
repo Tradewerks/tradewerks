@@ -7,6 +7,7 @@ import {
     sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
+import { REFUSAL_STATUS } from '../lib/refusalStatus.js';
 import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
 import { requireAssigned } from '../lib/requireAssigned.js';
 import {
@@ -29,7 +30,7 @@ import { clockInVisit, clockOutVisit } from "../controllers/visitTimeEntriesCont
 import { addPartsUsed, updatePartsUsedQty } from "../controllers/vehiclesController.js";
 import { updateFieldLineQuantity } from "../controllers/visitFieldLinesController.js";
 import { z } from "zod";
-import { patchVisitTechniciansSchema } from "../lib/validate/jobVisits.js";
+import { patchVisitTechniciansSchema, putVisitTechniciansSchema } from "../lib/validate/jobVisits.js";
 import { db } from "../db.js";
 import { isTechnicianCaller, resolveActingTechId } from "../lib/visitActor.js";
 import type { Response } from "express";
@@ -40,8 +41,6 @@ const sendActorError = (res: Response, a: { err: string; status: 400 | 403 }) =>
             ? createErrorResponse(ErrorCodes.FORBIDDEN, a.err)
             : createErrorResponse(ErrorCodes.INVALID_INPUT, a.err, null, "tech_id"),
     );
-
-const REFUSAL_STATUS = { FORBIDDEN: 403, WRONG_STATE: 409, CONFLICT: 409, NOT_FOUND: 404 } as const;
 
 const sendTransitionResult = (
     res: Response,
@@ -175,7 +174,7 @@ router.post("/", requireAnyPermission("create_jobs", "edit_jobs"), async (req, r
 const techUseActionsResponse = () =>
     createErrorResponse(ErrorCodes.FORBIDDEN, "Technicians update visits through the visit actions.");
 
-router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
+router.put("/:id", requirePermission("edit_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
@@ -205,15 +204,13 @@ router.put("/:id", requireAnyPermission("edit_jobs", "update_visit_status"), ass
     }
 });
 
-const ASSIGNMENT_STATUS = { NOT_FOUND: 404, WRONG_STATE: 409 } as const;
-
 const sendAssignmentResult = (
     res: Response,
-    result: { err: string; code?: keyof typeof ASSIGNMENT_STATUS; item?: unknown },
+    result: { err: string; code?: keyof typeof REFUSAL_STATUS; item?: unknown },
 ) => {
     if (result.err) {
         if (!result.code) return sendResultErr(res, result.err);
-        return res.status(ASSIGNMENT_STATUS[result.code]).json(createErrorResponse(result.code, result.err));
+        return res.status(REFUSAL_STATUS[result.code]).json(createErrorResponse(result.code, result.err));
     }
     return res.json(createSuccessResponse(result.item));
 };
@@ -244,27 +241,27 @@ router.patch("/:id/technicians", requirePermission("edit_jobs"), async (req, res
 router.put("/:id/technicians", requirePermission("edit_jobs"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
-        const { tech_ids } = req.body;
         const orgId = req.user!.organization_id as string;
         const context = getUserContext(req);
         if (isTechnicianCaller(context)) {
             return res.status(403).json(techAssignmentForbidden());
         }
 
-        if (!Array.isArray(tech_ids)) {
+        const parsed = putVisitTechniciansSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
             return res
                 .status(400)
                 .json(
                     createErrorResponse(
                         ErrorCodes.INVALID_INPUT,
-                        "tech_ids must be an array",
+                        parsed.error.issues.map((i) => i.message).join(", "),
                         null,
                         "tech_ids",
                     ),
                 );
         }
 
-        const result = await assignTechniciansToVisit(id, tech_ids, orgId, context);
+        const result = await assignTechniciansToVisit(id, parsed.data.tech_ids, orgId, context);
         sendAssignmentResult(res, result);
     } catch (err) {
         next(err);
@@ -285,8 +282,8 @@ router.post("/:id/accept", requireAnyPermission("edit_jobs", "update_visit_statu
         // Closed or already-claimed visits are a state conflict, not bad input.
         if (result.err) {
             const code = "code" in result ? result.code : undefined;
-            if (code === "WRONG_STATE") {
-                return res.status(409).json(createErrorResponse(code, result.err));
+            if (code) {
+                return res.status(REFUSAL_STATUS[code]).json(createErrorResponse(code, result.err));
             }
             return sendResultErr(res, result.err, 409, ErrorCodes.CONFLICT);
         }
@@ -383,7 +380,7 @@ router.post("/:id/complete", requireAnyPermission("edit_jobs", "update_visit_sta
     }
 });
 
-router.post("/:id/cancel", requireAnyPermission("edit_jobs", "update_visit_status"), assignedVisit, async (req, res, next) => {
+router.post("/:id/cancel", requirePermission("edit_jobs"), async (req, res, next) => {
     try {
         const context = getUserContext(req);
         if (isTechnicianCaller(context)) {
@@ -432,17 +429,25 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
     }
 });
 
+const sendPartsUsedError = (
+    res: Response,
+    result: { err: string; code?: keyof typeof REFUSAL_STATUS },
+) => {
+    if (result.code) {
+        return res.status(REFUSAL_STATUS[result.code]).json(createErrorResponse(result.code, result.err));
+    }
+    if (result.err.toLowerCase().includes("not found")) {
+        return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+    }
+    return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
+};
+
 router.post("/:id/parts-used", requireModule("vehicle_stock"), requireAnyPermission("edit_jobs", "use_inventory"), assignedVisit, async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
         const result = await addPartsUsed(id, req.body, orgId, getUserContext(req));
-        if (result.err) {
-            if (result.err.toLowerCase().includes("not found")) {
-                return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
-            }
-            return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
-        }
+        if (result.err) return sendPartsUsedError(res, result);
         res.status(201).json(createSuccessResponse("item" in result ? result.item : null));
     } catch (err) {
         next(err);
@@ -458,12 +463,7 @@ router.patch("/:id/parts-used/:lineItemId", requireModule("vehicle_stock"), requ
         // never a technician_id from the body.
         const context = getUserContext(req);
         const result = await updatePartsUsedQty(id, lineItemId, req.body, orgId, context);
-        if (result.err) {
-            if (result.err.toLowerCase().includes("not found")) {
-                return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
-            }
-            return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
-        }
+        if (result.err) return sendPartsUsedError(res, result);
         res.json(createSuccessResponse("item" in result ? result.item : null));
     } catch (err) {
         next(err);

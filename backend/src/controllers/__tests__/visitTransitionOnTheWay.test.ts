@@ -222,6 +222,14 @@ describe("applyVisitTransition on-the-way hook", () => {
 
 	it("a secondary tech's drive on an already-driving visit does not queue the notice", async () => {
 		setup("Driving");
+		// The secondary write locks the visit, then writes assignment and tech.
+		sdb.$transaction.mockImplementation(async (arg: unknown) =>
+			(arg as (tx: unknown) => unknown)({
+				$queryRaw: vi.fn(async () => [{ status: "Driving" }]),
+				job_visit_technician: sdb.job_visit_technician,
+				technician: sdb.technician,
+			}),
+		);
 		const res = await applyVisitTransition("v1", "drive", "org1", {
 			techId: "t1",
 		} as never);

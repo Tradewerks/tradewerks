@@ -39,6 +39,7 @@ vi.mock("../../services/visitLifecycle/index.js", () => ({
 	LifecycleRefusal: class extends Error {},
 	applyStatusChange: vi.fn(),
 	runPostCommit: vi.fn(),
+	actorOf: vi.fn(() => ({ type: "technician", id: "t1" })),
 }));
 vi.mock("../timesheetController.js", () => ({
 	isWeekLocked: vi.fn(async () => false),

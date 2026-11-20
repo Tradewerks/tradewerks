@@ -117,6 +117,26 @@ export const useUpdateJobMutation = (): UseMutationResult<
 	});
 };
 
+export const useCancelJobMutation = (): UseMutationResult<
+	Job,
+	Error,
+	{ jobId: string; reason: string }
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ jobId, reason }) => jobApi.cancelJob(jobId, reason),
+		onSuccess: async (job, variables) => {
+			queryClient.setQueryData(["jobs", variables.jobId], job);
+			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+		},
+	});
+};
+
 export const useDeleteJobMutation = (): UseMutationResult<
 	{ message: string; id: string },
 	Error,

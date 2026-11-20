@@ -145,6 +145,8 @@ const QUOTE_LINE = {
 function seed(quoteSnapshot: unknown, job: Row | null = null) {
 	const quote: Row = {
 		id: QUOTE,
+		client_id: CLIENT,
+		issued_at: new Date("2026-01-01T00:00:00Z"),
 		status: "Sent",
 		title: "Furnace replacement",
 		description: "Replace furnace",
@@ -321,20 +323,9 @@ describe("updateJob — kept address rate in manual mode", () => {
 	});
 });
 
-describe("updateJob — review request", () => {
-	const job = (status: string) => ({
-		id: "j1",
-		client_id: CLIENT,
-		quote_id: null,
-		address: ADDRESS,
-		coords: null,
-		status,
-		tax_snapshot: null,
-		tax_source: null,
-		line_items: [],
-	});
-	const setStatus = (status: string) =>
-		updateJob({ params: { id: "j1" }, body: { status } } as unknown as Request, "org1", {
+describe("job status is not writable through /jobs", () => {
+	const patch = (body: Record<string, unknown>) =>
+		updateJob({ params: { id: "j1" }, body } as unknown as Request, "org1", {
 			dispatcherId: "d1",
 		});
 
@@ -343,36 +334,27 @@ describe("updateJob — review request", () => {
 		orgCtx.mockResolvedValue(MANUAL_ORG);
 	});
 
-	it("setting a job's status to Completed queues the review request after the commit", async () => {
-		seed(null, job("InProgress"));
-		const result = await setStatus("Completed");
-		expect(result.err).toBe("");
-		expect(notifyJobCompleted).toHaveBeenCalledWith("j1", "org1");
-		expect(notifyJobCompleted.mock.invocationCallOrder[0]).toBeGreaterThan(
-			mockDb.$transaction.mock.invocationCallOrder[0],
-		);
+	it("PATCH /jobs/:id with status is 400", async () => {
+		const result = await patch({ status: "Completed" });
+		expect(result.err).toContain("POST /jobs/:id/cancel");
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
 	});
 
-	it("re-saving a job that was already Completed, or another status, queues nothing", async () => {
-		seed(null, job("Completed"));
-		await setStatus("Completed");
-		seed(null, job("Scheduled"));
-		await setStatus("InProgress");
-		expect(notifyJobCompleted).not.toHaveBeenCalled();
+	it("PATCH /jobs/:id with actual_total is 400", async () => {
+		const result = await patch({ actual_total: 10 });
+		expect(result.err).toContain("POST /jobs/:id/cancel");
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
 	});
 
-	it("cancelling a job skips its visits' queued customer messages after the commit", async () => {
-		seed(null, job("Scheduled"));
-		const result = await setStatus("Cancelled");
-		expect(result.err).toBe("");
-		expect(notifyJobCancelled).toHaveBeenCalledWith("j1", "org1");
-		expect(notifyJobCancelled.mock.invocationCallOrder[0]).toBeGreaterThan(
-			mockDb.$transaction.mock.invocationCallOrder[0],
+	it("POST /jobs with status Completed is 400", async () => {
+		const result = await insertJob(
+			{
+				body: { client_id: CLIENT, name: "n", description: "d", status: "Completed" },
+				user: { organization_id: "org1" },
+			} as unknown as Request,
+			{ dispatcherId: "d1" },
 		);
-
-		vi.clearAllMocks();
-		seed(null, job("Cancelled"));
-		await setStatus("Cancelled");
-		expect(notifyJobCancelled).not.toHaveBeenCalled();
+		expect(result.err).toContain("starts Unscheduled");
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
 	});
 });

@@ -9,6 +9,7 @@ import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import { isWeekLocked, TIMESHEET_LOCKED } from "./timesheetController.js";
 import {
 	LifecycleRefusal,
+	actorOf,
 	applyStatusChange,
 	runPostCommit,
 	type PostCommitEffects,
@@ -18,6 +19,20 @@ const NOT_ASSIGNED = "Technician not assigned to this visit";
 class NotAssignedError extends Error {}
 const NO_OPEN_ENTRY = "No active clock-in found for this technician on this visit";
 class AlreadyClockedOutError extends Error {}
+class AlreadyClockedInError extends Error {
+	constructor(readonly visitId: string) {
+		super(`ALREADY_CLOCKED_IN:${visitId}`);
+	}
+}
+
+// The audit row names who pressed the button; the tech whose time it is
+// rides in `changes`.
+const auditActor = (context: UserContext | undefined) => ({
+	actor_type: actorOf(context),
+	actor_id: context?.techId || context?.dispatcherId,
+	ip_address: context?.ipAddress,
+	user_agent: context?.userAgent,
+});
 const VISIT_NOT_READY = "VISIT_NOT_READY: Visit must be OnSite, InProgress, or Paused before clocking in";
 
 const CLOCK_IN_ALLOWED = ["OnSite", "InProgress", "Paused"];
@@ -81,6 +96,16 @@ export const clockInVisit = async (
 			if (!locked || !CLOCK_IN_ALLOWED.includes(locked.status)) {
 				throw new LifecycleRefusal("WRONG_STATE", VISIT_NOT_READY);
 			}
+			// The one-open-entry check above is unlocked: a double tap, or two
+			// visits at once, would both pass it. The technician row serialises
+			// every clock-in for this tech (after visit and assignment, the
+			// lifecycle's order), and the re-check below then sees the winner.
+			await txc.$queryRaw`SELECT id FROM technician WHERE id = ${techId} FOR NO KEY UPDATE`;
+			const openNow = await tx.visit_tech_time_entry.findFirst({
+				where: { tech_id: techId, clocked_out_at: null },
+				select: { visit_id: true },
+			});
+			if (openNow) throw new AlreadyClockedInError(openNow.visit_id);
 
 			const newEntry = await tx.visit_tech_time_entry.create({
 				data: { visit_id: visitId, tech_id: techId, clocked_in_at: now },
@@ -110,10 +135,10 @@ export const clockInVisit = async (
 				entity_type: "visit_tech_time_entry",
 				entity_id: newEntry.id,
 				organization_id: organizationId,
-				actor_type: "technician",
-				actor_id: techId,
+				...auditActor(context),
 				changes: {
 					visit_id: { old: null, new: visitId },
+					tech_id: { old: null, new: techId },
 					clocked_in_at: { old: null, new: now },
 				},
 			});
@@ -147,6 +172,7 @@ export const clockInVisit = async (
 		return { err: "", item: entry };
 	} catch (e) {
 		if (e instanceof NotAssignedError) return { err: NOT_ASSIGNED };
+		if (e instanceof AlreadyClockedInError) return { err: e.message };
 		if (e instanceof LifecycleRefusal) return { err: e.message };
 		log.error({ err: e }, "clockInVisit failed");
 		throw e;
@@ -260,9 +286,9 @@ export const clockOutVisit = async (
 				entity_type: "visit_tech_time_entry",
 				entity_id: closedEntry.id,
 				organization_id: organizationId,
-				actor_type: "technician",
-				actor_id: techId,
+				...auditActor(context),
 				changes: {
+					tech_id: { old: null, new: techId },
 					clocked_out_at: { old: null, new: now },
 					hours_worked: { old: null, new: hoursWorked },
 				},

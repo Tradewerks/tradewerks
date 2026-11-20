@@ -503,5 +503,106 @@ describe.runIf(DB_URL)(
 				}),
 			).toBe(0);
 		});
+
+		it("deleting the last open visit re-derives the job: Completed, actual_total, job post-commit", async () => {
+			const { orgId, clientId, a } = await seedOrg("delete");
+			const job = await seedJob(orgId, clientId, "delete");
+			const done = await db.job_visit.create({
+				data: {
+					job_id: job.id,
+					name: "Done",
+					status: "Completed",
+					total: 250,
+					arrival_constraint: "anytime",
+					finish_constraint: "when_done",
+					scheduled_start_at: new Date("2027-02-01T15:00:00Z"),
+					scheduled_end_at: new Date("2027-02-01T16:00:00Z"),
+				},
+			});
+			const open = await seedVisit(job.id, "Scheduled", [
+				{ id: a.id, status: "Assigned" },
+			]);
+			const comms =
+				await import("../../services/customerComms/visitEvents.js");
+			vi.mocked(sockets.emitToOrg).mockClear();
+			vi.mocked(comms.notifyJobCompleted).mockClear();
+
+			const res = await ctl.deleteJobVisit(open.id, orgId, {
+				dispatcherId: "d-1",
+			});
+			expect(res.err).toBe("");
+
+			const after = await db.job.findUniqueOrThrow({
+				where: { id: job.id },
+			});
+			expect(after.status).toBe("Completed");
+			expect(after.completed_at).not.toBeNull();
+			expect(Number(after.actual_total)).toBe(250);
+			expect(
+				vi
+					.mocked(sockets.emitToOrg)
+					.mock.calls.some(
+						([, ev, p]) =>
+							ev === "job:updated" &&
+							(p as { jobId: string }).jobId === job.id,
+					),
+			).toBe(true);
+			expect(comms.notifyJobCompleted).toHaveBeenCalledWith(
+				job.id,
+				orgId,
+			);
+			expect(
+				await db.job_visit.count({ where: { id: done.id } }),
+			).toBe(1);
+		});
+
+		it("a second complete is refused with WRONG_STATE (409), not a 200 no-op", async () => {
+			const { orgId, clientId, a } = await seedOrg("twice");
+			const job = await seedJob(orgId, clientId, "twice");
+			const visit = await seedVisit(job.id, "InProgress", [
+				{ id: a.id, status: "OnSite" },
+			]);
+			const first = await ctl.applyVisitTransition(
+				visit.id,
+				"complete",
+				orgId,
+				{ techId: a.id },
+			);
+			expect(first.err).toBe("");
+
+			vi.mocked(ctx.getUserContext).mockReturnValue({ techId: a.id });
+			const http = await harness.callRoute(router, "post", "/:id/complete", {
+				user: { organization_id: orgId },
+				params: { id: visit.id },
+			});
+			expect(http.status).toBe(409);
+		});
+
+		it("a tech's drive on a Completed visit is WRONG_STATE and leaves the tech alone", async () => {
+			const { orgId, clientId, a } = await seedOrg("closeddrive");
+			const job = await seedJob(orgId, clientId, "closeddrive");
+			const visit = await seedVisit(job.id, "Scheduled", [
+				{ id: a.id, status: "Assigned" },
+			]);
+			await db.job_visit.update({
+				where: { id: visit.id },
+				data: { status: "Completed" },
+			});
+
+			const res = await ctl.applyVisitTransition(visit.id, "drive", orgId, {
+				techId: a.id,
+			});
+			expect(res).toEqual(expect.objectContaining({ code: "WRONG_STATE" }));
+			const row = await db.job_visit_technician.findUniqueOrThrow({
+				where: {
+					visit_id_tech_id: { visit_id: visit.id, tech_id: a.id },
+				},
+			});
+			expect(row.tech_status).toBe("Assigned");
+			expect(
+				(await db.technician.findUniqueOrThrow({ where: { id: a.id } }))
+					.status,
+			).toBe("Available");
+		});
 	},
 );

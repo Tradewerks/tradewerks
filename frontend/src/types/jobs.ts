@@ -95,7 +95,15 @@ export const VisitStatusColors: Record<VisitStatus, string> = {
 	Cancelled:  "bg-surface-raised/40 text-text-muted border-border-strong/40",
 };
 
-export type LifecycleAction = "drive" | "arrive" | "start" | "pause" | "resume" | "complete" | "delay";
+export type LifecycleAction =
+	| "drive"
+	| "arrive"
+	| "start"
+	| "pause"
+	| "resume"
+	| "complete"
+	| "delay"
+	| "restore";
 
 // Re-export constraint types from recurringPlans for convenience
 export { ArrivalConstraintValues, FinishConstraintValues };
@@ -216,22 +224,21 @@ export interface CreateJobInput extends PricingBreakdown, ExecutionTotals {
 	coords?: Coordinates;
 	description: string;
 	priority?: Priority;
-	status?: JobStatus;
+	status?: "Unscheduled";
 	request_id?: string;
 	quote_id?: string;
 	recurring_plan_id?: string;
 	line_items?: CreateJobLineItemInput[];
 }
 
-export interface UpdateJobInput extends PricingBreakdown, ExecutionTotals {
+export interface UpdateJobInput
+	extends PricingBreakdown,
+		Omit<ExecutionTotals, "actual_total"> {
 	name?: string;
 	address?: string;
 	coords?: Coordinates;
 	description?: string;
 	priority?: Priority;
-	status?: JobStatus;
-
-	cancellation_reason?: string;
 	line_items?: UpdateJobLineItemInput[];
 	address_tax_choice?: AddressTaxChoice;
 }
@@ -547,10 +554,7 @@ export const UpdateJobSchema = z.object({
 		.optional(),
 	description: z.string().min(1, "Description is required").optional(),
 	priority: z.enum(PriorityValues).optional(),
-	status: z.enum(JobStatusValues).optional(),
 	estimated_total: z.number().nonnegative().optional().nullable(),
-	actual_total: z.number().nonnegative().optional().nullable(),
-	cancellation_reason: z.string().optional(),
 	line_items: z
 		.array(
 			z.object({

@@ -1,5 +1,6 @@
 import type {
 	job_status,
+	log as LogRow,
 	visit_status,
 } from "../../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../../lib/context.js";
@@ -21,8 +22,16 @@ import { onVisitCancelled } from "../followupTriggers.js";
 import { fireLowStockAlerts } from "../lowStockAlerts.js";
 import { emitToOrg } from "../socketService.js";
 import { log } from "../appLogger.js";
+import { emitActivityHints } from "./activityLog.js";
 import { maybeAutoInvoiceOnCompletion } from "./autoInvoice.js";
 import type { VisitAction } from "./transitions.js";
+
+export interface JobChange {
+	from: job_status;
+	to: job_status;
+	/** The in-tx `job.updated` row; its live hints go out after commit. */
+	logRow?: LogRow;
+}
 
 export interface PostCommitEffects {
 	orgId: string;
@@ -33,7 +42,9 @@ export interface PostCommitEffects {
 	to: visit_status;
 	/** The transition's own clock; WrappingUp timers count from it. */
 	at: Date;
-	jobChange: { from: job_status; to: job_status } | null;
+	jobChange: JobChange | null;
+	/** Written in-tx; their live hints go out after commit. */
+	logRows?: LogRow[];
 	lowStockItemIds: string[];
 	autoInvoicePlanId: string | null;
 	wrappingUpTechIds: string[];
@@ -86,6 +97,10 @@ export async function runPostCommit(
 	};
 	const completed = e.action === "complete" || e.action === "record_complete";
 
+	for (const row of e.logRows ?? []) {
+		await step("activityHints", () => emitActivityHints(row));
+	}
+
 	if (e.lowStockItemIds.length > 0) {
 		// Email delivery; the response shouldn't wait on it.
 		fire("lowStock", () => fireLowStockAlerts(e.lowStockItemIds, e.orgId));
@@ -113,14 +128,6 @@ export async function runPostCommit(
 				buildVisitStatusPayload(v, e.from, true, context),
 			);
 	});
-	if (e.jobChange) {
-		await step("emitJob", () =>
-			emitToOrg(e.orgId, "job:updated", {
-				jobId: e.jobId,
-				organizationId: e.orgId,
-			}),
-		);
-	}
 
 	if (e.wrappingUpTechIds.length > 0) {
 		await step("armWrappingUp", async () => {
@@ -184,23 +191,12 @@ export async function runPostCommit(
 		);
 	}
 
-	if (e.jobChange?.to === "Completed") {
-		fire("notifyJobCompleted", () => notifyJobCompleted(e.jobId, e.orgId));
-		await step("jobFinishedNotice", () =>
-			notifyDispatchers(
-				{
-					type: "job_finished",
-					title: `Job ${jobNumber} finished`,
-					body: `${clientName}: all visits are complete.`,
-					actionUrl: `/dispatch/jobs/${e.jobId}`,
-				},
-				e.orgId,
-				context?.dispatcherId,
-			),
+	if (e.jobChange) {
+		await runJobChangePostCommit(
+			{ orgId: e.orgId, jobId: e.jobId, change: e.jobChange },
+			context,
+			v ? { jobNumber, clientName } : undefined,
 		);
-	}
-	if (e.jobChange?.to === "Cancelled") {
-		fire("notifyJobCancelled", () => notifyJobCancelled(e.jobId, e.orgId));
 	}
 
 	if (e.action === "delay") {
@@ -241,5 +237,73 @@ export async function runPostCommit(
 		await step("autoInvoice", () =>
 			maybeAutoInvoiceOnCompletion(e.orgId, e.visitId, planId),
 		);
+	}
+}
+
+/**
+ * What a committed job status change owes the outside world, for any writer
+ * that ran syncJobFromVisits. Never rejects.
+ */
+export async function runJobChangePostCommit(
+	args: { orgId: string; jobId: string; change: JobChange },
+	context?: UserContext,
+	names?: { jobNumber: string; clientName: string },
+): Promise<void> {
+	const { orgId, jobId, change } = args;
+	const step = async (name: string, fn: () => unknown) => {
+		try {
+			await fn();
+		} catch (err) {
+			log.warn({ err, jobId, step: name }, "job post-commit step failed");
+		}
+	};
+	const fire = (name: string, fn: () => Promise<unknown>) => {
+		try {
+			void fn().catch((err) =>
+				log.warn({ err, jobId, step: name }, "job post-commit notice failed"),
+			);
+		} catch (err) {
+			log.warn({ err, jobId, step: name }, "job post-commit notice failed");
+		}
+	};
+
+	if (change.logRow) {
+		const row = change.logRow;
+		await step("activityHints", () => emitActivityHints(row));
+	}
+	await step("emitJob", () =>
+		emitToOrg(orgId, "job:updated", { jobId, organizationId: orgId }),
+	);
+
+	if (change.to === "Completed") {
+		fire("notifyJobCompleted", () => notifyJobCompleted(jobId, orgId));
+		await step("jobFinishedNotice", async () => {
+			let jobNumber = names?.jobNumber;
+			let clientName = names?.clientName;
+			if (jobNumber === undefined || clientName === undefined) {
+				const job = await getScopedDb(orgId).job.findFirst({
+					where: { id: jobId },
+					select: {
+						job_number: true,
+						client: { select: { name: true } },
+					},
+				});
+				jobNumber = job?.job_number ?? "";
+				clientName = job?.client.name ?? "the client";
+			}
+			await notifyDispatchers(
+				{
+					type: "job_finished",
+					title: `Job ${jobNumber} finished`,
+					body: `${clientName}: all visits are complete.`,
+					actionUrl: `/dispatch/jobs/${jobId}`,
+				},
+				orgId,
+				context?.dispatcherId,
+			);
+		});
+	}
+	if (change.to === "Cancelled") {
+		fire("notifyJobCancelled", () => notifyJobCancelled(jobId, orgId));
 	}
 }
