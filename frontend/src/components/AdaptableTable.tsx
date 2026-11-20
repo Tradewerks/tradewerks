@@ -52,6 +52,10 @@ export interface ColumnClamp {
 	maxWidth?: string;
 	// Lines shown before the ellipsis. Defaults to 1.
 	lines?: 1 | 2 | 3;
+	// maxWidth only caps what the cell asks for; auto layout still hands the
+	// column its share of spare width, which a capped wrapper leaves empty.
+	// `fill` sizes the request at maxWidth, then stretches to the column.
+	fill?: boolean;
 }
 
 // Static class strings — Tailwind only emits what it can read in the source.
@@ -328,11 +332,16 @@ const AdaptableTable = ({
 																]
 															}
 															style={
-																clamp.maxWidth
-																	? {
-																			maxWidth: clamp.maxWidth,
-																		}
-																	: undefined
+																!clamp.maxWidth
+																	? undefined
+																	: clamp.fill
+																		? {
+																				width: clamp.maxWidth,
+																				minWidth: "100%",
+																			}
+																		: {
+																				maxWidth: clamp.maxWidth,
+																			}
 															}
 															title={clampTitle(
 																rawValue

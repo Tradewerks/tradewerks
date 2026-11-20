@@ -58,6 +58,14 @@ describe("AdaptableTable column clamp", () => {
 		expect(wrapper?.className).toContain("truncate");
 	});
 
+	it("fill sizes the column at the cap but stretches to the cell", () => {
+		render(<AdaptableTable data={rows} columnClamp={{ sku: { maxWidth: "11rem", fill: true } }} />);
+		const wrapper = wrapperFor(MAX_SKU) as HTMLElement | null;
+
+		expect(wrapper).toHaveStyle({ width: "11rem", minWidth: "100%" });
+		expect(wrapper?.style.maxWidth).toBe("");
+	});
+
 	it("keeps the full value reachable on hover", () => {
 		renderTable();
 
