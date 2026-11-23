@@ -123,7 +123,7 @@ describe("requirePermissions middlewares — table-driven", () => {
 			if (!expected) {
 				expect(r.status).toBe(403);
 				expect(r.res.json).toHaveBeenCalledWith(
-					expect.objectContaining({ error: expect.objectContaining({ code: "INVALID_CREDENTIALS" }) }),
+					expect.objectContaining({ error: expect.objectContaining({ code: "FORBIDDEN" }) }),
 				);
 			}
 		});

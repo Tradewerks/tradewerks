@@ -116,7 +116,7 @@ router.post("/:id/ping", requirePermissionOrSelf("manage_technicians"), async (r
         if (req.body?.cost_rate !== undefined && req.user?.uid === id && !hasPermission(req, "manage_technicians")) {
             return res
                 .status(403)
-                .json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Cannot edit your own cost rate"));
+                .json(createErrorResponse(ErrorCodes.FORBIDDEN, "Cannot edit your own cost rate"));
         }
 
         // Lazy WrappingUp auto-transition: clear to Available if timer has passed
@@ -162,7 +162,7 @@ router.put("/:id", requirePermissionOrSelf("manage_technicians"), async (req, re
         if (req.body?.cost_rate !== undefined && req.user?.uid === id && !hasPermission(req, "manage_technicians")) {
             return res
                 .status(403)
-                .json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Cannot edit your own cost rate"));
+                .json(createErrorResponse(ErrorCodes.FORBIDDEN, "Cannot edit your own cost rate"));
         }
 
         const result = await updateTechnician(id, req.body, orgId, context);

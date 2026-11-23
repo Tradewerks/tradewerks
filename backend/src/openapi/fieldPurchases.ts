@@ -202,7 +202,7 @@ authed(
 			404: json(errorEnvelope, "Field purchase not found (`NOT_FOUND`)"),
 		},
 	},
-	"Another technician's purchase (`INVALID_CREDENTIALS`); " +
+	"Another technician's purchase (`FORBIDDEN`); " +
 		moduleOff("field_purchases"),
 );
 
@@ -216,7 +216,7 @@ const fpNotFound = json(
 	"Field purchase not found, or another technician's (`NOT_FOUND`)",
 );
 const fpRefused = (why: string) =>
-	`${why} (\`INVALID_CREDENTIALS\`); or ${fpOff}`;
+	`${why} (\`FORBIDDEN\`); or ${fpOff}`;
 const fpBad = (why: string) =>
 	json(errorEnvelope, `${why} (\`VALIDATION_ERROR\`)`);
 const purchaseOut = (text = "The purchase") =>

@@ -258,7 +258,7 @@ router.post("/stream", async (req, res, next) => {
 			.status(403)
 			.json(
 				createErrorResponse(
-					ErrorCodes.INVALID_CREDENTIALS,
+					ErrorCodes.FORBIDDEN,
 					"Your permissions do not reach anything the assistant can look up.",
 				),
 			);

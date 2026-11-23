@@ -549,7 +549,7 @@ const FEED_MAX_LIMIT = 50;
 const FEED_VIEWER_PERMISSIONS = ["view_dispatchers", "view_technicians"];
 
 const forbidden = (res: Response) =>
-    res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+    res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
 
 /**
  * Access rule for the activity feed:

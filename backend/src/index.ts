@@ -247,7 +247,7 @@ const verifyToken = async (req: Request, res: Response, next: NextFunction) => {
 				.status(403)
 				.json(
 					createErrorResponse(
-						ErrorCodes.INVALID_CREDENTIALS,
+						ErrorCodes.FORBIDDEN,
 						"Insufficient permissions",
 					),
 				);

@@ -62,7 +62,7 @@ describe("GET /logs/recent access + redaction (review P1-3 / S4)", () => {
 	it("denies technicians the unfiltered org feed", async () => {
 		const r = await callHandlers(recentActivityRoute, { user: { uid: "tech-1", role: "technician", permissions: ["view_visits"] } });
 		expect(r.status).toBe(403);
-		expect(r.body).toMatchObject({ success: false, error: { code: "INVALID_CREDENTIALS" } });
+		expect(r.body).toMatchObject({ success: false, error: { code: "FORBIDDEN" } });
 		expect(fake.log.findMany).not.toHaveBeenCalled();
 	});
 

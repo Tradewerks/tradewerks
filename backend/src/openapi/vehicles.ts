@@ -799,7 +799,7 @@ authed(
 			),
 			403: json(
 				errorEnvelope,
-				"Technician without `adjust_<type>`, or not their current vehicle (`INVALID_CREDENTIALS`)",
+				"Technician without `adjust_<type>`, or not their current vehicle (`FORBIDDEN`)",
 			),
 			404: json(
 				errorEnvelope,
@@ -886,7 +886,7 @@ const restockRequestBody = {
 };
 const techOnlyRefused = json(
 	errorEnvelope,
-	"Not a technician, or not assigned to this vehicle (`INVALID_CREDENTIALS`)",
+	"Not a technician, or not assigned to this vehicle (`FORBIDDEN`)",
 );
 
 authed(
@@ -998,7 +998,7 @@ authed(
 			),
 			403: json(
 				errorEnvelope,
-				"Technician not assigned to this vehicle (`INVALID_CREDENTIALS`)",
+				"Technician not assigned to this vehicle (`FORBIDDEN`)",
 			),
 			500: json(errorEnvelope, "The lookup failed (`SERVER_ERROR`)"),
 		},

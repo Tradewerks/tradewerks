@@ -411,7 +411,7 @@ router.post(
 					const perms = (req.user?.permissions as string[]) || [];
 					if (!perms.includes(required)) {
 						return res.status(403).json(
-							createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions for this adjustment type"),
+							createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions for this adjustment type"),
 						);
 					}
 				}
@@ -579,7 +579,7 @@ router.post("/:id/stock/:itemId/restock-request", requireModule("vehicle_stock")
 		const result = await createRestockRequest(id, itemId, req.body, orgId, context);
 		if (result.err) {
 			if (result.err.includes("Only technicians") || result.err.includes("not assigned")) {
-				return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, result.err));
+				return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, result.err));
 			}
 			if (result.err.includes("already requested")) {
 				return res.status(409).json(createErrorResponse(ErrorCodes.CONFLICT, result.err));
@@ -601,7 +601,7 @@ router.post("/:id/restock-requests/bulk", requireModule("vehicle_stock"), requir
 		const result = await createRestockRequestsBulk(vehicleId, req.body, orgId, context);
 		if (result.err) {
 			if (result.err.includes("Only technicians") || result.err.includes("not assigned")) {
-				return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, result.err));
+				return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, result.err));
 			}
 			return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, result.err));
 		}
@@ -619,7 +619,7 @@ router.get("/:id/restock-requests", requireModule("vehicle_stock"), requireAnyPe
 		const result = await listVehicleRestockRequests(vehicleId, orgId, context);
 		if (result.err) {
 			if (result.err.includes("not assigned")) {
-				return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, result.err));
+				return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, result.err));
 			}
 			return res.status(500).json(createErrorResponse(ErrorCodes.SERVER_ERROR, result.err));
 		}

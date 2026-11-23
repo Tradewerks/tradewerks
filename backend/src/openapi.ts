@@ -56,7 +56,7 @@ On failure \`success\` is \`false\`, \`data\` is \`null\` and \`error\` holds \`
 | Status | Meaning |
 |---|---|
 | 401 | Missing, invalid or expired token (\`INVALID_TOKEN\`) |
-| 403 | Missing permission (\`INVALID_CREDENTIALS\`), or the module is off or not in the plan (\`MODULE_DISABLED\`, \`MODULE_NOT_IN_PLAN\`) |
+| 403 | Missing permission (\`FORBIDDEN\`), or the module is off or not in the plan (\`MODULE_DISABLED\`, \`MODULE_NOT_IN_PLAN\`) |
 | 500 | Unexpected server error (\`SERVER_ERROR\`) |
 `,
 	},

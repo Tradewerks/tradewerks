@@ -53,7 +53,7 @@ function sendControllerErr(res: Response, err: string) {
 				notFound
 					? ErrorCodes.NOT_FOUND
 					: forbidden
-						? ErrorCodes.INVALID_CREDENTIALS
+						? ErrorCodes.FORBIDDEN
 						: ErrorCodes.VALIDATION_ERROR,
 				err,
 			),

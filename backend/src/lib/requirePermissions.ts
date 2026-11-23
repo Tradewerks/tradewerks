@@ -82,7 +82,7 @@ export const requirePermission = (permission: string) => (req: Request, res: Res
     const perms = resolvePerms(req);
     if (perms === null) return next();
     if (!perms.includes(permission)) {
-        return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+        return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
     }
     next();
 };
@@ -104,7 +104,7 @@ export const requireAnyPermission = (...permissions: string[]) => (req: Request,
     const perms = resolvePerms(req);
     if (perms === null) return next();
     if (!permissions.some((p) => perms.includes(p))) {
-        return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+        return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
     }
     next();
 };
@@ -141,7 +141,7 @@ export const requireVehiclePermission =
 					.status(403)
 					.json(
 						createErrorResponse(
-							ErrorCodes.INVALID_CREDENTIALS,
+							ErrorCodes.FORBIDDEN,
 							"You can only manage stock on your current vehicle",
 						),
 					);
@@ -149,13 +149,13 @@ export const requireVehiclePermission =
 				log.error({ err }, "requireVehiclePermission db lookup failed");
 				return res
 					.status(403)
-					.json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+					.json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
 			}
 		}
 
 		return res
 			.status(403)
-			.json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+			.json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
 	};
 
 export const requirePermissionOrSelf = (permission: string, idParam = "id") => (req: Request, res: Response, next: NextFunction) => {
@@ -163,7 +163,7 @@ export const requirePermissionOrSelf = (permission: string, idParam = "id") => (
     const perms = resolvePerms(req);
     if (perms === null) return next();
     if (!perms.includes(permission)) {
-        return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+        return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
     }
     next();
 };
@@ -173,14 +173,14 @@ export const requireAnyPermissionOrSelf = (permissions: string[], idParam = "id"
     const perms = resolvePerms(req);
     if (perms === null) return next();
     if (!permissions.some((p) => perms.includes(p))) {
-        return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+        return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
     }
     next();
 };
 
 export const denyTechnicians = (req: Request, res: Response, next: NextFunction)=>{
 	if (req.user?.role === "technician"){
-		return res.status(403).json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Insufficient permissions"));
+		return res.status(403).json(createErrorResponse(ErrorCodes.FORBIDDEN, "Insufficient permissions"));
 	}
 	next();
 }
