@@ -297,6 +297,7 @@ enum recurring_plan_status {
   Paused
   Completed
   Cancelled
+  Expired
 }
 
 enum billing_mode {
@@ -1396,7 +1397,12 @@ model recurring_plan {
   updated_at      DateTime                @updatedAt
   created_by_dispatcher_id String?
   created_by_dispatcher    dispatcher?    @relation("RecurringPlanCreator", fields: [created_by_dispatcher_id], references: [id])
-  
+
+  default_technician_id String?
+  default_technician    technician?       @relation("RecurringPlanDefaultTech", fields: [default_technician_id], references: [id], onDelete: SetNull)
+  expiry_notified_at    DateTime?
+  last_topped_up_at     DateTime?
+
   rules            recurring_rule[]
   occurrences      recurring_occurrence[]
   line_items       recurring_plan_line_item[]
@@ -1409,6 +1415,8 @@ model recurring_plan {
   @@index([organization_id])
   @@index([starts_at])
   @@index([client_id, status])
+  @@index([status, ends_at])
+  @@index([default_technician_id])
 }
 
 model recurring_rule {
@@ -1455,7 +1463,12 @@ model recurring_occurrence {
   
   occurrence_start_at DateTime
   occurrence_end_at   DateTime
-  
+
+  // The rule-computed slot this row fills; never changes on reschedule (idempotency key)
+  original_start_at   DateTime
+  // false = legacy row whose original_start_at was copied from occurrence_start_at, not computed
+  slot_verified       Boolean           @default(true)
+
   status              occurrence_status @default(planned)
 
   // Per-occurrence scheduling constraints (copied from rule at generation; may be overridden on reschedule)
@@ -1479,7 +1492,8 @@ model recurring_occurrence {
   template_version    Int               @default(1)
   
   created_at          DateTime          @default(now())
-  
+
+  @@unique([recurring_plan_id, original_start_at])
   @@index([recurring_plan_id])
   @@index([occurrence_start_at])
   @@index([status])
@@ -3062,6 +3076,7 @@ model technician {
   last_edited_quote_notes   quote_note[]   @relation("QuoteNoteEditor")
   created_recurring_plan_notes      recurring_plan_note[] @relation("RecurringPlanNoteCreator")
   last_edited_recurring_plan_notes  recurring_plan_note[] @relation("RecurringPlanNoteEditor")
+  default_for_recurring_plans       recurring_plan[]      @relation("RecurringPlanDefaultTech")
 
   recorded_invoice_payments    invoice_payment[]
   created_invoice_notes        invoice_note[]    @relation("InvoiceNoteCreator")
@@ -3348,6 +3363,8 @@ model invoice_schedule {
   memo_template     String?
   next_invoice_at   DateTime?
   last_invoiced_at  DateTime?
+  last_failure_at      DateTime?
+  last_failure_message String?
   is_active         Boolean                        @default(true)
   created_at        DateTime                       @default(now())
   updated_at        DateTime                       @updatedAt

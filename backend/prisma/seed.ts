@@ -2634,6 +2634,7 @@ async function main() {
 			data: {
 				recurring_plan_id: recurringPlan1.id,
 				occurrence_start_at: occurrenceSkippedStart,
+				original_start_at: occurrenceSkippedStart,
 				occurrence_end_at: occurrenceSkippedEnd,
 				status: "skipped",
 				skipped_at: occurrenceSkippedStart,
@@ -2651,6 +2652,7 @@ async function main() {
 			data: {
 				recurring_plan_id: recurringPlan1.id,
 				occurrence_start_at: occurrencePastStart,
+				original_start_at: occurrencePastStart,
 				occurrence_end_at: occurrencePastEnd,
 				status: "completed",
 				job_visit_id: recurringVisit1.id,
@@ -2667,6 +2669,7 @@ async function main() {
 			data: {
 				recurring_plan_id: recurringPlan1.id,
 				occurrence_start_at: occurrenceFutureStart,
+				original_start_at: occurrenceFutureStart,
 				occurrence_end_at: occurrenceFutureEnd,
 				status: "planned",
 				arrival_constraint: "between",
@@ -2680,6 +2683,7 @@ async function main() {
 			data: {
 				recurring_plan_id: recurringPlan2.id,
 				occurrence_start_at: weeklyOccStart1,
+				original_start_at: weeklyOccStart1,
 				occurrence_end_at: weeklyOccEnd1,
 				status: "completed",
 				job_visit_id: weeklyVisit1.id,
@@ -2695,6 +2699,7 @@ async function main() {
 			data: {
 				recurring_plan_id: recurringPlan2.id,
 				occurrence_start_at: weeklyOccStart2,
+				original_start_at: weeklyOccStart2,
 				occurrence_end_at: weeklyOccEnd2,
 				status: "generated",
 				job_visit_id: weeklyVisit2.id,

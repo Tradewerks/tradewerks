@@ -182,7 +182,8 @@ async function generateOccurrencesForPlan(
 		const existing = await tx.recurring_occurrence.findFirst({
 			where: {
 				recurring_plan_id: planId,
-				occurrence_start_at: date.start,
+				// original_start_at is unique per plan; a rescheduled row still owns its slot
+				OR: [{ original_start_at: date.start }, { occurrence_start_at: date.start }],
 			},
 		});
 
@@ -196,6 +197,7 @@ async function generateOccurrencesForPlan(
 			data: {
 				recurring_plan_id: planId,
 				occurrence_start_at: date.start,
+				original_start_at: date.start,
 				occurrence_end_at: date.end,
 				status: "planned",
 				template_version: 1, // TODO: Implement versioning

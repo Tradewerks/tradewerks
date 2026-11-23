@@ -192,6 +192,14 @@ export const createRecurringPlanSchema = z
 		},
 	)
 	.refine(
+		(data) =>
+			data.rule.frequency !== "yearly" || !!data.rule.by_month_day,
+		{
+			message: "Yearly frequency requires by_month_day",
+			path: ["rule", "by_month_day"],
+		},
+	)
+	.refine(
 		(data) => {
 			if (
 				data.rule.arrival_constraint === "at" &&
@@ -441,6 +449,16 @@ export const updateRecurringPlanSchema = z
 		{
 			message: "Yearly frequency requires by_month",
 			path: ["rule", "by_month"],
+		},
+	)
+	.refine(
+		(data) =>
+			!data.rule ||
+			data.rule.frequency !== "yearly" ||
+			!!data.rule.by_month_day,
+		{
+			message: "Yearly frequency requires by_month_day",
+			path: ["rule", "by_month_day"],
 		},
 	)
 	.refine(
