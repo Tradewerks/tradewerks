@@ -11,9 +11,25 @@ import { useAuthStore } from "../../auth/authStore";
 import TechPage from "../../components/technician/TechPage";
 import { usePermission } from "../../hooks/usePermission";
 import EditShiftModal from "../../components/timesheets/EditShiftModal";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
-const pctOf = (h: number, total: number) =>
-    `${total > 0 ? Math.round((h / total) * 100) : 0}% of shift time`;
+const pctOf = (t: TFunction, h: number, total: number) =>
+    t("timesheet.pctOf", { pct: total > 0 ? Math.round((h / total) * 100) : 0 });
+
+// The server words segments in English; job segments are data and stay as sent
+const segText = (t: TFunction, s: Segment): { label: string; sub: string } => {
+    const tr = t as unknown as (key: string, opts?: Record<string, unknown>) => string;
+    if (s.type === "unassigned") return { label: t("timesheet.segNone"), sub: "" };
+    if (s.type === "drive")
+        return { label: s.job_number ? t("timesheet.driveTo", { job: s.job_number }) : t("timesheet.driveBack"), sub: "" };
+    if (s.type === "break")
+        return {
+            label: tr(`shiftEdit.reason.${s.label}`, { defaultValue: s.label }),
+            sub: t(s.paid ? "shiftEdit.paid" : "shiftEdit.unpaid"),
+        };
+    return s;
+};
 
 interface StatCard {
     label: string;
@@ -26,11 +42,11 @@ type Shift = TechWeekDetails["days"][number];
 const spanHours = (s: { start: string; end: string }) =>
         (new Date(s.end).getTime() - new Date(s.start).getTime()) / 3_600_000;
 
-const SEG_STYLE: Record<SegType, { label: string; className: string }> = {
-    job: { label: "Jobs", className: "bg-primary" },
-    drive: { label: "Driving", className: "bg-amber-500" },
-    break: { label: "Breaks", className: "bg-slate-600" },
-    unassigned: { label: "Unassigned", className: "bg-border-strong" },
+const SEG_STYLE: Record<SegType, string> = {
+    job: "bg-primary",
+    drive: "bg-amber-500",
+    break: "bg-slate-600",
+    unassigned: "bg-border-strong",
 };
 
 const SEG_TYPES = Object.keys(SEG_STYLE) as SegType[];
@@ -39,39 +55,42 @@ const sumType = (segs: Segment[], t: SegType) =>
     segs.filter((s) => s.type === t).reduce((h, s) => h + spanHours(s), 0);
 
 const splitOf = (segs: Segment[]) =>
-    SEG_TYPES.map((t) => ({ label: SEG_STYLE[t].label, hours: sumType(segs, t), className: SEG_STYLE[t].className }));
+    SEG_TYPES.map((type) => ({ type, hours: sumType(segs, type), className: SEG_STYLE[type] }));
 
 const dayKey = (d: Date | string, tz?: string) => new Date(d).toLocaleDateString("en-CA", { timeZone: tz });
 
-function TimeSplitBar({ segs, className = "h-3.5" }: { segs: { label: string; hours: number; className: string }[]; className?: string }) {
+function TimeSplitBar({ segs, className = "h-3.5" }: { segs: { type: SegType; hours: number; className: string }[]; className?: string }) {
+    const { t } = useTranslation();
     const total = segs.reduce((s, x) => s + x.hours, 0);
     if (!total) return null;
 
     return (
         <div
             className={`flex gap-0.5 w-full rounded overflow-hidden ${className}`}
-            title={segs.map((s) => `${s.label} ${fmtHours(s.hours)}`).join(" · ")}
+            title={segs.map((s) => `${t(`timesheet.seg.${s.type}`)} ${fmtHours(s.hours)}`).join(" · ")}
         >
             {segs.filter((s) => s.hours > 0).map((s) => (
-                <span key={s.label} className={s.className} style={{ width: `${(s.hours / total) * 100}%` }} />
+                <span key={s.type} className={s.className} style={{ width: `${(s.hours / total) * 100}%` }} />
             ))}
         </div>
     )
 }
 
 function DayLabel({ date, tz, muted }: { date: Date | string; tz?: string; muted?: boolean }) {
+    const { i18n } = useTranslation();
     const d = new Date(date);
     return (
         <div className="w-11 shrink-0">
-            <p className="text-xs font-medium text-text-muted">{d.toLocaleDateString("en-US", { weekday: "short", timeZone: tz })}</p>
+            <p className="text-xs font-medium text-text-muted">{d.toLocaleDateString(i18n.language, { weekday: "short", timeZone: tz })}</p>
             <p className={`text-lg font-bold ${muted ? "text-text-muted" : "text-text-primary"}`}>
-                {d.toLocaleDateString("en-US", { day: "numeric", timeZone: tz })}
+                {d.toLocaleDateString(i18n.language, { day: "numeric", timeZone: tz })}
             </p>
         </div>
     );
 }
 
 function ShiftRow({ shift, tz, canEdit, setEditShiftId, setReportShiftId }: { shift: Shift; tz: string; canEdit: boolean; setEditShiftId: (id: string) => void; setReportShiftId: (id: string) => void }) {
+    const { t } = useTranslation();
     const visits = new Set(shift.segments.filter((s) => s.type === "job").map((s) => s.label)).size;
     const overnight = !!shift.end && dayKey(shift.end, tz) !== dayKey(shift.start, tz);
     const pending = !!shift.pendingCorrection;
@@ -84,21 +103,21 @@ function ShiftRow({ shift, tz, canEdit, setEditShiftId, setReportShiftId }: { sh
                     <DayLabel date={shift.start} tz={tz} />
                     <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-text-primary">
-                            {formatTime(shift.start, tz)} - {shift.end ? formatTime(shift.end, tz) : "now"}
+                            {formatTime(shift.start, tz)} - {shift.end ? formatTime(shift.end, tz) : t("timesheet.now")}
                         </p>
                         <p className="flex items-center gap-1.5 text-xs text-text-muted">
-                            {visits} {visits === 1 ? "visit" : "visits"}
-                            {overnight && <><Moon size={11} /> Overnight</>}
+                            {t("timesheet.visits", { count: visits })}
+                            {overnight && <><Moon size={11} /> {t("timesheet.overnight")}</>}
                             {pending && (
                                 <span className="rounded-full bg-warning-bg px-2 py-0.5 font-medium text-warning-text">
-                                    Correction pending
+                                    {t("timesheet.correctionPending")}
                                 </span>
                             )}
                         </p>
                     </div>
                     <div className="text-right tabular-nums">
                         <p className="font-bold text-text-primary">{shift.end ? fmtHours(shift.payableHours) : "—"}</p>
-                        <p className="text-xs text-text-muted">payable</p>
+                        <p className="text-xs text-text-muted">{t("timesheet.payableShort")}</p>
                     </div>
                     <ChevronRight size={18} className="shrink-0 text-text-muted transition-transform group-open:rotate-90" />
                 </div>
@@ -107,25 +126,30 @@ function ShiftRow({ shift, tz, canEdit, setEditShiftId, setReportShiftId }: { sh
                 </div>
             </summary>
             <ol className="px-4 pb-3">
-                {shift.segments.map((s, i) => (
+                {shift.segments.map((s, i) => {
+                    const { label, sub } = segText(t, s);
+                    return (
                     <li key={i} className="flex items-start gap-3 py-2">
                         <span className="w-16 shrink-0 pt-0.5 text-right text-xs tabular-nums text-text-muted">
                             {formatTime(s.start, tz)}
                         </span>
-                        <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${SEG_STYLE[s.type].className}`} />
+                        <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${SEG_STYLE[s.type]}`} />
                         <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-text-primary">{s.label}</p>
-                            {s.sub && <p className="text-xs text-text-muted">{s.sub}</p>}
+                            <p className="text-sm font-medium text-text-primary">{label}</p>
+                            {sub && <p className="text-xs text-text-muted">{sub}</p>}
                         </div>
                         <span className="text-sm font-medium tabular-nums text-text-secondary">{fmtHours(spanHours(s))}</span>
                     </li>
-                ))}
+                    );
+                })}
             </ol>
             {last && (
                 <p className={`px-4 pb-3 text-sm ${last.status === "accepted" ? "text-success-text" : "text-error-text"}`}>
                     {last.status === "accepted"
-                        ? "Correction accepted"
-                        : `Correction rejected${last.review_note ? `: ${last.review_note}` : ""}`}
+                        ? t("timesheet.correctionAccepted")
+                        : last.review_note
+                          ? t("timesheet.correctionRejectedNote", { note: last.review_note })
+                          : t("timesheet.correctionRejected")}
                 </p>
             )}
             {canEdit && shift.end && (
@@ -135,7 +159,7 @@ function ShiftRow({ shift, tz, canEdit, setEditShiftId, setReportShiftId }: { sh
                         onClick={() => setEditShiftId(shift.shiftId)}
                         className="flex w-full min-h-11 items-center justify-center gap-2 border border-border-subtle rounded-md bg-surface text-sm font-medium text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors"
                     >
-                        <Pencil size={14} /> Edit times
+                        <Pencil size={14} /> {t("timesheet.editTimes")}
                     </button>
                 </div>
             )}
@@ -146,7 +170,7 @@ function ShiftRow({ shift, tz, canEdit, setEditShiftId, setReportShiftId }: { sh
                         onClick={() => setReportShiftId(shift.shiftId)}
                         className="flex w-full min-h-11 items-center justify-center gap-2 border border-border-subtle rounded-md bg-surface text-sm font-medium text-text-secondary hover:bg-error/50 hover:text-text-primary transition-colors"
                     >
-                        <Timer size={14} /> {pending ? "Update suggestion" : "Report issue"}
+                        <Timer size={14} /> {t(pending ? "timesheet.updateSuggestion" : "timesheet.reportIssue")}
                     </button>
                 </div>
             )}
@@ -156,6 +180,7 @@ function ShiftRow({ shift, tz, canEdit, setEditShiftId, setReportShiftId }: { sh
 
 export default function TechnicianTimesheet () {
     const { user } = useAuthStore();
+    const { t } = useTranslation();
     const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
     const navigate = useNavigate();
     const location = useLocation();
@@ -195,25 +220,25 @@ export default function TechnicianTimesheet () {
                 return { date, shifts: shifts.filter((s) => dayKey(s.start, tz) === dayKey(date)) };
             }),
             stats: [
-                { label: "Payable", value: fmtHours(payableHours), hint: `${shifts.length} ${shifts.length === 1 ? "shift" : "shifts"}` },
-                { label: "Shift Time", value: fmtHours(grossHours), hint: "including breaks" },
-                { label: "On Jobs", value: fmtHours(jobHours), hint: pctOf(jobHours, grossHours) },
-                { label: "Driving", value: fmtHours(driveHours), hint: pctOf(driveHours, grossHours) },
+                { label: t("timesheet.payable"), value: fmtHours(payableHours), hint: t("timesheet.shiftCount", { count: shifts.length }) },
+                { label: t("timesheet.shiftTime"), value: fmtHours(grossHours), hint: t("timesheet.inclBreaks") },
+                { label: t("timesheet.onJobs"), value: fmtHours(jobHours), hint: pctOf(t, jobHours, grossHours) },
+                { label: t("timesheet.driving"), value: fmtHours(driveHours), hint: pctOf(t, driveHours, grossHours) },
             ] as StatCard[],
             split,
         };
-    }, [week, tz, weekKey]);
+    }, [week, tz, weekKey, t]);
 
     return (
         <TechPage>
-            <PageHeader title="My Time">
+            <PageHeader title={t("timesheet.title")}>
                 {approved ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-success-bg px-3 py-1 text-sm font-medium text-success-text">
-                        <Lock size={14} /> Approved
+                        <Lock size={14} /> {t("timesheet.approved")}
                     </span>
                 ) : (
                     <span className="inline-flex items-center rounded-full bg-warning-bg px-3 py-1 text-sm font-medium text-warning-text">
-                        Open
+                        {t("timesheet.open")}
                     </span>
                 )}
             </PageHeader>
@@ -222,7 +247,7 @@ export default function TechnicianTimesheet () {
                 <button
                     className="p-3 border border-border-subtle rounded-md bg-surface"
                     onClick={() => setWeek(addDays(weekStart, -7))}
-                    aria-label="Previous week"
+                    aria-label={t("timesheet.prevWeek")}
                 >
                     <ChevronLeft size={16} />
                 </button>
@@ -245,7 +270,7 @@ export default function TechnicianTimesheet () {
                     className="p-3 border border-border-subtle rounded-md bg-surface disabled:opacity-40"
                     onClick={() => setWeek(addDays(weekStart, 7))}
                     disabled={isCurrentWeek}
-                    aria-label="Next week"
+                    aria-label={t("timesheet.nextWeek")}
                 >
                     <ChevronRight size={16} />
                 </button>
@@ -264,13 +289,13 @@ export default function TechnicianTimesheet () {
             </div>
 
             <Card
-                title="Shifts"
+                title={t("timesheet.shifts")}
                 headerAction={(
                     <div className="flex flex-wrap gap-3 text-xs text-text-muted">
-                        {Object.values(SEG_STYLE).map(({ label, className }) => (
-                            <span key={label} className="inline-flex items-center gap-1.5">
-                                <span className={`size-2.5 rounded-sm ${className}`} />
-                                {label}
+                        {SEG_TYPES.map((type) => (
+                            <span key={type} className="inline-flex items-center gap-1.5">
+                                <span className={`size-2.5 rounded-sm ${SEG_STYLE[type]}`} />
+                                {t(`timesheet.seg.${type}`)}
                             </span>
                         ))}
                     </div>
@@ -278,14 +303,14 @@ export default function TechnicianTimesheet () {
                 className="shadow-sm border border-border-subtle bg-base rounded-lg text-left"
             >
                 {isLoading ? (
-                    <p className="py-16 text-center text-sm text-text-muted">Loading…</p>
+                    <p className="py-16 text-center text-sm text-text-muted">{t("common.loading")}</p>
                 ) : error ? (
-                    <p className="py-16 text-center text-sm text-text-muted">Couldn't load your timesheet</p>
+                    <p className="py-16 text-center text-sm text-text-muted">{t("timesheet.loadFailed")}</p>
                 ) : !week?.days.length ? (
                     <div className="text-center py-16">
                         <Clock size={48} className="mx-auto text-text-faint mb-3" />
-                        <h3 className="text-text-tertiary text-lg font-medium mb-2">No shifts this week</h3>
-                        <p className="text-text-muted text-sm">Time is recorded when you start and end a shift</p>
+                        <h3 className="text-text-tertiary text-lg font-medium mb-2">{t("timesheet.noShifts")}</h3>
+                        <p className="text-text-muted text-sm">{t("timesheet.noShiftsHint")}</p>
                     </div>
                 ) : (
                     <>
@@ -298,7 +323,7 @@ export default function TechnicianTimesheet () {
                             ) : (
                                 <div key={date.toISOString()} className="flex items-center gap-3 px-4 py-3.5 border-b border-border-subtle last:border-b-0">
                                     <DayLabel date={date} muted />
-                                    <p className="text-sm text-text-muted">No shift</p>
+                                    <p className="text-sm text-text-muted">{t("timesheet.noShift")}</p>
                                 </div>
                             ),
                         )}
@@ -307,9 +332,7 @@ export default function TechnicianTimesheet () {
             </Card>
 
             <p className="mt-4 text-sm text-text-secondary">
-                {approved
-                    ? "This week is approved and locked. If something looks wrong, contact your dispatcher."
-                    : "Hours can still change until dispatch approves the week. If something looks wrong, contact your dispatcher."}
+                {t(approved ? "timesheet.lockedNote" : "timesheet.openNote")}
             </p>
 
             {editDay && <EditShiftModal day={editDay} tz={tz} onClose={() => setEditShiftId(null)} />}

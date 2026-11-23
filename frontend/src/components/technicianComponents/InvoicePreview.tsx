@@ -1,4 +1,5 @@
 ﻿import { CheckCircle2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { VisitLineItem } from "../../types/jobs";
 
 interface InvoicePreviewProps {
@@ -18,22 +19,23 @@ export default function InvoicePreview({
 	total,
 	isCompleted,
 }: InvoicePreviewProps) {
+	const { t } = useTranslation();
 	return (
 		<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 			<div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
 				<span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
-					Invoice Preview
+					{t("invoicePreview.title")}
 				</span>
 				{isCompleted && (
 					<span className="flex items-center gap-1.5 text-[11px] font-medium text-success-text">
 						<CheckCircle2 size={12} />
-						Ready for Invoice
+						{t("invoicePreview.ready")}
 					</span>
 				)}
 			</div>
 
 			{lineItems.length === 0 ? (
-				<p className="px-4 py-6 text-center text-sm text-text-faint">No line items yet</p>
+				<p className="px-4 py-6 text-center text-sm text-text-faint">{t("invoicePreview.noItems")}</p>
 			) : (
 				<>
 					{/* Line items */}
@@ -64,17 +66,17 @@ export default function InvoicePreview({
 					{/* Totals */}
 					<div className="px-4 py-3 space-y-1.5 border-t border-border-subtle">
 						<div className="flex justify-between text-sm text-text-tertiary">
-							<span>Subtotal</span>
+							<span>{t("invoicePreview.subtotal")}</span>
 							<span className="tabular-nums">${subtotal.toFixed(2)}</span>
 						</div>
 						{taxRate > 0 && (
 							<div className="flex justify-between text-sm text-text-tertiary">
-								<span>Tax ({taxRate}%)</span>
+								<span>{t("invoicePreview.tax", { rate: taxRate })}</span>
 								<span className="tabular-nums">${taxAmount.toFixed(2)}</span>
 							</div>
 						)}
 						<div className="flex justify-between text-base font-bold text-text-primary pt-1 border-t border-border-subtle">
-							<span>Total</span>
+							<span>{t("invoicePreview.total")}</span>
 							<span className="tabular-nums">${total.toFixed(2)}</span>
 						</div>
 					</div>

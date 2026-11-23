@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Barcode } from "lucide-react";
 import type { RestockMode } from "../../api/org";
 
@@ -35,6 +36,9 @@ export default function VehicleStockActionRow({
 	onRequestRestock,
 	onScan,
 }: Props) {
+	const { t } = useTranslation();
+	// Short visible labels keep the row on one line at 390px; aria-label keeps the full wording
+	const fillLabel = `↑ ${t("actionRow.fill")}`;
 	const [showSelfStock, setShowSelfStock] = useState(false);
 	const selfStockId = useId();
 	const dispatchPrepared = restockMode === "dispatch_prepared";
@@ -46,9 +50,10 @@ export default function VehicleStockActionRow({
 		<button
 			type="button"
 			onClick={onRequestRestock}
+			aria-label={t("actionRow.requestRestock")}
 			className={dispatchPrepared ? PRIMARY : TINTED}
 		>
-			Request Restock
+			{t("actionRow.restock")}
 		</button>
 	);
 
@@ -56,8 +61,8 @@ export default function VehicleStockActionRow({
 		<div className="px-4 py-2.5 border-b border-border-subtle space-y-2">
 			<div className="flex gap-2 items-stretch">
 				{canStock && selfServe && (
-					<button type="button" onClick={onFill} className={PRIMARY}>
-						↑ Fill to Standard
+					<button type="button" onClick={onFill} aria-label={t("vehicle.fillToStandard")} className={PRIMARY}>
+						{fillLabel}
 					</button>
 				)}
 				{dispatchPrepared && requestButton}
@@ -65,9 +70,10 @@ export default function VehicleStockActionRow({
 					<button
 						type="button"
 						onClick={onAdjust}
+						aria-label={t("adjust.stepTitle.type")}
 						className={OUTLINE}
 					>
-						Adjust Stock
+						{t("actionRow.adjust")}
 					</button>
 				)}
 				{!dispatchPrepared && requestButton}
@@ -75,8 +81,8 @@ export default function VehicleStockActionRow({
 					<button
 						type="button"
 						onClick={onScan}
-						title="Scan barcode"
-						aria-label="Scan barcode"
+						title={t("actionRow.scan")}
+						aria-label={t("actionRow.scan")}
 						className="flex-shrink-0 p-2 flex items-center justify-center rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
 					>
 						<Barcode size={16} />
@@ -92,9 +98,7 @@ export default function VehicleStockActionRow({
 						onClick={() => setShowSelfStock((v) => !v)}
 						className="text-xs text-text-muted hover:text-text-secondary transition-colors"
 					>
-						{showSelfStock
-							? "Hide self-stocking actions"
-							: "Self-stocking actions…"}
+						{t(showSelfStock ? "actionRow.hideSelf" : "actionRow.showSelf")}
 					</button>
 					<div
 						id={selfStockId}
@@ -105,9 +109,10 @@ export default function VehicleStockActionRow({
 							<button
 								type="button"
 								onClick={onFill}
+								aria-label={t("vehicle.fillToStandard")}
 								className={OUTLINE}
 							>
-								↑ Fill to Standard
+								{fillLabel}
 							</button>
 						)}
 					</div>

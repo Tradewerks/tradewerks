@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { CameraZoomCaps } from "./useCameraStream";
 
 /**
@@ -28,6 +29,7 @@ export function usePinchZoom({
 	setZoom,
 	enabled = true,
 }: UsePinchZoomOptions) {
+	const { t } = useTranslation();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const pointers = useRef(new Map<number, { x: number; y: number }>());
 	const pinchStart = useRef<{ dist: number; zoom: number } | null>(null);
@@ -63,7 +65,7 @@ export function usePinchZoom({
 	};
 
 	const showPinchHint = () => {
-		setPinchHint("Zoom not supported — move the phone closer");
+		setPinchHint(t("camera.zoomNotSupported"));
 		if (hintTimeout.current) clearTimeout(hintTimeout.current);
 		hintTimeout.current = setTimeout(() => setPinchHint(null), HINT_MS);
 	};

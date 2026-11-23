@@ -246,7 +246,11 @@ export interface PurchaseFlag {
 		| "not_a_receipt"
 		| "foreign_currency";
 	message: string;
+	// Values the technician app fills into its translated copy; message stays the English text
+	vars?: FlagVars;
 }
+
+export type FlagVars = Record<string, string | number | null> & { variant?: string };
 
 export interface FlagInput {
 	total: Money;
@@ -278,6 +282,7 @@ export function evaluateFlags(input: FlagInput): PurchaseFlag[] {
 		flags.push({
 			code: "total_mismatch",
 			message: `Receipt total ${total.toFixed(2)} does not match lines plus tax (${expected.toFixed(2)})`,
+			vars: { total: total.toNumber(), expected: expected.toNumber() },
 		});
 	}
 
@@ -286,6 +291,7 @@ export function evaluateFlags(input: FlagInput): PurchaseFlag[] {
 		flags.push({
 			code: "over_estimate",
 			message: `Spent ${total.toFixed(2)} against a pre-authorized estimate of ${estimate.toFixed(2)}`,
+			vars: { total: total.toNumber(), estimate: estimate.toNumber() },
 		});
 	}
 
@@ -300,6 +306,7 @@ export function evaluateFlags(input: FlagInput): PurchaseFlag[] {
 			flags.push({
 				code: "outside_job_window",
 				message: "Purchase time falls outside the active window of every linked job",
+				vars: {},
 			});
 		}
 	}
@@ -308,6 +315,7 @@ export function evaluateFlags(input: FlagInput): PurchaseFlag[] {
 		flags.push({
 			code: "geo_missing",
 			message: "No capture location recorded (expected on desktop, advisory only)",
+			vars: {},
 		});
 	}
 
@@ -409,6 +417,7 @@ export interface DuplicateVerdict {
 	level: "exact" | "near";
 	purchase_id: string;
 	message: string;
+	vars: FlagVars;
 }
 
 /** Nothing looser matches: two receipts a dollar apart are two receipts. */
@@ -498,12 +507,14 @@ export function findDuplicate(
 					level: "exact",
 					purchase_id: prior.id,
 					message: `Receipt ${subject.receipt_number} from this vendor was already submitted`,
+					vars: { variant: "receipt_exact", receipt: subject.receipt_number },
 				};
 			}
 			near ??= {
 				level: "near",
 				purchase_id: prior.id,
 				message: `Receipt ${subject.receipt_number} from this vendor matches an earlier purchase on a different date`,
+				vars: { variant: "receipt_near", receipt: subject.receipt_number },
 			};
 		}
 	}
@@ -538,12 +549,14 @@ export function findDuplicate(
 				level: "exact",
 				purchase_id: prior.id,
 				message: `A ${total.toFixed(2)} purchase from ${subject.vendor_name} on this date was already reimbursed${who}`,
+				vars: { variant: "reimbursed", total: total.toNumber(), vendor: subject.vendor_name, by: prior.technician_name ?? null },
 			};
 		}
 		near ??= {
 			level: "near",
 			purchase_id: prior.id,
 			message: `Closely matches an existing ${priorTotal.toFixed(2)} purchase from ${prior.vendor_name}${who}`,
+			vars: { variant: "near", total: priorTotal.toNumber(), vendor: prior.vendor_name, by: prior.technician_name ?? null },
 		};
 	}
 
@@ -575,7 +588,11 @@ export function velocityFlags(
 	const count = sameVendorSameDay.length + 1;
 
 	if (count >= VELOCITY_COUNT) {
-		flags.push({ code: "velocity", message: `${count} purchases${vendor} on the same day` });
+		flags.push({
+			code: "velocity",
+			message: `${count} purchases${vendor} on the same day`,
+			vars: { count, vendor: vendorName ?? null, variant: vendorName ? "vendor" : "default" },
+		});
 	}
 
 	const amt = toDecimal(amount);
@@ -589,6 +606,13 @@ export function velocityFlags(
 			flags.push({
 				code: "split_transaction",
 				message: `${count} under-limit purchases${vendor} today total ${aggregate.toFixed(2)}, over the ${limit.toFixed(2)} per-purchase limit`,
+				vars: {
+					count,
+					vendor: vendorName ?? null,
+					total: aggregate.toNumber(),
+					limit: limit.toNumber(),
+					variant: vendorName ? "vendor" : "default",
+				},
 			});
 		}
 	}

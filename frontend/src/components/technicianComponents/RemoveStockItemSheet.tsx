@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Search, Trash2, X, ArrowRight } from "lucide-react";
 import { useDeleteVehicleStockItemMutation } from "../../hooks/useVehicleStock";
 import { useToast } from "../ui/useToast";
@@ -25,6 +26,7 @@ export default function RemoveStockItemSheet({
 	const [confirmingId, setConfirmingId] = useState<string | null>(null);
 	const deleteMutation = useDeleteVehicleStockItemMutation();
 	const toast = useToast();
+	const { t } = useTranslation();
 
 	const q = search.toLowerCase().trim();
 	const rows = stockItems
@@ -34,17 +36,17 @@ export default function RemoveStockItemSheet({
 	const handleRemove = async (item: VehicleStockItem) => {
 		try {
 			await deleteMutation.mutateAsync({ vehicleId, itemId: item.id });
-			toast.success(`Removed ${item.inventory_item.name} from stock list`);
+			toast.success(t("removeStock.removed", { name: item.inventory_item.name }));
 			setConfirmingId(null);
 		} catch (e) {
-			toast.error(errorMessage(e, "Failed to remove item"));
+			toast.error(errorMessage(e, t("removeStock.failed")));
 		}
 	};
 
 	if (stockItems.length === 0) {
 		return (
 			<p className="px-4 py-6 text-xs text-text-muted text-center">
-				No items on this vehicle's stock list.
+				{t("removeStock.empty")}
 			</p>
 		);
 	}
@@ -56,13 +58,13 @@ export default function RemoveStockItemSheet({
 				<input
 					value={search}
 					onChange={(e) => setSearch(e.target.value)}
-					placeholder="Search stock list…"
+					placeholder={t("removeStock.search")}
 					className="flex-1 text-sm bg-transparent text-text-primary placeholder:text-faint outline-none"
 				/>
 				{search && (
 					<button
 						onClick={() => setSearch("")}
-						aria-label="Clear search"
+						aria-label={t("vehicle.clearSearch")}
 						className="text-text-faint hover:text-text-secondary transition-colors"
 					>
 						<X size={13} />
@@ -102,7 +104,7 @@ export default function RemoveStockItemSheet({
 
 								<div className="flex items-center gap-2 shrink-0">
 									<span className="text-xs text-text-muted tabular-nums">
-										qty {qty}
+										{t("removeStock.qty", { qty })}
 									</span>
 
 									{removable ? (
@@ -113,20 +115,20 @@ export default function RemoveStockItemSheet({
 													disabled={deleteMutation.isPending}
 													className="text-[11px] font-semibold px-2 py-1 rounded-md border border-error-border bg-error-bg text-error-text transition-colors hover:bg-error-bg/70 disabled:opacity-50"
 												>
-													Remove
+													{t("vehicle.remove")}
 												</button>
 												<button
 													onClick={() => setConfirmingId(null)}
 													disabled={deleteMutation.isPending}
 													className="text-[11px] px-2 py-1 rounded-md text-text-muted hover:text-text-secondary transition-colors disabled:opacity-50"
 												>
-													Cancel
+													{t("common.cancel")}
 												</button>
 											</div>
 										) : (
 											<button
 												onClick={() => setConfirmingId(item.id)}
-												aria-label={`Remove ${item.inventory_item.name}`}
+												aria-label={t("shiftEdit.removeAria", { label: item.inventory_item.name })}
 												className="flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-surface text-text-muted transition-colors hover:border-error-border hover:text-error-text"
 											>
 												<Trash2 size={13} />
@@ -136,7 +138,7 @@ export default function RemoveStockItemSheet({
 										<div className="flex flex-col items-end">
 											<button
 												disabled
-												aria-label={`Remove ${item.inventory_item.name}`}
+												aria-label={t("shiftEdit.removeAria", { label: item.inventory_item.name })}
 												className="flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-surface text-text-faint opacity-40 cursor-not-allowed"
 											>
 												<Trash2 size={13} />
@@ -145,7 +147,7 @@ export default function RemoveStockItemSheet({
 												onClick={() => onAdjust(item)}
 												className="mt-0.5 flex items-center gap-0.5 text-[10px] text-text-muted hover:text-primary-text transition-colors"
 											>
-												Adjust to 0
+												{t("removeStock.adjustToZero")}
 												<ArrowRight size={10} />
 											</button>
 										</div>
@@ -157,7 +159,7 @@ export default function RemoveStockItemSheet({
 				</div>
 			) : (
 				<p className="text-xs text-text-muted text-center py-2">
-					No matching items
+					{t("vehicle.noMatches")}
 				</p>
 			)}
 		</div>

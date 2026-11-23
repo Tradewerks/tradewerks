@@ -188,7 +188,7 @@ export async function deleteTimesheet (orgId: string, data: unknown, context?: U
     }
 }
 
-type Span = { start: Date; end: Date; label: string; sub: string };
+type Span = { start: Date; end: Date; label: string; sub: string; job_number?: string };
 type SegType = "job" | "drive" | "break" | "unassigned";
 type Segment = Span & { type: SegType; paid?: boolean };
 
@@ -303,6 +303,7 @@ export async function getTechnicianWeek (orgId: string, technicianId: string, da
         end: d.ended_at ?? now,
         label: d.visit ? `Drive to ${d.visit.job.job_number}` : "Drive back",
         sub: "",
+        job_number: d.visit?.job.job_number,
     }));
 
     const days = shifts.map((shift) => {
@@ -638,6 +639,7 @@ export async function acceptCorrection(orgId: string, correctionId: string, data
             type: "time_correction_accepted",
             title: `Time correction accepted · ${day}`,
             body: parsed.note ?? "Your suggested times were applied.",
+            vars: { day: result.shift.started_at.toISOString(), keep_body: !!parsed.note },
             actionUrl: `/technician/timesheet?week=${week}`,
         }, orgId);
 
@@ -690,6 +692,7 @@ export async function rejectCorrection(orgId: string, correctionId: string, data
             type: "time_correction_rejected",
             title: `Time correction rejected · ${day}`,
             body: parsed.note ?? "Dispatch kept the original times.",
+            vars: { day: correction.shift.started_at.toISOString(), keep_body: !!parsed.note },
             actionUrl: `/technician/timesheet?week=${week}`,
         }, orgId);
 

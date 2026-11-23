@@ -1,5 +1,6 @@
 import { Check, Lock, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import type { FormStep } from "../../../types/common";
 
 export interface StepWizardProps<T extends number> {
@@ -34,13 +35,18 @@ const StepWizard = <T extends number>({
 	onCancel,
 	onSubmit,
 	canGoNext = true,
-	submitLabel = "Submit",
-	cancelLabel = "Cancel",
-	nextLabel = "Next",
-	backLabel = "Back",
+	submitLabel: submitLabelProp,
+	cancelLabel: cancelLabelProp,
+	nextLabel: nextLabelProp,
+	backLabel: backLabelProp,
 	showNavigation = true,
 	children,
 }: StepWizardProps<T>) => {
+	const { t } = useTranslation();
+	const submitLabel = submitLabelProp ?? t("wizard.submit");
+	const cancelLabel = cancelLabelProp ?? t("common.cancel");
+	const nextLabel = nextLabelProp ?? t("wizard.next");
+	const backLabel = backLabelProp ?? t("wizard.back");
 	const isFirstStep = currentStep === (1 as T);
 	const isLastStep = currentStep === steps[steps.length - 1]?.id;
 

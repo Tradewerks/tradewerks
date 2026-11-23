@@ -1,93 +1,46 @@
-import {
-	FIELD_PURCHASE_STATUS_LABELS,
-	type FieldPurchase,
-	type FieldPurchaseKind,
-} from "../../../types/fieldPurchases";
+import i18n from "../../../i18n";
+import type { FieldPurchase, FieldPurchaseKind } from "../../../types/fieldPurchases";
 
 /**
  * Every word the purchase sheet says that changes when the sheet is a refund. A
  * refund reuses the whole screen — same photo, same lines, same review — so
  * without one source a credit slip reads as money spent: "Total paid", "What you
- * bought". The purchase column is the screen's existing wording, unchanged.
+ * bought". Text lives in `sheet.purchase.*` / `sheet.refund.*`.
  */
-export interface SheetCopy {
-	/** The paper itself, mid-sentence: "the {noun}". */
-	noun: string;
+const FIELDS = [
+	/** The paper itself with its article, mid-sentence: "the receipt" / "la nota de crédito". */
+	"noun",
 	/** The heading when the vendor is not known yet. */
-	untitled: string;
-	receiptTitle: string;
-	photograph: string;
-	photoRequired: string;
-	noPhoto: string;
-	detailsTitle: string;
-	totalLabel: string;
-	dateLabel: string;
-	linesTitle: string;
-	linePlaceholder: string;
+	"untitled",
+	"receiptTitle",
+	"photograph",
+	"photoRequired",
+	"noPhoto",
+	"detailsTitle",
+	"totalLabel",
+	"dateLabel",
+	"linesTitle",
+	"linePlaceholder",
 	/** "…do not add up to the $X {reconcileVerb}". */
-	reconcileVerb: string;
-	jobsTitle: string;
-	submitLabel: string;
-	submitted: string;
-	blockedNoPhoto: string;
-	blockedNoLines: string;
-	discardTitle: string;
-	discardBody: string;
-	discardLabel: string;
-	discardFailed: string;
-}
+	"reconcileVerb",
+	"jobsTitle",
+	"submitLabel",
+	"submitted",
+	"blockedNoPhoto",
+	"blockedNoLines",
+	"discardTitle",
+	"discardBody",
+	"discardLabel",
+	"discardFailed",
+] as const;
 
-const PURCHASE: SheetCopy = {
-	noun: "receipt",
-	untitled: "Field purchase",
-	receiptTitle: "Receipt",
-	photograph: "Photograph receipt",
-	photoRequired: "Required to submit — it's the only record of the purchase.",
-	noPhoto: "No receipt yet.",
-	detailsTitle: "Receipt details",
-	totalLabel: "Total paid",
-	dateLabel: "Purchase date",
-	linesTitle: "Items",
-	linePlaceholder: "Part as it reads on the receipt",
-	reconcileVerb: "paid",
-	jobsTitle: "Jobs this covers",
-	submitLabel: "Submit for review",
-	submitted: "Submitted for review",
-	blockedNoPhoto: "Photograph the receipt first",
-	blockedNoLines: "Add the items first",
-	discardTitle: "Discard this draft?",
-	discardBody: "The photo and all items will be deleted. This can't be undone.",
-	discardLabel: "Discard this draft",
-	discardFailed: "Could not discard the draft",
+export type SheetCopy = Record<(typeof FIELDS)[number], string>;
+
+/** Read at call time, so it follows the current language. */
+export const sheetCopy = (kind: FieldPurchaseKind): SheetCopy => {
+	const k = kind === "refund" ? "refund" : "purchase";
+	return Object.fromEntries(FIELDS.map((f) => [f, i18n.t(`sheet.${k}.${f}`)])) as SheetCopy;
 };
-
-const REFUND: SheetCopy = {
-	noun: "credit slip",
-	untitled: "Refund",
-	receiptTitle: "Credit slip",
-	photograph: "Photograph credit slip",
-	photoRequired: "Required to submit — it's the only record of the return.",
-	noPhoto: "No credit slip yet.",
-	detailsTitle: "Credit slip details",
-	totalLabel: "Credit total",
-	dateLabel: "Return date",
-	linesTitle: "Items returned",
-	linePlaceholder: "Part as it reads on the credit slip",
-	reconcileVerb: "credited",
-	jobsTitle: "Jobs credited",
-	submitLabel: "Send refund to dispatch",
-	submitted: "Refund sent to dispatch",
-	blockedNoPhoto: "Photograph the credit slip first",
-	blockedNoLines: "Add the returned items first",
-	discardTitle: "Discard this refund?",
-	discardBody:
-		"The photo and all items will be deleted. The original purchase isn't affected.",
-	discardLabel: "Discard this refund",
-	discardFailed: "Could not discard the refund",
-};
-
-export const sheetCopy = (kind: FieldPurchaseKind): SheetCopy =>
-	kind === "refund" ? REFUND : PURCHASE;
 
 /**
  * A refund's status, said as where the money is. "Approved" alone reads as done,
@@ -95,20 +48,21 @@ export const sheetCopy = (kind: FieldPurchaseKind): SheetCopy =>
  * know whether it has actually landed.
  */
 export function refundStateLabel(p: Pick<FieldPurchase, "status" | "refund_settled_at">): string {
+	const { t } = i18n;
 	switch (p.status) {
 		case "draft":
-			return "Not sent yet";
+			return t("refund.notSent");
 		case "pending_review":
 		case "pending_second_signoff":
-			return "With dispatch";
+			return t("refund.withDispatch");
 		case "queried":
-			return "Needs a change from you";
+			return t("refund.needsChange");
 		case "rejected":
-			return "Not credited";
+			return t("refund.notCredited");
 		case "approved":
-			return p.refund_settled_at ? "Credit received" : "Credit on its way";
+			return t(p.refund_settled_at ? "refund.creditReceived" : "refund.creditOnWay");
 		default:
-			return FIELD_PURCHASE_STATUS_LABELS[p.status];
+			return t(`status.fieldPurchase.${p.status}`);
 	}
 }
 
@@ -131,16 +85,17 @@ export function refundStateTone(
  */
 export function sheetTitle(p: Pick<FieldPurchase, "kind">, vendor: string): string {
 	const name = vendor.trim();
-	if (p.kind === "refund") return name ? `Refund · ${name}` : REFUND.untitled;
-	return name || PURCHASE.untitled;
+	if (p.kind === "refund")
+		return name ? i18n.t("detail.refundTitle", { name }) : i18n.t("sheet.refund.untitled");
+	return name || i18n.t("sheet.purchase.untitled");
 }
 
 /** The line under the heading: where the purchase stands. */
 export function sheetStatus(p: Pick<FieldPurchase, "kind" | "status" | "refund_settled_at">): string {
-	return p.kind === "refund" ? refundStateLabel(p) : FIELD_PURCHASE_STATUS_LABELS[p.status];
+	return p.kind === "refund" ? refundStateLabel(p) : i18n.t(`status.fieldPurchase.${p.status}`);
 }
 
 /** "1 refund pending · $42.00" — plural-aware, money already formatted. */
 export function pendingRefundsLine(count: number, value: string): string {
-	return `${count} refund${count === 1 ? "" : "s"} pending · ${value}`;
+	return i18n.t("detail.pendingRefunds", { count, value });
 }

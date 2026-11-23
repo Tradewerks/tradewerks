@@ -17,6 +17,7 @@ export interface TechnicianNotification {
 	type: NotificationType;
 	title: string;
 	body: string;
+	vars: Record<string, string | number | boolean | null> | null;
 	action_url: string | null;
 	read_at: string | null;
 	created_at: string;

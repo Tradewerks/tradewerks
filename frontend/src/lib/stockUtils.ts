@@ -1,4 +1,5 @@
 import type { VehicleStockItem } from "../types/vehicles";
+import { dateLocale } from "../i18n";
 
 export function getStockHealth(item: VehicleStockItem): "out" | "low" | "ok" {
 	const onHand = Number(item.qty_on_hand);
@@ -13,7 +14,7 @@ export function resolveItemName(stockItemId: string, stockItems: VehicleStockIte
 }
 
 export function formatRestockDate(iso: string): string {
-	return new Date(iso).toLocaleString([], {
+	return new Date(iso).toLocaleString(dateLocale(), {
 		month: "short",
 		day: "numeric",
 		year: "numeric",

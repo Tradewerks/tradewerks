@@ -1,57 +1,17 @@
 import type { ComponentType } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, Check, CircleSlash, Pencil, Sigma } from "lucide-react";
 import type { OcrFieldFlag, OcrFieldKey, OcrFlagKind } from "../../types/fieldPurchases";
 import { ocrFlagReason } from "./ocrFlagCopy";
 import { useRevealPopover } from "./useRevealPopover";
 
-const KIND: Record<
-	OcrFlagKind,
-	{ label: string; Icon: ComponentType<{ size?: number }>; tone: string }
-> = {
-	unsure: {
-		label: "Unsure",
-		Icon: AlertTriangle,
-		tone: "border-warning-border bg-warning-bg text-warning-text",
-	},
-	calculated: {
-		label: "Calculated",
-		Icon: Sigma,
-		tone: "border-info-border bg-info-bg text-info-text",
-	},
-	not_found: {
-		label: "Not found",
-		Icon: CircleSlash,
-		tone: "border-border bg-surface-raised text-text-muted",
-	},
+const KIND: Record<OcrFlagKind, { Icon: ComponentType<{ size?: number }>; tone: string }> = {
+	unsure: { Icon: AlertTriangle, tone: "border-warning-border bg-warning-bg text-warning-text" },
+	calculated: { Icon: Sigma, tone: "border-info-border bg-info-bg text-info-text" },
+	not_found: { Icon: CircleSlash, tone: "border-border bg-surface-raised text-text-muted" },
 };
 
-/** The technician reads their own sheet; "by tech" is for the dispatcher reviewing it. */
-const RESOLVED = {
-	dispatcher: {
-		confirmed: {
-			label: "Checked by tech",
-			Icon: Check,
-			reason: "Checked against the photo by the technician.",
-		},
-		edited: {
-			label: "Edited by tech",
-			Icon: Pencil,
-			reason: "Changed by the technician from the scanned value.",
-		},
-	},
-	technician: {
-		confirmed: {
-			label: "Checked",
-			Icon: Check,
-			reason: "You checked this against the photo.",
-		},
-		edited: {
-			label: "Edited",
-			Icon: Pencil,
-			reason: "You changed this from the scanned value.",
-		},
-	},
-} as const;
+const RESOLVED_ICON = { confirmed: Check, edited: Pencil } as const;
 
 /**
  * The reason lives in a hidden span (always in the DOM) for aria-describedby, and
@@ -71,12 +31,12 @@ export function OcrFieldChip({
 }) {
 	const { wrapperRef, popRef, reasonId, open, flip, toggle, hoverHandlers } =
 		useRevealPopover();
-	const resolved = review ? RESOLVED[audience][review] : null;
-	const reason = resolved ? resolved.reason : ocrFlagReason(field, flag);
-	const { label, Icon } = resolved ?? KIND[flag.kind];
-	const tone = resolved
-		? "border-border bg-transparent text-text-muted"
-		: KIND[flag.kind].tone;
+	const { t } = useTranslation();
+	// The technician reads their own sheet; "by tech" is for the dispatcher reviewing it.
+	const label = review ? t(`ocrChip.${audience}.${review}`) : t(`ocrChip.kind.${flag.kind}`);
+	const reason = review ? t(`ocrChip.${audience}.${review}Reason`) : ocrFlagReason(field, flag);
+	const Icon = review ? RESOLVED_ICON[review] : KIND[flag.kind].Icon;
+	const tone = review ? "border-border bg-transparent text-text-muted" : KIND[flag.kind].tone;
 
 	return (
 		<span ref={wrapperRef} className="relative inline-flex" {...hoverHandlers}>

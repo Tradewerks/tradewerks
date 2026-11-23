@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import {
 	useClockInMutation,
 	useClockOutMutation,
@@ -58,6 +59,7 @@ export function useTechVisitActions(
 	visit: JobVisit | undefined,
 	techId: string,
 ): UseTechVisitActionsReturn {
+	const { t } = useTranslation();
 	const [uiState, setUiState] = useState<TechVisitUiState>("idle");
 	const [confirmingAction, setConfirmingAction] = useState<TechVisitConfirmingAction>(null);
 	const [optimisticStatus, setOptimisticStatus] = useState<string | null>(null);
@@ -151,19 +153,15 @@ export function useTechVisitActions(
 			setOptimisticStatus(null);
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "";
-			if (msg.includes("CLOCKED_IN")) {
-				setClockError("Clock out of your current job first.");
-			} else {
-				setClockError("Failed to update status — try again.");
-			}
+			setClockError(t(msg.includes("CLOCKED_IN") ? "visit.clockOutFirst" : "visit.statusFailed"));
 			setOptimisticStatus(null);
 		}
-	}, [isLoading, constraints.drive.requiresSwitchConfirm, confirmingAction, visitId, transitionMutation, startConfirmTimer, clearConfirmTimer]);
+	}, [isLoading, constraints.drive.requiresSwitchConfirm, confirmingAction, visitId, transitionMutation, startConfirmTimer, clearConfirmTimer, t]);
 
 	const handleConfirmSwitch = useCallback(async () => {
 		if (!visitId) return;
 		if (techStatus.isClockedIn) {
-			setClockError("Clock out of your current job first.");
+			setClockError(t("visit.clockOutFirst"));
 			setUiState("idle");
 			return;
 		}
@@ -173,10 +171,10 @@ export function useTechVisitActions(
 			setUiState("idle");
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "";
-			setClockError(msg.includes("CLOCKED_IN") ? "Clock out of your current job first." : "Failed to update status — try again.");
+			setClockError(t(msg.includes("CLOCKED_IN") ? "visit.clockOutFirst" : "visit.statusFailed"));
 			setUiState("idle");
 		}
-	}, [visitId, techStatus.isClockedIn, transitionMutation]);
+	}, [visitId, techStatus.isClockedIn, transitionMutation, t]);
 
 	const handleArrive = useCallback(async () => {
 		if (isLoading || !visitId) return;
@@ -192,13 +190,9 @@ export function useTechVisitActions(
 			await transitionMutation.mutateAsync({ visitId, action: "arrive" });
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "";
-			if (msg.includes("CLOCKED_IN")) {
-				setClockError("Clock out of your current job first.");
-			} else {
-				setClockError("Failed to update status — try again.");
-			}
+			setClockError(t(msg.includes("CLOCKED_IN") ? "visit.clockOutFirst" : "visit.statusFailed"));
 		}
-	}, [isLoading, confirmingAction, visitId, transitionMutation, startConfirmTimer, clearConfirmTimer]);
+	}, [isLoading, confirmingAction, visitId, transitionMutation, startConfirmTimer, clearConfirmTimer, t]);
 
 	const handleClockIn = useCallback(async () => {
 		if (!visitId) return;
@@ -208,14 +202,14 @@ export function useTechVisitActions(
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "";
 			if (msg.startsWith("ALREADY_CLOCKED_IN:")) {
-				setClockError("You're already clocked in to another visit — clock out there first.");
+				setClockError(t("visit.alreadyClockedIn"));
 			} else if (msg.startsWith("TIMESHEET_LOCKED")) {
 				setClockError(msg.replace(/^TIMESHEET_LOCKED: /, ""));
 			} else {
-				setClockError("Failed to clock in — try again.");
+				setClockError(t("visit.clockInFailed"));
 			}
 		}
-	}, [visitId, techId, clockInMutation]);
+	}, [visitId, techId, clockInMutation, t]);
 
 	const handleClockOut = useCallback(async () => {
 		if (!visitId) return;
@@ -230,9 +224,9 @@ export function useTechVisitActions(
 			await clockOutMutation.mutateAsync({ visitId, techId });
 			setUiState("departure-prompt");
 		} catch {
-			setClockError("Failed to clock out — try again.");
+			setClockError(t("visit.clockOutFailed"));
 		}
-	}, [visitId, techId, openEntries, clockOutMutation]);
+	}, [visitId, techId, openEntries, clockOutMutation, t]);
 
 	const handlePause = useCallback(() => {
 		if (!visitId) return;

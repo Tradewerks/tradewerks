@@ -150,6 +150,8 @@ export interface FieldPurchaseFlag {
 		| "refund_unsettled"
 		| "not_billed";
 	message: string;
+	/** Fills the translated copy; absent on flags saved before it existed. */
+	vars?: Record<string, string | number | null>;
 }
 
 export interface FieldPurchase {

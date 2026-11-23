@@ -5,27 +5,33 @@ import { useAuthStore } from "../../auth/authStore";
 import { useNotificationsQuery, useMarkNotificationReadMutation, useMarkAllNotificationsReadMutation } from "../../hooks/useNotifications";
 import type { TechnicianNotification, NotificationType } from "../../types/notifications";
 import TechPage from "../../components/technician/TechPage";
+import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
+import { notificationText } from "../../lib/notificationText";
+import { FALLBACK_TIMEZONE } from "../../util/util";
 
 function formatRelativeTime(dateStr: string): string {
+	const { t } = i18n;
 	const diff = Date.now() - new Date(dateStr).getTime();
 	const mins = Math.floor(diff / 60_000);
-	if (mins < 1) return "Just now";
-	if (mins < 60) return `${mins}m ago`;
+	if (mins < 1) return t("notifications.justNow");
+	if (mins < 60) return t("notifications.minsAgo", { count: mins });
 	const hrs = Math.floor(mins / 60);
-	if (hrs < 24) return `${hrs}h ago`;
+	if (hrs < 24) return t("notifications.hrsAgo", { count: hrs });
 	const days = Math.floor(hrs / 24);
-	if (days === 1) return "Yesterday";
-	return `${days}d ago`;
+	if (days === 1) return t("notifications.yesterday");
+	return t("notifications.daysAgo", { count: days });
 }
 
+// "today" / "yesterday" are group keys, translated where shown; older days are already labels.
 function getDateGroup(dateStr: string): string {
 	const d = new Date(dateStr);
 	const today = new Date();
 	const yesterday = new Date(today);
 	yesterday.setDate(today.getDate() - 1);
-	if (d.toDateString() === today.toDateString()) return "Today";
-	if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-	return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+	if (d.toDateString() === today.toDateString()) return "today";
+	if (d.toDateString() === yesterday.toDateString()) return "yesterday";
+	return d.toLocaleDateString(i18n.language, { weekday: "short", month: "short", day: "numeric" });
 }
 
 function NotificationIcon({ type }: { type: NotificationType }) {
@@ -51,6 +57,8 @@ function NotificationItem({
 }) {
 	const navigate = useNavigate();
 	const isUnread = !notif.read_at;
+	const tz = useAuthStore((s) => s.user?.orgTimezone) ?? FALLBACK_TIMEZONE;
+	const { title, body } = notificationText(notif, tz);
 
 	const handleClick = () => {
 		if (isUnread) onMarkRead(notif.id);
@@ -69,10 +77,10 @@ function NotificationItem({
 				<div className="flex items-center gap-1.5">
 					{isUnread && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
 					<p className={`text-sm leading-snug truncate ${isUnread ? "font-semibold text-text-primary" : "text-text-secondary"}`}>
-						{notif.title}
+						{title}
 					</p>
 				</div>
-				<p className="text-xs text-text-muted mt-0.5 line-clamp-2">{notif.body}</p>
+				<p className="text-xs text-text-muted mt-0.5 line-clamp-2">{body}</p>
 			</div>
 			<span className="text-[11px] text-text-faint whitespace-nowrap shrink-0 mt-0.5">
 				{formatRelativeTime(notif.created_at)}
@@ -83,6 +91,7 @@ function NotificationItem({
 
 export default function TechnicianNotificationsPage() {
 	const { user } = useAuthStore();
+	const { t, i18n: { language } } = useTranslation();
 	const { data: notifications = [], isLoading } = useNotificationsQuery(user?.userId);
 	const markRead = useMarkNotificationReadMutation();
 	const markAllRead = useMarkAllNotificationsReadMutation();
@@ -107,16 +116,18 @@ export default function TechnicianNotificationsPage() {
 			const g = getDateGroup(n.created_at);
 			(groups[g] ??= []).push(n);
 		}
-		const groupOrder = ["Today", "Yesterday", ...Object.keys(groups).filter((g) => g !== "Today" && g !== "Yesterday")];
+		const groupOrder = ["today", "yesterday", ...Object.keys(groups).filter((g) => g !== "today" && g !== "yesterday")];
 		return { groups, groupOrder };
-	}, [notifications]);
+		// language: older group labels are formatted in it.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [notifications, language]);
 
 	return (
 		<TechPage>
 			{/* Header */}
 			<div className="flex items-center justify-between mb-4">
 				<div className="flex items-center gap-2">
-					<h1 className="text-lg font-semibold text-text-primary">Notifications</h1>
+					<h1 className="text-lg font-semibold text-text-primary">{t("notifications.title")}</h1>
 					{unreadCount > 0 && (
 						<span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/20 text-primary-text border border-primary/30 min-w-[20px]">
 							{unreadCount}
@@ -129,7 +140,7 @@ export default function TechnicianNotificationsPage() {
 					className="flex items-center gap-1.5 text-xs text-primary-text hover:text-primary-text disabled:opacity-40 disabled:cursor-not-allowed"
 				>
 					<CheckCheck size={14} />
-					Mark all read
+					{t("notifications.markAllRead")}
 				</button>
 			</div>
 
@@ -137,7 +148,7 @@ export default function TechnicianNotificationsPage() {
 				<div className="flex justify-center py-12">
 					<div
 						role="status"
-						aria-label="Loading notifications"
+						aria-label={t("notifications.loading")}
 						className="w-6 h-6 rounded-full border-2 border-border border-t-primary animate-spin"
 					/>
 				</div>
@@ -146,7 +157,7 @@ export default function TechnicianNotificationsPage() {
 			{!isLoading && notifications.length === 0 && (
 				<div className="flex flex-col items-center gap-3 py-16 text-text-faint">
 					<Bell size={36} strokeWidth={1.5} />
-					<p className="text-sm">No notifications yet</p>
+					<p className="text-sm">{t("notifications.empty")}</p>
 				</div>
 			)}
 
@@ -158,7 +169,9 @@ export default function TechnicianNotificationsPage() {
 						return (
 							<div key={group}>
 								<div className="px-4 py-2 border-b border-border-subtle text-[11px] font-medium text-text-muted uppercase tracking-wide">
-									{group}
+									{group === "today" || group === "yesterday"
+										? t(`notifications.${group}`)
+										: group}
 								</div>
 								{items.map((notif) => (
 									<NotificationItem

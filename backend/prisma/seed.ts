@@ -4792,8 +4792,8 @@ async function main() {
 	// ============================================================================
 	await db.technician_notification.createMany({
 		data: [
-			{ technician_id: tech1.id, type: "visit_assigned", title: "New visit assigned", body: "You've been assigned to Filter Replacement — Anderson Bldg A today at 8:00 AM.", action_url: `/technician/visits/${todayFilterVisit.id}`, created_at: minsAgo(45) },
-			{ technician_id: tech1.id, type: "visit_changed", title: "Visit time updated", body: "Follow-Up AC Check — Johnson Residence moved to the 11:00–12:00 window.", action_url: `/technician/visits/${todayFollowUpVisit.id}`, read_at: minsAgo(20), created_at: hrsAgo(3) },
+			{ technician_id: tech1.id, type: "visit_assigned", title: "New visit assigned: Anderson Office Complex", body: "You have been assigned to a visit at Anderson Office Complex today at 8:00 AM.", vars: { client: "Anderson Office Complex", at: todayFilterVisit.scheduled_start_at.toISOString() }, action_url: `/technician/visits/${todayFilterVisit.id}`, created_at: minsAgo(45) },
+			{ technician_id: tech1.id, type: "visit_changed", title: "Schedule changed: Johnson Residence", body: "Your visit at Johnson Residence has been rescheduled to today at 11:00 AM.", vars: { client: "Johnson Residence", at: todayFollowUpVisit.scheduled_start_at.toISOString() }, action_url: `/technician/visits/${todayFollowUpVisit.id}`, read_at: minsAgo(20), created_at: hrsAgo(3) },
 			{ technician_id: tech1.id, type: "dispatch_message", title: "Message from dispatch", body: "Heads up — Kevin is riding with you on Van 12 this week. Coordinate the morning route.", created_at: hrsAgo(20) },
 		],
 	});
@@ -5352,6 +5352,7 @@ async function main() {
 	const GEO_MISSING = {
 		code: "geo_missing",
 		message: "No capture location recorded (expected on desktop, advisory only)",
+		vars: {},
 	};
 
 	// 1. draft — started at the counter, nothing captured yet.
@@ -5568,9 +5569,14 @@ async function main() {
 				{
 					code: "total_mismatch",
 					message: "Receipt total 402.00 does not match lines plus tax (379.96)",
+					vars: { total: 402, expected: 379.96 },
 				},
 				GEO_MISSING,
-				{ code: "velocity", message: "3 purchases at FERGUSON #418 on the same day" },
+				{
+					code: "velocity",
+					message: "3 purchases at FERGUSON #418 on the same day",
+					vars: { count: 3, vendor: "FERGUSON #418", variant: "vendor" },
+				},
 			],
 			created_at: hrsAgo(4),
 			lines: { create: purchaseLines(flaggedLines, hrsAgo(3)) },
@@ -6036,9 +6042,9 @@ async function main() {
 
 	await db.technician_notification.createMany({
 		data: [
-			{ technician_id: tech1.id, type: "field_purchase_preauth", title: "Purchase pre-approved", body: "Go ahead with the purchase up to 640.00.", action_url: `/technician/purchases/${fpPreauthApproved.id}`, created_at: hrsAgo(4) },
-			{ technician_id: tech1.id, type: "field_purchase_reviewed", title: "Purchase needs a change", body: "Which job is the conduit for? Point it at one or split the amount.", action_url: `/technician/purchases/${fpQueried.id}`, created_at: hrsAgo(1) },
-			{ technician_id: tech1.id, type: "field_purchase_reviewed", title: "Purchase rejected", body: "Tools are a shop purchase, not a job cost. File it with the tool allowance.", action_url: `/technician/purchases/${fpRejected.id}`, read_at: daysFromNow(-5), created_at: daysFromNow(-5) },
+			{ technician_id: tech1.id, type: "field_purchase_preauth", title: "Purchase pre-approved", body: "Go ahead with the purchase up to 640.00.", vars: { amount: 640, variant: "approved" }, action_url: `/technician/purchases/${fpPreauthApproved.id}`, created_at: hrsAgo(4) },
+			{ technician_id: tech1.id, type: "field_purchase_reviewed", title: "Purchase needs a change", body: "Which job is the conduit for? Point it at one or split the amount.", vars: { variant: "query", keep_body: true }, action_url: `/technician/purchases/${fpQueried.id}`, created_at: hrsAgo(1) },
+			{ technician_id: tech1.id, type: "field_purchase_reviewed", title: "Purchase rejected", body: "Tools are a shop purchase, not a job cost. File it with the tool allowance.", vars: { variant: "reject", keep_body: true }, action_url: `/technician/purchases/${fpRejected.id}`, read_at: daysFromNow(-5), created_at: daysFromNow(-5) },
 			{ technician_id: tech2.id, type: "field_purchase_reviewed", title: "Purchase submitted", body: "Your 143.70 purchase is with dispatch for review.", action_url: `/technician/purchases/${fpMaria.id}`, read_at: hrsAgo(5), created_at: hrsAgo(6) },
 		],
 	});

@@ -4,8 +4,9 @@ import { useAuthStore } from "../../auth/authStore";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { Search, MapPin, Calendar, Clock, Navigation, ChevronRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import TechVisitCard from "../../components/technicianComponents/TechVisitCard";
-import { addSpacesToCamelCase, formatDateTime, FALLBACK_TIMEZONE } from "../../util/util";
+import { formatDateTime, FALLBACK_TIMEZONE } from "../../util/util";
 import TechPage from "../../components/technician/TechPage";
 
 type TabFilter = "available" | "mine" | "past";
@@ -51,19 +52,20 @@ function getSlaStatus(scheduledStart: Date | string, status: VisitStatus): SlaSt
 }
 
 function SlaBadge({ status }: { status: SlaStatus }) {
+	const { t } = useTranslation();
 	if (!status) return null;
 	if (status === "overdue") {
 		return (
-			<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-error/15 text-error-text border border-error/20">
+			<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-error/15 text-error-text border border-error/20">
 				<Clock size={10} />
-				OVERDUE
+				{t("dashboard.overdue")}
 			</span>
 		);
 	}
 	return (
-		<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-warning/15 text-warning-text border border-warning/20">
+		<span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-warning/15 text-warning-text border border-warning/20">
 			<Clock size={10} />
-			SOON
+			{t("visits.soon")}
 		</span>
 	);
 }
@@ -71,6 +73,7 @@ function SlaBadge({ status }: { status: SlaStatus }) {
 export default function TechnicianVisitsPage() {
 	const { user } = useAuthStore();
 	const navigate = useNavigate();
+	const { t } = useTranslation();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 
 	const [tab, setTab] = useState<TabFilter>("mine");
@@ -260,11 +263,10 @@ export default function TechnicianVisitsPage() {
 
 				return {
 					id: v.id,
-					visitName: v.name || "Unnamed Visit",
+					visitName: v.name || t("visits.unnamed"),
 					client: v.job?.client?.name ?? "—",
 					address: v.job?.address ?? "—",
 					scheduled: formatDateTime(v.scheduled_start_at, tz),
-					status: addSpacesToCamelCase(v.status),
 					rawStatus: v.status as VisitStatus,
 					slaStatus: getSlaStatus(
 						v.scheduled_start_at,
@@ -294,7 +296,7 @@ export default function TechnicianVisitsPage() {
 				return tab === "past" ? -timeDiff : timeDiff;
 			})
 			.map(({ _scheduleDate, _isClockedIn, ...rest }) => rest);
-	}, [visits, tab, searchInput, user?.userId, sortMode, userPosition, tz]);
+	}, [visits, tab, searchInput, user?.userId, sortMode, userPosition, tz, t]);
 
 	const cardData = tab === "past" && !showAllPast ? display.slice(0, 5) : display;
 
@@ -328,7 +330,7 @@ export default function TechnicianVisitsPage() {
 			setTab("mine");
 		} catch (err) {
 			setAcceptError(
-				err instanceof Error ? err.message : "Failed to accept visit."
+				err instanceof Error ? err.message : t("visits.accept_failed")
 			);
 		}
 	};
@@ -337,7 +339,7 @@ export default function TechnicianVisitsPage() {
 		<TechPage className="text-text-primary">
 			{/* Header */}
 			<div className="flex flex-col gap-3 mb-4">
-				<h2 className="text-2xl font-semibold">My Visits</h2>
+				<h2 className="text-2xl font-semibold">{t("nav.my_visits")}</h2>
 				<form
 					onSubmit={(e) => e.preventDefault()}
 					className="relative w-full"
@@ -348,7 +350,7 @@ export default function TechnicianVisitsPage() {
 					/>
 					<input
 						type="text"
-						placeholder="Search visits..."
+						placeholder={t("visits.search")}
 						value={searchInput}
 						onChange={(e) => setSearchInput(e.target.value)}
 						className="w-full pl-11 pr-3 py-2.5 rounded-md bg-surface border border-border text-sm text-text-primary placeholder:text-faint focus:outline-none focus:ring-1 focus:ring-primary-border"
@@ -393,7 +395,7 @@ export default function TechnicianVisitsPage() {
 							tab === "mine" ? "text-on-primary font-semibold" : "text-text-tertiary"
 						}`}
 					>
-						Mine
+						{t("visits.tab_mine")}
 					</button>
 					{/* Available */}
 					<button
@@ -403,7 +405,7 @@ export default function TechnicianVisitsPage() {
 							tab === "available" ? "text-on-primary font-semibold" : "text-text-tertiary"
 						}`}
 					>
-						Available
+						{t("visits.tab_available")}
 					</button>
 					{/* Past */}
 					<button
@@ -413,7 +415,7 @@ export default function TechnicianVisitsPage() {
 							tab === "past" ? "text-on-primary font-semibold" : "text-text-tertiary"
 						}`}
 					>
-						Past
+						{t("visits.tab_past")}
 					</button>
 				</div>
 			</div>
@@ -422,7 +424,7 @@ export default function TechnicianVisitsPage() {
 			{tab === "mine" && geoSupported && (
 				<div className="flex items-center gap-2 mb-3">
 					<span className="text-[11px] text-text-muted uppercase tracking-wide font-medium">
-						Sort:
+						{t("visits.sort")}
 					</span>
 					<div className="flex rounded-lg overflow-hidden border border-border">
 						<button
@@ -433,7 +435,7 @@ export default function TechnicianVisitsPage() {
 									: "bg-surface text-text-tertiary hover:bg-surface-raised"
 							}`}
 						>
-							By Time
+							{t("visits.by_time")}
 						</button>
 						<button
 							onClick={() => setSortMode("distance")}
@@ -444,7 +446,7 @@ export default function TechnicianVisitsPage() {
 							}`}
 						>
 							<Navigation size={11} />
-							By Distance
+							{t("visits.by_distance")}
 						</button>
 					</div>
 				</div>
@@ -455,8 +457,7 @@ export default function TechnicianVisitsPage() {
 				<div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-success-bg border border-success/20 text-success-text">
 					<Navigation size={13} className="shrink-0" />
 					<span className="text-xs font-medium">
-						{nearbyCount} visit{nearbyCount > 1 ? "s" : ""}{" "}
-						within {PROXIMITY_MILES} miles of your location
+						{t("visits.nearby", { count: nearbyCount, miles: PROXIMITY_MILES })}
 					</span>
 				</div>
 			)}
@@ -470,17 +471,17 @@ export default function TechnicianVisitsPage() {
 			{/* Card list */}
 			{isLoading && (
 				<p className="text-text-tertiary text-sm text-center py-8">
-					Loading visits...
+					{t("visits.loading")}
 				</p>
 			)}
 			{error && (
 				<p className="text-error-text text-sm text-center py-8">
-					Failed to load visits.
+					{t("visits.load_failed")}
 				</p>
 			)}
 			{!isLoading && !error && cardData.length === 0 && (
 				<p className="text-text-muted text-sm text-center py-8">
-					No visits found.
+					{t("visits.none_found")}
 				</p>
 			)}
 
@@ -533,8 +534,8 @@ export default function TechnicianVisitsPage() {
 											<span className="text-xs text-text-muted shrink-0 tabular-nums">
 												{row.distanceMiles <
 												0.1
-													? "< 0.1 mi"
-													: `${row.distanceMiles.toFixed(1)} mi`}
+													? t("mileage.miles", { miles: "< 0.1" })
+													: t("mileage.miles", { miles: row.distanceMiles.toFixed(1) })}
 											</span>
 										)}
 									</div>
@@ -574,11 +575,11 @@ export default function TechnicianVisitsPage() {
 										}`}
 									>
 										{acceptMutation.isPending
-											? "Accepting..."
+											? t("visits.accepting")
 											: acceptConfirm ===
 												  row.id
-												? "Tap Again to Confirm"
-												: "Accept"}
+												? t("visits.tap_again")
+												: t("visits.accept")}
 									</button>
 									<button
 										onClick={() =>
@@ -587,13 +588,13 @@ export default function TechnicianVisitsPage() {
 											)
 										}
 										className="flex-[1] flex flex-col items-center justify-center gap-1 rounded-lg border border-border bg-surface text-text-tertiary hover:bg-surface-raised hover:text-text-primary hover:border-border-strong transition-all duration-150 active:scale-[0.97] px-2 py-2.5 min-w-[52px]"
-										aria-label="View visit details"
+										aria-label={t("visits.view_details")}
 									>
 										<ChevronRight
 											size={15}
 										/>
 										<span className="text-[10px] font-medium leading-none">
-											Details
+											{t("visits.details")}
 										</span>
 									</button>
 								</div>
@@ -627,8 +628,8 @@ export default function TechnicianVisitsPage() {
 					className="mt-3 w-full py-3 min-h-[44px] text-sm text-primary-text hover:text-primary-text transition-colors"
 				>
 					{showAllPast
-						? "Show less"
-						: `View all ${display.length} past visits`}
+						? t("visits.show_less")
+						: t("visits.view_all_past", { count: display.length })}
 				</button>
 			)}
 		</TechPage>

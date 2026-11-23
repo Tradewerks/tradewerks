@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useDialogA11y } from "../../hooks/useDialogA11y";
 
 interface DrawerProps {
@@ -24,6 +25,7 @@ interface DrawerProps {
 const baseClasses = "bg-surface border-border-card shadow-xl flex flex-col duration-200 ease-out";
 
 export default function Drawer({ isOpen, onClose, title, side = "right", children, footer }: DrawerProps) {
+	const { t } = useTranslation();
 	const [mounted, setMounted] = useState(false);
 	const [visible, setVisible] = useState(false);
 	// Gated on `mounted`, not `isOpen` — `isOpen` flips a render before
@@ -71,7 +73,7 @@ export default function Drawer({ isOpen, onClose, title, side = "right", childre
 				</h2>
 				<button
 					onClick={onClose}
-					aria-label="Close"
+					aria-label={t("common.close")}
 					className="text-text-muted hover:text-text-primary p-1 -mr-1 rounded-md hover:bg-surface-raised transition-colors"
 				>
 					<X size={16} />

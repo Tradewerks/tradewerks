@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Loader2, ShieldQuestion } from "lucide-react";
 import {
 	useCreateFieldPurchase,
@@ -14,7 +16,8 @@ import LimitBreachNotice from "./LimitBreachNotice";
 import { errorMessage } from "../../../util/util";
 import type { MyJobOption } from "../../../api/jobs";
 
-const jobLabel = (j: MyJobOption) => j.job_name || `Job ${j.job_number ?? ""}`.trim();
+const jobLabel = (j: MyJobOption, t: TFunction) =>
+	j.job_name || t("purchase.jobNumber", { number: j.job_number ?? "" }).trim();
 
 interface JobRow {
 	job_id: string;
@@ -37,6 +40,7 @@ export default function RequestApprovalButton({
 	preselectedJobId?: string | null;
 	autoOpen?: boolean;
 }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(autoOpen);
 	// The purchases page is already behind both of these, so this is a no-op
 	// there. It matters on the visit, which is not — and a technician with no
@@ -61,11 +65,10 @@ export default function RequestApprovalButton({
 				/>
 				<span className="min-w-0">
 					<span className="block text-sm font-medium text-text-primary">
-						Request approval before buying
+						{t("purchase.requestApproval")}
 					</span>
 					<span className="block text-xs text-text-muted">
-						Not paid yet. Send an estimate — dispatch answers before
-						you spend your own money.
+						{t("purchase.requestApprovalHint")}
 					</span>
 				</span>
 			</button>
@@ -87,6 +90,7 @@ function ApprovalSheet({
 	preselectedJobId: string;
 	onClose: () => void;
 }) {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const { data: myJobs = [], isLoading: jobsLoading, isError: jobsFailed } = useMyJobsQuery();
 	const create = useCreateFieldPurchase();
@@ -110,10 +114,10 @@ function ApprovalSheet({
 
 	// A job named by the link but absent from the list — a visit that was
 	// cancelled, say — still has to be pickable, or the link leads nowhere.
-	const rows: JobRow[] = myJobs.map((j) => ({ job_id: j.job_id, label: jobLabel(j) }));
+	const rows: JobRow[] = myJobs.map((j) => ({ job_id: j.job_id, label: jobLabel(j, t) }));
 	const options =
 		preselectedJobId && !myJobs.some((j) => j.job_id === preselectedJobId)
-			? [{ job_id: preselectedJobId, label: "This job" }, ...rows]
+			? [{ job_id: preselectedJobId, label: t("purchase.thisJob") }, ...rows]
 			: rows;
 
 	// Asked of the server: the daily, weekly and per-job ceilings depend on what
@@ -160,7 +164,7 @@ function ApprovalSheet({
 			});
 			navigate(`/technician/purchases/${id}`);
 		} catch (err) {
-			setFailure(errorMessage(err, "Could not send the request"));
+			setFailure(errorMessage(err, t("purchase.sendFailed")));
 		} finally {
 			setBusy(false);
 		}
@@ -172,7 +176,7 @@ function ApprovalSheet({
 	return (
 		<div
 			{...dialogProps}
-			aria-label="Request approval before buying"
+			aria-label={t("purchase.requestApproval")}
 			className="fixed inset-0 z-[60] flex items-end justify-center bg-overlay lg:items-center"
 		>
 			{/* Sheet on phones, centered panel on desktop: full width past lg stretched
@@ -180,12 +184,9 @@ function ApprovalSheet({
 			    what a single-column form reads as. */}
 			<div className="max-h-[85vh] w-full overflow-y-auto rounded-t-2xl border-t border-border bg-canvas p-4 lg:max-w-lg lg:rounded-2xl lg:border">
 				<h2 className="text-sm font-semibold text-text-primary">
-					Request approval before buying
+					{t("purchase.requestApproval")}
 				</h2>
-				<p className="mt-1 text-xs text-text-muted">
-					Dispatch answers before you pay, so you are not fronting
-					money you may not get back.
-				</p>
+				<p className="mt-1 text-xs text-text-muted">{t("purchase.approvalExplain")}</p>
 
 				{failure && (
 					<p className="mt-2 text-xs text-warning-text">{failure}</p>
@@ -193,25 +194,17 @@ function ApprovalSheet({
 
 				<div className="mt-3">
 					<span className="mb-1 block text-xs text-text-muted">
-						Job this is for
+						{t("purchase.jobFor")}
 					</span>
 					{jobsLoading ? (
-						<p className="text-sm text-text-muted">
-							Loading your jobs…
-						</p>
+						<p className="text-sm text-text-muted">{t("purchase.loadingJobs")}</p>
 					) : jobsFailed ? (
 						// Distinct from the empty case on purpose: "no jobs assigned"
 						// reads as dispatch's doing, and sends the technician to argue
 						// with the wrong person when the request simply failed.
-						<p className="text-sm text-warning-text">
-							Could not load your jobs. Check your signal
-							and reopen this.
-						</p>
+						<p className="text-sm text-warning-text">{t("purchase.jobsFailedReopen")}</p>
 					) : options.length === 0 ? (
-						<p className="text-sm text-text-muted">
-							You have no jobs assigned right now —
-							dispatch has to attach this one.
-						</p>
+						<p className="text-sm text-text-muted">{t("purchase.noJobs")}</p>
 					) : (
 						<ul className="space-y-2">
 							{options.map((o) => (
@@ -246,7 +239,7 @@ function ApprovalSheet({
 
 				<label className="mt-3 block">
 					<span className="mb-1 block text-xs text-text-muted">
-						Estimated cost
+						{t("purchase.estimatedCost")}
 					</span>
 					<input
 						value={amount}
@@ -259,12 +252,12 @@ function ApprovalSheet({
 
 				<label className="mt-3 block">
 					<span className="mb-1 block text-xs text-text-muted">
-						Reason (optional)
+						{t("purchase.reasonOptional")}
 					</span>
 					<input
 						value={reason}
 						onChange={(e) => setReason(e.target.value)}
-						placeholder="Part not on the truck, job is down"
+						placeholder={t("purchase.reasonPlaceholder")}
 						className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted"
 					/>
 				</label>
@@ -285,7 +278,7 @@ function ApprovalSheet({
 						onClick={onClose}
 						className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-border bg-surface text-sm font-medium text-text-secondary hover:enabled:bg-surface-raised disabled:opacity-40"
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 					<button
 						type="button"
@@ -300,7 +293,7 @@ function ApprovalSheet({
 								className="animate-spin"
 							/>
 						)}
-						Send for approval
+						{t("purchase.sendForApproval")}
 					</button>
 				</div>
 			</div>

@@ -76,6 +76,7 @@ const TECHNICIAN_SELECT = {
 	last_login: true,
 	deactivated_at: true,
 	theme: true,
+	language: true,
 	organization_role_id: true,
 	current_vehicle_id: true,
 	current_vehicle: { select: { id: true, name: true, stored_at_coords: true } },
@@ -264,6 +265,7 @@ export const updateTechnician = async (
 			"hire_date",
 			"last_login",
 			"theme",
+			"language",
 			"cost_rate",
 		] as const);
 

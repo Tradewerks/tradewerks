@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import i18n, { dateLocale } from "../../i18n";
 import {
 	AlertTriangle,
 	CalendarOff,
@@ -34,7 +36,7 @@ import LimitBreachNotice from "../../components/technician/procurement/LimitBrea
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import SheetNotice from "../../components/technician/procurement/SheetNotice";
 import { OcrCheckSummary } from "../../components/fieldPurchases/OcrCheckSummary";
-import { OCR_FIELD_LABEL, needsCheck } from "../../components/fieldPurchases/ocrFlagCopy";
+import { needsCheck } from "../../components/fieldPurchases/ocrFlagCopy";
 import {
 	effectiveReviews,
 	reviewsToSend,
@@ -66,6 +68,7 @@ import {
 	sheetTitle,
 } from "../../components/technician/procurement/sheetCopy";
 import TechSelect from "../../components/technician/procurement/TechSelect";
+import { purchaseFlagText } from "../../lib/purchaseFlagText";
 import {
 	isTechEditable,
 	type FieldPurchase,
@@ -95,7 +98,7 @@ interface AllocDraft {
 
 /** A job by name, else by number — never by its id, which means nothing to anybody. */
 const jobLabel = (name: string | null | undefined, number: string | null | undefined) =>
-	name || (number ? `Job ${number}` : "Job");
+	name || (number ? i18n.t("purchase.jobNumber", { number }) : i18n.t("detail.jobFallback"));
 
 /**
  * Where every exit from this screen leads. Deliberately one place: this sheet is
@@ -116,12 +119,13 @@ const money2 = (v: number | null | undefined): string | null => (v == null ? nul
  */
 export default function TechnicianPurchaseDetailPage() {
 	const { purchaseId } = useParams<{ purchaseId: string }>();
+	const { t } = useTranslation();
 	const { data, isLoading, isError, isFetching, refetch } = useFieldPurchase(purchaseId);
 
 	if (isLoading) {
 		return (
 			<TechPage>
-				<p className="text-sm text-text-muted">Loading…</p>
+				<p className="text-sm text-text-muted">{t("common.loading")}</p>
 			</TechPage>
 		);
 	}
@@ -138,12 +142,9 @@ export default function TechnicianPurchaseDetailPage() {
 				/>
 				<div className="min-w-0">
 					<h1 className="text-sm font-semibold text-text-primary">
-						Could not open this purchase
+						{t("detail.openFailed")}
 					</h1>
-					<p className="mt-1 text-xs text-text-muted">
-						Check your signal and try again. Nothing you sent
-						has been lost.
-					</p>
+					<p className="mt-1 text-xs text-text-muted">{t("detail.openFailedHint")}</p>
 					<div className="mt-2 flex flex-wrap items-center gap-3">
 						<button
 							type="button"
@@ -160,13 +161,13 @@ export default function TechnicianPurchaseDetailPage() {
 										: ""
 								}
 							/>
-							{isFetching ? "Retrying…" : "Try again"}
+							{isFetching ? t("detail.retrying") : t("common.retry")}
 						</button>
 						<Link
 							to={PURCHASES}
 							className="inline-flex min-h-11 items-center text-xs font-medium text-primary underline-offset-2 hover:underline"
 						>
-							Back to your purchases
+							{t("detail.backToPurchases")}
 						</Link>
 					</div>
 				</div>
@@ -177,6 +178,7 @@ export default function TechnicianPurchaseDetailPage() {
 }
 
 function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
+	const { t, i18n: { language } } = useTranslation();
 	const navigate = useNavigate();
 	// The truck the technician is signed onto, and the only vehicle a line may
 	// stock. Read from the profile, not a `?vehicleId=` query param: a URL the
@@ -474,7 +476,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		Object.entries(reviews).map(([k, state]) => [k, { state, at: "" }])
 	);
 	const toCheck = needsCheck(flagSet, stamped);
-	const checkText = `Check against ${copy.noun}: ${toCheck.map((k) => OCR_FIELD_LABEL[k]).join(", ")}`;
+	const kind = isRefund ? "refund" : "purchase";
+	const checkText = t(`sheet.${kind}.checkAgainst`, {
+		fields: toCheck.map((k) => t(`ocrFields.${k}`)).join(", "),
+	});
 	const confirmField = (k: OcrFieldKey) => () => {
 		setDirty(true);
 		setConfirmed((prev) => new Set(prev).add(k));
@@ -568,27 +573,27 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 	const reading = readState !== null;
 	const readingReason =
 		readState === "stalled"
-			? `Reading the ${copy.noun} failed — tap Try again`
-			: `Reading the ${copy.noun}…`;
+			? t(`sheet.${kind}.readingFailed`)
+			: t(`sheet.${kind}.reading`);
 
 	const blockedReason = reading
 		? readingReason
 		: !incomplete
 		? overRefund
-			? `More than the ${money(refundRemaining ?? 0)} left to refund`
+			? t("detail.overRefund", { amount: money(refundRemaining ?? 0) })
 			: null
 		: !purchase.receipt_image_url
 			? copy.blockedNoPhoto
 			: lines.length === 0
 				? copy.blockedNoLines
 				: unconfirmed > 0
-					? `Check ${unconfirmed} item${unconfirmed === 1 ? "" : "s"} against the ${copy.noun}`
+					? t(`sheet.${kind}.checkItems`, { count: unconfirmed })
 					: unassigned > 0
-						? `Choose a job for ${unassigned === 1 ? "1 item" : `${unassigned} items`}`
+						? t("detail.chooseJobFor", { count: unassigned })
 						: lines.some((l) => !l.description.trim())
-							? "Every item needs a description"
+							? t("detail.needsDescription")
 							: lines.some((l) => notANumber(l.quantity) || notANumber(l.unit_price))
-								? "Enter a quantity and price for every item"
+								? t("detail.needsQtyPrice")
 								: checkText;
 
 	// A job the technician can add the receipt to. Their own jobs only, and never
@@ -655,12 +660,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 			setDirty(false);
 			toast.success(
 				result.flags.length > 0
-					? `Submitted with ${result.flags.length} note${result.flags.length === 1 ? "" : "s"} for dispatch`
+					? t("detail.submittedWithNotes", { count: result.flags.length })
 					: copy.submitted
 			);
 			navigate(PURCHASES);
 		} catch (err) {
-			toast.error(errorMessage(err, "Failed to submit"));
+			toast.error(errorMessage(err, t("detail.submitFailed")));
 		}
 	}
 
@@ -690,9 +695,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 			// re-seed effect would overwrite them with the server's stale copy —
 			// the original bug, reintroduced through the back door.
 			if (linesReady) setDirty(false);
-			toast.success("Sent to dispatch for pre-approval");
+			toast.success(t("detail.preauthSent"));
 		} catch (err) {
-			toast.error(errorMessage(err, "Failed to request pre-approval"));
+			toast.error(errorMessage(err, t("detail.preauthFailed")));
 		}
 	}
 
@@ -707,9 +712,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 		try {
 			const created = await refund.mutateAsync({ parentPurchaseId: purchase.id });
 			navigate(`/technician/purchases/${created.id}`);
-			toast.success("Refund started — attach the credit slip");
+			toast.success(t("detail.refundStarted"));
 		} catch (err) {
-			toast.error(errorMessage(err, "Could not start the refund"));
+			toast.error(errorMessage(err, t("detail.refundStartFailed")));
 		}
 	}
 
@@ -763,7 +768,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 					open={confirmingDiscard}
 					title={copy.discardTitle}
 					body={copy.discardBody}
-					confirmLabel="Discard"
+					confirmLabel={t("detail.discard")}
 					tone="destructive"
 					pending={remove.isPending}
 					onConfirm={() => void onDiscard()}
@@ -771,9 +776,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				/>
 				<ConfirmDialog
 					open={leavingTo != null}
-					title="Leave without sending?"
-					body="What you've changed here isn't saved yet."
-					confirmLabel="Leave"
+					title={t("detail.leaveTitle")}
+					body={t("detail.leaveBody")}
+					confirmLabel={t("detail.leave")}
 					onConfirm={() => leavingTo && navigate(leavingTo)}
 					onCancel={() => setLeavingTo(null)}
 				/>
@@ -789,10 +794,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							icon={dispatchAsks ? AlertTriangle : MessageSquare}
 							title={
 								purchase.status === "queried"
-									? "Dispatch asked for a change"
+									? t("detail.dispatchAskedChange")
 									: purchase.status === "rejected"
-										? "Rejected by dispatch"
-										: "Note from dispatch"
+										? t("detail.rejectedByDispatch")
+										: t("detail.noteFromDispatch")
 							}
 						>
 							{purchase.review_note}
@@ -804,8 +809,8 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							icon={ShieldQuestion}
 							title={
 								purchase.status === "preauth_denied"
-									? "Pre-approval denied"
-									: "Pre-approval note"
+									? t("status.fieldPurchase.preauth_denied")
+									: t("detail.preauthNote")
 							}
 						>
 							{purchase.preauth_note}
@@ -819,10 +824,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 			{shownFlags.length > 0 && (
 				// Advisory: flags route a reviewer's attention and never block, so
 				// they read as information rather than as something owed.
-				<SheetNotice tone="info" icon={Flag} title="Flagged for dispatch review">
+				<SheetNotice tone="info" icon={Flag} title={t("detail.flagged")}>
 					<ul className="space-y-0.5">
 						{shownFlags.map((f, i) => (
-							<li key={`${f.code}-${i}`}>{f.message}</li>
+							<li key={`${f.code}-${i}`}>{purchaseFlagText(f)}</li>
 						))}
 					</ul>
 				</SheetNotice>
@@ -834,15 +839,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				// yet. What matters at this point is the ask itself.
 				<section className="rounded-xl border border-border bg-base p-4">
 					<h2 className="mb-1 text-sm font-semibold text-text-primary">
-						Pre-approval request
+						{t("detail.preauthRequest")}
 					</h2>
-					<p className="mb-3 text-xs text-text-muted">
-						Once dispatch approves and you&apos;ve paid, photograph
-						the receipt here.
-					</p>
+					<p className="mb-3 text-xs text-text-muted">{t("detail.preauthRequestHint")}</p>
 					<label className="block">
 						<span className="mb-1 block text-xs text-text-muted">
-							Estimated cost
+							{t("purchase.estimatedCost")}
 						</span>
 						<input
 							value={estimate}
@@ -856,7 +858,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 					</label>
 					<label className="mt-3 block">
 						<span className="mb-1 block text-xs text-text-muted">
-							Reason
+							{t("detail.reason")}
 						</span>
 						<input
 							value={reason}
@@ -864,15 +866,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							onChange={(e) =>
 								touch(setReason)(e.target.value)
 							}
-							placeholder="e.g. Part not on the truck, unit is down"
+							placeholder={t("detail.reasonPlaceholder")}
 							className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
 						/>
 					</label>
 					{purchase.status === "pending_preauth" && (
-						<p className="mt-3 text-xs text-text-secondary">
-							Waiting on dispatch. Don&apos;t buy it until it&apos;s
-							approved — you&apos;ll be notified either way.
-						</p>
+						<p className="mt-3 text-xs text-text-secondary">{t("detail.waitingOnDispatch")}</p>
 					)}
 				</section>
 			) : (
@@ -896,10 +895,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 						<div>
 							<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 								<label htmlFor="fp-vendor">
-									{isRefund ? "Returned to" : "Vendor"}
+									{isRefund ? t("detail.returnedTo") : t("ocrFields.vendor_name")}
 								</label>
 								<ReceiptValueDiff
-									label="Vendor"
+									label={t("ocrFields.vendor_name")}
 									entered={vendor}
 									receipt={
 										receipt?.vendor_name ??
@@ -923,15 +922,15 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 										e.target.value
 									)
 								}
-								placeholder="As printed on the receipt"
+								placeholder={t("detail.vendorPlaceholder")}
 								className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
 							/>
 						</div>
 						<div className="mt-3">
 							<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
-								<label htmlFor="fp-receipt-no">Receipt #</label>
+								<label htmlFor="fp-receipt-no">{t("ocrFields.receipt_number")}</label>
 								<ReceiptValueDiff
-									label="Receipt #"
+									label={t("ocrFields.receipt_number")}
 									entered={receiptNo}
 									receipt={receipt?.receipt_number ?? null}
 									{...flagProps("receipt_number")}
@@ -945,7 +944,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								value={receiptNo}
 								disabled={!editable}
 								onChange={(e) => touch(setReceiptNo)(e.target.value)}
-								placeholder="Invoice or ticket number"
+								placeholder={t("detail.receiptNoPlaceholder")}
 								className="h-11 w-full rounded-md border border-border bg-surface px-2 text-sm text-text-primary placeholder:text-text-muted disabled:opacity-60"
 							/>
 						</div>
@@ -959,7 +958,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 										{copy.totalLabel}
 									</label>
 									<ReceiptValueDiff
-										label="total"
+										label={copy.totalLabel}
 										entered={total}
 										receipt={money2(
 											receipt?.total
@@ -990,10 +989,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							<div className="flex min-w-0 flex-1 flex-col">
 								<div className="mb-1 flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
 									<label htmlFor="fp-tax">
-										Tax
+										{t("ocrFields.tax_amount")}
 									</label>
 									<ReceiptValueDiff
-										label="tax"
+										label={t("ocrFields.tax_amount")}
 										entered={tax}
 										receipt={money2(
 											receipt?.tax_amount
@@ -1028,7 +1027,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 									{copy.dateLabel}
 								</label>
 								<ReceiptValueDiff
-									label="purchase time"
+									label={copy.dateLabel}
 									entered={purchasedAt}
 									receipt={
 										receipt?.purchased_at
@@ -1036,6 +1035,9 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 													receipt.purchased_at
 												)
 											: null
+									}
+									display={(v) =>
+										new Date(v).toLocaleString(dateLocale(), { dateStyle: "medium", timeStyle: "short" })
 									}
 									{...flagProps("purchased_at")}
 									editable={editable}
@@ -1062,12 +1064,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 						    only so a flagged one can be checked, which submit requires. */}
 						{flagSet?.fields.subtotal && (
 							<div className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-text-muted">
-								<span>Subtotal</span>
+								<span>{t("ocrFields.subtotal")}</span>
 								<span className="tabular-nums text-text-secondary">
-									{readings.subtotal ?? "not read"}
+									{readings.subtotal ?? t("detail.notRead")}
 								</span>
 								<ReceiptValueDiff
-									label="Subtotal"
+									label={t("ocrFields.subtotal")}
 									entered={readings.subtotal ?? ""}
 									receipt={null}
 									{...flagProps("subtotal")}
@@ -1128,7 +1130,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								{to && start ? (
 									<span className="flex h-10 w-10 flex-shrink-0 flex-col items-center justify-center rounded-md border border-border bg-base leading-none">
 										<span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-											{start.toLocaleDateString(undefined, {
+											{start.toLocaleDateString(language, {
 												month: "short",
 											})}
 										</span>
@@ -1150,12 +1152,12 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 									</span>
 									<span className="block truncate text-xs text-text-muted">
 										{to
-											? (a.visit_name ?? "Visit")
-											: "No visit"}
+											? (a.visit_name ?? t("dashboard.visit_fallback"))
+											: t("detail.noVisit")}
 										{/* The chip is visual; say the date once for a reader. */}
 										{to && start && (
 											<span className="sr-only">
-												{`, ${start.toLocaleDateString()}`}
+												{`, ${start.toLocaleDateString(language)}`}
 											</span>
 										)}
 									</span>
@@ -1200,7 +1202,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 								{isSplit && editable && (
 									<button
 										type="button"
-										aria-label={`Remove ${a.label}`}
+										aria-label={t("photos.removeNamed", { name: a.label })}
 										onClick={() => removeJob(a.key)}
 										className={`flex w-11 flex-shrink-0 items-center justify-center rounded-lg border border-border text-text-secondary transition-colors duration-150 ease-out hover:border-error-border hover:text-error-text ${FOCUS_RING}`}
 									>
@@ -1218,7 +1220,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				{editable && !isRefund && addableJobs.length > 0 && (
 					<label className="mt-2 block">
 						<span className="mb-1 block text-xs text-text-muted">
-							Split with another job
+							{t("detail.splitJob")}
 						</span>
 						<TechSelect
 							value=""
@@ -1226,15 +1228,14 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							surface="surface"
 						>
 							<option value="">
-								Choose a job…
+								{t("detail.chooseJob")}
 							</option>
 							{addableJobs.map((j) => (
 								<option
 									key={j.job_id}
 									value={j.job_id}
 								>
-									{j.job_name ||
-										`Job ${j.job_number ?? ""}`.trim()}
+									{jobLabel(j.job_name, j.job_number)}
 								</option>
 							))}
 						</TechSelect>
@@ -1243,15 +1244,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 				{isRefund ? (
 					// Refunds never write to a visit — approval flags dispatch to
 					// adjust the invoice by hand.
-					<p className="mt-2 text-xs text-text-muted">
-						Dispatch takes this off the customer's bill.
-					</p>
+					<p className="mt-2 text-xs text-text-muted">{t("detail.refundOffBill")}</p>
 				) : (
 					!billsAVisit && (
-						<p className="mt-2 text-xs text-text-muted">
-							No visit attached, so nothing is added to the
-							customer&apos;s bill. Dispatch will bill it.
-						</p>
+						<p className="mt-2 text-xs text-text-muted">{t("detail.noVisitBill")}</p>
 					)
 				)}
 			</section>
@@ -1280,7 +1276,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 							aria-live="polite"
 							className="rounded-lg border border-warning-border bg-warning-bg p-3 text-xs text-warning-text"
 						>
-							Checking this against your limits…
+							{t("detail.checkingLimits")}
 						</p>
 					)}
 					{(breaches.length > 0 ||
@@ -1302,10 +1298,10 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 									size={16}
 								/>
 							}
-							label="Ask dispatch again"
+							label={t("detail.askAgain")}
 							blockedReason={
 								estimateNum <= 0
-									? "Put an estimated cost in first"
+									? t("detail.estimateFirst")
 									: null
 							}
 							disabled={
@@ -1323,7 +1319,7 @@ function PurchaseSheet({ purchase }: { purchase: FieldPurchase }) {
 									size={16}
 								/>
 							}
-							label="Send for pre-approval"
+							label={t("detail.sendPreauth")}
 							blockedReason={reading ? readingReason : null}
 							disabled={preauth.isPending || reading}
 							onClick={() => void onRequestPreauth()}
@@ -1372,6 +1368,7 @@ function RefundOf({
 	parent: FieldPurchaseRefundParent;
 	editable: boolean;
 }) {
+	const { t, i18n: { language } } = useTranslation();
 	return (
 		<Link
 			to={`/technician/purchases/${parent.id}`}
@@ -1380,21 +1377,21 @@ function RefundOf({
 			<Undo2 aria-hidden size={16} className="flex-shrink-0 text-text-muted" />
 			<span className="min-w-0 flex-1">
 				<span className="block text-sm font-medium text-text-primary">
-					Original purchase
+					{t("detail.originalPurchase")}
 				</span>
 				<span className="block truncate text-xs text-text-muted">
 					{[
 						parent.vendor_name,
 						parent.purchased_at &&
-							new Date(parent.purchased_at).toLocaleDateString(),
+							new Date(parent.purchased_at).toLocaleDateString(language),
 					]
 						.filter(Boolean)
-						.join(" · ") || "Open the purchase"}
+						.join(" · ") || t("detail.openPurchase")}
 				</span>
 				{/* The ceiling only matters while the amount can still change. */}
 				{editable && (
 					<span className="block truncate text-xs text-text-muted">
-						Up to {money(Number(parent.remaining))} can still be refunded
+						{t("detail.upToRefundable", { amount: money(Number(parent.remaining)) })}
 					</span>
 				)}
 			</span>
@@ -1430,23 +1427,24 @@ function RefundsOnPurchase({
 	summary: FieldPurchaseRefundSummary;
 	paid: number;
 }) {
+	const { t, i18n: { language } } = useTranslation();
 	if (summary.refunds.length === 0) return null;
 	const ledger = refundLedger(paid, summary);
 	const rows: [string, number][] = [
-		["Credit received", ledger.received],
-		["Credit on its way", ledger.onItsWay],
-		["With dispatch", ledger.withDispatch],
+		[t("refund.creditReceived"), ledger.received],
+		[t("refund.creditOnWay"), ledger.onItsWay],
+		[t("refund.withDispatch"), ledger.withDispatch],
 	];
 	return (
 		<section className="rounded-xl border border-border bg-base p-4">
 			<div className="mb-1 flex items-center gap-2">
-				<h2 className="text-sm font-semibold text-text-primary">Refunds</h2>
+				<h2 className="text-sm font-semibold text-text-primary">{t("detail.refunds")}</h2>
 				<span className="rounded-full bg-surface px-1.5 text-xs tabular-nums text-text-muted">
 					{summary.refunds.length}
 				</span>
 			</div>
 			<p className="mb-2 text-xs text-text-muted">
-				Parts you took back against this receipt
+				{t("detail.refundsHint")}
 			</p>
 			<ul className="-mx-2">
 				{summary.refunds.map((r) => {
@@ -1459,12 +1457,16 @@ function RefundsOnPurchase({
 							>
 								<span className="min-w-0 flex-1">
 									<span className="block truncate text-sm text-text-primary">
-										{partsSummary(r.parts) ?? "Refund"}
+										{partsSummary(r.parts) ?? t("sheet.refund.untitled")}
 									</span>
 									<span className="block truncate text-xs text-text-muted">
 										{r.returned_at
-											? `Returned ${new Date(r.returned_at).toLocaleDateString()}`
-											: `Started ${new Date(r.created_at).toLocaleDateString()}`}
+											? t("detail.returnedOn", {
+													date: new Date(r.returned_at).toLocaleDateString(language),
+												})
+											: t("detail.startedOn", {
+													date: new Date(r.created_at).toLocaleDateString(language),
+												})}
 									</span>
 								</span>
 								<span className="flex-shrink-0 text-right">
@@ -1491,7 +1493,7 @@ function RefundsOnPurchase({
 			</ul>
 			<dl className="mt-2 space-y-1 border-t border-border pt-2 text-xs">
 				<div className="flex justify-between gap-2 text-text-secondary">
-					<dt>Paid</dt>
+					<dt>{t("detail.paid")}</dt>
 					<dd className="tabular-nums">{money(ledger.paid)}</dd>
 				</div>
 				{rows
@@ -1508,12 +1510,12 @@ function RefundsOnPurchase({
 				<div className="flex justify-between gap-2 border-t border-border pt-1 text-sm font-semibold text-text-primary">
 					{/* Only a landed credit comes off: one still on its way or with
 					    dispatch can yet be turned down. */}
-					<dt>Net cost so far</dt>
+					<dt>{t("detail.netCost")}</dt>
 					<dd className="tabular-nums">{money(ledger.net)}</dd>
 				</div>
 				{ledger.stillRefundable > 0 && (
 					<p className="text-text-muted">
-						{money(ledger.stillRefundable)} still refundable
+						{t("detail.stillRefundable", { amount: money(ledger.stillRefundable) })}
 					</p>
 				)}
 			</dl>
@@ -1535,28 +1537,29 @@ function ReturnPartBar({
 	pending: boolean;
 	onClick: () => void;
 }) {
+	const { t } = useTranslation();
 	// Every part accounted for: nothing left to start, so no button to press.
 	if (summary && Number(summary.remaining) <= 0 && !summary.draft_id) {
 		return (
 			<p className="flex h-11 items-center gap-2 text-sm text-text-muted">
-				<Undo2 aria-hidden size={16} /> Fully refunded
+				<Undo2 aria-hidden size={16} /> {t("detail.fullyRefunded")}
 			</p>
 		);
 	}
 	const resuming = !!summary?.draft_id;
 	const subtitle = resuming
-		? "You started a refund and have not sent it"
+		? t("detail.resumeHint")
 		: summary && summary.in_progress_count > 0
 			? pendingRefundsLine(
 					summary.in_progress_count,
 					money(Number(summary.in_progress_value))
 				)
-			: "Refund it against this receipt";
+			: t("detail.refundAgainst");
 	return (
 		<div className="flex items-center gap-3">
 			<div className="min-w-0 flex-1">
 				<p className="truncate text-sm font-medium text-text-primary">
-					{resuming ? "Refund in progress" : "Took a part back?"}
+					{resuming ? t("detail.refundInProgress") : t("detail.tookPartBack")}
 				</p>
 				<p className="truncate text-xs text-text-muted">{subtitle}</p>
 			</div>
@@ -1572,10 +1575,14 @@ function ReturnPartBar({
 				) : (
 					<Undo2 aria-hidden size={16} />
 				)}
-				{pending ? "Starting…" : resuming ? "Continue refund" : "Return a part"}
+				{pending
+					? t("dashboard.starting")
+					: resuming
+						? t("detail.continueRefund")
+						: t("detail.returnPart")}
 			</button>
 			<p role="status" aria-live="polite" className="sr-only">
-				{pending ? "Starting a refund" : ""}
+				{pending ? t("detail.startingRefund") : ""}
 			</p>
 		</div>
 	);

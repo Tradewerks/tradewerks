@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronLeft, ChevronRight, FileText } from "lucide-react";
+import i18n, { dateLocale } from "../../i18n";
 import { resolveItemName } from "../../lib/stockUtils";
 import {
 	useVehicleStockAdjustmentHistoryQuery,
@@ -29,38 +31,32 @@ const TYPE_BADGE: Record<string, string> = {
 	supplier_purchase:  "bg-violet-500/15 text-violet-400",
 };
 
-const TYPE_BADGE_LABEL: Record<string, string> = {
-	field_loss:         "Loss",
-	transfer:           "Transfer",
-	audit:              "Audit",
-	warehouse_exchange: "Exchange",
-	supplier_purchase:  "Purchase",
-};
-
-const TYPE_FILTER_LABEL: Record<string, string> = {
-	all: "All",
-	...TYPE_BADGE_LABEL,
-};
+// Short chip label; falls back to the raw type for anything unknown.
+const badgeLabel = (type: string) => i18n.t(`history.badge.${type}`, { defaultValue: type });
+const typeName = (type: VehicleAdjustmentType) => i18n.t(`history.typeName.${type}`);
 
 const ALL_TYPES = Object.keys(ADJUSTMENT_TYPE_LABELS) as VehicleAdjustmentType[];
 
 function relativeTime(iso: string): string {
 	const ms = Date.now() - new Date(iso).getTime();
 	const hours = Math.floor(ms / 3_600_000);
-	if (hours < 1) return `${Math.max(1, Math.floor(ms / 60_000))}m ago`;
-	if (hours < 24) return `${hours}h ago`;
-	if (hours < 48) return "Yesterday";
-	return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" });
+	if (hours < 1)
+		return i18n.t("notifications.minsAgo", { count: Math.max(1, Math.floor(ms / 60_000)) });
+	if (hours < 24) return i18n.t("notifications.hrsAgo", { count: hours });
+	if (hours < 48) return i18n.t("notifications.yesterday");
+	return new Date(iso).toLocaleDateString(i18n.language, { month: "short", day: "numeric" });
 }
+
+const timeOf = (d: Date) => d.toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" });
 
 function absTime(iso: string): string {
 	const d = new Date(iso);
-	return `${d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })} · ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+	return `${d.toLocaleDateString(i18n.language, { month: "short", day: "numeric", year: "numeric" })} · ${timeOf(d)}`;
 }
 
 function shortStamp(iso: string): string {
 	const d = new Date(iso);
-	return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} · ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+	return `${d.toLocaleDateString(i18n.language, { month: "short", day: "numeric" })} · ${timeOf(d)}`;
 }
 
 // Desk ledger: one line per entry, every column readable without expanding.
@@ -106,6 +102,7 @@ function AdjRow({
 	onToggle: () => void;
 	desk?: boolean;
 }) {
+	const { t } = useTranslation();
 	const actor = adj.created_by?.name ?? adj.created_by_tech?.name;
 	const isWarehouse = adj.type === "warehouse_exchange";
 	const hasNote = !!adj.note;
@@ -136,17 +133,17 @@ function AdjRow({
 					<span>
 						<span
 							className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${TYPE_BADGE[adj.type]}`}
-							aria-label={ADJUSTMENT_TYPE_LABELS[adj.type]}
+							aria-label={typeName(adj.type)}
 						>
-							{TYPE_BADGE_LABEL[adj.type]}
+							{badgeLabel(adj.type)}
 						</span>
 					</span>
 					<span className="flex min-w-0 items-center gap-1.5">
 						<span className="truncate text-sm text-text-primary" title={singleItem ?? undefined}>
-							{singleItem ?? `${adj.lines.length} items`}
+							{singleItem ?? t("restock.nItems", { count: adj.lines.length })}
 						</span>
 						{hasNote && (
-							<FileText size={12} className="shrink-0 text-text-faint" aria-label="Has a note" />
+							<FileText size={12} className="shrink-0 text-text-faint" aria-label={t("history.hasNote")} />
 						)}
 					</span>
 					<span className="text-right tabular-nums whitespace-nowrap">
@@ -164,7 +161,7 @@ function AdjRow({
 								</span>
 							</>
 						) : (
-							<span className="text-xs text-text-muted">{totalUnits} units</span>
+							<span className="text-xs text-text-muted">{t("history.nUnits", { count: totalUnits })}</span>
 						)}
 					</span>
 					<span className="truncate text-xs text-text-muted">{actor ?? "—"}</span>
@@ -177,19 +174,20 @@ function AdjRow({
 			>
 				<span
 					className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${TYPE_BADGE[adj.type]}`}
-					aria-label={ADJUSTMENT_TYPE_LABELS[adj.type]}
+					aria-label={typeName(adj.type)}
 				>
-					{TYPE_BADGE_LABEL[adj.type]}
+					{badgeLabel(adj.type)}
 				</span>
 				<div className="flex-1 min-w-0">
 					<span className="text-sm text-text-primary">
-						{singleItem ?? `${adj.lines.length} items · ${totalUnits} units`}
+						{singleItem ??
+							`${t("restock.nItems", { count: adj.lines.length })} · ${t("history.nUnits", { count: totalUnits })}`}
 					</span>
 					{(isWarehouse || hasNote) && (
 						<div className="flex items-center gap-1.5 mt-0.5">
 							{isWarehouse && (
 								<span className="text-[10px] font-medium bg-success/10 text-success px-1 py-0.5 rounded">
-									Warehouse +
+									{t("history.warehousePlus")}
 								</span>
 							)}
 							{hasNote && <FileText size={10} className="text-text-faint" />}
@@ -199,7 +197,7 @@ function AdjRow({
 				<div className="flex items-center gap-2 flex-shrink-0 text-right">
 					<div>
 						{actor && (
-							<div className="text-[10px] text-text-muted whitespace-nowrap">by {actor}</div>
+							<div className="text-[10px] text-text-muted whitespace-nowrap">{t("history.by", { name: actor })}</div>
 						)}
 						<div className="text-[10px] text-text-faint">{relativeTime(adj.created_at)}</div>
 					</div>
@@ -237,7 +235,9 @@ function AdjRow({
 									</div>
 									{adj.type === "warehouse_exchange" && line.inventory_impact !== 0 && (
 										<div className="text-[11px] text-success pb-1">
-											Warehouse: {line.inventory_impact > 0 ? `+${line.inventory_impact}` : line.inventory_impact}
+											{t("history.warehouseImpact", {
+												n: line.inventory_impact > 0 ? `+${line.inventory_impact}` : line.inventory_impact,
+											})}
 										</div>
 									)}
 								</div>
@@ -265,22 +265,23 @@ function RestockRow({
 	onToggle: () => void;
 	desk?: boolean;
 }) {
+	const { t } = useTranslation();
 	const person = record.completed_by?.name ?? record.completed_by_tech?.name;
 	const totalItems = record.restock_lines.length;
 	const totalUnits = record.restock_lines.reduce((sum, l) => sum + l.qty_restocked, 0);
-	const date = new Date(record.completed_at).toLocaleDateString(undefined, {
+	const date = new Date(record.completed_at).toLocaleDateString(i18n.language, {
 		month: "short", day: "numeric", year: "numeric",
 	});
-	const time = new Date(record.completed_at).toLocaleTimeString([], {
-		hour: "numeric", minute: "2-digit",
-	});
+	const time = timeOf(new Date(record.completed_at));
 	const isPrepare = record.mode === "prepare";
 	const shortLines = record.restock_lines.filter((l) => l.qty_shortfall > 0).length;
+	const modeLabel = t(isPrepare ? "history.prepare" : "restock.modeRestock");
+	const itemsLabel = totalItems > 0 ? t("restock.nItems", { count: totalItems }) : t("history.noItems");
 	const modeBadge = (
 		<span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 uppercase tracking-wider ${
 			isPrepare ? "bg-primary/15 text-primary" : "bg-surface-raised border border-border text-text-muted"
 		}`}>
-			{isPrepare ? "Prepare" : "Restock"}
+			{modeLabel}
 		</span>
 	);
 
@@ -300,9 +301,9 @@ function RestockRow({
 					</span>
 					<span>{modeBadge}</span>
 					<span className="flex min-w-0 items-center gap-1.5 text-sm text-text-primary">
-						{totalItems > 0 ? `${totalItems} item${totalItems !== 1 ? "s" : ""}` : "No items"}
+						{itemsLabel}
 						{shortLines > 0 && (
-							<span className="text-xs text-warning-text">· {shortLines} short</span>
+							<span className="text-xs text-warning-text">· {t("history.shortN", { count: shortLines })}</span>
 						)}
 					</span>
 					<span className="text-right text-sm font-semibold tabular-nums text-success">
@@ -317,13 +318,9 @@ function RestockRow({
 				className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-surface-raised/40 transition-colors text-left border-b border-border-subtle/60"
 			>
 				<span className="text-sm font-semibold text-text-primary flex-shrink-0">{date}</span>
-				<span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 uppercase tracking-wider ${
-					isPrepare ? "bg-primary/15 text-primary" : "bg-surface-raised border border-border text-text-muted"
-				}`}>
-					{isPrepare ? "Prepare" : "Restock"}
-				</span>
+				{modeBadge}
 				<span className="text-xs text-text-muted flex-1 min-w-0 truncate">
-					{totalItems > 0 ? `${totalItems} item${totalItems !== 1 ? "s" : ""} · +${totalUnits}` : "No items"}
+					{totalItems > 0 ? `${itemsLabel} · +${totalUnits}` : itemsLabel}
 				</span>
 				<div className="flex items-center gap-2 flex-shrink-0">
 					{person && (
@@ -354,14 +351,14 @@ function RestockRow({
 									</span>
 									{line.qty_shortfall > 0 && (
 										<span className="text-[10px] text-warning-text flex-shrink-0">
-											({line.qty_shortfall} short)
+											{t("restock.nShort", { count: line.qty_shortfall })}
 										</span>
 									)}
 								</div>
 							))}
 						</div>
 					) : (
-						<p className="text-xs text-text-muted mb-2.5">No items restocked.</p>
+						<p className="text-xs text-text-muted mb-2.5">{t("history.noneRestocked")}</p>
 					)}
 					{record.notes && <p className="text-xs text-text-muted italic mb-2">"{record.notes}"</p>}
 					<p className="text-[10px] text-text-faint">{absTime(record.completed_at)}</p>
@@ -383,6 +380,7 @@ export default function StockHistorySection({
 	 *  dispatch panel uses — full width there read as a page-wide banner. */
 	density?: "touch" | "desk";
 }) {
+	const { t } = useTranslation();
 	const [activeTab, setActiveTab] = useState<HistoryTab>("adjustments");
 	const [typeFilter, setTypeFilter] = useState<FilterType>("all");
 	const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -428,32 +426,34 @@ export default function StockHistorySection({
 
 	const desk = density === "desk";
 
-	const typeChip = (t: FilterType) => (
+	const typeChip = (type: FilterType) => (
 		<button
-			key={t}
-			onClick={() => setTypeFilter(t)}
-			title={t === "all" ? "All types" : ADJUSTMENT_TYPE_LABELS[t]}
-			aria-pressed={typeFilter === t}
+			key={type}
+			onClick={() => setTypeFilter(type)}
+			title={type === "all" ? t("history.allTypes") : typeName(type)}
+			aria-pressed={typeFilter === type}
 			className={`whitespace-nowrap text-[11px] px-2.5 py-1 rounded-full border transition-colors flex-shrink-0 ${
-				typeFilter === t
+				typeFilter === type
 					? "bg-primary/15 border-primary/30 text-primary font-medium"
 					: "bg-surface border-border text-text-tertiary hover:border-border-strong hover:text-text-secondary"
 			}`}
 		>
-			{TYPE_FILTER_LABEL[t]}
+			{type === "all" ? t("history.all") : badgeLabel(type)}
 		</button>
 	);
 
+	const noTypeMsg = typeFilter !== "all" ? t("history.noTypeAdj", { type: typeName(typeFilter) }) : "";
+
 	const modeToggle = (
 		<SegmentedToggle<HistoryTab>
-			ariaLabel="History type"
+			ariaLabel={t("history.historyType")}
 			value={activeTab}
 			onChange={setActiveTab}
 			fullWidth={!desk}
 			variant={desk ? "boxed" : "flat"}
 			options={[
-				{ id: "adjustments", label: "Adjustments", badge: adjustments.length },
-				{ id: "restock", label: "Restock", badge: restockRecords.length },
+				{ id: "adjustments", label: t("history.adjustments"), badge: adjustments.length },
+				{ id: "restock", label: t("restock.modeRestock"), badge: restockRecords.length },
 			]}
 		/>
 	);
@@ -480,7 +480,7 @@ export default function StockHistorySection({
 				<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border-subtle px-4 py-3">
 					{modeToggle}
 					{activeTab === "adjustments" && (
-						<div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Adjustment type">
+						<div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("history.adjType")}>
 							{(["all", ...ALL_TYPES] as FilterType[]).map(typeChip)}
 						</div>
 					)}
@@ -492,14 +492,20 @@ export default function StockHistorySection({
 					) : filtered.length === 0 ? (
 						<div className="py-8 text-center">
 							<p className="text-sm text-text-muted">
-								{typeFilter !== "all"
-									? `No ${ADJUSTMENT_TYPE_LABELS[typeFilter]} adjustments in recent history.`
-									: "No stock adjustments recorded yet."}
+								{noTypeMsg || t("history.noAdj")}
 							</p>
 						</div>
 					) : (
 						<div className="max-h-[min(520px,50vh)] overflow-y-auto">
-							<DeskHeader labels={["When", "Type", "Item", "Change", "By"]} />
+							<DeskHeader
+								labels={[
+									t("history.col.when"),
+									t("history.col.type"),
+									t("history.col.item"),
+									t("history.col.change"),
+									t("history.col.by"),
+								]}
+							/>
 							{filtered.map((adj) => (
 								<AdjRow
 									key={adj.id}
@@ -512,7 +518,7 @@ export default function StockHistorySection({
 							))}
 							{adjustments.length >= 50 && (
 								<p className="text-center text-[11px] text-text-faint py-3">
-									Showing most recent 50 adjustments
+									{t("history.recentAdj")}
 								</p>
 							)}
 						</div>
@@ -522,10 +528,18 @@ export default function StockHistorySection({
 					(restockLoading ? (
 						skeleton
 					) : restockRecords.length === 0 ? (
-						<p className="text-sm text-text-muted text-center py-8">No restock records yet.</p>
+						<p className="text-sm text-text-muted text-center py-8">{t("history.noRestock")}</p>
 					) : (
 						<div className="max-h-[min(520px,50vh)] overflow-y-auto">
-							<DeskHeader labels={["When", "Mode", "Items", "Restocked", "By"]} />
+							<DeskHeader
+								labels={[
+									t("history.col.when"),
+									t("history.col.mode"),
+									t("history.col.items"),
+									t("history.col.restocked"),
+									t("history.col.by"),
+								]}
+							/>
 							{restockRecords.map((record) => (
 								<RestockRow
 									key={record.id}
@@ -538,7 +552,7 @@ export default function StockHistorySection({
 							))}
 							{restockRecords.length >= 50 && (
 								<p className="text-center text-[11px] text-text-faint py-3">
-									Showing most recent 50 records
+									{t("history.recentRec")}
 								</p>
 							)}
 						</div>
@@ -564,7 +578,7 @@ export default function StockHistorySection({
 							<button
 								onClick={() => scrollFilterBy(-1)}
 								className="absolute left-0 z-10 flex items-center justify-center w-7 h-full bg-gradient-to-r from-canvas via-canvas/90 to-transparent text-text-muted hover:text-text-secondary transition-colors flex-shrink-0"
-								aria-label="Scroll filters left"
+								aria-label={t("history.scrollLeft")}
 							>
 								<ChevronLeft size={13} />
 							</button>
@@ -579,7 +593,7 @@ export default function StockHistorySection({
 							<button
 								onClick={() => scrollFilterBy(1)}
 								className="absolute right-0 z-10 flex items-center justify-center w-7 h-full bg-gradient-to-l from-canvas via-canvas/90 to-transparent text-text-muted hover:text-text-secondary transition-colors flex-shrink-0"
-								aria-label="Scroll filters right"
+								aria-label={t("history.scrollRight")}
 							>
 								<ChevronRight size={13} />
 							</button>
@@ -588,13 +602,13 @@ export default function StockHistorySection({
 					{typeFilter !== "all" && (
 						<div className="flex items-center gap-2 px-4 py-1.5 border-b border-border-subtle/40 bg-primary/5">
 							<span className="text-[11px] text-text-muted">
-								Filtered: <span className="text-primary font-medium">{ADJUSTMENT_TYPE_LABELS[typeFilter]}</span>
+								{t("history.filtered")} <span className="text-primary font-medium">{typeName(typeFilter)}</span>
 							</span>
 							<button
 								onClick={() => setTypeFilter("all")}
 								className="text-[11px] text-text-faint hover:text-primary ml-auto transition-colors"
 							>
-								Clear ×
+								{t("history.clearX")}
 							</button>
 						</div>
 					)}
@@ -614,17 +628,17 @@ export default function StockHistorySection({
 							{typeFilter !== "all" ? (
 								<>
 									<p className="text-sm text-text-muted">
-										No {ADJUSTMENT_TYPE_LABELS[typeFilter]} adjustments in recent history.
+										{noTypeMsg}
 									</p>
 									<button
 										onClick={() => setTypeFilter("all")}
 										className="text-xs text-primary mt-2 hover:underline"
 									>
-										Clear filter
+										{t("history.clearFilter")}
 									</button>
 								</>
 							) : (
-								<p className="text-sm text-text-muted">No stock adjustments recorded yet.</p>
+								<p className="text-sm text-text-muted">{t("history.noAdj")}</p>
 							)}
 						</div>
 					) : (
@@ -640,7 +654,7 @@ export default function StockHistorySection({
 							))}
 							{adjustments.length >= 50 && (
 								<p className="text-center text-[11px] text-text-faint py-3">
-									Showing most recent 50 adjustments
+									{t("history.recentAdj")}
 								</p>
 							)}
 						</div>
@@ -661,7 +675,7 @@ export default function StockHistorySection({
 							))}
 						</div>
 					) : restockRecords.length === 0 ? (
-						<p className="text-sm text-text-muted text-center py-8">No restock records yet.</p>
+						<p className="text-sm text-text-muted text-center py-8">{t("history.noRestock")}</p>
 					) : (
 						<div>
 							{restockRecords.map((record) => (
@@ -675,7 +689,7 @@ export default function StockHistorySection({
 							))}
 							{restockRecords.length >= 50 && (
 								<p className="text-center text-[11px] text-text-faint py-3">
-									Showing most recent 50 records
+									{t("history.recentRec")}
 								</p>
 							)}
 						</div>

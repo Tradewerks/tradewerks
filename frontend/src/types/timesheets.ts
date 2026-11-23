@@ -19,7 +19,7 @@ export interface ApproveTimesheetInput {
 }
 
 // Dates are ISO strings over JSON.
-type Span = { start: string; end: string; label: string; sub: string };
+type Span = { start: string; end: string; label: string; sub: string; job_number?: string };
 export type SegType = "job" | "drive" | "break" | "unassigned";
 export type Segment = Span & { type: SegType; paid?: boolean };
 

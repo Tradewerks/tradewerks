@@ -1,4 +1,5 @@
 import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useToastStore, type ToastKind } from "../../stores/toastStore";
 
 const TOAST_CONFIG: Record<
@@ -42,6 +43,7 @@ const TOAST_CONFIG: Record<
 // spans left-4→right-4 — at 390px a right-anchored max-w-sm box would clip off-screen
 // left. At `sm`+ (where dispatch always sits) both revert to the original geometry.
 export default function ToastViewport({ inset = "default" }: { inset?: "default" | "above-nav" }) {
+	const { t } = useTranslation();
 	const toasts = useToastStore((s) => s.toasts);
 	const dismiss = useToastStore((s) => s.dismiss);
 
@@ -84,7 +86,7 @@ export default function ToastViewport({ inset = "default" }: { inset?: "default"
 						)}
 						<button
 							onClick={() => dismiss(toast.id)}
-							aria-label="Dismiss notification"
+							aria-label={t("wizard.dismiss")}
 							className="text-text-faint hover:text-text-secondary flex-shrink-0"
 						>
 							<X size={14} />

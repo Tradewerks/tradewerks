@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+// The instance, not useTranslation: a `t` in the effect's deps would restart the camera on a language switch.
+import i18n from "../i18n";
 
 /**
  * The rear camera, with no opinion about what it is pointed at. Split out of
@@ -112,11 +114,7 @@ export function useCameraStream({
 
 		const start = async () => {
 			if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
-				bail(
-					window.isSecureContext
-						? "Camera not supported on this device."
-						: "Camera requires a secure (HTTPS) connection."
-				);
+				bail(i18n.t(window.isSecureContext ? "camera.notSupported" : "camera.needsHttps"));
 				return;
 			}
 
@@ -131,9 +129,11 @@ export function useCameraStream({
 				});
 			} catch (e) {
 				bail(
-					e instanceof Error && e.name === "NotAllowedError"
-						? "Camera permission denied."
-						: "Could not start camera."
+					i18n.t(
+						e instanceof Error && e.name === "NotAllowedError"
+							? "camera.permissionDenied"
+							: "camera.couldNotStart"
+					)
 				);
 				return;
 			}
@@ -148,7 +148,7 @@ export function useCameraStream({
 			trackRef.current = track;
 			if (track) {
 				track.addEventListener("ended", () => {
-					bail("Camera stopped.");
+					bail(i18n.t("camera.stopped"));
 				});
 
 				if ("getCapabilities" in track) {
@@ -169,7 +169,7 @@ export function useCameraStream({
 
 			const video = videoRef.current;
 			if (!video) {
-				bail("Could not start camera.");
+				bail(i18n.t("camera.couldNotStart"));
 				return;
 			}
 			video.srcObject = stream;
@@ -177,7 +177,7 @@ export function useCameraStream({
 				await video.play();
 			} catch (e) {
 				if (e instanceof Error && e.name !== "AbortError") {
-					bail("Could not start camera.");
+					bail(i18n.t("camera.couldNotStart"));
 					return;
 				}
 			}
@@ -188,7 +188,7 @@ export function useCameraStream({
 
 		start().catch(() => {
 			stream?.getTracks().forEach((t) => t.stop());
-			bail("Could not start camera.");
+			bail(i18n.t("camera.couldNotStart"));
 		});
 
 		return () => {

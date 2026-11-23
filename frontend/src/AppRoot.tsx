@@ -4,6 +4,7 @@ import App from "./App";
 import { APP_BASE } from "./config";
 import { queryClient } from "./lib/queryClient";
 import "./index.css";
+import "./i18n";
 
 // The product app. Mounted under APP_BASE so every route and navigate() call inside
 // it stays written as "/dispatch/…", "/login", etc. — the basename adds the prefix.

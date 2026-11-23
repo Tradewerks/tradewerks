@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { X, Camera, Keyboard, Loader2, CircleCheck, Flashlight, FlashlightOff } from "lucide-react";
 import { useCameraScanner } from "../../hooks/useCameraScanner";
 import { usePinchZoom } from "../../hooks/usePinchZoom";
@@ -10,6 +11,7 @@ interface BarcodeScannerProps {
 }
 
 export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeScannerProps) {
+	const { t } = useTranslation();
 	const [manualCode, setManualCode] = useState("");
 	const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -57,28 +59,28 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 
 	const caption =
 		status === "starting"
-			? "Starting camera…"
+			? t("scanner.starting")
 			: status === "scanning"
-				? "Point camera at a barcode"
+				? t("barcode.point")
 				: null;
 
 	return (
 		<div
 			role="dialog"
 			aria-modal="true"
-			aria-label="Scan barcode"
+			aria-label={t("actionRow.scan")}
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
 		>
 			<div className="bg-canvas border border-border rounded-xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
 				<div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-shrink-0">
 					<span className="flex items-center gap-2 text-sm font-bold text-text-primary">
 						<Camera size={16} className="text-primary" />
-						Scan Barcode
+						{t("barcode.title")}
 					</span>
 					<button
 						ref={closeButtonRef}
 						onClick={onClose}
-						aria-label="Close scanner"
+						aria-label={t("barcode.close")}
 						className="text-text-faint hover:text-text-secondary transition-colors"
 					>
 						<X size={16} />
@@ -154,11 +156,7 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 											? "text-primary"
 											: "text-white"
 									}`}
-									aria-label={
-										torchOn
-											? "Turn torch off"
-											: "Turn torch on"
-									}
+									aria-label={t(torchOn ? "scanner.torchOff" : "scanner.torchOn")}
 								>
 									{torchOn ? (
 										<FlashlightOff
@@ -198,8 +196,8 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 						type="text"
 						value={manualCode}
 						onChange={(e) => setManualCode(e.target.value)}
-						placeholder="Or type barcode manually…"
-						aria-label="Barcode"
+						placeholder={t("barcode.manualPlaceholder")}
+						aria-label={t("barcode.aria")}
 						className={`flex-1 text-sm bg-surface border rounded-md px-3 py-1.5 text-text-primary placeholder:text-faint outline-none focus:border-primary transition-colors ${
 							status === "error"
 								? "border-primary/40"
@@ -211,7 +209,7 @@ export function BarcodeScanner({ onScan, onClose, continuous = false }: BarcodeS
 						disabled={!manualCode.trim()}
 						className="px-3 py-1.5 text-xs font-semibold bg-primary text-on-primary rounded-md disabled:opacity-40 transition-colors"
 					>
-						Go
+						{t("barcode.go")}
 					</button>
 				</form>
 			</div>

@@ -10,6 +10,7 @@ import {
 	useRememberedAccountsStore,
 	type RememberedAccount,
 } from "../../stores/rememberedAccountsStore";
+import { useTranslation } from "react-i18next";
 
 export default function SwitchUserSection() {
 	const { user, logout } = useAuthStore();
@@ -19,6 +20,7 @@ export default function SwitchUserSection() {
 	const [switching, setSwitching] = useState(false);
 	const navigate = useNavigate();
 	const otherAccounts = accounts.filter((a) => a.userId !== user?.userId);
+	const { t, i18n } = useTranslation();
 
 	const switchTo = (account: RememberedAccount) => {
 		setSwitching(true);
@@ -42,10 +44,10 @@ export default function SwitchUserSection() {
 			<button
 				onClick={() => (otherAccounts.length > 0 ? setOpen(!open) : signInAsNew())}
 				aria-expanded={otherAccounts.length > 0 ? open : undefined}
-				className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary rounded-md hover:bg-surface transition-colors"
+				className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary rounded-md hover:bg-surface transition-colors text-nowrap"
 			>
 				<Users size={16} />
-				Switch User
+				{t('profile.switch_user')}
 				{otherAccounts.length > 0 && (
 					<ChevronDown
 						size={13}
@@ -89,7 +91,7 @@ export default function SwitchUserSection() {
 						className="w-full flex items-center gap-2 pl-4 pr-3 py-1.5 text-sm rounded-md text-text-primary hover:text-text-primary hover:bg-surface transition-colors"
 					>
 						<UserRoundPlus size={14} className="shrink-0" />
-						New User
+						{t('profile.new_user')}
 					</button>
 				</div>
 			)}
@@ -98,7 +100,7 @@ export default function SwitchUserSection() {
 				createPortal(
 					<div className="fixed inset-0 z-[6000] flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-sm">
 						<Loader2 className="w-10 h-10 animate-spin text-primary" />
-						<p className="text-sm text-text-primary">Switching account</p>
+						<p className="text-sm text-text-primary">{t('profile.switching_account')}</p>
 					</div>,
 					document.body,
 				)}

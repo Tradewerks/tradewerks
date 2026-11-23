@@ -7,6 +7,7 @@ import { ENTITLEMENTS_STALE_EVENT } from "../lib/permissionAccess";
 import axios from "axios";
 import { useAuthStore } from "../auth/authStore";
 import { APP_BASE } from "../config";
+import { apiErrorText } from "../util/util";
 const BASE_URL: string = import.meta.env.VITE_BACKEND_URL;
 const refreshClient = axios.create({
 	baseURL: BASE_URL,
@@ -63,6 +64,9 @@ api.interceptors.response.use((response) => response, async (error) => {
 		);
 	}
 	if (error.response?.status !== 401 || originalRequest._retry || AUTH_PATHS.some((path) => url.includes(path))) {
+		// Callers that show `err.message` get the API's words, not "Request failed with status code 4xx"
+		const text = apiErrorText(error.response?.data?.error);
+		if (text) error.message = text;
 		return Promise.reject(error);
 	}
 	if (isRefreshing) {

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { StockMovementReason } from "../types/inventory";
+import i18n from "../i18n";
 
 // Single source of presentation for stock_movement.reason. Every surface that
 // renders a ledger row — the dispatch serial timeline, the technician serial
@@ -77,7 +78,9 @@ const NEUTRAL_DOT = "bg-surface-raised text-text-tertiary";
 // reason this build has never heard of. Unknown values degrade to a humanized
 // spelling rather than rendering a raw snake_case token.
 export function movementReasonLabel(reason: string): string {
-	return MOVEMENT_REASON_LABEL[reason as StockMovementReason] ?? reason.replace(/_/g, " ");
+	return i18n.t(`movement.${reason}`, {
+		defaultValue: MOVEMENT_REASON_LABEL[reason as StockMovementReason] ?? reason.replace(/_/g, " "),
+	});
 }
 
 export function movementReasonIcon(reason: string): LucideIcon {

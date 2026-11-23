@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { ocrLineReason } from "./ocrFlagCopy";
 import { useRevealPopover } from "./useRevealPopover";
 
@@ -9,6 +10,7 @@ import { useRevealPopover } from "./useRevealPopover";
 export function OcrLineMark({ confidence }: { confidence: number }) {
 	const { wrapperRef, popRef, reasonId, open, flip, toggle, hoverHandlers } =
 		useRevealPopover();
+	const { t } = useTranslation();
 	const reason = ocrLineReason(confidence);
 
 	return (
@@ -19,7 +21,7 @@ export function OcrLineMark({ confidence }: { confidence: number }) {
 		>
 			<button
 				type="button"
-				aria-label="Read with low confidence"
+				aria-label={t("procure.lowLineAria")}
 				aria-expanded={open}
 				aria-describedby={reasonId}
 				onClick={toggle}

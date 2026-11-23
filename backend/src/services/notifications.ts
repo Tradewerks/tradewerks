@@ -47,6 +47,7 @@ export function startVisitReminderInterval(): void {
 						type: "visit_reminder",
 						title: `Visit in 30 minutes: ${clientName}`,
 						body: `Your visit at ${clientName} starts in about 30 minutes.`,
+						vars: { client: clientName },
 						actionUrl,
 					}, orgId);
 				}

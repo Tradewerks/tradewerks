@@ -11,6 +11,7 @@ import {
 	AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useJobVisitByIdQuery } from "../../hooks/useJobs";
 import VisitActionButtons from "../../components/technicianComponents/VisitActionButtons";
 import TechnicianQuoteModal from "../../components/quotes/TechnicianQuoteModal";
@@ -18,12 +19,12 @@ import WorkPerformedSection from "../../components/technicianComponents/WorkPerf
 import PartsUsedSection from "../../components/technicianComponents/PartsUsedSection";
 import CustomerHistorySection from "../../components/technicianComponents/CustomerHistorySection";
 import InvoicePreview from "../../components/technicianComponents/InvoicePreview";
-import { VisitStatusColors, VisitStatusLabels, type VisitStatus } from "../../types/jobs";
-import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
+import { VisitStatusColors, type VisitStatus } from "../../types/jobs";
+import { QuoteStatusColors, type QuoteStatus } from "../../types/quotes";
 import { formatDateTime, formatTime, FALLBACK_TIMEZONE } from "../../util/util";
 import { formatElapsed, resolveWorkTimerStart } from "../../util/elapsedUtil";
 import { useAuthStore } from "../../auth/authStore";
-import { ProjectStatusColors, ProjectStatusLabels } from "../../types/project";
+import { ProjectStatusColors } from "../../types/project";
 import StartPurchaseButton from "../../components/technician/procurement/StartPurchaseButton";
 import RequestApprovalButton from "../../components/technician/procurement/RequestApprovalButton";
 import TechPage from "../../components/technician/TechPage";
@@ -37,6 +38,7 @@ import TechPage from "../../components/technician/TechPage";
  * their own money is at stake with no way to ask first.
  */
 function FieldPurchaseActions({ jobId, visitId }: { jobId: string | null; visitId: string }) {
+	const { t } = useTranslation();
 	return (
 		<section className="space-y-2" aria-labelledby="field-purchases-heading">
 			<div>
@@ -44,17 +46,14 @@ function FieldPurchaseActions({ jobId, visitId }: { jobId: string | null; visitI
 					id="field-purchases-heading"
 					className="text-xs font-semibold uppercase tracking-wide text-text-secondary"
 				>
-					Field Purchases
+					{t("profile.field_purchases")}
 				</h2>
-				<p className="mt-1 text-xs text-text-muted">
-					Parts bought at a store or supply house. Parts off your truck go
-					in Parts Used.
-				</p>
+				<p className="mt-1 text-xs text-text-muted">{t("visitDetail.fieldPurchasesHint")}</p>
 			</div>
 			<StartPurchaseButton
 				job={jobId ? { id: jobId, visitId } : null}
-				label="Record a field purchase"
-				hint="Already paid at the counter. Photograph the receipt to get reimbursed and put the cost on the job."
+				label={t("visitDetail.recordPurchase")}
+				hint={t("visitDetail.recordPurchaseHint")}
 			/>
 			<RequestApprovalButton preselectedJobId={jobId} />
 		</section>
@@ -64,6 +63,7 @@ function FieldPurchaseActions({ jobId, visitId }: { jobId: string | null; visitI
 // ── Elapsed Timer ─────────────────────────────────────────────────────────────
 
 function ElapsedTimer({ startAt }: { startAt: string }) {
+	const { t } = useTranslation();
 	const [elapsed, setElapsed] = useState(() =>
 		Math.floor((Date.now() - new Date(startAt).getTime()) / 1000)
 	);
@@ -85,7 +85,7 @@ function ElapsedTimer({ startAt }: { startAt: string }) {
 				<span className="relative inline-flex h-2 w-2 rounded-full bg-visit-completed" />
 			</span>
 			<span className="text-xs text-success-text font-medium uppercase tracking-wide">
-				In Progress
+				{t("status.visit.InProgress")}
 			</span>
 			<span className="ml-auto text-sm font-bold tabular-nums text-success-bright-text">
 				{label}
@@ -107,6 +107,7 @@ function JobContextSection({
 	defaultOpen?: boolean;
 	onViewQuote: () => void;
 }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(defaultOpen);
 	const job = visit?.job;
 	const primaryContact = job?.client?.contacts?.find((cc) => cc.is_primary)?.contact ?? null;
@@ -118,7 +119,7 @@ function JobContextSection({
 				className="w-full flex items-center justify-between px-4 py-3 border-b border-border-subtle"
 			>
 				<span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
-					Job Context
+					{t("visitDetail.jobContext")}
 				</span>
 				{open ? (
 					<ChevronUp size={14} className="text-text-muted" />
@@ -133,7 +134,7 @@ function JobContextSection({
 						<>
 							<div>
 								<p className="text-xs text-text-muted mb-0.5">
-									Job
+									{t("visitDetail.job")}
 								</p>
 								<p className="text-sm font-medium text-text-primary">
 									#{job.job_number} ·{" "}
@@ -142,7 +143,7 @@ function JobContextSection({
 							</div>
 							{job.project && (
 								<div>
-									<p className="text-xs text-text-muted mb-0.5"> Project</p>
+									<p className="text-xs text-text-muted mb-0.5">{t("visitDetail.project")}</p>
 									<div className="flex items-center gap-2">
 										<p className="text-sm font-medium text-text-primary">
 											{job.project.project_number}  ·  {job.project.name}
@@ -150,7 +151,7 @@ function JobContextSection({
 										<span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border
 											${ProjectStatusColors[job.project.status]}`}
 										>
-											{ProjectStatusLabels[job.project.status]}
+											{t(`status.project.${job.project.status}`)}
 										</span>
 									</div>
 								</div>
@@ -158,7 +159,7 @@ function JobContextSection({
 							{job.address && (
 								<div>
 									<p className="text-xs text-text-muted mb-0.5">
-										Address
+										{t("visitDetail.address")}
 									</p>
 									<a
 										href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`}
@@ -171,7 +172,7 @@ function JobContextSection({
 									</a>
 									{visit?.estimated_drive_miles != null && (
 										<p className="text-xs text-text-muted mt-0.5">
-											{visit.estimated_drive_miles.toFixed(1)} mi from driving
+											{t("visitDetail.milesFromDriving", { miles: visit.estimated_drive_miles.toFixed(1) })}
 										</p>
 									)}
 								</div>
@@ -179,7 +180,7 @@ function JobContextSection({
 							{job.description && (
 								<div>
 									<p className="text-xs text-text-muted mb-0.5">
-										Description
+										{t("visitDetail.description")}
 									</p>
 									<p className="text-sm text-text-secondary break-words">
 										{job.description}
@@ -192,7 +193,7 @@ function JobContextSection({
 					{visit?.description && (
 						<div>
 							<p className="text-xs text-text-muted mb-0.5">
-								Visit Notes
+								{t("visitDetail.visitNotes")}
 							</p>
 							<p className="text-sm text-text-secondary break-words">
 								{visit.description}
@@ -202,7 +203,7 @@ function JobContextSection({
 
 					<div>
 						<p className="text-xs text-text-muted mb-0.5">
-							Scheduled
+							{t("visitDetail.scheduled")}
 						</p>
 						<p className="text-sm text-text-secondary">
 							{visit
@@ -214,8 +215,7 @@ function JobContextSection({
 					{visit?.visit_techs && visit.visit_techs.length > 0 && (
 						<div>
 							<p className="text-xs text-text-muted mb-1.5 flex items-center gap-1.5">
-								<Users size={11} /> Assigned
-								Technicians
+								<Users size={11} /> {t("visitDetail.assignedTechs")}
 							</p>
 							<div className="flex flex-wrap gap-1.5">
 								{visit.visit_techs.map((vt) => (
@@ -238,7 +238,7 @@ function JobContextSection({
 						>
 							<div className="text-left">
 								<p className="text-xs text-text-muted">
-									Quote
+									{t("visitDetail.quote")}
 								</p>
 								<p className="text-sm font-medium text-text-primary">
 									#{job.quote.quote_number} ·{" "}
@@ -255,10 +255,9 @@ function JobContextSection({
 										"bg-neutral/20 text-text-secondary border-border-strong/30"
 									}`}
 								>
-									{QuoteStatusLabels[
-										job.quote
-											.status as keyof typeof QuoteStatusLabels
-									] ?? job.quote.status}
+									{t(`status.quote.${job.quote.status as QuoteStatus}`, {
+										defaultValue: job.quote.status,
+									})}
 								</span>
 								<ChevronRight
 									size={14}
@@ -273,7 +272,7 @@ function JobContextSection({
 						<div className="border-t border-border-subtle pt-3 space-y-2">
 							<div>
 								<p className="text-xs text-text-muted mb-0.5">
-									Client
+									{t("visitDetail.client")}
 								</p>
 								<p className="text-sm font-semibold text-text-secondary">
 									{job.client.name}
@@ -305,7 +304,7 @@ function JobContextSection({
 													12
 												}
 											/>
-											Call
+											{t("visitDetail.call")}
 										</a>
 									) : (
 										<span
@@ -318,7 +317,7 @@ function JobContextSection({
 													12
 												}
 											/>
-											No phone
+											{t("visitDetail.noPhone")}
 										</span>
 									)}
 									{primaryContact.email ? (
@@ -331,7 +330,7 @@ function JobContextSection({
 													12
 												}
 											/>
-											Email
+											{t("visitDetail.email")}
 										</a>
 									) : (
 										<span
@@ -344,13 +343,13 @@ function JobContextSection({
 													12
 												}
 											/>
-											Email
+											{t("visitDetail.email")}
 										</span>
 									)}
 								</div>
 							) : (
 								<p className="text-xs text-text-faint italic">
-									No contact on file
+									{t("visitDetail.noContact")}
 								</p>
 							)}
 						</div>
@@ -374,6 +373,7 @@ function ArrivalBanner({
 	tz: string;
 	distanceMiles?: number | null;
 }) {
+	const { t } = useTranslation();
 	const [countdown, setCountdown] = useState(() => {
 		const diff = new Date(scheduledStart).getTime() - Date.now();
 		return diff > 0 ? Math.ceil(diff / 60_000) : 0;
@@ -393,16 +393,16 @@ function ArrivalBanner({
 				<div className="flex items-center gap-2">
 					<Car size={16} className="text-info-text" />
 					<span className="text-sm font-semibold text-info-text">
-						En Route
+						{t("visitDetail.enRoute")}
 					</span>
 				</div>
 				{countdown > 0 ? (
 					<span className="text-sm tabular-nums text-info-text font-bold">
-						{countdown} min to start
+						{t("visitDetail.minToStart", { count: countdown })}
 					</span>
 				) : (
 					<span className="text-sm text-warning-text font-bold">
-						Arrival time passed
+						{t("visitDetail.arrivalPassed")}
 					</span>
 				)}
 			</div>
@@ -421,11 +421,11 @@ function ArrivalBanner({
 
 			<div className="flex items-center justify-between">
 				<p className="text-xs text-text-muted">
-					Scheduled: {formatDateTime(scheduledStart, tz)}
+					{t("visitDetail.scheduledAt", { time: formatDateTime(scheduledStart, tz) })}
 				</p>
 				{distanceMiles != null && (
 					<span className="text-xs text-info-text font-medium tabular-nums">
-						{distanceMiles.toFixed(1)} mi
+						{t("mileage.miles", { miles: distanceMiles.toFixed(1) })}
 					</span>
 				)}
 			</div>
@@ -436,23 +436,24 @@ function ArrivalBanner({
 // ── Delayed Banner ────────────────────────────────────────────────────────────
 
 function DelayedBanner({ scheduledStart, tz }: { scheduledStart: Date | string; tz: string }) {
+	const { t } = useTranslation();
 	const overdueMs = Math.max(0, Date.now() - new Date(scheduledStart).getTime());
 	const overdueMin = Math.floor(overdueMs / 60_000);
 	const overdueLabel =
 		overdueMin >= 60
-			? `${Math.floor(overdueMin / 60)}h ${overdueMin % 60}m past scheduled start`
+			? t("visitDetail.pastStartHours", { hours: Math.floor(overdueMin / 60), minutes: overdueMin % 60 })
 			: overdueMin > 0
-				? `${overdueMin}m past scheduled start`
+				? t("visitDetail.pastStartMinutes", { minutes: overdueMin })
 				: null;
 
 	return (
 		<div className="rounded-xl border border-orange/25 bg-orange/5 p-4 space-y-1.5">
 			<div className="flex items-center gap-2">
 				<AlertTriangle size={15} className="text-orange-text shrink-0" />
-				<span className="text-sm font-semibold text-orange-text">Visit Delayed</span>
+				<span className="text-sm font-semibold text-orange-text">{t("visitDetail.visitDelayed")}</span>
 			</div>
 			<p className="text-xs text-text-tertiary">
-				Scheduled: {formatDateTime(scheduledStart, tz)}
+				{t("visitDetail.scheduledAt", { time: formatDateTime(scheduledStart, tz) })}
 			</p>
 			{overdueLabel && (
 				<p className="text-xs text-orange-text/80">{overdueLabel}</p>
@@ -464,15 +465,14 @@ function DelayedBanner({ scheduledStart, tz }: { scheduledStart: Date | string; 
 // ── Paused Banner ─────────────────────────────────────────────────────────────
 
 function PausedBanner() {
+	const { t } = useTranslation();
 	return (
 		<div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-warning-bg border border-warning/20">
 			<span className="h-2 w-2 rounded-full bg-visit-paused-text flex-shrink-0" />
 			<span className="text-xs text-warning-text font-medium uppercase tracking-wide flex-1">
-				Visit Paused
+				{t("visitDetail.visitPaused")}
 			</span>
-			<span className="text-xs text-text-muted">
-				Clock in to resume
-			</span>
+			<span className="text-xs text-text-muted">{t("visitDetail.clockInToResume")}</span>
 		</div>
 	);
 }
@@ -481,6 +481,7 @@ function PausedBanner() {
 
 export default function TechnicianVisitDetailPage() {
 	const { visitId } = useParams<{ visitId: string }>();
+	const { t } = useTranslation();
 	const { user } = useAuthStore();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 	const { data: visit, isLoading } = useJobVisitByIdQuery(visitId!);
@@ -500,7 +501,7 @@ export default function TechnicianVisitDetailPage() {
 	if (!visit) {
 		return (
 			<div className="flex items-center justify-center h-64">
-				<p className="text-text-muted">Visit not found</p>
+				<p className="text-text-muted">{t("visitDetail.notFound")}</p>
 			</div>
 		);
 	}
@@ -745,9 +746,9 @@ export default function TechnicianVisitDetailPage() {
 							"bg-neutral/20 text-text-tertiary border-border-strong/30"
 						}`}
 					>
-						{VisitStatusLabels[status] ?? status}
+						{t(`status.visit.${status}`)}
 					</span>
-					{visit.name ?? "Visit"}
+					{visit.name ?? t("dashboard.visit_fallback")}
 				</h1>
 				{job?.client?.name && (
 					<p className="text-sm text-text-tertiary mt-0.5">
@@ -782,7 +783,7 @@ export default function TechnicianVisitDetailPage() {
 							<a
 								href={`tel:${dispatchPhone}`}
 								className="flex items-center justify-center w-12 rounded-xl bg-surface border border-border text-text-tertiary hover:text-text-primary transition-colors self-start"
-								title="Call Dispatch"
+								title={t("dashboard.call_dispatch")}
 							>
 								<Phone size={18} />
 							</a>

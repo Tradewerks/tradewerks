@@ -1,4 +1,5 @@
 import { AlertTriangle, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { money } from "../../fieldPurchases/fieldPurchaseFormat";
 import type { FieldPurchaseRefundParentLine } from "../../../types/fieldPurchases";
 import { blankLine, type LineDraft } from "./lineDrafts";
@@ -20,6 +21,7 @@ export default function RefundPartPicker({
 	allocationKey: string;
 	onChange: (next: LineDraft[]) => void;
 }) {
+	const { t } = useTranslation();
 	const parts = returnableParts(parentLines, lines).filter((p) => p.left > 0);
 	if (parts.length === 0) return null;
 
@@ -61,7 +63,7 @@ export default function RefundPartPicker({
 	return (
 		<div className="mb-3">
 			<p className="mb-1.5 text-xs text-text-muted">
-				From your original purchase
+				{t("procure.fromOriginal")}
 			</p>
 			<ul className="space-y-1.5">
 				{parts.map((p) => (
@@ -69,7 +71,7 @@ export default function RefundPartPicker({
 						<button
 							type="button"
 							onClick={() => add(p)}
-							aria-label={`Add ${p.description} to this refund`}
+							aria-label={t("procure.addToRefund", { name: p.description })}
 							className="flex min-h-11 w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-left transition-colors duration-150 ease-out hover:bg-surface-raised"
 						>
 							<Plus
@@ -82,11 +84,10 @@ export default function RefundPartPicker({
 									{p.description}
 								</span>
 								<span className="block truncate text-xs text-text-muted">
-									{money(
-										Number(p.unit_price)
-									)}{" "}
-									each · {p.left} left to
-									return
+									{t("procure.eachLeft", {
+										price: money(Number(p.unit_price)),
+										count: p.left,
+									})}
 								</span>
 							</span>
 						</button>
@@ -109,6 +110,7 @@ export function RefundLineStock({
 	draft: LineDraft;
 	parentLines: FieldPurchaseRefundParentLine[];
 }) {
+	const { t } = useTranslation();
 	const part = returnableParts(parentLines, []).find((p) => p.key === draftKey(draft));
 	const linked = !!draft.inventory_item_id && !!part;
 	const over = linked && (Number(draft.quantity) || 0) > part.left;
@@ -124,10 +126,10 @@ export function RefundLineStock({
 				/>
 			)}
 			{over
-				? `Only ${part.left} of these can come back off stock`
+				? t("procure.onlyLeft", { count: part.left })
 				: linked && part.from
-					? `Comes off ${part.from} when approved`
-					: "No stock comes off — this is not a stocked part from the purchase"}
+					? t("procure.comesOff", { from: part.from })
+					: t("procure.notStocked")}
 		</p>
 	);
 }

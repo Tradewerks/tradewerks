@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { X, Receipt } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useDialogA11y } from "../../hooks/useDialogA11y";
@@ -9,7 +10,6 @@ import type {
 	VehicleAdjustmentType,
 	AdjustStockInput,
 } from "../../types/vehicles";
-import { ADJUSTMENT_TYPE_LABELS } from "../../types/vehicles";
 import { useAuthStore } from "../../auth/authStore";
 import ExistingUnitPicker from "./ExistingUnitPicker";
 import ExistingBatchPicker, { type BatchPickDirection } from "./ExistingBatchPicker";
@@ -23,30 +23,12 @@ const ADJUST_TYPE_PERMS: Record<VehicleAdjustmentType, string> = {
 	warehouse_exchange: "adjust_warehouse_exchange",
 };
 
-const TYPE_META: Record<
-	VehicleAdjustmentType,
-	{ label?: string; description: string; warehouseEffect: string | null; note?: string }
-> = {
-	warehouse_exchange: {
-		label: "Return to Warehouse",
-		description:
-			"Return surplus parts to the warehouse — vehicle qty goes down, warehouse qty goes up",
-		warehouseEffect: "Warehouse +",
-	},
-	field_loss: {
-		description:
-			"Parts used on jobs, damaged, or lost — permanently out of org inventory",
-		warehouseEffect: null,
-	},
-	transfer: {
-		description: "Receive parts from another vehicle — org total unchanged",
-		warehouseEffect: null,
-		note: "Adjust the source vehicle separately",
-	},
-	audit: {
-		description: "Override count to match physical reality — no accounting impact",
-		warehouseEffect: null,
-	},
+// Text lives in adjust.label.* / adjust.desc.*; transfer also has adjust.transferNote.
+const TYPE_META: Record<VehicleAdjustmentType, { warehouseEffect: boolean }> = {
+	warehouse_exchange: { warehouseEffect: true },
+	field_loss: { warehouseEffect: false },
+	transfer: { warehouseEffect: false },
+	audit: { warehouseEffect: false },
 };
 
 function TypeStep({
@@ -64,23 +46,23 @@ function TypeStep({
 	availableTypes: VehicleAdjustmentType[];
 	vehicleId: string;
 }) {
+	const { t } = useTranslation();
 	return (
 		<>
 			<div className="px-5 py-4 space-y-2">
 				{availableTypes.length === 0 ? (
 					<div className="py-8 text-center">
 						<p className="text-sm text-text-muted">
-							No adjustment types available.
+							{t("adjust.noTypes")}
 						</p>
 						<p className="text-xs text-text-faint mt-1">
-							Contact your dispatcher to enable adjustment
-							permissions.
+							{t("adjust.noTypesHint")}
 						</p>
 					</div>
 				) : (
 					<>
 						<p className="text-xs text-text-secondary mb-3">
-							Select the type of stock adjustment.
+							{t("adjust.selectType")}
 						</p>
 						{availableTypes.map((type) => {
 							const meta = TYPE_META[type];
@@ -99,25 +81,20 @@ function TypeStep({
 								>
 									<div className="flex items-center justify-between gap-3">
 										<span className="text-sm font-semibold text-text-primary">
-											{meta.label ??
-												ADJUSTMENT_TYPE_LABELS[
-													type
-												]}
+											{t(`adjust.label.${type}`)}
 										</span>
 										{meta.warehouseEffect && (
 											<span className="text-xs font-semibold px-2 py-0.5 rounded border flex-shrink-0 text-primary bg-primary/10 border-primary/30">
-												{
-													meta.warehouseEffect
-												}
+												{t("history.warehousePlus")}
 											</span>
 										)}
 									</div>
 									<p className="text-xs text-text-secondary mt-1">
-										{meta.description}
+										{t(`adjust.desc.${type}`)}
 									</p>
-									{meta.note && (
+									{type === "transfer" && (
 										<p className="text-[10px] text-text-muted mt-1 italic">
-											{meta.note}
+											{t("adjust.transferNote")}
 										</p>
 									)}
 								</button>
@@ -129,9 +106,9 @@ function TypeStep({
 			</div>
 			<StepFooter
 				onBack={onClose}
-				backLabel="Cancel"
+				backLabel={t("common.cancel")}
 				onNext={onNext}
-				nextLabel="Next →"
+				nextLabel={t("adjust.next")}
 				nextDisabled={!selected}
 			/>
 		</>
@@ -145,6 +122,7 @@ function TypeStep({
  * muscle memory does.
  */
 function BuyFromSupplierDoorway({ vehicleId }: { vehicleId?: string | null }) {
+	const { t } = useTranslation();
 	const canBuy = usePermission("request_field_purchase");
 	if (!canBuy) return null;
 	return (
@@ -156,11 +134,10 @@ function BuyFromSupplierDoorway({ vehicleId }: { vehicleId?: string | null }) {
 		>
 			<span className="flex items-center gap-2 text-sm font-semibold text-text-primary">
 				<Receipt size={14} className="text-text-muted" />
-				Record a field purchase
+				{t("adjust.fieldPurchase")}
 			</span>
 			<p className="text-xs text-text-secondary mt-1">
-				Bought a part at a store or supply house. Photograph the receipt to get
-				reimbursed.
+				{t("adjust.fieldPurchaseHint")}
 			</p>
 		</Link>
 	);
@@ -185,6 +162,7 @@ function QuantitiesStep({
 	onBack: () => void;
 	onNext: () => void;
 }) {
+	const { t } = useTranslation();
 	const [clampedId, setClampedId] = useState<string | null>(null);
 	const [filter, setFilter] = useState("");
 	const isDecreaseOnly = isDecreaseOnlyType(type);
@@ -205,11 +183,13 @@ function QuantitiesStep({
 		<>
 			<div className="px-5 py-4">
 				<p className="text-xs text-text-secondary mb-3">
-					{isReturn
-						? "Set the qty to return to the warehouse. Only items with a lower qty will be recorded."
-						: type === "field_loss"
-							? "Set the new qty after loss. Only items with a lower qty will be recorded."
-							: "Edit quantities below. Only items with changed quantities will be recorded."}
+					{t(
+						isReturn
+							? "adjust.qtyHintReturn"
+							: type === "field_loss"
+								? "adjust.qtyHintLoss"
+								: "adjust.qtyHintEdit"
+					)}
 				</p>
 				{isDecreaseOnly && (
 					<div className="flex items-start gap-2 text-xs text-warning-text bg-warning/10 border border-warning/20 rounded-md px-3 py-2 mb-3">
@@ -217,9 +197,7 @@ function QuantitiesStep({
 							⚠
 						</span>
 						<span>
-							{isReturn
-								? "Quantities can only be decreased — this adjustment returns stock to the warehouse."
-								: "Quantities can only be decreased — this adjustment records permanent stock loss."}
+							{t(isReturn ? "adjust.decreaseReturn" : "adjust.decreaseLoss")}
 						</span>
 					</div>
 				)}
@@ -231,19 +209,19 @@ function QuantitiesStep({
 						type="text"
 						value={filter}
 						onChange={(e) => setFilter(e.target.value)}
-						placeholder="Filter items…"
+						placeholder={t("adjust.filterItems")}
 						className="w-full mb-2 text-sm bg-surface border border-border-input rounded-md px-3 py-2 text-text-primary placeholder:text-faint outline-none focus:border-primary"
 					/>
 				)}
 				<div className="bg-surface rounded-lg border border-border overflow-hidden mb-3">
 					<div className="grid grid-cols-[1fr_72px_80px] px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
-						<span>Item</span>
-						<span className="text-center">Current</span>
-						<span className="text-center">New Qty</span>
+						<span>{t("restock.col.item")}</span>
+						<span className="text-center">{t("vehicle.current")}</span>
+						<span className="text-center">{t("adjust.newQty")}</span>
 					</div>
 					{shown.length === 0 && (
 						<div className="px-4 py-6 text-center text-xs text-text-muted">
-							No items match that.
+							{t("adjust.noMatch")}
 						</div>
 					)}
 					{shown.map((item) => {
@@ -269,9 +247,7 @@ function QuantitiesStep({
 									</span>
 									{showClampWarning && (
 										<span className="block text-[10px] text-warning-text mt-0.5">
-											Cannot
-											exceed
-											current qty
+											{t("adjust.cannotExceed")}
 										</span>
 									)}
 								</div>
@@ -336,7 +312,7 @@ function QuantitiesStep({
 			<StepFooter
 				onBack={onBack}
 				onNext={onNext}
-				nextLabel="Review →"
+				nextLabel={t("adjust.review")}
 				nextDisabled={!hasChanges}
 			/>
 		</>
@@ -362,6 +338,7 @@ function ConfirmStep({
 	isPending: boolean;
 	error: string | null;
 }) {
+	const { t } = useTranslation();
 	const meta = TYPE_META[type];
 	const isDecreaseOnly = isDecreaseOnlyType(type);
 	const changedItems = stockItems.filter((i) => {
@@ -375,16 +352,13 @@ function ConfirmStep({
 		<>
 			<div className="px-5 py-4">
 				<p className="text-xs text-text-secondary mb-3">
-					Review changes.{" "}
-					{meta.warehouseEffect
-						? "Warehouse quantities will be updated."
-						: "No warehouse impact."}
+					{t("adjust.reviewChanges")}{" "}
+					{t(meta.warehouseEffect ? "adjust.warehouseUpdated" : "adjust.noWarehouseImpact")}
 				</p>
 				<div className="bg-surface rounded-lg border border-border overflow-hidden mb-3">
 					<div className="px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
-						{meta.label ?? ADJUSTMENT_TYPE_LABELS[type]} —{" "}
-						{changedItems.length} item
-						{changedItems.length !== 1 ? "s" : ""}
+						{t(`adjust.label.${type}`)} —{" "}
+						{t("restock.nItems", { count: changedItems.length })}
 					</div>
 					{changedItems.map((item) => {
 						const current = Number(item.qty_on_hand);
@@ -417,7 +391,7 @@ function ConfirmStep({
 				</div>
 				{note && (
 					<p className="text-xs text-text-secondary italic mb-3">
-						Note: {note}
+						{t("adjust.notePrefix", { note })}
 					</p>
 				)}
 				{error && (
@@ -429,7 +403,7 @@ function ConfirmStep({
 			<StepFooter
 				onBack={onBack}
 				onNext={onConfirm}
-				nextLabel="Apply Adjustment"
+				nextLabel={t("adjust.apply")}
 				isPending={isPending}
 			/>
 		</>
@@ -456,17 +430,18 @@ function clampNumber(
 }
 
 function NoteField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+	const { t } = useTranslation();
 	return (
 		<div>
 			<label className="block text-xs text-text-secondary mb-1">
-				Note (optional)
+				{t("vehicle.noteOptional")}
 			</label>
 			<textarea
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 				rows={2}
 				maxLength={500}
-				placeholder="Reason for adjustment…"
+				placeholder={t("adjust.notePlaceholder")}
 				className="w-full text-sm bg-surface border border-border-input rounded-md px-3 py-2 text-text-primary placeholder:text-faint outline-none focus:border-primary resize-none"
 			/>
 		</div>
@@ -475,7 +450,7 @@ function NoteField({ value, onChange }: { value: string; onChange: (v: string) =
 
 function StepFooter({
 	onBack,
-	backLabel = "← Back",
+	backLabel,
 	onNext,
 	nextLabel,
 	nextDisabled,
@@ -488,6 +463,7 @@ function StepFooter({
 	nextDisabled?: boolean;
 	isPending?: boolean;
 }) {
+	const { t } = useTranslation();
 	return (
 		// Sticky, not trailing: every step renders inside the modal's scrolling
 		// body, so a long list would otherwise push "Review →" below the fold with it.
@@ -497,14 +473,14 @@ function StepFooter({
 				disabled={isPending}
 				className="px-3 py-1.5 text-xs font-medium bg-surface border border-border rounded-md text-text-secondary hover:bg-surface-raised transition-colors disabled:opacity-50"
 			>
-				{backLabel}
+				{backLabel ?? t("adjust.back")}
 			</button>
 			<button
 				onClick={onNext}
 				disabled={isPending || nextDisabled}
 				className="px-4 py-2 text-sm font-semibold bg-primary hover:enabled:bg-primary-hover text-on-primary rounded-md transition-colors disabled:opacity-50"
 			>
-				{isPending ? "Saving…" : nextLabel}
+				{isPending ? t("adjust.saving") : nextLabel}
 			</button>
 		</div>
 	);
@@ -587,11 +563,12 @@ function TrackingStep({
 	onNext: () => void;
 	canProceed: boolean;
 }) {
+	const { t } = useTranslation();
 	return (
 		<>
 			<div className="px-5 py-4 space-y-3">
 				<p className="text-xs text-text-secondary mb-1">
-					Select which existing serialized units or lots this adjustment affects.
+					{t("adjust.trackingHint")}
 				</p>
 				{lines.map((line) => (
 					<div
@@ -651,7 +628,7 @@ function TrackingStep({
 			<StepFooter
 				onBack={onBack}
 				onNext={onNext}
-				nextLabel="Review →"
+				nextLabel={t("adjust.review")}
 				nextDisabled={!canProceed}
 			/>
 		</>
@@ -660,20 +637,6 @@ function TrackingStep({
 
 const STEP_ORDER = ["type", "quantities", "tracking", "confirm"] as const;
 type ModalStep = (typeof STEP_ORDER)[number];
-
-const STEP_TITLES: Record<ModalStep, string> = {
-	type: "Adjust Stock",
-	quantities: "Edit Quantities",
-	tracking: "Serial / Batch Tracking",
-	confirm: "Confirm Adjustment",
-};
-
-const STEP_LABELS: Record<ModalStep, string> = {
-	type: "Type",
-	quantities: "Quantities",
-	tracking: "Tracking",
-	confirm: "Confirm",
-};
 
 export default function AdjustStockModal({
 	vehicleId,
@@ -702,6 +665,7 @@ export default function AdjustStockModal({
 	// unit into field_loss so the tech doesn't re-pick what they just scanned.
 	initialSerialUnitId?: string;
 }) {
+	const { t } = useTranslation();
 	const [modalStep, setModalStep] = useState<ModalStep>(initialType ? "quantities" : "type");
 	const [selectedType, setSelectedType] = useState<VehicleAdjustmentType | null>(
 		initialType ?? null
@@ -733,7 +697,7 @@ export default function AdjustStockModal({
 	const availableTypes = useMemo<VehicleAdjustmentType[]>(() => {
 		const allTypes = Object.keys(TYPE_META) as VehicleAdjustmentType[];
 		if (!user || user.role !== "technician") return allTypes;
-		return allTypes.filter((t) => user.permissions.includes(ADJUST_TYPE_PERMS[t]));
+		return allTypes.filter((type) => user.permissions.includes(ADJUST_TYPE_PERMS[type]));
 	}, [user]);
 	const handleQtyChange = (id: string, qty: number) => {
 		setQuantities((prev) => ({ ...prev, [id]: qty }));
@@ -832,7 +796,7 @@ export default function AdjustStockModal({
 			onSuccess?.();
 			onClose();
 		} catch (e: unknown) {
-			const message = e instanceof Error ? e.message : "Failed to adjust stock";
+			const message = e instanceof Error ? e.message : t("adjust.failed");
 			setSubmitError(message);
 			onError?.(message);
 		}
@@ -845,7 +809,7 @@ export default function AdjustStockModal({
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay">
 			<div
 				{...dialogA11y}
-				aria-label={STEP_TITLES[modalStep]}
+				aria-label={t(`adjust.stepTitle.${modalStep}`)}
 				// overflow-hidden, not just rounded-xl: the step footers are sticky with an
 				// opaque bg-base, so without clipping they paint square over the bottom corners.
 				className="bg-canvas border border-border rounded-xl overflow-hidden shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col"
@@ -853,11 +817,11 @@ export default function AdjustStockModal({
 				{/* Header */}
 				<div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-shrink-0">
 					<span className="text-sm font-bold text-text-primary">
-						{STEP_TITLES[modalStep]}
+						{t(`adjust.stepTitle.${modalStep}`)}
 					</span>
 					<button
 						onClick={onClose}
-						aria-label="Close"
+						aria-label={t("common.close")}
 						className="text-text-faint hover:text-text-secondary transition-colors"
 					>
 						<X size={16} />
@@ -887,7 +851,7 @@ export default function AdjustStockModal({
 							<span
 								className={`text-[10px] font-medium whitespace-nowrap ${stepIndex === i ? "text-text-primary" : "text-text-muted"}`}
 							>
-								{STEP_LABELS[s]}
+								{t(`adjust.step.${s}`)}
 							</span>
 						</div>
 					))}

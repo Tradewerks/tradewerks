@@ -454,6 +454,18 @@ async function sendAlert(action: Exclude<AlertAction, null>, s: Stop, f: Forecas
 				type: "tech_running_late",
 				title: f.basis === "elapsed" ? `You're late to ${client}` : `You may be late to ${client}`,
 				body: techBody,
+				vars: {
+					client,
+					variant: f.basis === "elapsed" ? "elapsed" : enRoute ? "en_route" : "not_left",
+					due: f.dueAt.toISOString(),
+					eta: f.etaAt?.toISOString(),
+					late_min: lateMin,
+					drive_min: Math.round((f.driveSeconds ?? 0) / 60),
+					traffic_min:
+						f.basis !== "elapsed" && f.trafficDelaySeconds !== null && f.trafficDelaySeconds >= 5 * 60
+							? Math.round(f.trafficDelaySeconds / 60)
+							: null,
+				},
 				actionUrl: `/technician/visits/${s.c.visit.id}`,
 			},
 			orgId,

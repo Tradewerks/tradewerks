@@ -52,6 +52,7 @@ const technician = z
 			.nullable()
 			.describe("Null while active"),
 		theme: z.string(),
+		language: z.string(),
 		organization_role_id: z.uuid().nullable(),
 		current_vehicle_id: z.uuid().nullable(),
 		current_vehicle: idName
@@ -172,7 +173,7 @@ authed(
 			),
 		},
 	},
-	"A technician changing their own `cost_rate` (`INVALID_CREDENTIALS`)",
+	"A technician changing their own `cost_rate` (`FORBIDDEN`)",
 );
 
 authed("delete", "/technicians/{id}", "Technicians", "manage_technicians", {

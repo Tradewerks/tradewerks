@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 // Normalized shape both call sites map their data into — RestockWorkflow joins
 // VehicleRestockLine + RestockLineDetail by stock_item_id, FillToStandardPreview
@@ -14,7 +15,7 @@ export interface RestockSummaryLine {
 }
 
 export default function RestockSummaryModal({
-	title = "Restock Summary",
+	title,
 	lines,
 	onAcknowledge,
 }: {
@@ -22,6 +23,7 @@ export default function RestockSummaryModal({
 	lines: RestockSummaryLine[];
 	onAcknowledge: () => void;
 }) {
+	const { t } = useTranslation();
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onAcknowledge}>
 			<div
@@ -29,15 +31,15 @@ export default function RestockSummaryModal({
 				onClick={(e) => e.stopPropagation()}
 			>
 				<div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-shrink-0">
-					<span className="text-sm font-bold text-text-primary">{title}</span>
-					<button onClick={onAcknowledge} className="text-text-faint hover:text-text-secondary transition-colors">
+					<span className="text-sm font-bold text-text-primary">{title ?? t("restock.restockSummary")}</span>
+					<button onClick={onAcknowledge} aria-label={t("common.close")} className="text-text-faint hover:text-text-secondary transition-colors">
 						<X size={16} />
 					</button>
 				</div>
 
 				<div className="px-5 py-3 border-b border-border-subtle flex-shrink-0">
 					<p className="text-xs text-text-secondary">
-						{lines.length} item{lines.length !== 1 ? "s" : ""} need{lines.length === 1 ? "s" : ""} a second look — cross-check against what&apos;s physically on the truck.
+						{t("restockSummary.intro", { count: lines.length })}
 					</p>
 				</div>
 
@@ -57,9 +59,9 @@ export default function RestockSummaryModal({
 										{line.label}
 									</span>
 									<span className="text-xs tabular-nums text-text-secondary whitespace-nowrap shrink-0">
-										Requested <span className="text-text-primary font-semibold">{line.requested}</span>
-										{" · "}Moved <span className="text-text-primary font-semibold">{line.moved}</span>
-										{short > 0 && <span className="text-warning-text font-semibold"> ({short} short)</span>}
+										{t("restockSummary.requested")} <span className="text-text-primary font-semibold">{line.requested}</span>
+										{" · "}{t("restockSummary.moved")} <span className="text-text-primary font-semibold">{line.moved}</span>
+										{short > 0 && <span className="text-warning-text font-semibold"> {t("restock.nShort", { count: short })}</span>}
 									</span>
 								</div>
 								{line.message && (
@@ -74,7 +76,7 @@ export default function RestockSummaryModal({
 										))}
 										{line.lotCodes?.map((code) => (
 											<span key={code} className="text-[10px] font-mono bg-surface-raised border border-border text-text-secondary px-1.5 py-0.5 rounded">
-												Lot {code}
+												{t("restockSummary.lot", { code })}
 											</span>
 										))}
 									</div>
@@ -89,7 +91,7 @@ export default function RestockSummaryModal({
 						onClick={onAcknowledge}
 						className="w-full px-4 py-2.5 text-sm font-semibold bg-primary hover:bg-primary-hover text-on-primary rounded-md transition-colors"
 					>
-						Got it
+						{t("restockSummary.gotIt")}
 					</button>
 				</div>
 			</div>

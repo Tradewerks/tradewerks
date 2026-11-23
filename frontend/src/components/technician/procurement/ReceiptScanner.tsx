@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
 	Camera,
 	Check,
@@ -45,9 +46,12 @@ interface Props {
 export default function ReceiptScanner({
 	onAccept,
 	onClose,
-	title = "Photograph receipt",
-	confirmLabel = "Use photo",
+	title: titleProp,
+	confirmLabel: confirmLabelProp,
 }: Props) {
+	const { t } = useTranslation();
+	const title = titleProp ?? t("purchase.photographReceipt");
+	const confirmLabel = confirmLabelProp ?? t("purchase.usePhoto");
 	const [candidate, setCandidate] = useState<File | null>(null);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [grabbing, setGrabbing] = useState(false);
@@ -58,7 +62,7 @@ export default function ReceiptScanner({
 	const reviewing = candidate !== null;
 	const camera = useCameraStream({
 		resolution: "document",
-		fallbackHint: "Choose a photo instead.",
+		fallbackHint: t("scanner.chooseInstead"),
 		// The review stage replaces the preview entirely; the camera has nothing to
 		// show and no reason to stay open behind it.
 		active: !reviewing,
@@ -93,7 +97,7 @@ export default function ReceiptScanner({
 		try {
 			setCandidate(await grabFrame(video, camera.trackRef.current));
 		} catch (err) {
-			setFailure(errorMessage(err, "Could not take the photo — try again."));
+			setFailure(errorMessage(err, t("scanner.shotFailed")));
 		} finally {
 			setGrabbing(false);
 		}
@@ -108,7 +112,7 @@ export default function ReceiptScanner({
 		} catch (err) {
 			// Kept on the review step on purpose: the photo is still in hand, so the
 			// way out is one more tap rather than another trip to the camera.
-			setFailure(errorMessage(err, "Could not attach the receipt"));
+			setFailure(errorMessage(err, t("purchase.attachFailed")));
 		} finally {
 			setBusy(false);
 		}
@@ -132,7 +136,7 @@ export default function ReceiptScanner({
 				<div className="flex flex-shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
 					<span className="flex items-center gap-2 text-sm font-bold text-text-primary">
 						<Camera aria-hidden size={16} className="text-primary" />
-						{reviewing ? "Check the photo" : title}
+						{reviewing ? t("scanner.checkPhoto") : title}
 					</span>
 					{/* The glyph stays at 16; the target grows to the 44px every other
 					    control in this flow already is. The negative margin keeps the X
@@ -141,7 +145,7 @@ export default function ReceiptScanner({
 						type="button"
 						onClick={onClose}
 						disabled={busy}
-						aria-label="Close"
+						aria-label={t("common.close")}
 						className="-mr-3.5 flex h-11 w-11 items-center justify-center text-text-faint transition-colors hover:text-text-secondary disabled:opacity-40"
 					>
 						<X aria-hidden size={16} />
@@ -184,7 +188,7 @@ export default function ReceiptScanner({
 							disabled={busy}
 							className="inline-flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-surface text-sm font-medium text-text-primary transition-colors hover:enabled:border-border-strong disabled:opacity-40"
 						>
-							<RotateCcw aria-hidden size={15} /> Retake
+							<RotateCcw aria-hidden size={15} /> {t("purchase.retake")}
 						</button>
 						<button
 							type="button"
@@ -201,7 +205,7 @@ export default function ReceiptScanner({
 							) : (
 								<Check aria-hidden size={15} />
 							)}
-							{busy ? "Uploading…" : confirmLabel}
+							{busy ? t("photos.uploading") : confirmLabel}
 						</button>
 					</div>
 				) : (
@@ -215,9 +219,7 @@ export default function ReceiptScanner({
 						}`}
 					>
 						<ImageIcon aria-hidden size={15} />
-						{cameraDown
-							? "Choose a photo"
-							: "Choose an existing photo"}
+						{cameraDown ? t("scanner.choosePhoto") : t("scanner.chooseExisting")}
 					</button>
 				)}
 			</div>
@@ -231,6 +233,7 @@ export default function ReceiptScanner({
  * technician already uses on every other page.
  */
 function ReviewStage({ previewUrl }: { previewUrl: string | null }) {
+	const { t } = useTranslation();
 	const [zoomStep, setZoomStep] = useState(0);
 	const zoom = ZOOM_STEPS[zoomStep];
 
@@ -239,7 +242,7 @@ function ReviewStage({ previewUrl }: { previewUrl: string | null }) {
 			{previewUrl && (
 				<img
 					src={previewUrl}
-					alt="Receipt just captured"
+					alt={t("scanner.receiptAlt")}
 					style={{ width: `${zoom * 100}%` }}
 					className="max-w-none object-contain"
 				/>
@@ -247,7 +250,7 @@ function ReviewStage({ previewUrl }: { previewUrl: string | null }) {
 			<button
 				type="button"
 				onClick={() => setZoomStep((s) => (s + 1) % ZOOM_STEPS.length)}
-				aria-label={`Zoom, currently ${zoom} times`}
+				aria-label={t("scanner.zoomAria", { zoom })}
 				className="absolute bottom-3 right-3 flex h-11 items-center gap-1.5 rounded-full bg-black/60 px-3.5 text-xs font-semibold text-white"
 			>
 				<ZoomIn aria-hidden size={16} />
@@ -266,6 +269,7 @@ function CaptureStage({
 	grabbing: boolean;
 	onShutter: () => void;
 }) {
+	const { t } = useTranslation();
 	const down = camera.status === "error";
 	const { containerRef, zoomIndicator, pinchHint, pinchHandlers } = usePinchZoom({
 		zoomCaps: camera.zoomCaps,
@@ -285,10 +289,8 @@ function CaptureStage({
 	}
 
 	const starting = camera.status === "starting";
-	const torchLabel = camera.torchOn ? "Turn torch off" : "Turn torch on";
-	const caption = starting
-		? "Starting camera…"
-		: "Fill the frame with the receipt — flatten it if you can";
+	const torchLabel = camera.torchOn ? t("scanner.torchOff") : t("scanner.torchOn");
+	const caption = starting ? t("scanner.starting") : t("scanner.fillFrame");
 
 	return (
 		<div
@@ -352,7 +354,7 @@ function CaptureStage({
 				type="button"
 				onClick={onShutter}
 				disabled={starting || grabbing}
-				aria-label="Take photo"
+				aria-label={t("scanner.takePhoto")}
 				className="absolute bottom-4 left-1/2 flex h-14 w-14 -translate-x-1/2 items-center justify-center rounded-full bg-white ring-4 ring-white/30 transition-transform active:scale-95 disabled:opacity-40"
 			>
 				{grabbing ? (

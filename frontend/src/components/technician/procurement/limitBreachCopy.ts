@@ -1,3 +1,4 @@
+import i18n from "../../../i18n";
 import { money } from "../../fieldPurchases/fieldPurchaseFormat";
 import type { LimitBreach } from "../../../types/fieldPurchases";
 
@@ -15,23 +16,6 @@ export interface BreachCopy {
 	spent: string | null;
 	action: string;
 }
-
-const LIMIT_LABEL: Record<LimitBreach["code"], string> = {
-	// "Per purchase" everywhere: AuthorityStrip prints this exact ceiling under that
-	// name at the top of the same screen this notice appears on. The windowed labels
-	// below stay prose, because they read inside a sentence rather than as headers.
-	per_transaction: "Per purchase",
-	daily: "Today's limit",
-	weekly: "This week's limit",
-	per_job: "This job's limit",
-};
-
-const SPENT_LABEL: Record<LimitBreach["code"], string | null> = {
-	per_transaction: null,
-	daily: "already spent today",
-	weekly: "already spent this week",
-	per_job: "already spent on this job",
-};
 
 /** One job's share of the receipt, as the limit check was asked about it. */
 export interface BreachShare {
@@ -58,10 +42,12 @@ export function describeBreach(
 			? shares?.find((s) => s.job_id === breach.job_id)?.amount
 			: undefined;
 	const measured = share ?? amount;
-	const spentLabel = SPENT_LABEL[breach.code];
+	// "Per purchase" matches the name AuthorityStrip prints for this ceiling.
+	const { t } = i18n;
+	const spent = money(Math.max(0, wouldBe - measured));
 	return {
-		title: `${LIMIT_LABEL[breach.code]} ${money(limit)}`,
-		spent: spentLabel ? `${money(Math.max(0, wouldBe - measured))} ${spentLabel}` : null,
-		action: `${money(Math.max(0, wouldBe - limit))} over`,
+		title: t(`limits.title.${breach.code}`, { amount: money(limit) }),
+		spent: breach.code === "per_transaction" ? null : t(`limits.spent.${breach.code}`, { amount: spent }),
+		action: t("limits.over", { amount: money(Math.max(0, wouldBe - limit)) }),
 	};
 }

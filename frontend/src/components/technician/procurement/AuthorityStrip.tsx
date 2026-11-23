@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { COL_LABEL, money } from "../../fieldPurchases/fieldPurchaseFormat";
 import type { FieldPurchaseGrant, SpentSoFar } from "../../../types/fieldPurchases";
 
@@ -22,16 +23,21 @@ export default function AuthorityStrip({
 	grant: FieldPurchaseGrant;
 	spent: SpentSoFar;
 }) {
-	const window = (label: string, limit: string | null, used: string): Cell => {
-		if (!limit) return { label: `Spent ${label}`, value: money(used), low: false };
+	const { t } = useTranslation();
+	const window = (span: "Today" | "Week", limit: string | null, used: string): Cell => {
+		if (!limit) return { label: t(`procure.spent${span}`), value: money(used), low: false };
 		const left = Math.max(0, Number(limit) - Number(used));
-		return { label: `Left ${label}`, value: money(left), low: left < Number(limit) * LOW };
+		return {
+			label: t(`procure.left${span}`),
+			value: money(left),
+			low: left < Number(limit) * LOW,
+		};
 	};
 
 	const cells: Cell[] = [
-		{ label: "Per purchase", value: money(grant.per_transaction_limit), low: false },
-		window("today", grant.daily_limit, spent.today),
-		window("this week", grant.weekly_limit, spent.week),
+		{ label: t("procure.perPurchase"), value: money(grant.per_transaction_limit), low: false },
+		window("Today", grant.daily_limit, spent.today),
+		window("Week", grant.weekly_limit, spent.week),
 	];
 
 	return (

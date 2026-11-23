@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import type {
 	OcrFieldFlag,
 	OcrFieldKey,
@@ -14,41 +15,27 @@ export const OCR_FIELD_ORDER: OcrFieldKey[] = [
 	"total",
 ];
 
-export const OCR_FIELD_LABEL: Record<OcrFieldKey, string> = {
-	vendor_name: "Vendor",
-	receipt_number: "Receipt #",
-	purchased_at: "Date",
-	subtotal: "Subtotal",
-	tax_amount: "Tax",
-	total: "Total",
-};
-
 export function ocrLineReason(confidence: number): string {
-	return `Reader was ${Math.round(confidence * 100)}% sure of this line. Check it against the photo.`;
+	return i18n.t("ocrChip.line", { pct: Math.round(confidence * 100) });
 }
 
 export function ocrFlagReason(field: OcrFieldKey, flag: OcrFieldFlag): string {
+	const { t } = i18n;
 	switch (flag.kind) {
 		case "unsure":
 			// Pen-written digits read confidently and wrong, so the percent would mislead.
-			if (flag.rule === "handwritten") {
-				return "Handwritten on the receipt. Check it against the photo.";
-			}
+			if (flag.rule === "handwritten") return t("ocrChip.handwritten");
 			// First: a rule-picked field carries a fixed stand-in confidence, not a reading.
-			if (flag.rule) {
-				return `Picked using the ${flag.rule} receipt layout. Check it against the photo.`;
-			}
-			if (flag.confidence != null) {
-				return `Reader was ${Math.round(flag.confidence * 100)}% sure. Check it against the photo.`;
-			}
-			return "Reader wasn't sure. Check it against the photo.";
+			if (flag.rule) return t("ocrChip.layout", { rule: flag.rule });
+			if (flag.confidence != null)
+				return t("ocrChip.sure", { pct: Math.round(flag.confidence * 100) });
+			return t("ocrChip.notSure");
 		case "calculated":
-			if (field === "total") return "No total read — subtotal + tax";
-			if (field === "subtotal")
-				return "Didn't add up with the total — total minus tax";
-			return "Calculated, not read — check against the photo";
+			if (field === "total") return t("ocrChip.calcTotal");
+			if (field === "subtotal") return t("ocrChip.calcSubtotal");
+			return t("ocrChip.calc");
 		case "not_found":
-			return "Not on the receipt, or unreadable";
+			return t("ocrChip.notFound");
 	}
 }
 

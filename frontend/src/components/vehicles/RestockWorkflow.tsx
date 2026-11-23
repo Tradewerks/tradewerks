@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { dateLocale } from "../../i18n";
 import { ChevronDown } from "lucide-react";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import { formatter } from "../../util/util";
@@ -42,12 +44,13 @@ function CompleteStep({ record, stockItems, onReset }: {
 	 *  completed restock, "start another" is the next step, not a mode. */
 	onReset: () => void;
 }) {
+	const { t } = useTranslation();
 	const hasShortfall = record.restock_lines.some((l) => l.qty_shortfall > 0);
 	return (
 		<div className="px-5 py-6">
 			<div className="flex flex-col items-center text-center mb-6">
 				<div className="w-12 h-12 rounded-full bg-success/15 border-2 border-success flex items-center justify-center text-xl mb-3">✓</div>
-				<div className="text-base font-bold text-text-primary">{record.mode === "prepare" ? "Prep Complete" : "Restock Complete"}</div>
+				<div className="text-base font-bold text-text-primary">{t(record.mode === "prepare" ? "restock.prepComplete" : "restock.restockComplete")}</div>
 				<div className="text-xs text-text-muted mt-1">
 					{formatRestockDate(record.completed_at)}
 					{" · "}{record.completed_by?.name ?? record.completed_by_tech?.name ?? "—"}
@@ -55,7 +58,7 @@ function CompleteStep({ record, stockItems, onReset }: {
 			</div>
 			{record.restock_lines.length > 0 && (
 				<div className="bg-surface rounded-lg border border-border overflow-hidden mb-4">
-					<div className="px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-muted uppercase tracking-wider">Restocked</div>
+					<div className="px-4 py-2 border-b border-border-subtle text-[10px] font-semibold text-text-muted uppercase tracking-wider">{t("restock.restocked")}</div>
 					{record.restock_lines.map((line) => (
 						<div key={line.id} className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border-subtle last:border-0">
 							{(() => {
@@ -73,23 +76,23 @@ function CompleteStep({ record, stockItems, onReset }: {
 							})()}
 							<div className="flex items-center gap-3 shrink-0">
 								<span className="text-sm font-semibold text-success">+{line.qty_restocked}</span>
-								{line.qty_shortfall > 0 && <span className="text-xs text-warning-text">({line.qty_shortfall} short)</span>}
+								{line.qty_shortfall > 0 && <span className="text-xs text-warning-text">{t("restock.nShort", { count: line.qty_shortfall })}</span>}
 							</div>
 						</div>
 					))}
 				</div>
 			)}
 			{record.restock_lines.length === 0 && (
-				<p className="text-sm text-text-muted text-center mb-4">No items restocked — all were at or above standard.</p>
+				<p className="text-sm text-text-muted text-center mb-4">{t("restock.noneRestocked")}</p>
 			)}
 			{hasShortfall && (
-				<p className="text-xs text-warning-text mb-4">Some items were short in the warehouse. Order more stock to fully restock next time.</p>
+				<p className="text-xs text-warning-text mb-4">{t("restock.shortWarehouse")}</p>
 			)}
 			<button
 				onClick={onReset}
 				className="w-full px-4 py-2.5 text-sm font-semibold bg-surface border border-border rounded-md text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors"
 			>
-				Start another restock
+				{t("restock.startAnother")}
 			</button>
 		</div>
 	);
@@ -98,6 +101,7 @@ function CompleteStep({ record, stockItems, onReset }: {
 // ── RestockContextPanel — implemented in Task 2 ───────────────────────────────────
 
 function RestockContextPanel({ vehicleId, showHeader = false }: { vehicleId: string; showHeader?: boolean }) {
+	const { t } = useTranslation();
 	const { data: groups = [], isLoading } = useVehicleUsageTodayQuery(vehicleId);
 	if (isLoading) return <div className="flex justify-center py-16"><LoadSvg className="w-8 h-8" /></div>;
 
@@ -107,14 +111,14 @@ function RestockContextPanel({ vehicleId, showHeader = false }: { vehicleId: str
 		<div className="px-4 py-4">
 			{showHeader && (
 				<div className="flex items-center gap-2 mb-3">
-					<span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">Usage Since Last Restock</span>
+					<span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{t("restock.usageTitle")}</span>
 					{totalItems > 0 && (
 						<span className="text-[10px] font-bold bg-surface-raised border border-border text-text-muted px-1.5 py-0.5 rounded">{totalItems}</span>
 					)}
 				</div>
 			)}
 			{groups.length === 0 ? (
-				<p className="text-sm text-text-muted">No usage since last restock — proceed to restock.</p>
+				<p className="text-sm text-text-muted">{t("restock.noUsage")}</p>
 			) : (
 				<div className="space-y-3">
 					{groups.map((group) => (
@@ -123,7 +127,7 @@ function RestockContextPanel({ vehicleId, showHeader = false }: { vehicleId: str
 								<span className="text-sm font-semibold text-text-primary">{group.visitName}</span>
 								{group.scheduledAt && (
 									<span className="text-xs text-text-muted">
-										{new Date(group.scheduledAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+										{new Date(group.scheduledAt).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" })}
 									</span>
 								)}
 							</div>
@@ -151,19 +155,20 @@ function RestockContextPanel({ vehicleId, showHeader = false }: { vehicleId: str
 // ── PrepContextPanel — implemented in Task 2 ──────────────────────────────────
 
 function PrepContextPanel({ vehicleId }: { vehicleId: string }) {
+	const { t } = useTranslation();
 	const { data: visits = [], isLoading } = useTomorrowRequirementsQuery(vehicleId);
 	if (isLoading) return <div className="flex justify-center py-16"><LoadSvg className="w-8 h-8" /></div>;
 
 	return (
 		<div className="px-4 py-4">
 			<div className="flex items-center gap-2 mb-3">
-				<span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">Tomorrow's Visits</span>
+				<span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{t("restock.tomorrowTitle")}</span>
 				{visits.length > 0 && (
 					<span className="text-[10px] font-bold bg-surface-raised border border-border text-text-muted px-1.5 py-0.5 rounded">{visits.length}</span>
 				)}
 			</div>
 			{visits.length === 0 ? (
-				<p className="text-sm text-text-muted">No visits scheduled for tomorrow.</p>
+				<p className="text-sm text-text-muted">{t("restock.noVisits")}</p>
 			) : (
 				<div className="space-y-3">
 					{visits.map((visit) => (
@@ -173,7 +178,7 @@ function PrepContextPanel({ vehicleId }: { vehicleId: string }) {
 									<span className="text-sm font-semibold text-text-primary">{visit.visitName}</span>
 									{visit.scheduledAt && (
 										<span className="text-xs text-text-muted">
-											{new Date(visit.scheduledAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+											{new Date(visit.scheduledAt).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" })}
 										</span>
 									)}
 								</div>
@@ -192,9 +197,9 @@ function PrepContextPanel({ vehicleId }: { vehicleId: string }) {
 												{item.itemName}
 											</span>
 											<div className="flex items-center gap-2 text-xs shrink-0">
-												<span className="text-text-muted">Need <span className="text-text-primary font-semibold">{item.qtyNeeded}</span></span>
+												<span className="text-text-muted">{t("vehicle.need")} <span className="text-text-primary font-semibold">{item.qtyNeeded}</span></span>
 												<span className={`font-semibold ${isShort ? "text-error-text" : isEqual ? "text-warning-text" : "text-success"}`}>
-													Have {item.qtyOnHand}
+													{t("vehicle.have")} {item.qtyOnHand}
 												</span>
 											</div>
 										</div>
@@ -210,6 +215,8 @@ function PrepContextPanel({ vehicleId }: { vehicleId: string }) {
 }
 
 // ── RestockPanel — implemented in Task 3 ──────────────────────────────────────
+
+type Col = "item" | "vehicle" | "whse" | "add" | "need" | "standard" | "warehouse" | "qtyToAdd" | "tomorrowNeed";
 
 const RESTOCK_GRID = "grid-cols-[1fr_72px_72px_80px_80px]";
 const PREP_GRID = "grid-cols-[1fr_64px_64px_72px_72px_80px]";
@@ -233,6 +240,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 	const overLimit = line.qtyToRestock > warehouse;
 	const invItem = line.item.inventory_item;
 	const showTracking = line.qtyToRestock > 0 && (invItem.is_serialized || invItem.is_batch_tracked);
+	const { t } = useTranslation();
 	const [nameExpanded, setNameExpanded] = useState(false);
 	const advisoryId = `restock-advisory-${line.stockItemId}`;
 	// Tighter gutters on a phone: the row now sits inside a bordered table with its
@@ -284,7 +292,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 				{/* Compact past five digits so a large warehouse count can't widen a
 				    56px column; the exact figure stays in the title. */}
 				<span
-					title={`${warehouse} in warehouse`}
+					title={t("restock.inWarehouse", { n: warehouse })}
 					className={`text-center text-sm tabular-nums font-medium ${
 						warehouse === 0 ? "text-error-text font-semibold" : overLimit ? "text-warning-text" : "text-text-secondary"
 					}`}
@@ -299,7 +307,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 						onValue={(n) => onChange(line.stockItemId, Math.max(0, n))}
 						aria-invalid={overLimit}
 						aria-describedby={overLimit ? advisoryId : undefined}
-						aria-label={`Quantity to add for ${invItem.name}`}
+						aria-label={t("restock.qtyToAddFor", { name: invItem.name })}
 						// Fixed height and no siblings in this cell: the input used to
 						// sit above an inline warning, so the moment a line went over
 						// the limit it slid off the row's centre line.
@@ -317,7 +325,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 					className={`${rowInset} mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5`}
 				>
 					<span className="text-[11px] text-warning-text">
-						Only {warehouse} in warehouse — this line will be capped at {warehouse}.
+						{t("restock.onlyN", { n: warehouse })}
 					</span>
 					{/* Fills the input rather than enforcing anything: submitting an
 					    over-limit line stays legal and the backend records the
@@ -327,7 +335,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 						onClick={() => onChange(line.stockItemId, warehouse)}
 						className="px-2 -mx-2 py-3 -my-3 text-[11px] font-semibold text-warning-text underline decoration-warning/50 hover:decoration-warning"
 					>
-						Use {warehouse}
+						{t("restock.useN", { n: warehouse })}
 					</button>
 				</div>
 			)}
@@ -346,11 +354,14 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 							/>
 							{overLimit ? (
 								<p className="mt-1.5 text-xs text-warning-text">
-									Warehouse stock is short for this line — the restock will be capped, so scanned units won't be recorded as tracked.
+									{t("restock.serialShort")}
 								</p>
 							) : line.serialUnitIds.length < line.qtyToRestock ? (
 								<p className="mt-1.5 text-xs text-warning-text">
-									{line.serialUnitIds.length} of {line.qtyToRestock} units scanned — scan all {line.qtyToRestock} to record this line as tracked, or submit as-is to restock it untracked.
+									{t("restock.unitsScanned", {
+										scanned: line.serialUnitIds.length,
+										total: line.qtyToRestock,
+									})}
 								</p>
 							) : null}
 						</>
@@ -365,7 +376,7 @@ function RestockRow({ line, met, subTab, grid, mobile, vehicleId, onChange, onTr
 							/>
 							{overLimit && (
 								<p className="mt-1.5 text-xs text-warning-text">
-									Warehouse stock is short for this line — the restock will be capped, so the selected batch won't be recorded as tracked.
+									{t("restock.batchShort")}
 								</p>
 							)}
 						</>
@@ -402,17 +413,20 @@ function RestockPanel({
 	const RESTOCK_GRID_MOBILE = "grid-cols-[1fr_56px_56px_64px]";
 	const PREP_GRID_MOBILE = "grid-cols-[1fr_48px_48px_48px_64px]";
 
+	const { t } = useTranslation();
 	const mobile = layout === "mobile";
 	const needs = restockLines.filter((l) => l.suggested > 0);
 	const met = restockLines.filter((l) => l.suggested === 0);
 	const grid = mobile
 		? (subTab === "restock" ? RESTOCK_GRID_MOBILE : PREP_GRID_MOBILE)
 		: (subTab === "restock" ? RESTOCK_GRID : PREP_GRID);
-	const headers = mobile
-		? (subTab === "restock" ? ["Item", "Vehicle", "Whse", "Add"] : ["Item", "Vehicle", "Need", "Whse", "Add"])
-		: (subTab === "restock"
-			? ["Item", "Vehicle", "Standard", "Warehouse", "Qty to Add"]
-			: ["Item", "Vehicle", "Standard", "Tomorrow Need", "Warehouse", "Qty to Add"]);
+	const headers: Col[] = mobile
+		? subTab === "restock"
+			? ["item", "vehicle", "whse", "add"]
+			: ["item", "vehicle", "need", "whse", "add"]
+		: subTab === "restock"
+			? ["item", "vehicle", "standard", "warehouse", "qtyToAdd"]
+			: ["item", "vehicle", "standard", "tomorrowNeed", "warehouse", "qtyToAdd"];
 	const totalToRestock = restockLines.reduce((sum, l) => sum + l.qtyToRestock, 0);
 	const anyShortfall = restockLines.some((l) => l.qtyToRestock > Number(l.item.inventory_item.quantity));
 
@@ -427,11 +441,11 @@ function RestockPanel({
 				    between them. */}
 				<div className="bg-canvas">
 					<div className={`flex items-center gap-2 ${pad} pt-2.5 pb-1.5`}>
-						<span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">Restock Quantities</span>
+						<span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{t("restock.quantities")}</span>
 						{needs.length > 0 ? (
-							<span className="text-[10px] font-bold bg-warning/15 text-warning-text px-1.5 py-0.5 rounded">{needs.length} items</span>
+							<span className="text-[10px] font-bold bg-warning/15 text-warning-text px-1.5 py-0.5 rounded">{t("restock.nItems", { count: needs.length })}</span>
 						) : restockLines.length > 0 ? (
-							<span className="text-[10px] font-bold bg-success/15 text-success px-1.5 py-0.5 rounded">All stocked</span>
+							<span className="text-[10px] font-bold bg-success/15 text-success px-1.5 py-0.5 rounded">{t("restock.allStocked")}</span>
 						) : null}
 					</div>
 
@@ -442,7 +456,7 @@ function RestockPanel({
 					{restockLines.length > 0 && (
 						<div className={`grid ${grid} ${pad} pb-2 border-b border-border-strong gap-x-1 bg-base/40`}>
 							{headers.map((h) => (
-								<div key={h} className="text-[10px] font-semibold text-text-muted uppercase tracking-wider text-center first:text-left">{h}</div>
+								<div key={h} className="text-[10px] font-semibold text-text-muted uppercase tracking-wider text-center first:text-left">{t(`restock.col.${h}`)}</div>
 							))}
 						</div>
 					)}
@@ -451,8 +465,8 @@ function RestockPanel({
 				{/* Empty state */}
 				{restockLines.length === 0 && (
 					<div className="flex flex-col items-center justify-center py-12 text-center px-8 border-t border-border-strong">
-						<p className="text-sm text-text-muted">No items configured for restocking.</p>
-						<p className="text-xs text-text-faint mt-1">Set a standard qty on the Stock tab to include items here.</p>
+						<p className="text-sm text-text-muted">{t("restock.noneConfigured")}</p>
+						<p className="text-xs text-text-faint mt-1">{t("restock.setStandardHint")}</p>
 					</div>
 				)}
 
@@ -479,7 +493,7 @@ function RestockPanel({
 					// keep full-strength text — dimming them made the finished work
 					// the hardest part of the table to see.
 					<div className={`flex items-center gap-2 ${pad} pt-3 pb-1 text-success-text`}>
-						<span className="text-[10px] font-semibold uppercase tracking-wider">Already met</span>
+						<span className="text-[10px] font-semibold uppercase tracking-wider">{t("restock.alreadyMet")}</span>
 						<span className="text-[10px] font-semibold tabular-nums">{met.length}</span>
 						<div className="flex-1 h-px bg-success-text/50" />
 					</div>
@@ -504,7 +518,7 @@ function RestockPanel({
 			{anyShortfall && (
 				<div className={`${mobile ? "mx-4" : "mx-5"} mt-3 flex items-start gap-2 bg-warning/10 border border-warning/30 rounded-md px-3 py-2`}>
 					<span className="text-warning-text text-xs font-semibold">⚠</span>
-					<span className="text-xs text-warning-text">Some quantities exceed warehouse stock — restock will be capped at available.</span>
+					<span className="text-xs text-warning-text">{t("restock.exceeds")}</span>
 				</div>
 			)}
 
@@ -513,13 +527,13 @@ function RestockPanel({
 			<div
 				className={`${mobile ? "px-4" : "px-5 sticky bottom-0 bg-base border-t border-border"} pt-5 pb-4`}
 			>
-				<label className="block text-xs text-text-muted mb-1">Notes (optional)</label>
+				<label className="block text-xs text-text-muted mb-1">{t("restock.notesOptional")}</label>
 				<textarea
 					value={notes}
 					onChange={(e) => onNotesChange(e.target.value)}
 					rows={2}
 					maxLength={500}
-					placeholder="e.g. short on filters, will reorder Monday…"
+					placeholder={t("restock.notesPlaceholder")}
 					className="w-full text-sm bg-surface border border-border-input rounded-md px-3 py-2 text-text-primary placeholder:text-faint outline-none focus:border-primary resize-none mb-3"
 				/>
 				<button
@@ -527,9 +541,11 @@ function RestockPanel({
 					disabled={isPending}
 					className="w-full px-4 py-2.5 text-sm font-semibold bg-primary hover:enabled:bg-primary-hover text-on-primary rounded-md transition-colors disabled:opacity-50"
 				>
-					{isPending ? "Applying…"
-						: totalToRestock === 0 && !notes.trim() ? "Complete — Nothing to Restock"
-						: subTab === "restock" ? "Apply Restock" : "Apply Prep"}
+					{t(
+						isPending ? "restock.applying"
+						: totalToRestock === 0 && !notes.trim() ? "restock.completeNothing"
+						: subTab === "restock" ? "restock.applyRestock" : "restock.applyPrep"
+					)}
 				</button>
 			</div>
 		</div>
@@ -547,6 +563,7 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 	onConfirm: () => void;
 	onCancel: () => void;
 }) {
+	const { t } = useTranslation();
 	const activeLines = restockLines.filter((l) => l.qtyToRestock > 0);
 	const totalUnits = activeLines.reduce((sum, l) => sum + l.qtyToRestock, 0);
 	const hasShortfall = activeLines.some((l) => l.qtyToRestock > Number(l.item.inventory_item.quantity));
@@ -558,13 +575,12 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 				<div className="bg-base border border-border rounded-xl shadow-xl w-full max-w-md flex flex-col">
 					<div className="px-5 pt-5 pb-3 border-b border-border">
 						<div className="text-base font-bold text-text-primary">
-							{subTab === "restock" ? "Confirm Restock" : "Confirm Prep"}
+							{t(subTab === "restock" ? "restock.confirmRestock" : "restock.confirmPrep")}
 						</div>
 						<div className="text-xs text-text-muted mt-1">
 							{activeLines.length > 0
-								? `${activeLines.length} item${activeLines.length !== 1 ? "s" : ""} · ${totalUnits} total units moving from warehouse to vehicle.`
-								: "No items to move — recording completion."
-							}
+								? t("restock.confirmSummary", { count: activeLines.length, units: totalUnits })
+								: t("restock.noneToMove")}
 						</div>
 					</div>
 
@@ -572,9 +588,9 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 						{activeLines.length > 0 && (
 							<>
 								<div className="grid grid-cols-[1fr_56px_88px] text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-2">
-									<span>Item</span>
-									<span className="text-center">Adding</span>
-									<span className="text-center">Warehouse After</span>
+									<span>{t("restock.col.item")}</span>
+									<span className="text-center">{t("restock.adding")}</span>
+									<span className="text-center">{t("restock.warehouseAfter")}</span>
 								</div>
 								<div className="space-y-0.5">
 									{activeLines.map((line) => {
@@ -586,7 +602,7 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 												<span className="text-sm text-text-primary">{line.item.inventory_item.name}</span>
 												<span className="text-center text-sm font-semibold text-success">+{line.qtyToRestock}</span>
 												<span className={`text-center text-sm font-medium ${isShort ? "text-warning-text" : "text-text-secondary"}`}>
-													{isShort ? `0 (−${Math.abs(after)} short)` : after}
+													{isShort ? t("restock.shortAfter", { n: Math.abs(after) }) : after}
 												</span>
 											</div>
 										);
@@ -597,7 +613,7 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 						{hasShortfall && (
 							<div className="mt-3 flex items-center gap-2 bg-warning/10 border border-warning/30 rounded px-3 py-2">
 								<span className="text-warning-text text-xs font-semibold">⚠</span>
-								<span className="text-xs text-warning-text">Some quantities exceed warehouse stock — restock will be capped at available.</span>
+								<span className="text-xs text-warning-text">{t("restock.exceeds")}</span>
 							</div>
 						)}
 						{notes.trim() && (
@@ -611,10 +627,10 @@ function ConfirmModal({ subTab, restockLines, notes, isPending, error, onConfirm
 
 					<div className="px-5 py-4 border-t border-border flex items-center justify-between gap-3">
 						<button onClick={onCancel} disabled={isPending} className="px-4 py-2 text-sm font-medium bg-surface border border-border rounded-md text-text-secondary hover:bg-surface-raised transition-colors disabled:opacity-50">
-							Cancel
+							{t("common.cancel")}
 						</button>
 						<button onClick={onConfirm} disabled={isPending} className="px-4 py-2 text-sm font-semibold bg-primary hover:enabled:bg-primary-hover text-on-primary rounded-md transition-colors disabled:opacity-50">
-							{isPending ? "Applying…" : "Confirm & Apply"}
+							{t(isPending ? "restock.applying" : "restock.confirmApply")}
 						</button>
 					</div>
 				</div>
@@ -682,11 +698,12 @@ function computeAttentionLines(record: VehicleRestockRecord, stockItems: Vehicle
 // ── MobileContextAccordion ────────────────────────────────────────────────────
 
 function MobileContextAccordion({ vehicleId, subTab }: { vehicleId: string; subTab: SubTab }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const usage = useVehicleUsageTodayQuery(vehicleId);
 	const prep = useTomorrowRequirementsQuery(vehicleId);
 
-	const title = subTab === "restock" ? "Usage Since Last Restock" : "Tomorrow's Visits";
+	const title = t(subTab === "restock" ? "restock.usageTitle" : "restock.tomorrowTitle");
 	const loading = subTab === "restock" ? usage.isLoading : prep.isLoading;
 
 	let summary: string;
@@ -694,10 +711,10 @@ function MobileContextAccordion({ vehicleId, subTab }: { vehicleId: string; subT
 		summary = "…";
 	} else if (subTab === "restock") {
 		const n = (usage.data ?? []).reduce((s, g) => s + g.items.length, 0);
-		summary = n === 0 ? "No usage since last restock" : `${n} item${n !== 1 ? "s" : ""} used`;
+		summary = n === 0 ? t("restock.noUsageShort") : t("restock.itemsUsed", { count: n });
 	} else {
 		const n = (prep.data ?? []).length;
-		summary = n === 0 ? "No visits tomorrow" : `${n} visit${n !== 1 ? "s" : ""} tomorrow`;
+		summary = n === 0 ? t("restock.noVisitsTomorrow") : t("restock.visitsTomorrow", { count: n });
 	}
 
 	const count = subTab === "restock"
@@ -729,7 +746,7 @@ function MobileContextAccordion({ vehicleId, subTab }: { vehicleId: string; subT
 					{/* Second line says what tapping does. An empty result states the
 					    fact instead and doesn't invite a tap that shows nothing. */}
 					<span className="block text-xs text-text-muted mt-0.5 truncate">
-						{loading ? "Loading…" : count === 0 ? summary : `${summary} — tap to review`}
+						{loading ? t("common.loading") : count === 0 ? summary : t("restock.tapToReview", { summary })}
 					</span>
 				</span>
 				<span className="shrink-0 flex items-center justify-center w-8 h-8 rounded-md border border-border bg-surface">
@@ -753,6 +770,7 @@ function MobileContextAccordion({ vehicleId, subTab }: { vehicleId: string; subT
 // ── RestockWorkflow ───────────────────────────────────────────────────────────
 
 export default function RestockWorkflow({ vehicleId, stockItems, layout = "desktop" }: { vehicleId: string; stockItems: VehicleStockItem[]; layout?: "desktop" | "mobile" }) {
+	const { t } = useTranslation();
 	const [subTab, setSubTab] = useState<SubTab>("restock");
 	const [completedRecord, setCompletedRecord] = useState<VehicleRestockRecord | null>(null);
 	const [restockLines, setRestockLines] = useState<RestockLine[]>([]);
@@ -845,7 +863,7 @@ export default function RestockWorkflow({ vehicleId, stockItems, layout = "deskt
 					setSummaryDismissed(false);
 				},
 				onError: (e) => {
-					setSubmitError(e instanceof Error ? e.message : "Failed to complete restock");
+					setSubmitError(e instanceof Error ? e.message : t("restock.failed"));
 				},
 			},
 		);
@@ -870,14 +888,14 @@ export default function RestockWorkflow({ vehicleId, stockItems, layout = "deskt
 			    switch on the technician vehicle page. */}
 			<div className="px-3 py-2 flex-shrink-0">
 				<SegmentedToggle<SubTab>
-					ariaLabel="Restock mode"
+					ariaLabel={t("restock.modeAria")}
 					value={subTab}
 					onChange={handleSubTabChange}
 					fullWidth={layout === "mobile"}
 					variant="flat"
 					options={[
-						{ id: "restock", label: "Restock" },
-						{ id: "prepare", label: "Prep for Tomorrow" },
+						{ id: "restock", label: t("restock.modeRestock") },
+						{ id: "prepare", label: t("restock.modePrep") },
 					]}
 				/>
 			</div>
@@ -946,7 +964,7 @@ export default function RestockWorkflow({ vehicleId, stockItems, layout = "deskt
 
 			{completedRecord && attentionLines.length > 0 && !summaryDismissed && (
 				<RestockSummaryModal
-					title={completedRecord.mode === "prepare" ? "Prep Summary" : "Restock Summary"}
+					title={t(completedRecord.mode === "prepare" ? "restock.prepSummary" : "restock.restockSummary")}
 					lines={attentionLines}
 					onAcknowledge={() => setSummaryDismissed(true)}
 				/>

@@ -1,4 +1,5 @@
 ﻿import { ChevronLeft, ChevronRight, History, X, Save } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import FullPopup from "../FullPopup";
 import StepWizard from "./StepWizard";
 import type { FormStep } from "../../../types/common";
@@ -58,7 +59,7 @@ export function FormWizardContainer<T extends number>({
 	submitLabel,
 	children,
 	onStartFromExisting,
-	startFromExistingLabel = "Start from Draft or Existing",
+	startFromExistingLabel: startFromExistingLabelProp,
 	hideStartFromExisting = false,
 	draftsOnly = false,
 	hideSourceToggle = false,
@@ -72,6 +73,8 @@ export function FormWizardContainer<T extends number>({
 	canSaveDraft = false,
 	isSavingDraft = false,
 }: FormWizardContainerProps<T>) {
+	const { t } = useTranslation();
+	const startFromExistingLabel = startFromExistingLabelProp ?? t("wizard.startFromExisting");
 	const isFirstStep = currentStep === (1 as T);
 	const isLastStep = !steps.length || currentStep === steps[steps.length - 1]?.id;
 	const stacked = steps.length >= 4;
@@ -204,7 +207,7 @@ export function FormWizardContainer<T extends number>({
 							className={btnGhost}
 						>
 							<ChevronLeft size={15} />
-							Back
+							{t("wizard.back")}
 						</button>
 					)}
 
@@ -216,7 +219,7 @@ export function FormWizardContainer<T extends number>({
 							className={btnGhost}
 						>
 							<X size={14} />
-							Cancel Search
+							{t("wizard.cancelSearch")}
 						</button>
 					) : showTemplates ? (
 						<button
@@ -232,9 +235,7 @@ export function FormWizardContainer<T extends number>({
 						>
 							<History size={14} />
 							{showBack
-								? draftsOnly
-									? "Draft"
-									: "Existing / Draft"
+								? t(draftsOnly ? "wizard.draft" : "wizard.existingDraft")
 								: startFromExistingLabel}
 						</button>
 					) : null}
@@ -253,27 +254,27 @@ export function FormWizardContainer<T extends number>({
 										size={13}
 										className="animate-pulse"
 									/>
-									Saving…
+									{t("adjust.saving")}
 								</button>
 							) : canSaveDraft && !isLoading ? (
 								<button
 									type="button"
 									onClick={onSaveDraft}
-									title="Save current form state as a draft"
+									title={t("wizard.saveDraftTitle")}
 									className={btnAmber}
 								>
 									<Save size={13} />
-									Save Draft
+									{t("wizard.saveDraft")}
 								</button>
 							) : (
 								<button
 									type="button"
 									disabled
-									title="Add some content before saving a draft"
+									title={t("wizard.saveDraftEmpty")}
 									className={btnMuted}
 								>
 									<Save size={13} />
-									Save Draft
+									{t("wizard.saveDraft")}
 								</button>
 							)}
 							<div className="w-px h-5 bg-surface-raised flex-shrink-0" />
@@ -286,7 +287,7 @@ export function FormWizardContainer<T extends number>({
 						disabled={isLoading}
 						className={btnGhost}
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 
 					{!isSourceSearchOpen &&
@@ -297,7 +298,7 @@ export function FormWizardContainer<T extends number>({
 								disabled={!canGoNext || isLoading}
 								className={btnPrimary}
 							>
-								Next
+								{t("wizard.next")}
 								<ChevronRight size={15} />
 							</button>
 						) : onSubmit ? (
@@ -307,9 +308,7 @@ export function FormWizardContainer<T extends number>({
 								disabled={isLoading || !canSubmit}
 								className={btnSuccess(isLoading, !canSubmit)}
 							>
-								{isLoading
-									? "Processing…"
-									: submitLabel || "Submit"}
+								{isLoading ? t("wizard.processing") : submitLabel || t("wizard.submit")}
 							</button>
 						) : null)}
 				</div>

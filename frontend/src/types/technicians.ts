@@ -137,6 +137,7 @@ export interface Technician {
 	organization_role: { id: string; name: string } | null;
 	permissions: string[];
 	theme: "dark" | "light" | "system";
+	language: "en" | "es";
 	mfaEnabled?: boolean;
 }
 
@@ -169,6 +170,7 @@ export interface UpdateTechnicianInput {
 	hire_date?: Date;
 	last_login?: Date;
 	theme?: "dark" | "light" | "system";
+	language?: "en" | "es";
 }
 
 // ============================================================================
@@ -210,6 +212,7 @@ export const UpdateTechnicianSchema = z
 		hire_date: z.coerce.date().optional(),
 		last_login: z.coerce.date().optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
+		language: z.enum(["en", "es"]).optional(),
 	})
 	.refine(
 		(data) =>
@@ -223,7 +226,8 @@ export const UpdateTechnicianSchema = z
 			data.cost_rate !== undefined ||
 			data.hire_date !== undefined ||
 			data.last_login !== undefined ||
-			data.theme !== undefined,
+			data.theme !== undefined ||
+			data.language !== undefined,
 		{ message: "At least one field must be provided for update" }
 	);
 

@@ -2136,6 +2136,7 @@ export async function runReceiptOcr(
 				ocrFlags.push({
 					code: "not_a_receipt",
 					message: `The image reads as a ${extraction.document_type.replace(/_/g, " ")}, not a receipt`,
+					vars: { doc: extraction.document_type.replace(/_/g, " ") },
 				});
 			}
 			// Hard-coded because the org currency is not modelled anywhere today. When
@@ -2144,6 +2145,7 @@ export async function runReceiptOcr(
 				ocrFlags.push({
 					code: "foreign_currency",
 					message: `Receipt is priced in ${extraction.currency}`,
+					vars: { currency: extraction.currency },
 				});
 			}
 
@@ -2391,6 +2393,7 @@ export async function requestPreauth(
 		const flags: PurchaseFlag[] = verdict.breaches.map((b) => ({
 			code: "limit_breach",
 			message: `Exceeds the ${b.code} limit of ${b.limit} (${b.would_be})`,
+			vars: { variant: b.code, limit: Number(b.limit), would_be: Number(b.would_be) },
 		}));
 
 		const purchase = await sdb.$transaction(async (tx) => {
@@ -2516,6 +2519,11 @@ export async function decidePreauth(
 			body: parsed.approve
 				? `Go ahead with the purchase up to ${toDecimal(existing.estimated_amount).toFixed(2)}.`
 				: (parsed.note ?? "Dispatch did not approve this purchase."),
+			vars: {
+				amount: toDecimal(existing.estimated_amount).toNumber(),
+				variant: parsed.approve ? "approved" : "denied",
+				keep_body: !parsed.approve && !!parsed.note,
+			},
 			actionUrl: `/technician/purchases/${purchaseId}`,
 		}, orgId);
 		// Nothing was emitted here at all, so the technician holding the answer and
@@ -2975,10 +2983,11 @@ export async function submitPurchase(
 			flags.push({
 				code: "limit_breach",
 				message: `Exceeds the ${b.code} limit of ${b.limit} (${b.would_be})`,
+				vars: { variant: b.code, limit: Number(b.limit), would_be: Number(b.would_be) },
 			});
 		}
 		if (duplicate) {
-			flags.push({ code: "duplicate_suspected", message: duplicate.message });
+			flags.push({ code: "duplicate_suspected", message: duplicate.message, vars: duplicate.vars });
 		}
 
 		const sameVendorSameDay = similar.filter(
@@ -3031,6 +3040,7 @@ export async function submitPurchase(
 							code: "not_billed" as const,
 							message:
 								"Some lines are not attached to a visit, so no charge was raised for them — add it to the right visit by hand",
+							vars: {},
 						},
 					]
 				: flags;
@@ -3487,6 +3497,11 @@ export async function reviewPurchase(
 			type: "field_purchase_reviewed",
 			title: titles[parsed.decision],
 			body: parsed.note ?? `Your ${formatCurrency(toDecimal(existing.total).toNumber())} purchase was ${outcome}.`,
+			vars: {
+				amount: toDecimal(existing.total).toNumber(),
+				variant: parsed.decision === "approve" && needsSecondSignoff ? "approve_pending" : parsed.decision,
+				keep_body: !!parsed.note,
+			},
 			actionUrl: `/technician/purchases/${purchaseId}`,
 		}, orgId);
 		emitToOrg(orgId, "field_purchase:reviewed", { id: purchaseId, status });
@@ -3769,6 +3784,11 @@ export async function secondSignoff(
 			body:
 				parsed.note ??
 				`Your ${toDecimal(existing.total).toFixed(2)} purchase was ${status} at second sign-off.`,
+			vars: {
+				amount: toDecimal(existing.total).toNumber(),
+				variant: parsed.approve ? "second_approve" : "second_reject",
+				keep_body: !!parsed.note,
+			},
 			actionUrl: `/technician/purchases/${purchaseId}`,
 		}, orgId);
 		emitToOrg(orgId, "field_purchase:reviewed", { id: purchaseId, status });

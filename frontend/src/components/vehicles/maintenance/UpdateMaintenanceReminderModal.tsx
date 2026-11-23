@@ -1,9 +1,9 @@
 import { FormWizardContainer } from "../../ui/forms/FormWizardContainer";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useToast } from "../../ui/useToast";
 import { useUpdateMaintenanceReminderMutation, useVehicleOdometer } from "../../../hooks/useVehicles";
 import {
-    MAINTENANCE_CATEGORY_LABELS,
     UpdateMaintenanceReminderSchema,
     type MaintenanceCategory,
     type IntervalUnit,
@@ -15,12 +15,7 @@ import { CATEGORY_TILES, TINT_CLASSES } from "./categoryTiles";
 const INPUT = "border border-border-input px-2.5 h-[34px] w-full rounded bg-base text-text-primary text-sm focus:border-primary focus:outline-none transition-colors min-w-0 disabled:opacity-60";
 const LABEL = "block mb-0.5 text-xs font-medium text-text-tertiary uppercase tracking-wider";
 
-const INTERVAL_UNIT_LABELS: Record<IntervalUnit, string> = {
-    days: "Days",
-    weeks: "Weeks",
-    months: "Months",
-    years: "Years",
-};
+const INTERVAL_UNITS: IntervalUnit[] = ["days", "weeks", "months", "years"];
 
 interface UpdateMaintenanceReminderProps {
     vehicleId: string;
@@ -48,6 +43,7 @@ export default function UpdateMaintenanceReminderModal({
     const [dueOdometerMi, setDueOdometerMi] = useState<string>(reminder.due_odometer_mi != null ? String(reminder.due_odometer_mi) : "");
 
     const toast = useToast();
+    const { t } = useTranslation();
     const { mutateAsync: updateMaintenanceReminder } = useUpdateMaintenanceReminderMutation();
     const [isLoading, setIsLoading] = useState(false);
 
@@ -68,19 +64,19 @@ export default function UpdateMaintenanceReminderModal({
     const invokeUpdate = async () => {
         if (isLoading) return;
         if (!category) {
-            toast.error("Pick a category before saving.");
+            toast.error(t("reminder.needCategory"));
             return;
         }
         if (!title.trim()) {
-            toast.error("Give the reminder a title.");
+            toast.error(t("reminder.needTitle"));
             return;
         }
         if (repeating && !intervalMiles && !intervalCount) {
-            toast.error("Set an interval in miles, or a time interval.");
+            toast.error(t("reminder.needInterval"));
             return;
         }
         if (!repeating && !dueAt && !dueOdometerMi) {
-            toast.error("Set a due date or mileage.");
+            toast.error(t("reminder.needDue"));
             return;
         }
 
@@ -98,18 +94,18 @@ export default function UpdateMaintenanceReminderModal({
 
         const result = UpdateMaintenanceReminderSchema.safeParse(input);
         if (!result.success) {
-            toast.error(result.error.issues[0]?.message ?? "Check the form for errors.");
+            toast.error(result.error.issues[0]?.message ?? t("reminder.checkForm"));
             return;
         }
 
         setIsLoading(true);
         try {
             await updateMaintenanceReminder({ vehicleId, reminderId: reminder.id, data: result.data });
-            toast.success("Reminder updated.");
+            toast.success(t("reminder.updated"));
             setIsModalOpen(false);
             onSuccess?.();
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Failed to update reminder.");
+            toast.error(error instanceof Error ? error.message : t("reminder.updateFailed"));
         } finally {
             setIsLoading(false);
         }
@@ -117,17 +113,17 @@ export default function UpdateMaintenanceReminderModal({
 
     const formContent = useMemo(() => (
         <div className="space-y-4">
-            <label className={LABEL}>Category</label>
+            <label className={LABEL}>{t("reminder.category")}</label>
             <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
-                {CATEGORY_TILES.map((t) => {
-                    const Icon = t.icon;
-                    const isSelected = category === t.value;
-                    const tint = TINT_CLASSES[t.tint];
+                {CATEGORY_TILES.map((tile) => {
+                    const Icon = tile.icon;
+                    const isSelected = category === tile.value;
+                    const tint = TINT_CLASSES[tile.tint];
                     return (
                         <button
-                            key={t.value}
+                            key={tile.value}
                             type="button"
-                            onClick={() => setCategory(t.value)}
+                            onClick={() => setCategory(tile.value)}
                             className={`flex flex-col items-center gap-1 rounded-lg border px-1 py-2 text-center transition-colors ${
                                 isSelected ? tint.selected : "border-border-subtle bg-base text-text-muted hover:border-border-strong"
                             }`}
@@ -136,7 +132,7 @@ export default function UpdateMaintenanceReminderModal({
                                 <Icon size={13} />
                             </div>
                             <span className="text-[9.5px] font-semibold leading-tight">
-                                {MAINTENANCE_CATEGORY_LABELS[t.value]}
+                                {t(`vehicle.maintCat.${tile.value}`)}
                             </span>
                         </button>
                     )
@@ -144,7 +140,7 @@ export default function UpdateMaintenanceReminderModal({
             </div>
 
             <div>
-                <label className={LABEL}>Title</label>
+                <label className={LABEL}>{t("reminder.title")}</label>
                 <input
                     className={INPUT}
                     value={title}
@@ -153,7 +149,7 @@ export default function UpdateMaintenanceReminderModal({
             </div>
 
             <div>
-                <label className={LABEL}>Description (optional)</label>
+                <label className={LABEL}>{t("reminder.description")}</label>
                 <textarea
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
@@ -164,7 +160,7 @@ export default function UpdateMaintenanceReminderModal({
             </div>
 
             <div className="rounded-lg border border-border-subtle bg-base p-3 space-y-2">
-                <label className={LABEL}>Schedule</label>
+                <label className={LABEL}>{t("reminder.schedule")}</label>
                 <div className="grid grid-cols-2 gap-1.5">
                     <button
                         type="button"
@@ -173,7 +169,7 @@ export default function UpdateMaintenanceReminderModal({
                             repeating ? "border-primary bg-primary/10 text-primary" : "border-border-subtle bg-base text-text-muted hover:border-border-strong"
                         }`}
                     >
-                        Repeating
+                        {t("reminder.repeating")}
                     </button>
                     <button
                         type="button"
@@ -182,7 +178,7 @@ export default function UpdateMaintenanceReminderModal({
                             !repeating ? "border-primary bg-primary/10 text-primary" : "border-border-subtle bg-base text-text-muted hover:border-border-strong"
                         }`}
                     >
-                        One time
+                        {t("reminder.oneTime")}
                     </button>
                 </div>
 
@@ -190,7 +186,7 @@ export default function UpdateMaintenanceReminderModal({
                     ? (
                         <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
                             <div>
-                                <label className={LABEL}>Every (mi)</label>
+                                <label className={LABEL}>{t("reminder.everyMi")}</label>
                                 <input
                                     className={`${INPUT} text-right tabular-nums`}
                                     inputMode="numeric"
@@ -199,9 +195,9 @@ export default function UpdateMaintenanceReminderModal({
                                     placeholder="mi"
                                 />
                             </div>
-                            <span className="pb-2 text-xs font-medium text-text-muted">and/or</span>
+                            <span className="pb-2 text-xs font-medium text-text-muted">{t("reminder.andOr")}</span>
                             <div>
-                                <label className={LABEL}>Every</label>
+                                <label className={LABEL}>{t("reminder.every")}</label>
                                 <div className="flex gap-1.5">
                                     <div className="w-16 flex-none">
                                         <input
@@ -217,8 +213,8 @@ export default function UpdateMaintenanceReminderModal({
                                         value={intervalUnit}
                                         onChange={(e) => setIntervalUnit(e.target.value as IntervalUnit)}
                                     >
-                                        {(Object.keys(INTERVAL_UNIT_LABELS) as IntervalUnit[]).map((unit) => (
-                                            <option key={unit} value={unit}>{INTERVAL_UNIT_LABELS[unit]}</option>
+                                        {INTERVAL_UNITS.map((unit) => (
+                                            <option key={unit} value={unit}>{t(`reminder.unit.${unit}`)}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -228,7 +224,7 @@ export default function UpdateMaintenanceReminderModal({
                     : (
                         <div className="grid grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)] gap-2 items-end">
                             <div>
-                                <label className={LABEL}>Due date</label>
+                                <label className={LABEL}>{t("reminder.dueDate")}</label>
                                 <input
                                     type="date"
                                     className={`${INPUT} appearance-none`}
@@ -236,10 +232,10 @@ export default function UpdateMaintenanceReminderModal({
                                     onChange={(e) => setDueAt(e.target.value)}
                                 />
                             </div>
-                            <span className="pb-2 text-xs font-medium text-text-muted">and/or</span>
+                            <span className="pb-2 text-xs font-medium text-text-muted">{t("reminder.andOr")}</span>
                             <div>
                                     <div className=" items-baseline justify-between gap-1">
-                                        <label className={LABEL}>Due at (mi)</label>
+                                        <label className={LABEL}>{t("reminder.dueAtMi")}</label>
                                         
                                     </div>
                                     <input
@@ -254,7 +250,7 @@ export default function UpdateMaintenanceReminderModal({
                                 <span/><span/>
                                 {currentOdometerMi != null && (
                                     <span className="text-[10px] justify-self-end normal-case tracking-normal font-normal text-text-muted whitespace-nowrap">
-                                        currently at {currentOdometerMi.toLocaleString()} mi
+                                        {t("reminder.currentlyAt", { miles: currentOdometerMi.toLocaleString() })}
                                     </span>
                                 )}
                         </div>
@@ -262,11 +258,11 @@ export default function UpdateMaintenanceReminderModal({
                 }
             </div>
         </div>
-    ), [category, title, description, repeating, intervalMiles, intervalUnit, intervalCount, dueAt, dueOdometerMi, currentOdometerMi]);
+    ), [category, title, description, repeating, intervalMiles, intervalUnit, intervalCount, dueAt, dueOdometerMi, currentOdometerMi, t]);
 
     return (
         <FormWizardContainer
-            title="Edit maintenance reminder"
+            title={t("reminder.editTitle")}
             steps={[]}
             currentStep={1}
             visitedSteps={new Set([1])}
@@ -277,7 +273,7 @@ export default function UpdateMaintenanceReminderModal({
                 resetForm();
             }}
             onSubmit={invokeUpdate}
-            submitLabel="Update reminder"
+            submitLabel={t("reminder.update")}
         >
             {formContent}
         </FormWizardContainer>

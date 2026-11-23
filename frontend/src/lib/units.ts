@@ -72,6 +72,8 @@
 // catalog doesn't actually have. A separate `rec21` field is the right home
 // for genuine package-type codes if that need ever arrives.
 
+import i18n from "../i18n";
+
 export const DEFAULT_UNIT_CODE = "each";
 
 export const UNIT_CODES = [
@@ -785,9 +787,14 @@ export function unitDef(code: string | null | undefined): UnitDef | LegacyUnitDe
  * Use this where the number and the unit are styled differently (stat tiles,
  * placement rows). Use formatQty where they belong to one run of text.
  */
+// Only unit words are keyed (units.<code>_one/_other); symbols like ft or kg fall back to UNITS.
+const tUnit = i18n.t as unknown as (key: string, opts: { count: number; defaultValue: string }) => string;
+
 export function unitLabel(code: string | null | undefined, qty?: number): string {
 	const def = unitDef(code);
-	return qty === 1 ? def.singular : def.plural;
+	const english = qty === 1 ? def.singular : def.plural;
+	if ("legacy" in def) return english;
+	return tUnit(`units.${def.code}`, { count: qty ?? 2, defaultValue: english });
 }
 
 /** "14 units" · "1 unit" · "0.42 units" · "14 ft" · "3 boxes" */

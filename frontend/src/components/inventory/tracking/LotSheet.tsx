@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import Drawer from "../../ui/Drawer";
 import { Field, SheetError } from "./sheetShared";
@@ -19,6 +20,7 @@ export interface LotSheetProps {
 }
 
 function LotDetail({ lot, vehicleId }: { lot: BatchListRow; vehicleId: string }) {
+	const { t } = useTranslation();
 	const onThisVehicle = lot.vehicles.find((v) => v.vehicle_id === vehicleId);
 	const otherVehicles = lot.vehicles.filter((v) => v.vehicle_id !== vehicleId);
 
@@ -31,7 +33,7 @@ function LotDetail({ lot, vehicleId }: { lot: BatchListRow; vehicleId: string })
 					</p>
 					{lot.recalled_at && (
 						<span className="shrink-0 rounded border border-error-border bg-error-bg px-2 py-0.5 text-[10px] font-semibold text-error-text">
-							Recalled
+							{t("tracking.recalled")}
 						</span>
 					)}
 				</div>
@@ -47,24 +49,23 @@ function LotDetail({ lot, vehicleId }: { lot: BatchListRow; vehicleId: string })
 						className="mt-0.5 shrink-0 text-error-text"
 					/>
 					<p className="text-xs text-error-text">
-						This lot was recalled on {formatDate(lot.recalled_at)}. Do
-						not install remaining units — report and set aside.
+						{t("tracking.recallNotice", { date: formatDate(lot.recalled_at) })}
 					</p>
 				</div>
 			)}
 
 			<div className="px-5">
 				<Field
-					label="On this vehicle"
+					label={t("tracking.onThisVehicle")}
 					value={String(onThisVehicle?.qty_on_hand ?? 0)}
 				/>
-				<Field label="In warehouse" value={String(lot.qty_in_warehouse)} />
-				<Field label="Received (total)" value={String(lot.qty_received)} />
+				<Field label={t("tracking.inWarehouse")} value={String(lot.qty_in_warehouse)} />
+				<Field label={t("tracking.receivedTotal")} value={String(lot.qty_received)} />
 				{lot.expires_at && (
-					<Field label="Expires" value={formatDate(lot.expires_at)} />
+					<Field label={t("tracking.expires")} value={formatDate(lot.expires_at)} />
 				)}
 				{lot.supplier && (
-					<Field label="Supplier" value={lot.supplier} />
+					<Field label={t("tracking.supplier")} value={lot.supplier} />
 				)}
 			</div>
 
@@ -72,7 +73,7 @@ function LotDetail({ lot, vehicleId }: { lot: BatchListRow; vehicleId: string })
 				<>
 					<div className="px-5 pt-4 pb-2">
 						<p className="text-xs font-medium uppercase tracking-wider text-text-tertiary">
-							Also On
+							{t("tracking.alsoOn")}
 						</p>
 					</div>
 					<div className="px-5 pb-4 space-y-1.5">
@@ -105,29 +106,28 @@ function LotList({
 	vehicleId: string;
 	onPick: (lot: BatchListRow) => void;
 }) {
+	const { t } = useTranslation();
 	const { data, isLoading, isError } = useBatchesQuery(itemId);
 	const lots = (data?.batches ?? []).filter((lot) =>
 		lot.vehicles.some((v) => v.vehicle_id === vehicleId),
 	);
 
 	if (isLoading) {
-		return <p className="px-5 py-6 text-sm text-text-muted">Loading lots…</p>;
+		return <p className="px-5 py-6 text-sm text-text-muted">{t("tracking.loadingLots")}</p>;
 	}
 
 	if (isError) {
-		return (
-			<SheetError message="Couldn't load lots. Check your connection and try again." />
-		);
+		return <SheetError message={t("tracking.lotsFailed")} />;
 	}
 
 	if (lots.length === 0) {
-		return <p className="px-5 py-6 text-sm text-text-muted">No lots on this vehicle.</p>;
+		return <p className="px-5 py-6 text-sm text-text-muted">{t("tracking.noLots")}</p>;
 	}
 
 	return (
 		<div className="px-5 py-3">
 			<p className="mb-2 text-xs text-text-muted">
-				{lots.length} lot{lots.length !== 1 ? "s" : ""} on this vehicle
+				{t("tracking.lotsOnVehicle", { count: lots.length })}
 			</p>
 			<div className="space-y-1.5">
 				{lots.map((lot) => {
@@ -165,6 +165,7 @@ export default function LotSheet({ target, onClose, vehicleId }: LotSheetProps) 
 	// hands us the entry point. See SerialSheet's identical comment for why this
 	// resets on target change rather than on unmount (Drawer keeps children
 	// mounted through its 200ms exit transition).
+	const { t } = useTranslation();
 	const [drilledLot, setDrilledLot] = useState<BatchListRow | null>(null);
 	const [lastItemId, setLastItemId] = useState<string | null>(null);
 	// Normalize to null FIRST, then compare against the stored (also-null) value.
@@ -177,7 +178,7 @@ export default function LotSheet({ target, onClose, vehicleId }: LotSheetProps) 
 		if (drilledLot !== null) setDrilledLot(null);
 	}
 
-	const title = drilledLot ? "Lot" : (target?.itemName ?? "");
+	const title = drilledLot ? t("tracking.lot") : (target?.itemName ?? "");
 
 	return (
 		<Drawer isOpen={!!target} onClose={onClose} title={title} side="center">
@@ -188,7 +189,7 @@ export default function LotSheet({ target, onClose, vehicleId }: LotSheetProps) 
 					className="flex h-11 w-full items-center gap-1.5 border-b border-border-subtle px-5 text-left text-sm text-text-secondary transition-colors hover:text-text-primary"
 				>
 					<ChevronLeft size={16} />
-					Back to lots
+					{t("tracking.backToLots")}
 				</button>
 			)}
 

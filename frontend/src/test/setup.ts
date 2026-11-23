@@ -1,6 +1,8 @@
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
+// Components render English text through t(), the same as the app.
+import "../i18n";
 
 // Cleanup after each test
 afterEach(() => {

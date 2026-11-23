@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { RotateCw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useDialogA11y } from "../../hooks/useDialogA11y";
 import { MAX_SCALE, MIN_SCALE, useImagePanZoom } from "../../hooks/useImagePanZoom";
@@ -29,6 +30,7 @@ export default function ReceiptLightbox({
 }) {
 	const { containerRef, scale, stepZoom, handlers } = useImagePanZoom(url);
 	const dialogProps = useDialogA11y<HTMLDivElement>(onClose);
+	const { t } = useTranslation();
 
 	// Captured, not bubbled. The dispatch review panel stays mounted behind this,
 	// so an Escape allowed to propagate would close the sheet and act on the panel
@@ -80,7 +82,7 @@ export default function ReceiptLightbox({
 			{/* At the bottom because that is where a thumb is. The sheet covers the
 			    bottom nav outright, so the space is free. */}
 			<div className="flex items-center justify-between gap-2 border-t border-border bg-base px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-				<Control label="Close" onClick={onClose}>
+				<Control label={t("common.close")} onClick={onClose}>
 					<X aria-hidden size={18} />
 				</Control>
 				<span className="text-xs tabular-nums text-text-tertiary">
@@ -88,20 +90,20 @@ export default function ReceiptLightbox({
 				</span>
 				<div className="flex items-center gap-1">
 					<Control
-						label="Zoom out"
+						label={t("capture.zoomOut")}
 						disabled={scale <= MIN_SCALE + 0.01}
 						onClick={() => stepZoom(-1)}
 					>
 						<ZoomOut aria-hidden size={18} />
 					</Control>
 					<Control
-						label="Zoom in"
+						label={t("capture.zoomIn")}
 						disabled={scale >= MAX_SCALE - 0.01}
 						onClick={() => stepZoom(1)}
 					>
 						<ZoomIn aria-hidden size={18} />
 					</Control>
-					<Control label="Rotate" onClick={onRotate}>
+					<Control label={t("capture.rotate")} onClick={onRotate}>
 						<RotateCw aria-hidden size={18} />
 					</Control>
 				</div>

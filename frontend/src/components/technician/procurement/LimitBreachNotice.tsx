@@ -1,4 +1,5 @@
 import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { describeBreach, type BreachShare } from "./limitBreachCopy";
 import type { LimitBreach } from "../../../types/fieldPurchases";
 
@@ -23,6 +24,8 @@ export default function LimitBreachNotice({
 	 */
 	shares?: readonly BreachShare[];
 }) {
+	// Also re-renders the rows from describeBreach when the language changes.
+	const { t } = useTranslation();
 	if (breaches.length === 0) return null;
 
 	return (
@@ -35,7 +38,7 @@ export default function LimitBreachNotice({
 		>
 			<p className="flex items-center gap-1.5 text-xs font-semibold text-warning-text">
 				<AlertTriangle size={12} aria-hidden className="flex-shrink-0" />
-				Over your limit — needs dispatch pre-approval
+				{t("limits.heading")}
 			</p>
 			<ul className="mt-2 space-y-2">
 				{breaches.map((b) => {

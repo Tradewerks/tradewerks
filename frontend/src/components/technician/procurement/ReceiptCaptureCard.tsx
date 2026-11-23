@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { dateLocale } from "../../../i18n";
 import {
 	Camera,
 	Check,
@@ -33,7 +35,10 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 	const upload = useUploadReceipt();
 	const retryOcr = useRetryOcr();
 	const toast = useToast();
+	const { t } = useTranslation();
 	const copy = sheetCopy(purchase.kind);
+	const noun = copy.noun;
+	const replaceLabel = t("capture.replacePhoto");
 
 	// The object URL holds the whole photo in memory until it is let go, and a
 	// technician can retake one several times before it uploads.
@@ -59,7 +64,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 		try {
 			await retryOcr.mutateAsync(purchase.id);
 		} catch (err) {
-			toast.error(errorMessage(err, `Could not read the ${copy.noun}`));
+			toast.error(errorMessage(err, t("capture.readFailed", { noun })));
 		}
 	}
 
@@ -70,7 +75,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 		await upload.mutateAsync({ id: purchase.id, capture });
 		setPreview(URL.createObjectURL(capture.file));
 		setScanning(false);
-		toast.success(`${copy.receiptTitle} attached`);
+		toast.success(t("capture.attached", { title: copy.receiptTitle, noun }));
 	}
 
 	return (
@@ -86,7 +91,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 						) : (
 							<MapPinOff aria-hidden size={12} />
 						)}
-						{hasGeo ? "Location recorded" : "No location recorded"}
+						{t(hasGeo ? "capture.locationRecorded" : "capture.noLocation")}
 					</span>
 				)}
 			</div>
@@ -96,7 +101,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 					<button
 						type="button"
 						onClick={() => setViewing(true)}
-						aria-label={`Open the ${copy.noun} photo full screen`}
+						aria-label={t("capture.openFull", { noun })}
 						className={`relative mb-3 block min-h-11 w-full overflow-hidden rounded-lg border border-border transition-colors duration-150 hover:bg-surface-raised ${FOCUS_RING}`}
 					>
 						{/* Cropped to a consistent strip rather than letterboxed: a
@@ -109,13 +114,13 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 							className="h-40 w-full object-cover object-top"
 						/>
 						<span className="absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 rounded-md bg-overlay px-2 py-1 text-xs font-medium text-text-primary">
-							<Maximize2 aria-hidden size={12} /> View
+							<Maximize2 aria-hidden size={12} /> {t("capture.view")}
 						</span>
 					</button>
 					{viewing && (
 						<ReceiptLightbox
 							url={shown}
-							label={`${copy.receiptTitle} photo`}
+							label={t("capture.photoLabel", { title: copy.receiptTitle })}
 							rotation={rotation}
 							onRotate={() =>
 								setRotation((r) => (r + 90) % 360)
@@ -139,16 +144,15 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 							size={12}
 							className="animate-spin"
 						/>{" "}
-						Reading the {copy.noun}…
+						{t("capture.reading", { noun })}
 					</p>
 				)}
 				{hasReceipt &&
 					purchase.ocr_status === "succeeded" &&
 					purchase.ocr_line_count != null && (
 						<p className="mb-3 inline-flex items-center gap-1.5 text-xs text-text-muted">
-							<ScanLine aria-hidden size={12} /> Read{" "}
-							{purchase.ocr_line_count} item
-							{purchase.ocr_line_count === 1 ? "" : "s"} from the photo.
+							<ScanLine aria-hidden size={12} />{" "}
+							{t("capture.readCount", { count: purchase.ocr_line_count })}
 						</p>
 					)}
 				{hasReceipt && purchase.ocr_status === "skipped" && purchase.ocr_error && (
@@ -161,8 +165,8 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 					<div className="mb-3 flex items-center justify-between gap-2 rounded-md bg-warning-bg px-2.5 py-2">
 						<p className="text-xs text-warning-text">
 							{readStalled
-								? `Reading the ${copy.noun} failed.`
-								: `Couldn't read the ${copy.noun}. Enter the items by hand.`}
+								? t("capture.stalled", { noun })
+								: t("capture.failed", { noun })}
 						</p>
 						<button
 							type="button"
@@ -179,7 +183,7 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 										: ""
 								}
 							/>{" "}
-							Try again
+							{t("common.retry")}
 						</button>
 					</div>
 				)}
@@ -193,21 +197,13 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 						className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-primary-hover text-sm font-medium text-on-primary transition-colors hover:bg-primary-active"
 					>
 						<Camera aria-hidden size={16} />
-						{hasReceipt
-							? "Replace photo"
-							: copy.photograph}
+						{hasReceipt ? replaceLabel : copy.photograph}
 					</button>
 					{scanning && (
 						<ReceiptScanner
-							title={
-								hasReceipt
-									? "Replace photo"
-									: copy.photograph
-							}
+							title={hasReceipt ? replaceLabel : copy.photograph}
 							confirmLabel={
-								hasReceipt
-									? "Replace photo"
-									: "Use photo"
+								hasReceipt ? replaceLabel : t("purchase.usePhoto")
 							}
 							onAccept={onAccept}
 							onClose={() => setScanning(false)}
@@ -221,9 +217,9 @@ export default function ReceiptCaptureCard({ purchase, editable }: Props) {
 				</>
 			) : hasReceipt ? (
 				<p className="inline-flex items-center gap-1.5 text-xs text-text-muted">
-					<Check aria-hidden size={12} /> Captured
+					<Check aria-hidden size={12} /> {t("capture.captured")}
 					{purchase.captured_at
-						? ` ${new Date(purchase.captured_at).toLocaleString()}`
+						? ` ${new Date(purchase.captured_at).toLocaleString(dateLocale())}`
 						: ""}
 				</p>
 			) : (

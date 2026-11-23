@@ -33,8 +33,16 @@ interface CreateNotificationInput {
 	type:         NotificationType;
 	title:        string;
 	body:         string;
+	// Lets the app show title/body in the technician's language; title/body are the English fallback
+	vars?:        NotificationVars;
 	actionUrl?:   string;
 }
+
+// `variant` picks the copy; `keep_body` means body is someone's own words, shown as typed
+export type NotificationVars = Record<string, string | number | boolean | null | undefined> & {
+	variant?:   string;
+	keep_body?: boolean;
+};
 
 interface CreateDispatcherNotificationInput {
 	dispatcherId: 	string;
@@ -57,6 +65,7 @@ export const createNotification = async (input: CreateNotificationInput, organiz
 				type:          input.type,
 				title:         input.title,
 				body:          input.body,
+				vars:          input.vars,
 				action_url:    input.actionUrl ?? null,
 			},
 		});

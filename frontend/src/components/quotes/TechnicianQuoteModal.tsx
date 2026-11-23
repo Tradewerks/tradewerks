@@ -1,7 +1,8 @@
 ﻿import { X, MapPin, Calendar, AlertCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useQuoteByIdQuery } from "../../hooks/useQuotes";
-import { QuoteStatusColors, QuoteStatusLabels } from "../../types/quotes";
-import { formatDateTime } from "../../util/util";
+import { QuoteStatusColors } from "../../types/quotes";
+import { errorMessage, formatDateTime } from "../../util/util";
 import { formatDocRatePercent } from "../../lib/formatTax";
 
 interface TechnicianQuoteModalProps {
@@ -13,7 +14,8 @@ const fmt = (n: number) =>
 	Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuoteModalProps) {
-	const { data: quote, isLoading } = useQuoteByIdQuery(quoteId);
+	const { t } = useTranslation();
+	const { data: quote, isLoading, error } = useQuoteByIdQuery(quoteId);
 
 	return (
 		<div
@@ -27,11 +29,13 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 				{/* Header */}
 				<div className="shrink-0 flex items-start justify-between gap-4 p-5 border-b border-border-subtle bg-base/95 backdrop-blur-sm">
 					<div className="min-w-0 flex-1">
-						{isLoading || !quote ? (
+						{error ? (
+							<h2 className="text-text-primary text-lg font-semibold leading-tight">{t("quoteModal.loadFailed")}</h2>
+						) : isLoading || !quote ? (
 							<div className="h-6 w-48 bg-surface-raised rounded animate-pulse" />
 						) : (
 							<>
-								<p className="text-text-muted text-xs mb-1">Quote #{quote.quote_number}</p>
+								<p className="text-text-muted text-xs mb-1">{t("quoteModal.quoteNumber", { number: quote.quote_number })}</p>
 								<h2 className="text-text-primary text-lg font-semibold leading-tight break-words">{quote.title}</h2>
 								<span
 									className={`inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
@@ -39,23 +43,28 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 										"bg-neutral/20 text-text-secondary border-border-strong/30"
 									}`}
 								>
-									{QuoteStatusLabels[quote.status] ?? quote.status}
+									{t(`status.quote.${quote.status}`, { defaultValue: quote.status })}
 								</span>
 							</>
 						)}
 					</div>
 					<button
 						onClick={onClose}
-						aria-label="Close"
+						aria-label={t("common.close")}
 						className="shrink-0 p-3 -m-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface transition-colors"
 					>
 						<X size={18} />
 					</button>
 				</div>
 
-				{isLoading || !quote ? (
+				{error ? (
+					<div className="flex gap-3 m-5 p-3 rounded-lg bg-error/10 border border-error/30">
+						<AlertCircle size={16} className="text-error-text shrink-0 mt-0.5" />
+						<p className="text-error-text text-sm break-words">{errorMessage(error, t("quoteModal.loadFailed"))}</p>
+					</div>
+				) : isLoading || !quote ? (
 					<div className="flex-1 flex items-center justify-center h-40">
-						<div className="text-text-tertiary text-sm animate-pulse">Loading quote...</div>
+						<div className="text-text-tertiary text-sm animate-pulse">{t("quoteModal.loading")}</div>
 					</div>
 				) : (
 					<div className="flex-1 overflow-y-auto p-5 space-y-5 pb-8">
@@ -64,7 +73,7 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 							<div className="flex gap-3 p-3 rounded-lg bg-error/10 border border-error/30">
 								<AlertCircle size={16} className="text-error-text shrink-0 mt-0.5" />
 								<div className="min-w-0">
-									<p className="text-error-text text-xs font-medium mb-0.5">Rejection Reason</p>
+									<p className="text-error-text text-xs font-medium mb-0.5">{t("quoteModal.rejectionReason")}</p>
 									<p className="text-error-text text-sm break-words">{quote.rejection_reason}</p>
 								</div>
 							</div>
@@ -73,7 +82,7 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 						{/* Description */}
 						{quote.description && (
 							<div>
-								<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-1.5">Description</h3>
+								<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-1.5">{t("visitDetail.description")}</h3>
 								<p className="text-text-primary text-sm whitespace-pre-wrap break-words leading-relaxed">{quote.description}</p>
 							</div>
 						)}
@@ -83,7 +92,7 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 							<div className="flex gap-2 items-start">
 								<MapPin size={14} className="text-text-tertiary mt-0.5 shrink-0" />
 								<div className="min-w-0">
-									<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-0.5">Address</h3>
+									<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-0.5">{t("visitDetail.address")}</h3>
 									<p className="text-text-primary text-sm break-words">{quote.address}</p>
 								</div>
 							</div>
@@ -92,7 +101,7 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 						{/* Line Items */}
 						{quote.line_items && quote.line_items.length > 0 && (
 							<div>
-								<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-2">Line Items</h3>
+								<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-2">{t("quoteModal.lineItems")}</h3>
 								<div className="rounded-lg border border-border/80 overflow-hidden">
 									<div className="overflow-x-auto">
 										<table className="w-full min-w-[360px] text-sm table-fixed">
@@ -104,10 +113,10 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 											</colgroup>
 											<thead>
 												<tr className="bg-surface/80 text-text-tertiary text-xs">
-													<th className="text-left px-3 py-2 font-medium">Item</th>
-													<th className="text-right px-3 py-2 font-medium">Qty</th>
-													<th className="text-right px-3 py-2 font-medium">Price</th>
-													<th className="text-right pl-3 pr-4 py-2 font-medium">Total</th>
+													<th className="text-left px-3 py-2 font-medium">{t("quoteModal.item")}</th>
+													<th className="text-right px-3 py-2 font-medium">{t("quoteModal.qty")}</th>
+													<th className="text-right px-3 py-2 font-medium">{t("quoteModal.price")}</th>
+													<th className="text-right pl-3 pr-4 py-2 font-medium">{t("invoicePreview.total")}</th>
 												</tr>
 											</thead>
 											<tbody className="divide-y divide-border/50">
@@ -133,29 +142,29 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 
 						{/* Pricing Summary */}
 						<div>
-							<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-2">Pricing</h3>
+							<h3 className="text-text-muted text-xs font-medium uppercase tracking-wider mb-2">{t("quoteModal.pricing")}</h3>
 							<div className="rounded-lg border border-border/80 overflow-hidden">
 								<div className="divide-y divide-border/50">
 									<div className="flex justify-between px-4 py-2.5 text-sm">
-										<span className="text-text-tertiary">Subtotal</span>
+										<span className="text-text-tertiary">{t("invoicePreview.subtotal")}</span>
 										<span className="text-text-primary tabular-nums">${fmt(quote.subtotal)}</span>
 									</div>
 									{Number(quote.tax_amount) > 0 && (
 										<div className="flex justify-between px-4 py-2.5 text-sm">
 											<span className="text-text-tertiary">
-												Tax {quote.tax_rate ? `(${formatDocRatePercent(quote.tax_rate)})` : ""}
+												{t("quoteModal.tax")} {quote.tax_rate ? `(${formatDocRatePercent(quote.tax_rate)})` : ""}
 											</span>
 											<span className="text-text-primary tabular-nums">${fmt(quote.tax_amount)}</span>
 										</div>
 									)}
 									{Number(quote.discount_amount) > 0 && (
 										<div className="flex justify-between px-4 py-2.5 text-sm">
-											<span className="text-text-tertiary">Discount</span>
+											<span className="text-text-tertiary">{t("quoteModal.discount")}</span>
 											<span className="text-success-text tabular-nums">-${fmt(quote.discount_amount)}</span>
 										</div>
 									)}
 									<div className="flex justify-between px-4 py-3 bg-surface/60 text-base font-semibold">
-										<span className="text-text-primary">Total</span>
+										<span className="text-text-primary">{t("invoicePreview.total")}</span>
 										<span className="text-text-primary tabular-nums">${fmt(quote.total)}</span>
 									</div>
 								</div>
@@ -169,13 +178,13 @@ export default function TechnicianQuoteModal({ quoteId, onClose }: TechnicianQuo
 								<div className="space-y-1">
 									{quote.valid_until && (
 										<p className="text-text-tertiary text-sm">
-											Valid until:{" "}
+											{t("quoteModal.validUntil")}{" "}
 											<span className="text-text-primary">{formatDateTime(quote.valid_until)}</span>
 										</p>
 									)}
 									{quote.expires_at && (
 										<p className="text-text-tertiary text-sm">
-											Expires:{" "}
+											{t("quoteModal.expires")}{" "}
 											<span className="text-text-primary">{formatDateTime(quote.expires_at)}</span>
 										</p>
 									)}

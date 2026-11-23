@@ -1103,6 +1103,7 @@ export const updateJobVisit = async (req: Request, organizationId: string, conte
 					type:         "visit_changed",
 					title:        `Schedule changed: ${clientName}`,
 					body:         `Your visit at ${clientName} has been rescheduled to ${newTime}.`,
+					vars:         { client: clientName, at: parsed.scheduled_start_at.toISOString() },
 					actionUrl:    `/technician/visits/${id}`,
 				}, organizationId);
 			}
@@ -1262,6 +1263,7 @@ export const assignTechniciansToVisit = async (
 					type:         "visit_assigned",
 					title:        `New visit assigned: ${clientName}`,
 					body:         `You have been assigned to a visit at ${clientName} on ${scheduledAt}.`,
+					vars:         { client: clientName, at: updated.scheduled_start_at.toISOString() },
 					actionUrl:    `/technician/visits/${visitId}`,
 				}, organizationId);
 			}
@@ -2041,6 +2043,9 @@ export const cancelJobVisit = async (
 					type:         "visit_cancelled",
 					title:        `Visit cancelled: ${clientName}`,
 					body:         `A visit at ${clientName} has been cancelled.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}`,
+					vars:         cancellationReason
+						? { client: clientName, reason: cancellationReason, variant: "reason" }
+						: { client: clientName },
 					actionUrl:    `/technician/visits/${id}`,
 				}, organizationId);
 			}

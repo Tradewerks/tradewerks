@@ -62,6 +62,11 @@ export function startMaintenanceReminderInterval(): void {
                         type: "vehicle_maintenance_due",
                         title: `${reminder.title} ${urgency} — ${reminder.vehicle.name}`,
                         body: `${reminder.vehicle.name}'s ${reminder.title.toLowerCase()} is ${urgency}.`,
+                        vars: {
+                            reminder: reminder.title,
+                            vehicle: reminder.vehicle.name,
+                            variant: status === "overdue" ? "overdue" : "due_soon",
+                        },
                         actionUrl,
                     }, reminder.organization_id);
                 }

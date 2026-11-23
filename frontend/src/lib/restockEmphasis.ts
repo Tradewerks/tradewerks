@@ -1,4 +1,5 @@
 import type { RestockMode } from "../api/org";
+import i18n from "../i18n";
 
 // restock_mode is emphasis only: these helpers reorder and reword, they never
 // remove a tab or an action. Permissions decide capability.
@@ -23,9 +24,7 @@ export function vehicleStockTabOrder(mode: RestockMode | undefined): VehicleStoc
 
 export function emptyVehicleStockCopy(canStock: boolean): { title: string; description: string } {
 	return {
-		title: "No items on this vehicle yet",
-		description: canStock
-			? "Add the parts this vehicle carries to start tracking its stock."
-			: "Dispatch sets up this vehicle's stock list. Ask them to add the parts it carries.",
+		title: i18n.t("vehicle.emptyStock"),
+		description: i18n.t(canStock ? "vehicle.emptyStockCanAdd" : "vehicle.emptyStockAskDispatch"),
 	};
 }

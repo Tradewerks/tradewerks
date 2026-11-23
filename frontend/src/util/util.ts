@@ -1,5 +1,6 @@
 ﻿import type { StockStatus } from "../types/inventory";
 import { isAxiosError } from "axios";
+import i18n, { dateLocale as loc } from "../i18n";
 
 export const camelCaseToRegular = (str: string) => {
 	return str
@@ -31,24 +32,23 @@ export const FALLBACK_TIMEZONE = "America/Chicago";
 
 export const formatDateTime = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
 	const d = typeof date === "string" ? new Date(date) : date;
-	return (
-		d.toLocaleDateString("en-US", {
+	return i18n.t("dates.dateAtTime", {
+		date: d.toLocaleDateString(loc(), {
 			month: "short",
 			day: "numeric",
 			year: "numeric",
 			timeZone: tz,
-		}) +
-		" at " +
-		d.toLocaleTimeString("en-US", {
+		}),
+		time: d.toLocaleTimeString(loc(), {
 			hour: "numeric",
 			minute: "2-digit",
 			timeZone: tz,
-		})
-	);
+		}),
+	});
 };
 
 export const formatDate = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
-	return new Date(date).toLocaleDateString("en-US", {
+	return new Date(date).toLocaleDateString(loc(), {
 		month: "short",
 		day: "numeric",
 		year: "numeric",
@@ -59,10 +59,12 @@ export const formatDate = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
 export const formatConstraintTime = (time: string | null | undefined): string => {
 	if (!time) return "";
 	const [hours, minutes] = time.split(":").map(Number);
-	const period = hours >= 12 ? "PM" : "AM";
-	const displayHours = hours % 12 || 12;
-	const displayMinutes = minutes > 0 ? `:${minutes.toString().padStart(2, "0")}` : "";
-	return `${displayHours}${displayMinutes} ${period}`;
+	// A wall-clock "HH:mm" with no date: format it on a fixed day in UTC so no zone shifts it.
+	return new Date(Date.UTC(2000, 0, 1, hours, minutes)).toLocaleTimeString(loc(), {
+		hour: "numeric",
+		...(minutes > 0 ? { minute: "2-digit" } : {}),
+		timeZone: "UTC",
+	});
 };
 
 // Rail rows are one line wide; the year only earns its space when it differs.
@@ -73,7 +75,7 @@ export function formatShortDate(
 ): string {
 	const d = new Date(date);
 	const year = (x: Date) => x.toLocaleDateString("en-US", { year: "numeric", timeZone: tz });
-	return d.toLocaleDateString("en-US", {
+	return d.toLocaleDateString(loc(), {
 		month: "short",
 		day: "numeric",
 		...(year(d) === year(now) ? {} : { year: "numeric" }),
@@ -109,7 +111,7 @@ export function addInterval(isoDate: string, unit: "days" | "weeks" | "months" |
 }
 
 export const formatDateOnly = (date: Date | string) => {
-	return new Date(date).toLocaleDateString("en-US", {
+	return new Date(date).toLocaleDateString(loc(), {
 		month: "short",
 		day: "numeric",
 		year: "numeric",
@@ -119,7 +121,7 @@ export const formatDateOnly = (date: Date | string) => {
 
 export const formatTime = (date: Date | string, tz = FALLBACK_TIMEZONE) => {
 	const d = typeof date === "string" ? new Date(date) : date;
-	return d.toLocaleTimeString("en-US", {
+	return d.toLocaleTimeString(loc(), {
 		hour: "numeric",
 		minute: "2-digit",
 		timeZone: tz,
@@ -146,7 +148,7 @@ export function addDays(d: Date, n: number): Date {
 
 // Formats a date
 export function formatWeekDay(d: Date, tz = FALLBACK_TIMEZONE): string {
-	return d.toLocaleDateString("en-US", {
+	return d.toLocaleDateString(loc(), {
 		timeZone: tz,
 		weekday: "long",
 		month: "short",
@@ -156,12 +158,12 @@ export function formatWeekDay(d: Date, tz = FALLBACK_TIMEZONE): string {
 
 // Formats a week range
 export function formatWeekRange(weekStart: Date, tz = FALLBACK_TIMEZONE): string {
-	const start = weekStart.toLocaleDateString("en-US", {
+	const start = weekStart.toLocaleDateString(loc(), {
 		timeZone: tz,
 		month: "short",
 		day: "numeric",
 	});
-	const end = addDays(weekStart, 6).toLocaleDateString("en-US", {
+	const end = addDays(weekStart, 6).toLocaleDateString(loc(), {
 		timeZone: tz,
 		month: "short",
 		day: "numeric",
@@ -282,11 +284,22 @@ export function isAdmin(role: string): boolean {
  */
 export function errorMessage(err: unknown, fallback: string): string {
 	if (isAxiosError(err)) {
-		const data = err.response?.data as { error?: { message?: unknown } } | undefined;
-		const enveloped = data?.error?.message;
-		return typeof enveloped === "string" && enveloped ? enveloped : fallback;
+		const data = err.response?.data as { error?: { code?: unknown; message?: unknown } } | undefined;
+		return apiErrorText(data?.error) || fallback;
 	}
 	return err instanceof Error && err.message ? err.message : fallback;
+}
+
+/**
+ * The API's error text in the user's language. Only codes with a fixed meaning have
+ * keys in `errors.*`; the rest (validation, not found, conflict) keep the API's own
+ * English message, which says what exactly was wrong.
+ */
+export function apiErrorText(error: { code?: unknown; message?: unknown } | null | undefined): string {
+	const message = typeof error?.message === "string" ? error.message : "";
+	const key = `errors.${String(error?.code)}`;
+	if (i18n.language !== "en" && i18n.exists(key)) return i18n.t(key as "errors.FORBIDDEN");
+	return message;
 }
 
 // datetime-local reads and writes wall clock. Seeding it from toISOString()

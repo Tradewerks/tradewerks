@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, PackageX } from "lucide-react";
 import Drawer from "../../ui/Drawer";
 import { Field, SheetError } from "./sheetShared";
 import { formatDate } from "./sheetFormat";
 import { movementReasonLabel as reasonLabel } from "../../../lib/movementReasons";
 import { useSerialHistoryQuery, useSerialsQuery } from "../../../hooks/useTracking";
-import { SERIAL_STATUS_LABEL } from "../../../types/tracking";
+import i18n from "../../../i18n";
 import type { SerialHistoryEvent, SerialUnitStatus } from "../../../types/tracking";
 
 export type SerialSheetTarget =
@@ -31,9 +32,9 @@ const STATUS_TONE: Record<SerialUnitStatus, string> = {
 
 function locationLabel(event: SerialHistoryEvent): string {
 	if (event.to_vehicle) return event.to_vehicle.name;
-	if (event.to_location_type === "warehouse") return "Warehouse";
-	if (event.to_location_type === "adjustment") return "Removed from inventory";
-	if (event.to_location_type === "visit") return event.visit?.job.job_number ?? "Job visit";
+	if (event.to_location_type === "warehouse") return i18n.t("stock.warehouse");
+	if (event.to_location_type === "adjustment") return i18n.t("tracking.removed");
+	if (event.to_location_type === "visit") return event.visit?.job.job_number ?? i18n.t("tracking.jobVisit");
 	return event.to_location_type;
 }
 
@@ -46,16 +47,15 @@ function SerialDetail({
 	vehicleId: string;
 	onReportLost: SerialSheetProps["onReportLost"];
 }) {
+	const { t } = useTranslation();
 	const { data, isLoading, isError } = useSerialHistoryQuery(serialId);
 
 	if (isLoading) {
-		return <p className="px-5 py-6 text-sm text-text-muted">Loading unit…</p>;
+		return <p className="px-5 py-6 text-sm text-text-muted">{t("tracking.loadingUnit")}</p>;
 	}
 
 	if (isError || !data) {
-		return (
-			<SheetError message="Couldn't load this unit. Check your connection and try again." />
-		);
+		return <SheetError message={t("tracking.unitFailed")} />;
 	}
 
 	const { serial, timeline } = data;
@@ -76,7 +76,7 @@ function SerialDetail({
 					<span
 						className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold ${STATUS_TONE[serial.status]}`}
 					>
-						{SERIAL_STATUS_LABEL[serial.status]}
+						{t(`serialStatus.${serial.status}`)}
 					</span>
 				</div>
 				<p className="mt-1 text-sm text-text-secondary truncate">
@@ -85,30 +85,30 @@ function SerialDetail({
 			</div>
 
 			<div className="px-5">
-				<Field label="Received" value={formatDate(serial.received_at)} />
+				<Field label={t("tracking.received")} value={formatDate(serial.received_at)} />
 				{serial.current_vehicle && (
 					<Field
-						label="Location"
+						label={t("tracking.location")}
 						value={serial.current_vehicle.name}
 					/>
 				)}
 				{serial.batch && (
-					<Field label="Lot" value={serial.batch.batch_number} />
+					<Field label={t("tracking.lot")} value={serial.batch.batch_number} />
 				)}
 				{serial.consumed_at && (
 					<Field
-						label="Used"
+						label={t("tracking.used")}
 						value={formatDate(serial.consumed_at)}
 					/>
 				)}
 				{serial.client && (
-					<Field label="Client" value={serial.client.name} />
+					<Field label={t("tracking.client")} value={serial.client.name} />
 				)}
 			</div>
 
 			{serial.note && (
 				<div className="px-5 pt-3">
-					<p className="text-xs text-text-muted mb-1">Note</p>
+					<p className="text-xs text-text-muted mb-1">{t("tracking.note")}</p>
 					<p className="rounded-lg bg-surface-raised px-3 py-2 text-sm text-text-secondary">
 						{serial.note}
 					</p>
@@ -117,13 +117,13 @@ function SerialDetail({
 
 			<div className="px-5 pt-4 pb-2">
 				<p className="text-xs font-medium uppercase tracking-wider text-text-tertiary">
-					History
+					{t("tracking.history")}
 				</p>
 			</div>
 			<div className="px-5 pb-4">
 				{timeline.length === 0 ? (
 					<p className="text-xs text-text-muted">
-						No movements recorded.
+						{t("tracking.noMovements")}
 					</p>
 				) : (
 					<ol className="space-y-2.5">
@@ -170,7 +170,7 @@ function SerialDetail({
 						className="flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-error-border bg-error-bg text-sm font-semibold text-error-text transition-colors hover:bg-error-bg/70"
 					>
 						<PackageX size={16} />
-						Report Lost
+						{t("tracking.reportLost")}
 					</button>
 				</div>
 			)}
@@ -187,27 +187,26 @@ function SerialList({
 	vehicleId: string;
 	onPick: (serialId: string) => void;
 }) {
+	const { t } = useTranslation();
 	const { data, isLoading, isError } = useSerialsQuery(itemId, { status: "on_vehicle", vehicleId });
 	const units = data?.serials ?? [];
 
 	if (isLoading) {
-		return <p className="px-5 py-6 text-sm text-text-muted">Loading units…</p>;
+		return <p className="px-5 py-6 text-sm text-text-muted">{t("unitPicker.loading")}</p>;
 	}
 
 	if (isError) {
-		return (
-			<SheetError message="Couldn't load units. Check your connection and try again." />
-		);
+		return <SheetError message={t("tracking.unitsFailed")} />;
 	}
 
 	if (units.length === 0) {
-		return <p className="px-5 py-6 text-sm text-text-muted">No units on this vehicle.</p>;
+		return <p className="px-5 py-6 text-sm text-text-muted">{t("tracking.noUnits")}</p>;
 	}
 
 	return (
 		<div className="px-5 py-3">
 			<p className="mb-2 text-xs text-text-muted">
-				{units.length} unit{units.length !== 1 ? "s" : ""} on this vehicle
+				{t("tracking.unitsOnVehicle", { count: units.length })}
 			</p>
 			<div className="space-y-1.5">
 				{units.map((unit) => (
@@ -236,6 +235,7 @@ export default function SerialSheet({
 }: SerialSheetProps) {
 	// Drilling from list mode into a unit is local state — the page only ever
 	// hands us the entry point.
+	const { t } = useTranslation();
 	const [drilledSerialId, setDrilledSerialId] = useState<string | null>(null);
 
 	// target flips to null on close, but Drawer keeps children mounted for its
@@ -252,7 +252,7 @@ export default function SerialSheet({
 
 	const activeSerialId = target?.mode === "serial" ? target.serialId : drilledSerialId;
 	const showBack = target?.mode === "item" && drilledSerialId !== null;
-	const title = activeSerialId ? "Unit" : target?.mode === "item" ? target.itemName : "";
+	const title = activeSerialId ? t("tracking.unit") : target?.mode === "item" ? target.itemName : "";
 
 	return (
 		<Drawer isOpen={!!target} onClose={onClose} title={title} side="center">
@@ -263,7 +263,7 @@ export default function SerialSheet({
 					className="flex h-11 w-full items-center gap-1.5 border-b border-border-subtle px-5 text-left text-sm text-text-secondary transition-colors hover:text-text-primary"
 				>
 					<ChevronLeft size={16} />
-					Back to units
+					{t("tracking.backToUnits")}
 				</button>
 			)}
 

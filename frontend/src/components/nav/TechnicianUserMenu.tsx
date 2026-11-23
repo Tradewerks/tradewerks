@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../auth/authStore";
 import { queryClient } from "../../lib/queryClient";
-import { LogOut, UserRound, Sun, Moon, Monitor, Palette, ChevronDown, Check, Receipt } from "lucide-react";
+import { LogOut, UserRound, Sun, Moon, Monitor, Palette, ChevronDown, Check, Receipt, Languages } from "lucide-react";
 import { useOrgSettings } from "../../hooks/useOrg";
 import { useThemeStore } from "../../stores/themeStore";
 import { useUpdateTechnicianMutation } from "../../hooks/useTechnicians";
@@ -10,18 +10,21 @@ import { useRememberedAccountsStore } from "../../stores/rememberedAccountsStore
 import { logoutBeacon } from "../../api/authenticate";
 import SwitchUserSection from "./SwitchUserSection";
 import { usePermission } from "../../hooks/usePermission";
+import { useTranslation } from "react-i18next";
 
 export default function TechnicianUserMenu() {
     const { user, logout } = useAuthStore();
     const [menuOpen, setMenuOpen] = useState(false);
     const canRequestPurchase = usePermission("request_field_purchase");
     const [themeOpen, setThemeOpen] = useState(false);
+    const [languageOpen, setLanguageOpen] = useState(false);
     const patchAccount = useRememberedAccountsStore((s) => s.patchAccount);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const navigate = useNavigate();
     const { data: org } = useOrgSettings();
     const { theme, setTheme } = useThemeStore();
     const updateTechnicianMutation = useUpdateTechnicianMutation();
+    const { t, i18n } = useTranslation();
 
     const handleThemeChange = (value: "system" | "light" | "dark") => {
         setTheme(value);
@@ -29,6 +32,13 @@ export default function TechnicianUserMenu() {
             updateTechnicianMutation.mutate({ id: user.userId, data: { theme: value } });
         }
     };
+
+    const handleLanguageChange = (value: "en" | "es") => {
+        i18n.changeLanguage(value)
+        if (user?.userId) {
+            updateTechnicianMutation.mutate({ id: user.userId, data: { language: value } });
+        }
+    }
 
     const [confirmingLogout, setConfirmingLogout] = useState(false);
 	const logoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,7 +111,7 @@ export default function TechnicianUserMenu() {
                             onClick={() => { navigate("/technician/profile"); setMenuOpen(false); }}
                         >
                             <UserRound size={16} />
-                            My Profile
+                            {t('profile.my_profile')}
                         </button>
                         {canRequestPurchase && (
                             <button
@@ -109,7 +119,7 @@ export default function TechnicianUserMenu() {
                                 onClick={() => { navigate("/technician/purchases"); setMenuOpen(false); }}
                             >
                                 <Receipt size={16} />
-                                Field Purchases
+                                {t('profile.field_purchases')}
                             </button>
                         )}
                         <button
@@ -117,12 +127,12 @@ export default function TechnicianUserMenu() {
                             onClick={() => setThemeOpen((o) => !o)}
                         >
                             <Palette size={16} />
-                            Theme
+                            {t('profile.theme')}
                             <ChevronDown size={13} className={`ml-auto transition-transform duration-200 ${themeOpen ? "rotate-180" : ""}`} />
                         </button>
                         {themeOpen && (
                             <div className="flex flex-col pb-0.5">
-                                {([["system", Monitor, "System"], ["light", Sun, "Light"], ["dark", Moon, "Dark"]] as const).map(([value, Icon, label]) => (
+                                {([["system", Monitor, t('profile.themes.system')], ["light", Sun, t('profile.themes.light')], ["dark", Moon, t('profile.themes.dark')]] as const).map(([value, Icon, label]) => (
                                     <button
                                         key={value}
                                         onClick={() => handleThemeChange(value)}
@@ -135,6 +145,32 @@ export default function TechnicianUserMenu() {
                                         <Icon size={14} />
                                         {label}
                                         {theme === value && <Check size={12} className="ml-auto" />}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        <button
+                            className="w-full flex items-center gap-1 px-3 py-2 text-sm text-text-primary rounded-md hover:bg-surface transition-colors"
+                            onClick={() => setLanguageOpen((o) => !o)}
+                        >
+                            <Languages size={16} />
+                            {t("profile.language")}
+                            <ChevronDown size={13} className={`ml-auto transition-transform duration-200 ${languageOpen ? "rotate-180" : ""}`} />
+                        </button>
+                        {languageOpen && (
+                            <div className="flex flex-col pb-0.5">
+                                {([["en", "English"], ["es", "Español"]] as const).map(([value, label]) => (
+                                    <button
+                                        key={value}
+                                        onClick={() => handleLanguageChange(value)}
+                                        className={`w-full flex items-center gap-2 pl-8 pr-3 py-1.5 text-sm rounded-md transition-colors ${
+                                            i18n.language === value
+                                                ? "text-primary hover:bg-surface"
+                                                : "text-text-muted hover:text-text-primary hover:bg-surface"
+                                        }`}
+                                    >
+                                        {label}
+                                        {i18n.language === value && <Check size={12} className="ml-auto" />}
                                     </button>
                                 ))}
                             </div>
@@ -161,7 +197,7 @@ export default function TechnicianUserMenu() {
                             }`}
                         >
                             <LogOut size={16} />
-                            {confirmingLogout ? "Confirm Logout" : "Logout"}
+                            {confirmingLogout ? t("profile.confirm_logout") : t("profile.logout")}
                         </button>
 					</div>
 				</div>

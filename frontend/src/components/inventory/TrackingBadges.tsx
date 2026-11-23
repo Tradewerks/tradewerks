@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { InventoryItem } from "../../types/inventory";
 
 interface TrackingBadgesProps {
@@ -20,10 +21,11 @@ export function TrackingBadges({
 	onBatchClick,
 	archived = false,
 }: TrackingBadgesProps) {
+	const { t } = useTranslation();
 	if (!item.is_serialized && !item.is_batch_tracked) {
 		return archived ? (
 			<span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-border-strong bg-surface-raised text-text-tertiary shrink-0">
-				Tracked (archived)
+				{t("tracking.archived")}
 			</span>
 		) : null;
 	}
@@ -40,26 +42,26 @@ export function TrackingBadges({
 					<button
 						type="button"
 						onClick={onSerialClick}
-						aria-label={`Serialized — view units for ${item.name}`}
+						aria-label={t("tracking.serializedAria", { name: item.name })}
 						className={`${serialClasses} transition-colors hover:bg-primary/25`}
 					>
-						Serialized
+						{t("tracking.serialized")}
 					</button>
 				) : (
-					<span className={serialClasses}>Serialized</span>
+					<span className={serialClasses}>{t("tracking.serialized")}</span>
 				))}
 			{item.is_batch_tracked &&
 				(onBatchClick ? (
 					<button
 						type="button"
 						onClick={onBatchClick}
-						aria-label={`Batch — view lots for ${item.name}`}
+						aria-label={t("tracking.batchAria", { name: item.name })}
 						className={`${batchClasses} transition-colors hover:bg-reviewing/25`}
 					>
-						Batch
+						{t("tracking.batch")}
 					</button>
 				) : (
-					<span className={batchClasses}>Batch</span>
+					<span className={batchClasses}>{t("tracking.batch")}</span>
 				))}
 		</>
 	);

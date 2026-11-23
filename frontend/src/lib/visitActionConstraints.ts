@@ -7,7 +7,8 @@ export type TechnicianStatus = {
 	drivingVisitId: string | null;
 };
 
-export type ActionConstraint = { enabled: boolean; reason: string | null };
+const DISABLED_REASON = "visit.clockOutFirst";
+export type ActionConstraint = { enabled: boolean; reason: typeof DISABLED_REASON | null };
 
 export type VisitActionConstraints = {
 	drive: ActionConstraint & { requiresSwitchConfirm: boolean };
@@ -15,7 +16,6 @@ export type VisitActionConstraints = {
 	clockIn: ActionConstraint;
 };
 
-const DISABLED_REASON = "Clock out of your current job first";
 const ACTIVE_VISIT_STATUSES: VisitStatus[] = [
 	"Scheduled", "Delayed", "Driving", "OnSite", "InProgress", "Paused",
 ];

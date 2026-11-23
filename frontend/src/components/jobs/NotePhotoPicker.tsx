@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { X, Camera, Loader2 } from "lucide-react";
 import axios from "axios";
 import { useUploadNotePhotoMutation } from "../../hooks/useJobs";
@@ -15,23 +17,23 @@ const NOTE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const NOTE_PHOTO_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 
 /** Client-side pre-check so a rejected file never leaves the device; null when OK. */
-const validateNotePhoto = (file: Pick<File, "size" | "type">): string | null => {
+const validateNotePhoto = (file: Pick<File, "size" | "type">, t: TFunction): string | null => {
 	if (!(NOTE_PHOTO_ACCEPTED_TYPES as readonly string[]).includes(file.type)) {
-		return "Unsupported file type. Please choose a JPEG, PNG, or WebP image.";
+		return t("photos.unsupportedType");
 	}
 	if (file.size > NOTE_PHOTO_MAX_BYTES) {
-		return `Photo is too large (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximum size is 5 MB.`;
+		return t("photos.tooLarge", { size: (file.size / (1024 * 1024)).toFixed(1) });
 	}
 	return null;
 };
 
-const uploadErrorMessage = (err: unknown): string => {
+const uploadErrorMessage = (err: unknown, t: TFunction): string => {
 	if (axios.isAxiosError(err)) {
 		const serverMessage = err.response?.data?.error?.message;
 		if (typeof serverMessage === "string" && serverMessage) return serverMessage;
 	}
 	if (err instanceof Error && err.message) return err.message;
-	return "Upload failed. Please try again.";
+	return t("photos.uploadFailed");
 };
 
 interface NotePhotoPickerProps {
@@ -60,6 +62,9 @@ export default function NotePhotoPicker({
 	onRemoveExisting,
 	capture = false,
 }: NotePhotoPickerProps) {
+	const { t } = useTranslation();
+	const labelText = (label: string) =>
+		t(`photos.labels.${label as PhotoLabel}`, { defaultValue: label });
 	const [pendingFile, setPendingFile] = useState<File | null>(null);
 	const [labelPickerOpen, setLabelPickerOpen] = useState(false);
 	const [selectedLabel, setSelectedLabel] = useState<PhotoLabel>("Before");
@@ -76,7 +81,7 @@ export default function NotePhotoPicker({
 		e.target.value = "";
 		if (!file) return;
 
-		const validationError = validateNotePhoto(file);
+		const validationError = validateNotePhoto(file, t);
 		if (validationError) {
 			setUploadError(validationError);
 			return;
@@ -95,7 +100,7 @@ export default function NotePhotoPicker({
 				: await uploadMutation.mutateAsync({ jobId: jobId!, file });
 			setPendingUpload(res);
 		} catch (err) {
-			setUploadError(uploadErrorMessage(err));
+			setUploadError(uploadErrorMessage(err, t));
 			setLabelPickerOpen(false);
 			setPendingFile(null);
 		} finally {
@@ -137,7 +142,7 @@ export default function NotePhotoPicker({
 						>
 							<Camera size={11} className="text-text-muted shrink-0" />
 							<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-bg text-primary-text border border-primary-border">
-								{p.photo_label}
+								{labelText(p.photo_label)}
 							</span>
 							{p.photo_name && (
 								<span className="max-w-[100px] truncate text-text-tertiary">{p.photo_name}</span>
@@ -146,7 +151,7 @@ export default function NotePhotoPicker({
 								<button
 									type="button"
 									onClick={() => onRemoveExisting(p.id)}
-									aria-label="Remove photo"
+									aria-label={t("photos.removePhoto")}
 									className="text-text-faint hover:text-text-secondary ml-0.5 p-0.5"
 								>
 									<X size={11} />
@@ -166,7 +171,7 @@ export default function NotePhotoPicker({
 						>
 							<Camera size={11} className="text-text-muted shrink-0" />
 							<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-bg text-primary-text border border-primary-border">
-								{p.photo_label}
+								{labelText(p.photo_label)}
 							</span>
 							{p.photo_name && (
 								<span className="max-w-[100px] truncate text-text-tertiary">{p.photo_name}</span>
@@ -174,7 +179,11 @@ export default function NotePhotoPicker({
 							<button
 								type="button"
 								onClick={() => handleRemovePhoto(i)}
-								aria-label={`Remove ${p.photo_name || `${p.photo_label} photo`}`}
+								aria-label={
+									p.photo_name
+										? t("photos.removeNamed", { name: p.photo_name })
+										: t("photos.removeLabeled", { label: labelText(p.photo_label) })
+								}
 								className="text-text-faint hover:text-text-secondary ml-0.5 p-0.5"
 							>
 								<X size={11} />
@@ -196,7 +205,7 @@ export default function NotePhotoPicker({
 					) : (
 						<Camera size={13} />
 					)}
-					{photos.length > 0 ? "Attach Another Photo" : "Attach Photo"}
+					{photos.length > 0 ? t("photos.attachAnother") : t("photos.attach")}
 				</button>
 				{uploadError && <p role="alert" className="text-xs text-error-text mt-1.5">{uploadError}</p>}
 			</div>
@@ -215,11 +224,11 @@ export default function NotePhotoPicker({
 					<div className="absolute inset-0 bg-overlay" />
 					<div className="relative w-full max-w-lg bg-base rounded-t-2xl border border-border-subtle p-4 pb-8 z-10">
 						<div className="flex items-center justify-between mb-3">
-							<h3 className="text-sm font-semibold text-text-primary">Photo Type</h3>
+							<h3 className="text-sm font-semibold text-text-primary">{t("photos.photoType")}</h3>
 							<button
 								type="button"
 								onClick={handleCancelLabel}
-								aria-label="Close"
+								aria-label={t("common.close")}
 								className="text-text-muted hover:text-text-primary"
 							>
 								<X size={18} />
@@ -231,15 +240,15 @@ export default function NotePhotoPicker({
 								value={photoName}
 								onChange={(e) => setPhotoName(e.target.value)}
 								maxLength={PHOTO_NAME_MAX}
-								placeholder="Photo name (optional)"
-								aria-label="Photo name"
+								placeholder={t("photos.photoNameOptional")}
+								aria-label={t("photos.photoName")}
 								className="w-full mb-3 px-3 py-2 text-sm rounded-lg bg-surface border border-border text-text-primary placeholder:text-text-faint focus:outline-none focus:border-border-strong"
 							/>
 						)}
 						{isUploading ? (
 							<div className="flex items-center justify-center gap-2 py-6 text-text-muted text-sm">
 								<Loader2 size={16} className="animate-spin" />
-								Uploading…
+								{t("photos.uploading")}
 							</div>
 						) : uploadError ? (
 							<p className="text-xs text-error-text py-4 text-center">{uploadError}</p>
@@ -266,7 +275,7 @@ export default function NotePhotoPicker({
 													: "bg-surface text-text-tertiary border border-border hover:bg-surface-raised"
 											}`}
 										>
-											{l}
+											{labelText(l)}
 										</button>
 									))}
 								</div>
@@ -276,14 +285,14 @@ export default function NotePhotoPicker({
 										onClick={handleCancelLabel}
 										className="flex-1 py-2 text-sm rounded-lg border border-border text-text-tertiary hover:bg-surface"
 									>
-										Cancel
+										{t("common.cancel")}
 									</button>
 									<button
 										type="button"
 										onClick={handleConfirmLabel}
 										className="flex-1 py-2 text-sm rounded-lg bg-primary-hover hover:bg-primary text-on-primary font-medium"
 									>
-										Attach Photo →
+										{t("photos.attachArrow")}
 									</button>
 								</div>
 							</>

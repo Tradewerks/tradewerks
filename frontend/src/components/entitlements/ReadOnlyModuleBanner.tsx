@@ -1,16 +1,18 @@
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { usePermission } from "../../hooks/usePermission";
 import { SUBSCRIPTION_PATH } from "../../lib/moduleGroups";
 import ModuleNotice from "./ModuleNotice";
 
 export default function ReadOnlyModuleBanner({ label }: { label: string }) {
+	const { t } = useTranslation();
 	const canManage = usePermission("manage_organization");
 	return (
 		<ModuleNotice
 			title={
 				<>
-					{label} is turned off for your organization. This record is read-only.
-					{!canManage && " An administrator can turn it back on."}
+					{t("plan.turnedOff", { label })}
+					{!canManage && ` ${t("plan.adminCanTurnOn")}`}
 				</>
 			}
 			action={
@@ -19,7 +21,7 @@ export default function ReadOnlyModuleBanner({ label }: { label: string }) {
 						to={SUBSCRIPTION_PATH}
 						className="text-xs font-medium text-primary hover:underline"
 					>
-						Turn on in Subscription
+						{t("plan.turnOn")}
 					</Link>
 				) : null
 			}

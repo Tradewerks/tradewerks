@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { BarcodeDetector, prepareZXingModule } from "barcode-detector/ponyfill";
 import wasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
 import { useCameraStream, type CameraZoomCaps } from "./useCameraStream";
+import i18n from "../i18n";
 
 // Self-hosted WASM — avoids a jsDelivr dependency on job sites with poor signal.
 prepareZXingModule({ overrides: { locateFile: () => wasmUrl } });
@@ -11,7 +12,6 @@ const DETECT_INTERVAL_MS = 100;
 const SAME_CODE_COOLDOWN_MS = 2000;
 const ANY_CODE_COOLDOWN_MS = 800;
 const FOUND_RESET_MS = 1200;
-const MANUAL_HINT = "Enter the code manually below.";
 
 export type CameraScannerStatus = "starting" | "scanning" | "found" | "error";
 
@@ -43,7 +43,7 @@ export function useCameraScanner({
 	const continuousRef = useRef(continuous);
 	continuousRef.current = continuous;
 
-	const camera = useCameraStream({ resolution: "scan", fallbackHint: MANUAL_HINT });
+	const camera = useCameraStream({ resolution: "scan", fallbackHint: i18n.t("barcode.manualHint") });
 	const { videoRef, status: cameraStatus, fail } = camera;
 	const [found, setFound] = useState(false);
 
@@ -89,7 +89,7 @@ export function useCameraScanner({
 		} catch {
 			// zxing WASM failed to load/instantiate — don't strand the spinner with a
 			// live camera; surface the manual-entry fallback instead.
-			fail("Scanner failed to load.");
+			fail(i18n.t("barcode.loadFailed"));
 			return;
 		}
 

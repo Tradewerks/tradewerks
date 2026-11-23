@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useBatchesQuery } from "../../hooks/useTracking";
 import type { BatchListRow } from "../../types/tracking";
 
@@ -37,6 +38,7 @@ function availableFor(direction: BatchPickDirection, vehicleId: string, b: Batch
 // is always a valid, no-error outcome for a batch-tracked (non-serialized)
 // line on a deduction/adjustment movement.
 export default function ExistingBatchPicker({ itemId, vehicleId, direction, value, onChange }: ExistingBatchPickerProps) {
+	const { t } = useTranslation();
 	const { data } = useBatchesQuery(itemId);
 	const batches = useMemo(() => data?.batches ?? [], [data]);
 
@@ -48,22 +50,22 @@ export default function ExistingBatchPicker({ itemId, vehicleId, direction, valu
 	return (
 		<div className="space-y-1">
 			<label className="block text-xs font-medium text-text-tertiary uppercase tracking-wider">
-				Batch / lot (optional)
+				{t("batchPicker.label")}
 			</label>
 			<select
-				aria-label="Batch / lot"
+				aria-label={t("batchPicker.aria")}
 				value={value ?? ""}
 				onChange={(e) => onChange(e.target.value || null)}
 				className="w-full border border-border-input px-2.5 h-[34px] rounded bg-base text-text-primary text-sm focus:border-primary focus:outline-none transition-colors"
 			>
-				<option value="">Let system decide (FIFO)</option>
+				<option value="">{t("batchPicker.fifo")}</option>
 				{options.map((b) => {
 					const avail = availableFor(direction, vehicleId, b);
 					return (
 						<option key={b.id} value={b.id}>
 							{b.batch_number}
-							{avail !== null ? ` (${avail} available)` : ""}
-							{b.recalled_at ? " — recalled" : ""}
+							{avail !== null ? ` (${t("batchPicker.available", { n: avail })})` : ""}
+							{b.recalled_at ? ` — ${t("batchPicker.recalled")}` : ""}
 						</option>
 					);
 				})}

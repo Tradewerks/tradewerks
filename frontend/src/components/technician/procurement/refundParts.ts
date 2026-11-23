@@ -1,3 +1,4 @@
+import i18n from "../../../i18n";
 import type {
 	FieldPurchaseRefundParentLine,
 	FieldPurchaseRefundSummary,
@@ -28,7 +29,7 @@ export const draftKey = (d: LineDraft) => partKey(d.inventory_item_id || null, d
 /** Where a parent line's stock sits, said the way the vehicle page says it. */
 function fromLabel(l: FieldPurchaseRefundParentLine): string | null {
 	if (l.disposition !== "receive" || !l.inventory_item_id) return null;
-	return l.vehicle_name ?? "the warehouse";
+	return l.vehicle_name ?? i18n.t("procure.warehouse");
 }
 
 export function returnableParts(
@@ -69,7 +70,9 @@ export function partsSummary(parts: RefundRow["parts"]): string | null {
 		return qty > 1 ? `${p.description} ×${qty}` : p.description;
 	});
 	const rest = parts.length - named.length;
-	return rest > 0 ? `${named.join(", ")} +${rest} more` : named.join(", ");
+	return rest > 0
+		? i18n.t("detail.moreParts", { names: named.join(", "), count: rest })
+		: named.join(", ");
 }
 
 /**

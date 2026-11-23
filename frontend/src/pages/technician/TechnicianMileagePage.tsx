@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, MapPin, Gauge } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useJobVisitsByTechIdQuery } from "../../hooks/useJobs";
@@ -9,6 +10,7 @@ import TechPage from "../../components/technician/TechPage";
 
 export default function TechnicianMileagePage() {
 	const navigate = useNavigate();
+	const { t } = useTranslation();
 	const { user } = useAuthStore();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 	const { data: allVisits = [], isLoading } = useJobVisitsByTechIdQuery(user?.userId ?? "");
@@ -44,9 +46,9 @@ export default function TechnicianMileagePage() {
 			<div>
 				<div className="flex items-center gap-2 mb-0.5">
 					<Gauge size={18} className="text-text-tertiary" />
-					<h1 className="text-lg font-semibold text-text-primary">Mileage</h1>
+					<h1 className="text-lg font-semibold text-text-primary">{t("mileage.mileage")}</h1>
 				</div>
-				<p className="text-xs text-text-muted">Driving Distance</p>
+				<p className="text-xs text-text-muted">{t("mileage.driving_distance")}</p>
 			</div>
 
 			{/* Week navigator */}
@@ -60,7 +62,7 @@ export default function TechnicianMileagePage() {
 				<div className="text-center">
 					<p className="text-sm font-medium text-text-primary">{formatWeekRange(weekStart, tz)}</p>
 					{isCurrentWeek && (
-						<p className="text-[10px] text-text-muted mt-0.5">Current week</p>
+						<p className="text-[10px] text-text-muted mt-0.5">{t("mileage.current_week")}</p>
 					)}
 				</div>
 				<button
@@ -81,7 +83,7 @@ export default function TechnicianMileagePage() {
 						{totalMiles.toFixed(1)}
 					</p>
 				)}
-				<p className="text-xs text-text-muted mt-2 uppercase tracking-widest">miles this week</p>
+				<p className="text-xs text-text-muted mt-2 uppercase tracking-widest">{t("mileage.miles_this_week")}</p>
 			</div>
 
 			{/* Days */}
@@ -94,9 +96,9 @@ export default function TechnicianMileagePage() {
 			) : days.length === 0 ? (
 				<div className="flex flex-col items-center justify-center py-12 text-center">
 					<Gauge size={32} className="text-text-faint mb-3" />
-					<p className="text-sm text-text-muted">No mileage recorded this week</p>
+					<p className="text-sm text-text-muted">{t("mileage.no_mileage_recorded")}</p>
 					<p className="text-xs text-text-faint mt-1">
-						Miles are logged when you click driving to a visit
+						{t("mileage.miles_are_logged")}
 					</p>
 				</div>
 			) : (
@@ -116,7 +118,7 @@ export default function TechnicianMileagePage() {
 									>
 										<div className="min-w-0">
 											<p className="text-sm font-medium text-text-primary truncate">
-												{v.job?.name ?? `Visit ${v.id.slice(-6)}`}
+												{v.job?.name ?? `${t("dashboard.visit_fallback")} ${v.id.slice(-6)}`}
 											</p>
 											{v.job?.address && (
 												<p className="text-xs text-text-muted flex items-center gap-1 mt-0.5 truncate">
@@ -126,18 +128,19 @@ export default function TechnicianMileagePage() {
 											)}
 										</div>
 										<span className="text-sm font-bold tabular-nums text-text-primary shrink-0">
-											{Number(v.estimated_drive_miles).toFixed(1)} mi
+											{t("mileage.miles", { miles: Number(v.estimated_drive_miles).toFixed(1) })}
 										</span>
 									</button>
 								))}
 							</div>
 							<p className="text-xs text-text-muted text-right px-1">
-								Day total:{" "}
+								{t("mileage.day_total")}{" "}
 								<span className="text-text-secondary font-medium">
-									{dayVisits
-										.reduce((s, v) => s + Number(v.estimated_drive_miles ?? 0), 0)
-										.toFixed(1)}{" "}
-									mi
+									{t("mileage.miles", {
+										miles: dayVisits
+											.reduce((s, v) => s + Number(v.estimated_drive_miles ?? 0), 0)
+											.toFixed(1),
+									})}
 								</span>
 							</p>
 						</div>

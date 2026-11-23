@@ -218,6 +218,7 @@ export const insertJobNote = async (
 					type:         "note_added",
 					title:        `Note added: Job #${jobName}`,
 					body:         parsed.content.slice(0, 200),
+					vars:         { job: jobName, keep_body: true },
 					actionUrl:    `/technician/visits/${created.visit_id}`,
 				}, organizationId);
 			}

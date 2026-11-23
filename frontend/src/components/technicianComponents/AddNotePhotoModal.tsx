@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import type { JobVisit, NotePhoto } from "../../types/jobs";
 import NotePhotoPicker from "../jobs/NotePhotoPicker";
@@ -18,6 +19,7 @@ export default function AddNotePhotoModal({
 	onClose,
 	onSubmit,
 }: AddNotePhotoModalProps) {
+	const { t } = useTranslation();
 	const [content, setContent] = useState("");
 	const [selectedVisitId, setSelectedVisitId] = useState(
 		preselectedVisitId ?? visits[0]?.id ?? "",
@@ -51,7 +53,7 @@ export default function AddNotePhotoModal({
 			await onSubmit(selectedVisitId, selectedVisit.job_id, content.trim(), photos);
 			onClose();
 		} catch {
-			setSaveError("Failed to save. Please try again.");
+			setSaveError(t("visit.noteSaveFailed"));
 		} finally {
 			setIsSaving(false);
 		}
@@ -66,10 +68,10 @@ export default function AddNotePhotoModal({
 			>
 				{/* Header */}
 				<div className="flex items-center justify-between px-4 py-3.5 border-b border-border-subtle">
-					<h2 className="text-sm font-semibold text-text-primary">Add Note / Photo</h2>
+					<h2 className="text-sm font-semibold text-text-primary">{t("visit.addNotePhoto")}</h2>
 					<button
 						onClick={onClose}
-						aria-label="Close"
+						aria-label={t("common.close")}
 						className="text-text-muted hover:text-text-primary p-3 -my-3 -mr-3 rounded-md hover:bg-surface transition-colors"
 					>
 						<X size={16} />
@@ -89,7 +91,7 @@ export default function AddNotePhotoModal({
 										: "bg-surface border border-border text-text-tertiary hover:text-text-primary"
 								}`}
 							>
-								{v.name ?? "Visit"}
+								{v.name ?? t("dashboard.visit_fallback")}
 								{v.job?.client?.name ? ` — ${v.job.client.name}` : ""}
 							</button>
 						))}
@@ -101,7 +103,7 @@ export default function AddNotePhotoModal({
 					ref={textareaRef}
 					value={content}
 					onChange={(e) => setContent(e.target.value)}
-					placeholder="Add a note…"
+					placeholder={t("visit.addANote")}
 					autoFocus
 					className="w-full px-4 pt-3 pb-2 bg-transparent text-sm text-text-primary placeholder:text-faint focus:outline-none resize-none min-h-[96px] max-h-[40vh] overflow-y-auto"
 				/>
@@ -126,14 +128,14 @@ export default function AddNotePhotoModal({
 						onClick={onClose}
 						className="flex-1 py-3 text-sm rounded-xl border border-border text-text-tertiary hover:bg-surface hover:text-text-primary transition-colors"
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 					<button
 						onClick={handleSubmit}
 						disabled={!canSave}
 						className="flex-1 py-3 text-sm rounded-xl bg-primary-hover hover:bg-primary text-on-primary font-semibold disabled:opacity-40 transition-colors"
 					>
-						{isSaving ? "Saving…" : "Save Note"}
+						{isSaving ? t("visit.saving") : t("visit.saveNote")}
 					</button>
 				</div>
 			</div>

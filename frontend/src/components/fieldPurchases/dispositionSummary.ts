@@ -1,3 +1,5 @@
+import i18n from "../../i18n";
+
 /** One line's stock & billing answer, as either side of the app holds it. */
 export interface DispositionLike {
 	disposition: string | null;
@@ -5,10 +7,18 @@ export interface DispositionLike {
 	vehicleName: string | null;
 }
 
-function phrase(l: DispositionLike): string {
-	if (l.disposition === "non_stock") return "consumed on job";
-	if (l.disposition === "receive") return `added to ${l.vehicleName || "Warehouse"}`;
-	return "not recorded";
+/** Grouping key; the phrase is built per count so Spanish can agree in number. */
+function group(l: DispositionLike): string {
+	if (l.disposition === "non_stock") return "consumed|";
+	if (l.disposition === "receive")
+		return `added|${l.vehicleName || i18n.t("stock.warehouse")}`;
+	return "notRecorded|";
+}
+
+function phrase(key: string, count: number): string {
+	const i = key.indexOf("|");
+	const kind = key.slice(0, i) as "consumed" | "added" | "notRecorded";
+	return i18n.t(`stock.phrase.${kind}`, { count, name: key.slice(i + 1) });
 }
 
 /**
@@ -20,15 +30,18 @@ export function dispositionSentence(lines: DispositionLike[]): string | null {
 	if (lines.length === 0) return null;
 	const groups = new Map<string, number>();
 	for (const l of lines) {
-		const p = phrase(l);
-		groups.set(p, (groups.get(p) ?? 0) + 1);
+		const g = group(l);
+		groups.set(g, (groups.get(g) ?? 0) + 1);
 	}
 	if (groups.size === 1) {
-		const [p] = [...groups.keys()];
-		return lines.length === 1 ? `1 item ${p}` : `All ${lines.length} items ${p}`;
+		const [g] = [...groups.keys()] as [string];
+		return i18n.t("stock.sentence", {
+			count: lines.length,
+			phrase: phrase(g, lines.length),
+		});
 	}
 	return [...groups.entries()]
 		.sort(([, a], [, b]) => b - a)
-		.map(([p, n]) => `${n} ${p}`)
+		.map(([g, n]) => `${n} ${phrase(g, n)}`)
 		.join(" · ");
 }

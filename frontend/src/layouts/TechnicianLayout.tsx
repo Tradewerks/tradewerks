@@ -12,30 +12,36 @@ import TechnicianUserMenu from "../components/nav/TechnicianUserMenu";
 import ToastViewport from "../components/ui/ToastViewport";
 import { useToast } from "../components/ui/useToast";
 import ModuleRouteGuard from "../components/entitlements/ModuleRouteGuard";
+import { useTranslation } from "react-i18next";
+import { notificationText } from "../lib/notificationText";
+import { FALLBACK_TIMEZONE } from "../util/util";
 
 export default function TechnicianLayout() {
 	const { user } = useAuthStore();
 	const navigate = useNavigate();
 	const location = useLocation();
 	const navigationCount = useRef(0);
+	const { t, i18n } = useTranslation();
 
 	useSocketQuerySync();
 
 	const toast = useToast();
+	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 	const handleNewNotification = useCallback((notif: TechnicianNotification) => {
+		const { title, body } = notificationText(notif, tz);
 		toast.info(
 			<>
-				<div className="font-semibold">{notif.title}</div>
-				{notif.body && <div className="text-xs text-text-muted mt-0.5">{notif.body}</div>}
+				<div className="font-semibold">{title}</div>
+				{body && <div className="text-xs text-text-muted mt-0.5">{body}</div>}
 			</>,
 			{
 				durationMs: 20_000,
 				action: notif.action_url
-					? { label: "View", onClick: () => navigate(notif.action_url!) }
+					? { label: t("notifications.view"), onClick: () => navigate(notif.action_url!) }
 					: undefined,
 			},
 		);
-	}, [toast, navigate]);
+	}, [toast, navigate, t, tz]);
 
 	const { data: techProfile } = useTechnicianByIdQuery(user?.userId ?? null);
 	const { data: notifications = [] } = useNotificationsQuery(user?.userId ?? null, false, handleNewNotification);
@@ -77,6 +83,11 @@ export default function TechnicianLayout() {
 		};
 	}, [onShift, user?.userId]);
 
+	// loads the technician's selected language
+	useEffect(() => {
+		i18n.changeLanguage(techProfile?.language ?? "en")
+	}, [techProfile])
+
 	useEffect(() => {
 		navigationCount.current++;
 	}, [location.pathname]);
@@ -98,7 +109,7 @@ export default function TechnicianLayout() {
 					<div className="flex items-center gap-3 sm:gap-6">
 						<button
 							onClick={handleBack}
-							aria-label="Back"
+							aria-label={t("nav.back")}
 							className="flex items-center gap-2 text-text-tertiary hover:text-text-primary px-2 sm:px-3 py-2 rounded-lg hover:bg-surface group"
 						>
 							<ArrowLeft
@@ -106,7 +117,7 @@ export default function TechnicianLayout() {
 								className="group-hover:-translate-x-1 transition-transform"
 							/>
 							<span className="hidden sm:inline text-sm font-medium">
-								Back
+								{t('nav.back')}
 							</span>
 						</button>
 						<div className="font-semibold text-sm whitespace-nowrap">
@@ -119,7 +130,8 @@ export default function TechnicianLayout() {
 						<button
 							onClick={() => navigate("/technician/mileage")}
 							className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
-							title="Weekly Mileage"
+							title={t("mileage.mileage")}
+							aria-label={t("mileage.mileage")}
 						>
 							<Gauge size={20} className="text-text-tertiary" />
 						</button>
@@ -127,8 +139,8 @@ export default function TechnicianLayout() {
 						<button
 							onClick={() => navigate("/technician/timesheet")}
 							className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
-							title="My Time"
-							aria-label="My Time"
+							title={t("timesheet.title")}
+							aria-label={t("timesheet.title")}
 						>
 							<Clock size={20} className="text-text-tertiary" />
 						</button>
@@ -138,7 +150,8 @@ export default function TechnicianLayout() {
 							<button
 								onClick={() => navigate("/technician/vehicles")}
 								className="relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface transition-colors"
-								title={techProfile?.current_vehicle?.name ?? "No vehicle selected"}
+								title={techProfile?.current_vehicle?.name ?? t("vehicle.noneSelected")}
+								aria-label={techProfile?.current_vehicle?.name ?? t("vehicle.noneSelected")}
 							>
 								<Truck
 									size={20}
@@ -157,7 +170,8 @@ export default function TechnicianLayout() {
 						<button
 							onClick={() => navigate("/technician/notifications")}
 							className="relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-raised transition-colors hover:cursor-pointer"
-							title="Notifications"
+							title={t("notifications.title")}
+							aria-label={t("notifications.title")}
 						>
 							<Bell size={20} className="text-text-tertiary" />
 							{unreadCount > 0 && (
@@ -192,7 +206,7 @@ export default function TechnicianLayout() {
 					}
 				>
 					<House size={22} />
-					<span>Dashboard</span>
+					<span>{t('nav.dashboard')}</span>
 				</NavLink>
 				{usePermission("view_visits") && (
 					<NavLink
@@ -204,7 +218,7 @@ export default function TechnicianLayout() {
 						}
 					>
 						<ClipboardList size={22} />
-						<span>My Visits</span>
+						<span>{t('nav.my_visits')}</span>
 					</NavLink>
 				)}
 				<NavLink
@@ -216,7 +230,7 @@ export default function TechnicianLayout() {
 					}
 				>
 					<Map size={22} />
-					<span>Map</span>
+					<span>{t('nav.map')}</span>
 				</NavLink>
 			</nav>
 

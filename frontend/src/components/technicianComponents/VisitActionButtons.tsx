@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Car, MapPin, Clock, Pause, CheckCircle2, Play, AlertTriangle, Info, UserCheck, Loader2 } from "lucide-react";
 import { useTechVisitActions } from "../../hooks/useTechVisitActions";
 import type { JobVisit } from "../../types/jobs";
@@ -10,11 +11,7 @@ interface VisitActionButtonsProps {
 	onOverlayChange?: (active: boolean) => void;
 }
 
-const PAUSE_REASONS = [
-	{ value: "AwaitingMaterials", label: "Awaiting Materials" },
-	{ value: "EquipmentIssue", label: "Equipment Issue" },
-	{ value: "Other", label: "Other" },
-];
+const PAUSE_REASONS = ["AwaitingMaterials", "EquipmentIssue", "Other"] as const;
 
 export default function VisitActionButtons({
 	visit,
@@ -22,6 +19,7 @@ export default function VisitActionButtons({
 	variant = "card",
 	onOverlayChange,
 }: VisitActionButtonsProps) {
+	const { t } = useTranslation();
 	const {
 		isClockedIn,
 		openEntries,
@@ -83,7 +81,7 @@ export default function VisitActionButtons({
 				<div className="flex items-center gap-2 px-1 pb-2 border-b border-border-subtle">
 					<Pause size={13} className="text-warning-text shrink-0" />
 					<p className="text-sm font-semibold text-text-primary">
-						{isClockOut ? "Wrap up or pause?" : "Why are you pausing?"}
+						{isClockOut ? t("visit.wrapUpOrPause") : t("visit.whyPausing")}
 					</p>
 				</div>
 				{isClockOut && (
@@ -94,19 +92,19 @@ export default function VisitActionButtons({
 							disabled={isLoading}
 							className={`w-full py-3 px-2.5 rounded-lg font-medium bg-success-bg hover:bg-success/25 border border-success-border text-success-text text-center transition-colors disabled:opacity-40 leading-snug ${isCard ? "text-xs" : "text-sm"}`}
 						>
-							{isLoading ? "Completing…" : "Complete Visit"}
+							{isLoading ? t("visit.completing") : t("visit.completeVisit")}
 						</button>
 						<p className={`text-text-faint text-center ${isCard ? "text-[10px]" : "text-xs"}`}>
-							or pause because:
+							{t("visit.orPauseBecause")}
 						</p>
 					</>
 				)}
 				<div className="grid grid-cols-2 gap-1.5">
 					{PAUSE_REASONS.map((r, i) => (
 						<button
-							key={r.value}
+							key={r}
 							autoFocus={!isClockOut && i === 0}
-							onClick={() => handleReasonSelected(r.value)}
+							onClick={() => handleReasonSelected(r)}
 							disabled={isLoading}
 							className={`py-3 px-2.5 rounded-lg font-medium bg-surface hover:bg-surface-raised border border-border text-text-primary text-center transition-colors disabled:opacity-40 leading-snug${
 								i === PAUSE_REASONS.length - 1 && PAUSE_REASONS.length % 2 !== 0
@@ -114,7 +112,7 @@ export default function VisitActionButtons({
 									: ""
 							} ${isCard ? "text-xs" : "text-sm"}`}
 						>
-							{r.label}
+							{t(`visit.pauseReasons.${r}`)}
 						</button>
 					))}
 				</div>
@@ -122,7 +120,7 @@ export default function VisitActionButtons({
 					onClick={dismiss}
 					className={`w-full py-3 rounded-lg font-medium bg-surface border border-border text-text-tertiary hover:bg-surface-raised hover:text-text-primary transition-colors ${isCard ? "text-xs" : "text-sm"}`}
 				>
-					Cancel
+					{t("common.cancel")}
 				</button>
 			</div>
 		);
@@ -131,21 +129,21 @@ export default function VisitActionButtons({
 	if (uiState === "departure-prompt") {
 		return (
 			<div className="space-y-2">
-				<p className="text-xs text-text-secondary text-center font-medium">Still on site or heading out?</p>
+				<p className="text-xs text-text-secondary text-center font-medium">{t("visit.stillOnSite")}</p>
 				<div className="flex gap-2">
 					<button
 						autoFocus
 						onClick={dismiss}
 						className={`${btn} bg-surface border border-border text-text-primary hover:bg-surface-raised hover:text-text-primary`}
 					>
-						Staying On Site
+						{t("visit.stayingOnSite")}
 					</button>
 					<button
 						onClick={handleHeadingOut}
 						disabled={isLoading}
 						className={`${btn} bg-action-drive hover:bg-action-drive-hover text-on-primary disabled:opacity-40`}
 					>
-						{isLoading ? "Updating…" : "Heading Out"}
+						{isLoading ? t("visit.updating") : t("visit.headingOut")}
 					</button>
 				</div>
 			</div>
@@ -162,10 +160,10 @@ export default function VisitActionButtons({
 				<div className="rounded-lg bg-warning/10 border border-warning/25 px-3.5 py-3 space-y-1">
 					<div className="flex items-center gap-2">
 						<AlertTriangle size={13} className="text-warning-text shrink-0" />
-						<p className="text-sm font-semibold text-warning-text">Other techs on site</p>
+						<p className="text-sm font-semibold text-warning-text">{t("visit.otherTechsOnSite")}</p>
 					</div>
 					<p className="text-xs text-text-tertiary leading-relaxed">
-						Pausing clocks out {otherNames}. Their time will be saved.
+						{t("visit.pauseClocksOut", { names: otherNames })}
 					</p>
 				</div>
 				<div className="flex gap-2">
@@ -174,14 +172,14 @@ export default function VisitActionButtons({
 						onClick={dismiss}
 						className={`${btn} bg-surface border border-border text-text-primary hover:bg-surface-raised hover:text-text-primary`}
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 					<button
 						onClick={handleConfirmPause}
 						disabled={isLoading}
 						className={`${btn} bg-action-pause hover:bg-action-pause-hover text-on-primary disabled:opacity-40`}
 					>
-						{isLoading ? "Pausing…" : "Pause Anyway"}
+						{isLoading ? t("visit.pausing") : t("visit.pauseAnyway")}
 					</button>
 				</div>
 			</div>
@@ -195,10 +193,10 @@ export default function VisitActionButtons({
 				<div className="rounded-lg bg-warning/10 border border-warning/25 px-3.5 py-3 space-y-1">
 					<div className="flex items-center gap-2">
 						<AlertTriangle size={13} className="text-warning-text shrink-0" />
-						<p className="text-sm font-semibold text-warning-text">Other techs on site</p>
+						<p className="text-sm font-semibold text-warning-text">{t("visit.otherTechsOnSite")}</p>
 					</div>
 					<p className="text-xs text-text-tertiary leading-relaxed">
-						{otherNames} still clocked in. Completing will clock them out automatically.
+						{t("visit.completeClocksOut", { names: otherNames })}
 					</p>
 				</div>
 				<div className="flex gap-2">
@@ -207,14 +205,14 @@ export default function VisitActionButtons({
 						onClick={dismiss}
 						className={`${btn} bg-surface border border-border text-text-primary hover:bg-surface-raised hover:text-text-primary`}
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 					<button
 						onClick={handleConfirmComplete}
 						disabled={isLoading}
 						className={`${btn} bg-action-pause hover:bg-action-pause-hover text-on-primary disabled:opacity-40`}
 					>
-						{isLoading ? "Completing…" : "Force Complete"}
+						{isLoading ? t("visit.completing") : t("visit.forceComplete")}
 					</button>
 				</div>
 			</div>
@@ -224,21 +222,21 @@ export default function VisitActionButtons({
 	if (uiState === "prompt-complete") {
 		return (
 			<div className="space-y-2">
-				<p className="text-xs text-text-secondary text-center font-medium">Complete this visit?</p>
+				<p className="text-xs text-text-secondary text-center font-medium">{t("visit.completeThisVisit")}</p>
 				<div className="flex gap-2">
 					<button
 						autoFocus
 						onClick={handleDeclineComplete}
 						className={`${btn} bg-surface border border-border text-text-primary hover:bg-surface-raised hover:text-text-primary`}
 					>
-						Keep Paused
+						{t("visit.keepPaused")}
 					</button>
 					<button
 						onClick={handleConfirmComplete}
 						disabled={isLoading}
 						className={`${btn} bg-confirm hover:bg-confirm-hover text-on-primary disabled:opacity-40`}
 					>
-						{isLoading ? "Completing…" : "Complete ✓"}
+						{isLoading ? t("visit.completing") : t("visit.completeCheck")}
 					</button>
 				</div>
 			</div>
@@ -251,7 +249,7 @@ export default function VisitActionButtons({
 				<div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
 					<Info size={14} className="text-text-tertiary shrink-0 mt-0.5" />
 					<p className="text-xs text-text-tertiary">
-						Visit is now paused — no active technicians on site.
+						{t("visit.nowPaused")}
 					</p>
 				</div>
 				<div className="flex">
@@ -260,7 +258,7 @@ export default function VisitActionButtons({
 						onClick={dismiss}
 						className={`${btn} bg-surface border border-border text-text-secondary hover:bg-surface-raised hover:text-text-primary`}
 					>
-						Dismiss
+						{t("visit.dismiss")}
 					</button>
 				</div>
 			</div>
@@ -271,7 +269,7 @@ export default function VisitActionButtons({
 		return (
 			<div className="space-y-2">
 				<p className="text-xs text-text-secondary text-center font-medium">
-					You're already heading to another visit. Switch destination?
+					{t("visit.switchDestination")}
 				</p>
 				<div className="flex gap-2">
 					<button
@@ -279,14 +277,14 @@ export default function VisitActionButtons({
 						onClick={dismiss}
 						className={`${btn} bg-surface border border-border text-text-primary hover:bg-surface-raised hover:text-text-primary`}
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 					<button
 						onClick={handleConfirmSwitch}
 						disabled={isLoading}
 						className={`${btn} bg-action-drive hover:bg-action-drive-hover text-on-primary disabled:opacity-40`}
 					>
-						{isLoading ? "Switching…" : "Switch"}
+						{isLoading ? t("visit.switching") : t("visit.switch")}
 					</button>
 				</div>
 			</div>
@@ -311,11 +309,11 @@ export default function VisitActionButtons({
 					<button
 						onClick={
 							driveDisabled
-								? () => constraints.drive.reason && showTooltip(constraints.drive.reason)
+								? () => constraints.drive.reason && showTooltip(t(constraints.drive.reason))
 								: handleDrive
 						}
 						disabled={isLoading}
-						aria-label={confirmingAction === "drive" ? "Confirm — tap again to begin driving" : "I'm Driving"}
+						aria-label={confirmingAction === "drive" ? t("visit.confirmDriveAria") : t("visit.imDriving")}
 						className={`${btn} ${
 							driveDisabled
 								? "bg-action-drive text-on-primary opacity-50 cursor-not-allowed"
@@ -325,7 +323,7 @@ export default function VisitActionButtons({
 						}`}
 					>
 					<Car size={iconSize} />
-					{confirmingAction === "drive" ? "Confirm Driving" : "I'm Driving"}
+					{confirmingAction === "drive" ? t("visit.confirmDriving") : t("visit.imDriving")}
 					</button>
 				</div>
 				{clockError && (
@@ -345,11 +343,11 @@ export default function VisitActionButtons({
 					<button
 						onClick={
 							arriveDisabled
-								? () => constraints.arrive.reason && showTooltip(constraints.arrive.reason)
+								? () => constraints.arrive.reason && showTooltip(t(constraints.arrive.reason))
 								: handleArrive
 						}
 						disabled={isLoading || optimisticStatus !== null}
-						aria-label={confirmingAction === "arrive" ? "Confirm — tap again to mark arrived" : "I've Arrived"}
+						aria-label={confirmingAction === "arrive" ? t("visit.confirmArriveAria") : t("visit.imArrived")}
 						className={`${btn} ${
 							arriveDisabled
 								? "bg-action-drive text-on-primary opacity-50 cursor-not-allowed"
@@ -361,12 +359,12 @@ export default function VisitActionButtons({
 						{optimisticStatus === "EnRoute" ? (
 							<>
 								<Loader2 size={iconSize} className="animate-spin" />
-								Confirm Drive
+								{t("visit.confirmDrive")}
 							</>
 						) : (
 							<>
 								<MapPin size={iconSize} />
-								{confirmingAction === "arrive" ? "Confirm Arrived" : "I've Arrived"}
+								{confirmingAction === "arrive" ? t("visit.confirmArrived") : t("visit.imArrived")}
 							</>
 						)}
 					</button>
@@ -391,7 +389,7 @@ export default function VisitActionButtons({
 							className={`${btn} bg-surface hover:bg-surface-raised border border-border text-text-secondary`}
 						>
 							<Pause size={iconSize} />
-							{variant === "detail" ? "Pause Visit" : "Pause"}
+							{variant === "detail" ? t("visit.pauseVisit") : t("visit.pause")}
 						</button>
 						<button
 							onClick={handleComplete}
@@ -403,7 +401,7 @@ export default function VisitActionButtons({
 							}`}
 						>
 							{confirmingAction !== "complete" && <CheckCircle2 size={iconSize} />}
-							{confirmingAction === "complete" ? "Confirm Complete" : "Complete"}
+							{confirmingAction === "complete" ? t("visit.confirmComplete") : t("visit.complete")}
 						</button>
 					</div>
 					<div className="flex">
@@ -413,7 +411,7 @@ export default function VisitActionButtons({
 							className={`${btn} border border-border text-text-muted hover:bg-surface hover:text-text-tertiary`}
 						>
 							<Clock size={iconSize} />
-							{isLoading ? "Clocking Out…" : "Clock Out"}
+							{isLoading ? t("visit.clockingOut") : t("visit.clockOut")}
 						</button>
 					</div>
 					{clockError && (
@@ -424,7 +422,7 @@ export default function VisitActionButtons({
 		}
 
 		const clockInDisabled = !constraints.clockIn.enabled;
-		const label = visit.status === "Paused" ? "Clock In & Resume" : "Clock In & Begin";
+		const label = visit.status === "Paused" ? t("visit.clockInResume") : t("visit.clockInBegin");
 		return (
 			<div className="space-y-1.5">
 				{tooltipEl}
@@ -432,7 +430,7 @@ export default function VisitActionButtons({
 					<button
 						onClick={
 							clockInDisabled
-								? () => constraints.clockIn.reason && showTooltip(constraints.clockIn.reason)
+								? () => constraints.clockIn.reason && showTooltip(t(constraints.clockIn.reason))
 								: handleClockIn
 						}
 						disabled={isLoading && !clockInDisabled}
@@ -443,7 +441,7 @@ export default function VisitActionButtons({
 						}`}
 					>
 						<Play size={iconSize} />
-						{isLoading && !clockInDisabled ? "Clocking In…" : label}
+						{isLoading && !clockInDisabled ? t("visit.clockingIn") : label}
 					</button>
 				</div>
 				{clockError && (
@@ -464,7 +462,7 @@ export default function VisitActionButtons({
 						className={`${btn} bg-confirm hover:bg-confirm-hover text-on-primary`}
 					>
 						<UserCheck size={iconSize} />
-						{isLoading ? "Updating…" : "I'm Available"}
+						{isLoading ? t("visit.updating") : t("dashboard.im_available")}
 					</button>
 				</div>
 			</div>

@@ -2949,6 +2949,8 @@ model technician_notification {
   type          String     // "visit_assigned" | "visit_changed" | "visit_cancelled" | "dispatch_message"
   title         String
   body          String     @db.Text
+  // Values the app fills into the translated title/body; title/body stay as the English copy
+  vars          Json?
   action_url    String?
   read_at       DateTime?
   created_at    DateTime   @default(now())
@@ -3007,6 +3009,7 @@ model technician {
   password_reset_token       String?   @unique
   password_reset_token_expires_at DateTime?
   theme       String            @default("system")
+  language    String            @default("en")
 
   organization_role_id String?
   organization_role    organization_role? @relation("TechnicianRole", fields: [organization_role_id], references: [id])

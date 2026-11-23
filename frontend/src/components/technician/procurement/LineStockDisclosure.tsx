@@ -1,9 +1,12 @@
 import { useId, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 import CatalogItemPicker from "../../inventory/CatalogItemPicker";
-import { DISPOSITION_LABELS, type FieldPurchaseDisposition } from "../../../types/fieldPurchases";
+import type { FieldPurchaseDisposition } from "../../../types/fieldPurchases";
 import TechSelect from "./TechSelect";
 import type { LineDraft } from "./lineDrafts";
+
+const DISPOSITIONS: FieldPurchaseDisposition[] = ["receive", "non_stock"];
 
 /**
  * What becomes of the part, kept off the transcription path. A technician reading
@@ -46,18 +49,21 @@ export default function LineStockDisclosure({
 	// way a collapsed group can still ask the question.
 	const [open, setOpen] = useState(draft.disposition === "");
 	const panelId = useId();
+	const { t } = useTranslation();
 
 	const summary =
 		draft.disposition === "receive"
 			? {
 					text: draft.disposition_vehicle_id
-						? `To ${myVehicle?.name ?? "your truck"}`
-						: "To Warehouse",
+						? t("stock.toTruck", {
+								name: myVehicle?.name ?? t("stock.yourTruck"),
+							})
+						: t("stock.toWarehouse"),
 					warn: false,
 				}
 			: draft.disposition === "non_stock"
-				? { text: "Billed to job", warn: false }
-				: { text: "Not recorded", warn: true };
+				? { text: t("stock.billed"), warn: false }
+				: { text: t("stock.notRecorded"), warn: true };
 
 	// A follower is inherited, so it recedes; a line set on its own is an exception
 	// and is what a technician scanning the list needs to find.
@@ -87,7 +93,7 @@ export default function LineStockDisclosure({
 					className={`flex-shrink-0 text-text-muted transition-transform duration-150 ${open ? "rotate-180" : ""}`}
 				/>
 				<span className="flex-shrink-0 text-xs text-text-muted">
-					Stock &amp; billing
+					{t("stock.title")}
 				</span>
 				<span className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
 					{draft.item && (
@@ -107,12 +113,12 @@ export default function LineStockDisclosure({
 						{summary.text}
 						{following && (
 							<span className="font-normal text-text-faint">
-								· all items
+								{t("stock.allItems")}
 							</span>
 						)}
 						{pinned && !summary.warn && (
 							<span className="font-normal text-text-muted">
-								· this item
+								{t("stock.thisItem")}
 							</span>
 						)}
 					</span>
@@ -126,7 +132,7 @@ export default function LineStockDisclosure({
 				>
 					<label className="min-w-0">
 						<span className="mb-1 block text-xs text-text-muted">
-							What happened to it
+							{t("stock.whatHappened")}
 						</span>
 						<TechSelect
 							value={draft.disposition}
@@ -152,14 +158,10 @@ export default function LineStockDisclosure({
 								})
 							}
 						>
-							<option value="">Not recorded</option>
-							{(
-								Object.keys(
-									DISPOSITION_LABELS
-								) as FieldPurchaseDisposition[]
-							).map((k) => (
+							<option value="">{t("stock.notRecorded")}</option>
+							{DISPOSITIONS.map((k) => (
 								<option key={k} value={k}>
-									{DISPOSITION_LABELS[k]}
+									{t(`stock.disposition.${k}`)}
 								</option>
 							))}
 						</TechSelect>
@@ -171,7 +173,7 @@ export default function LineStockDisclosure({
 								id={`${panelId}-dest`}
 								className="mb-1 block text-xs text-text-muted"
 							>
-								Goes onto
+								{t("stock.goesOnto")}
 							</span>
 							{/* Two answers, so both are on screen at once rather than
 							    behind a picker: one tap at a counter, gloved, instead of
@@ -184,7 +186,7 @@ export default function LineStockDisclosure({
 								{[
 									{
 										id: "",
-										label: "Warehouse",
+										label: t("stock.warehouse"),
 									},
 									...(myVehicle
 										? [
@@ -242,9 +244,7 @@ export default function LineStockDisclosure({
 							    wondering where their van went. */}
 							{!myVehicle && (
 								<span className="mt-1 block text-xs text-text-muted">
-									No truck assigned — ask
-									dispatch to sign you onto
-									one to stock it.
+									{t("stock.noTruck")}
 								</span>
 							)}
 						</div>
@@ -257,14 +257,14 @@ export default function LineStockDisclosure({
 								onClick={onFollow}
 								className="inline-flex min-h-9 items-center text-xs font-medium text-primary underline-offset-2 hover:underline"
 							>
-								Match all items
+								{t("stock.matchAll")}
 							</button>
 						</div>
 					)}
 
 					<div className="min-w-0 sm:col-span-2">
 						<span className="mb-1 block text-xs text-text-muted">
-							Catalog item (optional)
+							{t("stock.catalogItem")}
 						</span>
 						{/* Searched on the server. This was a native select holding every
 						    item in the catalog, once per line — no search, no SKU, no
@@ -274,13 +274,13 @@ export default function LineStockDisclosure({
 							scope="catalog"
 							value={draft.item}
 							disabled={!editable}
-							ariaLabel="Catalog item for this line"
-							placeholder="Search the catalog…"
-							onChange={(t) =>
+							ariaLabel={t("stock.catalogAria")}
+							placeholder={t("stock.searchCatalog")}
+							onChange={(item) =>
 								onChange({
-									item: t,
+									item,
 									inventory_item_id:
-										t?.id ?? "",
+										item?.id ?? "",
 								})
 							}
 						/>

@@ -6,6 +6,8 @@ import type { MapViewRequest, StaticMarker, TechRouteData } from "../../../types
 import "mapbox-gl/dist/mapbox-gl.css";
 import CreateMarker from "./MarkerFactory";
 import { Copy, Check, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 type BrowserHint = {
 	name: string;
@@ -13,42 +15,23 @@ type BrowserHint = {
 	steps: string;
 };
 
-function getBrowserHint(): BrowserHint {
+function getBrowserHint(t: TFunction): BrowserHint {
 	const ua = navigator.userAgent;
 	if (ua.includes("Edg/"))
-		return {
-			name: "Edge",
-			url: "edge://flags/#ignore-gpu-blocklist",
-			steps: 'Set "Override software rendering list" to Enabled, then click Restart.',
-		};
+		return { name: "Edge", url: "edge://flags/#ignore-gpu-blocklist", steps: t("map.steps.edge") };
 	if (ua.includes("Chrome/"))
-		return {
-			name: "Chrome",
-			url: "chrome://flags/#ignore-gpu-blocklist",
-			steps: 'Set "Override software rendering list" to Enabled, then click Relaunch.',
-		};
+		return { name: "Chrome", url: "chrome://flags/#ignore-gpu-blocklist", steps: t("map.steps.chrome") };
 	if (ua.includes("Firefox/"))
-		return {
-			name: "Firefox",
-			url: "about:config",
-			steps: "Search for webgl.disabled and set it to false, then reload.",
-		};
+		return { name: "Firefox", url: "about:config", steps: t("map.steps.firefox") };
 	if (ua.includes("Safari/"))
-		return {
-			name: "Safari",
-			url: "",
-			steps: "Go to Develop → Experimental Features and enable WebGL.",
-		};
-	return {
-		name: "your browser",
-		url: "",
-		steps: "Enable WebGL or hardware acceleration in your browser settings.",
-	};
+		return { name: "Safari", url: "", steps: t("map.steps.safari") };
+	return { name: t("map.yourBrowser"), url: "", steps: t("map.steps.other") };
 }
 
 function WebGLErrorFallback({ afterContextLoss }: { afterContextLoss: boolean }) {
+	const { t } = useTranslation();
 	const [copied, setCopied] = useState(false);
-	const hint = getBrowserHint();
+	const hint = getBrowserHint(t);
 
 	function copyUrl() {
 		navigator.clipboard.writeText(hint.url).then(() => {
@@ -60,24 +43,17 @@ function WebGLErrorFallback({ afterContextLoss }: { afterContextLoss: boolean })
 	if (afterContextLoss) {
 		return (
 			<div className="flex flex-col items-center justify-center h-full gap-4 text-text-tertiary text-sm px-6 text-center">
-				<p className="text-text-primary font-medium text-base">Map unavailable</p>
-				<p className="max-w-sm">
-					After losing the GPU connection, {hint.name} has disabled WebGL for
-					this tab. A page refresh won&apos;t help — you need to fully restart
-					the browser.
-				</p>
-				<p className="text-text-muted text-xs">
-					This happens when another tab (e.g. a video) reclaims the GPU and the
-					browser can&apos;t recover.
-				</p>
+				<p className="text-text-primary font-medium text-base">{t("map.unavailable")}</p>
+				<p className="max-w-sm">{t("map.afterLoss", { browser: hint.name })}</p>
+				<p className="text-text-muted text-xs">{t("map.afterLossWhy")}</p>
 			</div>
 		);
 	}
 
 	return (
 		<div className="flex flex-col items-center justify-center h-full gap-4 text-text-tertiary text-sm px-6 text-center">
-			<p className="text-text-primary font-medium text-base">Map unavailable</p>
-			<p>WebGL failed to initialize in {hint.name}. Follow the steps below to fix it:</p>
+			<p className="text-text-primary font-medium text-base">{t("map.unavailable")}</p>
+			<p>{t("map.initFailed", { browser: hint.name })}</p>
 			<p className="text-text-secondary">{hint.steps}</p>
 			{hint.url && (
 				<div className="flex items-center gap-2 bg-surface border border-border-strong rounded-md px-3 py-2 font-mono text-xs text-text-primary">
@@ -85,15 +61,14 @@ function WebGLErrorFallback({ afterContextLoss }: { afterContextLoss: boolean })
 					<button
 						onClick={copyUrl}
 						className="ml-1 text-text-tertiary hover:text-text-primary transition-colors"
-						title="Copy URL"
+						title={t("map.copyUrl")}
+						aria-label={t("map.copyUrl")}
 					>
 						{copied ? <Check size={14} /> : <Copy size={14} />}
 					</button>
 				</div>
 			)}
-			<p className="text-text-muted text-xs">
-				Paste the URL above into your address bar to open the settings page.
-			</p>
+			<p className="text-text-muted text-xs">{t("map.pasteHint")}</p>
 		</div>
 	);
 }
@@ -197,6 +172,7 @@ const DynamicMap = ({
 	autoFit = "once",
 	interactive = true,
 }: DynamicMapProps) => {
+	const { t } = useTranslation();
 	const mapRef = useRef<mapboxgl.Map | null>(null);
 	const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
 	const hasFitRef = useRef(false);
@@ -561,17 +537,14 @@ const DynamicMap = ({
 				style={{ position: "absolute", inset: 0, zIndex: 1000 }}
 				className="flex flex-col items-center justify-center gap-3 bg-base/80 backdrop-blur-sm rounded-lg text-sm text-center px-6"
 			>
-				<p className="text-text-primary font-medium">Map lost GPU connection</p>
-				<p className="text-text-tertiary text-xs max-w-xs">
-					The browser reclaimed the GPU context, likely due to another tab using
-					WebGL or hardware video. Click below to restore the map.
-				</p>
+				<p className="text-text-primary font-medium">{t("map.lostGpu")}</p>
+				<p className="text-text-tertiary text-xs max-w-xs">{t("map.lostGpuWhy")}</p>
 				<button
 					onClick={() => setInitKey((k) => k + 1)}
 					className="flex items-center gap-2 px-4 py-2 bg-primary-hover hover:bg-primary-active rounded-md text-on-primary text-sm font-medium transition-colors"
 				>
 					<RefreshCw size={14} />
-					Reload Map
+					{t("map.reload")}
 				</button>
 			</div>,
 			containerRef.current

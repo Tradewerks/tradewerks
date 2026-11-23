@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useDialogA11y } from "../../hooks/useDialogA11y";
 
 export interface ConfirmDialogProps {
@@ -30,6 +31,7 @@ export default function ConfirmDialog({
 	onConfirm,
 	onCancel,
 }: ConfirmDialogProps) {
+	const { t } = useTranslation();
 	// Synchronous re-entrancy guard — `pending` is whatever async state the
 	// caller wires up (usually a mutation's isPending), which can lag a click
 	// by a render or two. A fast double-click before that prop updates would
@@ -77,7 +79,7 @@ export default function ConfirmDialog({
 						onClick={onCancel}
 						className="px-3 py-1.5 rounded-md border border-border text-sm text-text-tertiary hover:text-text-primary hover:bg-surface transition-colors"
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 					<button
 						type="button"
@@ -89,7 +91,7 @@ export default function ConfirmDialog({
 								: "bg-primary hover:enabled:bg-primary-hover"
 						}`}
 					>
-						{pending ? "Working…" : confirmLabel}
+						{pending ? t("wizard.working") : confirmLabel}
 					</button>
 				</div>
 			</div>

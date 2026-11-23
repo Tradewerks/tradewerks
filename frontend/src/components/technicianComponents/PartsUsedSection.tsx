@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
 	Search,
 	Plus,
@@ -40,6 +41,7 @@ function EditPartsTab({
 	isPending: boolean;
 	highlightedPartId: string | null;
 }) {
+	const { t } = useTranslation();
 	const [pendingDeleteIdx, setPendingDeleteIdx] = useState<number | null>(null);
 	const pendingDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -64,7 +66,7 @@ function EditPartsTab({
 	if (lineItems.length === 0) {
 		return (
 			<div className="px-4 py-5 text-center bg-surface">
-				<p className="text-sm text-text-faint">No parts added yet</p>
+				<p className="text-sm text-text-faint">{t("partsUsed.noParts")}</p>
 			</div>
 		);
 	}
@@ -110,7 +112,7 @@ function EditPartsTab({
 												? "border-error/30 bg-error-bg text-error-text hover:bg-error/15"
 												: "border-border bg-surface text-text-tertiary hover:bg-surface-raised"
 									}`}
-									aria-label={isOne ? "Remove part" : "Decrease quantity"}
+									aria-label={isOne ? t("partsUsed.removePart") : t("partsUsed.decreaseQty")}
 								>
 									{isOne ? <Trash2 size={10} /> : "-"}
 								</button>
@@ -126,7 +128,7 @@ function EditPartsTab({
 									}}
 									disabled={isPending}
 									className="flex items-center justify-center w-5 h-5 rounded text-xs font-bold border border-border bg-surface text-text-tertiary hover:bg-surface-raised transition-colors disabled:opacity-40"
-									aria-label="Increase quantity"
+									aria-label={t("partsUsed.increaseQty")}
 								>
 									+
 								</button>
@@ -168,6 +170,7 @@ function StockPartPicker({
 	onSwitchToEdit: (partId: string) => void;
 	onClose: () => void;
 }) {
+	const { t } = useTranslation();
 	const addParts = useAddPartsUsedMutation();
 	const toast = useToast();
 	const [selected, setSelected] = useState<VehicleStockItem | null>(null);
@@ -199,7 +202,7 @@ function StockPartPicker({
 		let data: AddPartsUsedInput;
 		if (isSerialized) {
 			if (selectedUnits.length !== targetCount) {
-				setErr("Select exactly the target number of units.");
+				setErr(t("partsUsed.selectExactUnits"));
 				return;
 			}
 			data = {
@@ -211,17 +214,17 @@ function StockPartPicker({
 		} else {
 			const parsedQty = Number(qty);
 			if (!parsedQty || parsedQty <= 0) {
-				setErr("Enter a valid quantity.");
+				setErr(t("partsUsed.invalidQty"));
 				return;
 			}
 			// The ledger stores two decimals; the server would silently round
 			// 2.505, so catch it here where the tech can still correct it.
 			if (!isStorableStockQty(parsedQty)) {
-				setErr("Quantity must be to two decimal places.");
+				setErr(t("partsUsed.twoDecimals"));
 				return;
 			}
 			if (parsedQty > Number(selected.qty_on_hand)) {
-				setErr("Not enough stock on hand.");
+				setErr(t("partsUsed.notEnoughStock"));
 				return;
 			}
 			data = {
@@ -235,10 +238,10 @@ function StockPartPicker({
 		setErr(null);
 		try {
 			await addParts.mutateAsync({ visitId, vehicleId, data });
-			toast.success(`Added ${selected.inventory_item.name}`);
+			toast.success(t("partsUsed.added", { name: selected.inventory_item.name }));
 			onClose();
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Failed to add part");
+			toast.error(e instanceof Error ? e.message : t("partsUsed.addFailed"));
 		}
 	};
 
@@ -257,17 +260,16 @@ function StockPartPicker({
 					{selected.inventory_item.name}
 				</p>
 				<p className="text-xs text-text-muted mb-4">
-					On hand: {Number(selected.qty_on_hand)}{" "}
-					{unitLabel(
-						selected.inventory_item.unit,
-						Number(selected.qty_on_hand)
-					)}
+					{t("partsUsed.onHand", {
+						qty: Number(selected.qty_on_hand),
+						unit: unitLabel(selected.inventory_item.unit, Number(selected.qty_on_hand)),
+					})}
 				</p>
 				{isSerialized ? (
 					<div className="mb-3">
 						<div className="flex items-center justify-between mb-2">
 							<label className="text-xs text-text-tertiary">
-								Units to use
+								{t("partsUsed.unitsToUse")}
 							</label>
 							<div className="flex items-center gap-1.5">
 								<button
@@ -276,7 +278,7 @@ function StockPartPicker({
 										setTargetCount((c) => Math.max(1, c - 1))
 									}
 									className="flex items-center justify-center w-11 h-11 rounded-md text-sm font-bold border border-border bg-surface text-text-secondary hover:bg-surface-raised transition-colors"
-									aria-label="Decrease units to use"
+									aria-label={t("partsUsed.decreaseUnits")}
 								>
 									-
 								</button>
@@ -287,7 +289,7 @@ function StockPartPicker({
 									type="button"
 									onClick={() => setTargetCount((c) => c + 1)}
 									className="flex items-center justify-center w-11 h-11 rounded-md text-sm font-bold border border-border bg-surface text-text-secondary hover:bg-surface-raised transition-colors"
-									aria-label="Increase units to use"
+									aria-label={t("partsUsed.increaseUnits")}
 								>
 									+
 								</button>
@@ -309,7 +311,7 @@ function StockPartPicker({
 				) : (
 					<>
 						<label className="text-xs text-text-tertiary mb-1 block">
-							Quantity Used
+							{t("partsUsed.quantityUsed")}
 						</label>
 						<input
 							type="number"
@@ -341,14 +343,14 @@ function StockPartPicker({
 						onClick={() => setSelected(null)}
 						className="flex-1 py-2 text-sm rounded-lg border border-border text-text-tertiary hover:bg-surface"
 					>
-						Back
+						{t("nav.back")}
 					</button>
 					<button
 						onClick={handleConfirm}
 						disabled={confirmDisabled}
 						className="flex-1 py-2 text-sm rounded-lg bg-primary-hover hover:bg-primary text-on-primary font-medium disabled:opacity-40"
 					>
-						{addParts.isPending ? "Adding…" : "Add Part"}
+						{addParts.isPending ? t("partsUsed.adding") : t("partsUsed.addPart")}
 					</button>
 				</div>
 			</div>
@@ -364,7 +366,7 @@ function StockPartPicker({
 				/>
 				<input
 					type="text"
-					placeholder="Search parts…"
+					placeholder={t("partsUsed.search")}
 					value={search}
 					onChange={(e) => onSearchChange(e.target.value)}
 					autoFocus
@@ -374,7 +376,7 @@ function StockPartPicker({
 			<div className="divide-y divide-border-subtle overflow-y-auto max-h-56">
 				{filtered.length === 0 && (
 					<p className="px-4 py-4 text-center text-sm text-text-faint">
-						No matching parts
+						{t("partsUsed.noMatches")}
 					</p>
 				)}
 				{filtered.map((item) => (
@@ -403,7 +405,7 @@ function StockPartPicker({
 											: ""
 									}
 								>
-									{Number(item.qty_on_hand)} on hand
+									{t("partsUsed.qtyOnHand", { qty: Number(item.qty_on_hand) })}
 									{Number(item.qty_on_hand) <=
 										Number(item.qty_min) && (
 										<AlertTriangle
@@ -435,7 +437,7 @@ function StockPartPicker({
 									}
 									className="ml-3 shrink-0 px-2.5 py-1 rounded text-[10px] font-semibold bg-success-bg text-success-text border border-success-border hover:bg-success/25 transition-colors flex items-center gap-1"
 								>
-									<Check size={10} /> Added
+									<Check size={10} /> {t("partsUsed.addedBadge")}
 								</button>
 							) : (
 								<button
@@ -449,7 +451,7 @@ function StockPartPicker({
 									}}
 									className="ml-3 shrink-0 px-2.5 py-1 rounded text-[10px] font-semibold bg-primary-bg text-primary-text hover:bg-primary-bg-subtle hover:text-primary-text transition-colors border border-primary-border"
 								>
-									+ Add
+									{t("partsUsed.add")}
 								</button>
 							);
 						})()}
@@ -470,6 +472,7 @@ export default function PartsUsedSection({
 	lineItems: VisitLineItem[];
 }) {
 	const runningTotal = lineItems.reduce((sum, li) => sum + Number(li.quantity) * Number(li.unit_price), 0);
+	const { t } = useTranslation();
 	const { user } = useAuthStore();
 	// Using parts from the truck is a Vehicle Stock write, not just an Inventory one.
 	const vehicleStockOn = useModule("vehicle_stock") === "on";
@@ -496,7 +499,7 @@ export default function PartsUsedSection({
 					data: { technician_id: user.userId, quantity: newQty },
 				});
 			} catch (e) {
-				toast.error(e instanceof Error ? e.message : "Failed to update part");
+				toast.error(e instanceof Error ? e.message : t("partsUsed.updateFailed"));
 			}
 			return;
 		}
@@ -536,7 +539,7 @@ export default function PartsUsedSection({
 				},
 			});
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Failed to update part");
+			toast.error(e instanceof Error ? e.message : t("partsUsed.updateFailed"));
 		}
 	};
 
@@ -589,8 +592,8 @@ export default function PartsUsedSection({
 				className="w-full flex items-center justify-between px-4 py-3 border-b border-border-subtle"
 			>
 				<span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
-					{adding && <span className="text-primary-text">Editing </span>}
-					Parts Used
+					{adding && <span className="text-primary-text">{t("partsUsed.editing")} </span>}
+					{t("partsUsed.title")}
 					{lineItems.length > 0 && (
 						<span className="ml-2 text-text-muted font-normal normal-case tracking-normal">
 							({lineItems.length})
@@ -617,7 +620,7 @@ export default function PartsUsedSection({
 								className="flex items-center gap-2 text-sm text-primary-text hover:text-primary-text transition-colors"
 							>
 								<Plus size={14} />
-								Add / Edit Parts
+								{t("partsUsed.addEditParts")}
 							</button>
 						</div>
 					) : (
@@ -633,7 +636,7 @@ export default function PartsUsedSection({
 									}`}
 								>
 									<Pencil size={12} />
-									Edit Parts
+									{t("partsUsed.editParts")}
 								</button>
 								{canUseInventory && (
 									<button
@@ -645,7 +648,7 @@ export default function PartsUsedSection({
 										}`}
 									>
 										<Package size={12} />
-										Vehicle Stock
+										{t("partsUsed.vehicleStock")}
 									</button>
 								)}
 							</div>
@@ -676,11 +679,7 @@ export default function PartsUsedSection({
 								/>
 							) : (
 								<div className="px-4 py-4">
-									<p className="text-sm text-text-muted">
-										Nothing on the truck. A part bought at a store or
-										supply house is a field purchase — start one from
-										this visit and photograph the receipt.
-									</p>
+									<p className="text-sm text-text-muted">{t("partsUsed.nothingOnTruck")}</p>
 								</div>
 							)}
 
@@ -693,7 +692,7 @@ export default function PartsUsedSection({
 									}}
 									className="w-full py-2.5 rounded-lg bg-primary-hover hover:bg-primary text-on-primary text-sm font-bold transition-colors"
 								>
-									Done
+									{t("partsUsed.done")}
 								</button>
 							</div>
 						</div>
@@ -704,7 +703,7 @@ export default function PartsUsedSection({
 						<>
 							{lineItems.length === 0 ? (
 								<p className="px-4 py-5 text-center text-sm text-text-faint">
-									No parts added yet
+									{t("partsUsed.noParts")}
 								</p>
 							) : (
 								<div className="divide-y divide-border-subtle">
@@ -748,7 +747,7 @@ export default function PartsUsedSection({
 					{!adding && lineItems.length > 0 && (
 						<div className="flex items-center justify-between px-4 py-3 border-t border-border-subtle">
 							<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide">
-								Running Total
+								{t("partsUsed.runningTotal")}
 							</span>
 							<span className="text-base font-bold text-text-primary tabular-nums">
 								${runningTotal.toFixed(2)}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, Barcode as BarcodeIcon, ChevronDown, X } from "lucide-react";
 import { useSerialsQuery } from "../../hooks/useTracking";
 import { useScanDispatcher } from "../../hooks/useScanDispatcher";
@@ -53,6 +54,7 @@ export default function ExistingUnitPicker({
 	onChange,
 	defaultOpen = false,
 }: ExistingUnitPickerProps) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(defaultOpen);
 	const [searchInput, setSearchInput] = useState("");
 	const search = useDebouncedValue(searchInput, 300);
@@ -87,8 +89,8 @@ export default function ExistingUnitPicker({
 	const labelsRef = useRef<Map<string, string>>(new Map());
 	for (const row of rows) labelsRef.current.set(row.id, row.serial_number);
 	const selected = useMemo(
-		() => value.map((id) => ({ id, label: labelsRef.current.get(id) ?? "Selected unit" })),
-		[value],
+		() => value.map((id) => ({ id, label: labelsRef.current.get(id) ?? t("unitPicker.selectedUnit") })),
+		[value, t],
 	);
 
 	const toggle = (id: string) => {
@@ -97,11 +99,11 @@ export default function ExistingUnitPicker({
 	};
 
 	const { handleScan } = useScanDispatcher({
-		onItem: () => setScanError("That code is an item, not a serial unit"),
-		onBatch: () => setScanError("That code is a batch/lot, not a serial unit"),
+		onItem: () => setScanError(t("unitPicker.isItem")),
+		onBatch: () => setScanError(t("unitPicker.isBatch")),
 		onSerial: (serial) => {
 			if (serial.item.id !== itemId) {
-				setScanError(`That unit belongs to ${serial.item.name}, not ${itemName}`);
+				setScanError(t("unitPicker.wrongItem", { other: serial.item.name, item: itemName }));
 				return;
 			}
 			const loaded = rows.find((r) => r.id === serial.serialUnitId);
@@ -114,14 +116,20 @@ export default function ExistingUnitPicker({
 			// invalid. Only the resolve response's status gets checked here;
 			// anything finer is the backend's call at submit.
 			if (statusFilter && serial.status !== statusFilter) {
-				setScanError(`That unit is ${serial.status.replace(/_/g, " ")}, not available here`);
+				setScanError(
+					t("unitPicker.wrongStatus", {
+						status: t(`serialStatus.${serial.status}`, {
+							defaultValue: serial.status.replace(/_/g, " "),
+						}).toLowerCase(),
+					})
+				);
 				return;
 			}
 			labelsRef.current.set(serial.serialUnitId, serial.code);
 			setScanError(null);
 			if (!value.includes(serial.serialUnitId)) onChange([...value, serial.serialUnitId]);
 		},
-		onNotFound: () => setScanError("No unit found for that code"),
+		onNotFound: () => setScanError(t("unitPicker.notFound")),
 	});
 
 	const countState: "short" | "exact" | "over" =
@@ -139,15 +147,15 @@ export default function ExistingUnitPicker({
 			    button of its own whether or not the list is showing. */}
 			<div className="flex items-center gap-2">
 				<span className="text-xs font-medium text-text-tertiary uppercase tracking-wider flex-1 min-w-0">
-					Select existing units
+					{t("unitPicker.title")}
 				</span>
 				<span className={`text-xs font-semibold tabular-nums ${countClass}`}>
-					{value.length} / {targetCount} selected
+					{t("unitPicker.count", { n: value.length, total: targetCount })}
 				</span>
 				<button
 					type="button"
 					onClick={() => setScannerOpen(true)}
-					aria-label={`Scan a serial unit for ${itemName}`}
+					aria-label={t("unitPicker.scanFor", { name: itemName })}
 					className="h-[26px] w-[26px] shrink-0 flex items-center justify-center rounded border border-border text-text-muted hover:text-primary hover:border-primary transition-colors"
 				>
 					<BarcodeIcon size={14} />
@@ -158,7 +166,7 @@ export default function ExistingUnitPicker({
 					aria-expanded={open}
 					className="h-[26px] shrink-0 flex items-center gap-1 rounded border border-border px-2 text-[11px] font-medium text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors"
 				>
-					{open ? "Hide list" : "Browse"}
+					{t(open ? "unitPicker.hideList" : "unitPicker.browse")}
 					<ChevronDown
 						size={12}
 						className={`transition-transform ${open ? "rotate-180" : ""}`}
@@ -192,7 +200,7 @@ export default function ExistingUnitPicker({
 							<button
 								type="button"
 								onClick={() => toggle(unit.id)}
-								aria-label={`Remove ${unit.label}`}
+								aria-label={t("shiftEdit.removeAria", { label: unit.label })}
 								className="shrink-0 rounded-full p-0.5 text-primary-text/70 hover:text-primary-text hover:bg-primary/20 transition-colors"
 							>
 								<X size={10} />
@@ -208,18 +216,18 @@ export default function ExistingUnitPicker({
 						type="search"
 						value={searchInput}
 						onChange={(e) => setSearchInput(e.target.value)}
-						placeholder="Search serial…"
-						aria-label="Search serial numbers"
+						placeholder={t("unitPicker.search")}
+						aria-label={t("unitPicker.searchAria")}
 						className="w-full h-8 rounded border border-border-input bg-base px-2.5 text-sm text-text-primary placeholder:text-text-faint outline-none focus:border-primary"
 					/>
 
 					{isLoading && rows.length === 0 && (
-						<p className="text-xs text-text-muted">Loading units…</p>
+						<p className="text-xs text-text-muted">{t("unitPicker.loading")}</p>
 					)}
 
 					{!isLoading && rows.length === 0 && (
 						<p className="text-xs text-text-muted">
-							{search ? `No units match "${search}".` : "No matching units available."}
+							{search ? t("unitPicker.noMatch", { q: search }) : t("unitPicker.noneAvailable")}
 						</p>
 					)}
 
@@ -240,7 +248,7 @@ export default function ExistingUnitPicker({
 											type="checkbox"
 											checked={checked}
 											onChange={() => toggle(unit.id)}
-											aria-label={`Select unit ${unit.serial_number}`}
+											aria-label={t("unitPicker.selectUnit", { serial: unit.serial_number })}
 											className="shrink-0"
 										/>
 										<span className="flex-1 min-w-0 truncate font-mono text-text-primary">
@@ -257,8 +265,8 @@ export default function ExistingUnitPicker({
 					{rows.length > 0 && (
 						<div className="flex items-center justify-between gap-2">
 							<span className="text-[11px] text-text-faint tabular-nums">
-								{rows.length} shown
-								{data?.nextCursor ? " · more available" : ""}
+								{t("unitPicker.shown", { n: rows.length })}
+								{data?.nextCursor ? ` · ${t("unitPicker.moreAvailable")}` : ""}
 							</span>
 							{data?.nextCursor && (
 								<button
@@ -267,7 +275,7 @@ export default function ExistingUnitPicker({
 									disabled={isFetching}
 									className="text-[11px] font-medium text-primary-text hover:underline disabled:opacity-50"
 								>
-									{isFetching ? "Loading…" : `Show ${PAGE_HINT} more`}
+									{isFetching ? t("common.loading") : t("unitPicker.showMore", { n: PAGE_HINT })}
 								</button>
 							)}
 						</div>

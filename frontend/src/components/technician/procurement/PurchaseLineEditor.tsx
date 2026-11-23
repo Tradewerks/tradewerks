@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, Plus, ScanLine, Split, Trash2 } from "lucide-react";
 import { OcrLineMark } from "../../fieldPurchases/OcrLineMark";
 import { money } from "../../fieldPurchases/fieldPurchaseFormat";
@@ -85,7 +86,9 @@ export default function PurchaseLineEditor({
 	sheetDisposition,
 	onSheetDispositionChange,
 }: Props) {
+	const { t } = useTranslation();
 	const copy = sheetCopy(purchase.kind);
+	const noun = copy.noun;
 	// Null off a refund, so every refund-only branch below keys off this.
 	const parentLines = purchase.kind === "refund" ? (purchase.parent?.lines ?? []) : null;
 	const isSplit = jobs.length > 1;
@@ -173,8 +176,7 @@ export default function PurchaseLineEditor({
 					{copy.linesTitle}
 				</h2>
 				<span className="text-xs tabular-nums text-text-muted">
-					{lines.length} item{lines.length === 1 ? "" : "s"} ·{" "}
-					{money(linesTotal)}
+					{t("lines.count", { count: lines.length, total: money(linesTotal) })}
 				</span>
 			</div>
 
@@ -190,10 +192,7 @@ export default function PurchaseLineEditor({
 				>
 					<ScanLine aria-hidden size={14} className="flex-shrink-0" />
 					<span className="min-w-0 flex-1">
-						{pending.length} item
-						{pending.length === 1 ? "" : "s"} read from the {copy.noun}{" "}
-						{pending.length === 1 ? "hasn't" : "haven't"} been added yet — tap to
-						add {pending.length === 1 ? "it" : "them"}
+						{t("lines.pending", { count: pending.length, noun })}
 					</span>
 				</button>
 			)}
@@ -204,10 +203,10 @@ export default function PurchaseLineEditor({
 			<div role="status" aria-live="polite" className="sr-only">
 				{[
 					pending.length > 0
-						? `${pending.length} item${pending.length === 1 ? "" : "s"} read from the ${copy.noun} ${pending.length === 1 ? "hasn't" : "haven't"} been added yet.`
+						? t("lines.pendingStatus", { count: pending.length, noun })
 						: "",
 					lowConfidenceCount > 0
-						? `${lowConfidenceCount} item${lowConfidenceCount === 1 ? "" : "s"} read with low confidence — check ${lowConfidenceCount === 1 ? "it" : "them"} against the ${copy.noun}.`
+						? t("lines.lowConfidence", { count: lowConfidenceCount, noun })
 						: "",
 				]
 					.filter(Boolean)
@@ -267,7 +266,9 @@ export default function PurchaseLineEditor({
 								{editable && isSplit && (
 									<button
 										type="button"
-										aria-label={`Split ${d.description || "this item"} across two jobs`}
+										aria-label={t("lines.split", {
+											name: d.description || t("lines.thisItem"),
+										})}
 										onClick={() =>
 											split(i)
 										}
@@ -282,7 +283,7 @@ export default function PurchaseLineEditor({
 								{editable && (
 									<button
 										type="button"
-										aria-label="Remove item"
+										aria-label={t("lines.remove")}
 										onClick={() =>
 											emit(
 												lines.filter(
@@ -308,7 +309,7 @@ export default function PurchaseLineEditor({
 							<div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
 								<label>
 									<span className="mb-1 block text-xs text-text-muted">
-										Qty
+										{t("lines.qty")}
 									</span>
 									<input
 										value={d.quantity}
@@ -326,7 +327,7 @@ export default function PurchaseLineEditor({
 								</label>
 								<label>
 									<span className="mb-1 block text-xs text-text-muted">
-										Unit price
+										{t("lines.unitPrice")}
 									</span>
 									<input
 										value={d.unit_price}
@@ -346,7 +347,7 @@ export default function PurchaseLineEditor({
 								    types keeps the full width. */}
 								<div className="col-span-2 sm:col-span-1">
 									<span className="mb-1 block text-xs text-text-muted">
-										Line
+										{t("lines.line")}
 									</span>
 									<p className="h-11 rounded-md border border-transparent px-2 text-sm leading-[2.75rem] tabular-nums text-text-secondary">
 										{money(
@@ -368,7 +369,7 @@ export default function PurchaseLineEditor({
 							{isSplit && (
 								<label className="mt-2 block min-w-0">
 									<span className="mb-1 block text-xs text-text-muted">
-										Job
+										{t("lines.job")}
 									</span>
 									<TechSelect
 										value={
@@ -386,7 +387,7 @@ export default function PurchaseLineEditor({
 									>
 										{/* Blank is a real state, not a placeholder: submit
 										    refuses while any line is still on it. */}
-										<option value="">Choose a job</option>
+										<option value="">{t("lines.chooseJob")}</option>
 										{jobs.map((j) => (
 											<option
 												key={
@@ -439,8 +440,7 @@ export default function PurchaseLineEditor({
 							{lowConfidence && !d.acknowledged && (
 								<p className="mt-2 inline-flex items-center gap-1 text-xs text-warning-text">
 									<OcrLineMark confidence={d.ocrConfidence!} />{" "}
-									Read with low confidence — check it against the{" "}
-									{copy.noun}
+									{t("lines.lowLine", { noun })}
 								</p>
 							)}
 
@@ -461,8 +461,7 @@ export default function PurchaseLineEditor({
 										}
 										className="h-5 w-5 accent-primary"
 									/>
-									This item matches the{" "}
-									{copy.noun}
+									{t("lines.matches", { noun })}
 								</label>
 							)}
 							{!editable && d.acknowledged && (
@@ -471,7 +470,7 @@ export default function PurchaseLineEditor({
 										aria-hidden
 										size={12}
 									/>{" "}
-									Confirmed
+									{t("lines.confirmed")}
 								</p>
 							)}
 						</div>
@@ -494,14 +493,13 @@ export default function PurchaseLineEditor({
 					}
 					className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-text-secondary hover:bg-surface-raised"
 				>
-					<Plus aria-hidden size={14} /> Add item
+					<Plus aria-hidden size={14} /> {t("lines.add")}
 				</button>
 			)}
 
 			{editable && unconfirmed > 0 && (
 				<p className="mt-2 text-xs text-text-muted">
-					{unconfirmed} item{unconfirmed === 1 ? "" : "s"} left to check against the{" "}
-					{copy.noun}.
+					{t("lines.unconfirmed", { count: unconfirmed, noun })}
 				</p>
 			)}
 
@@ -509,10 +507,9 @@ export default function PurchaseLineEditor({
 			    rows, so the count belongs beside them. */}
 			{editable && isSplit && unassigned > 0 && (
 				<p className="mt-2 text-xs text-warning-text">
-					{unassigned} item{unassigned === 1 ? " needs" : "s need"} a job —
-					{parentLines
-						? " items without one aren't credited."
-						: " items without one aren't billed."}
+					{t(parentLines ? "lines.unassignedRefund" : "lines.unassigned", {
+						count: unassigned,
+					})}
 				</p>
 			)}
 
@@ -520,9 +517,11 @@ export default function PurchaseLineEditor({
 				// One string rather than interpolated fragments: it is a plain
 				// sentence, and split across nodes it is read out in pieces.
 				<p className="mt-2 text-xs text-warning-text">
-					{`Items plus tax don't add up to the ${money(paid)} ${copy.reconcileVerb} — ${money(
-						Math.abs(shortfall)
-					)} ${shortfall > 0 ? "short" : "over"}.`}
+					{t(shortfall > 0 ? "lines.short" : "lines.over", {
+						paid: money(paid),
+						verb: copy.reconcileVerb,
+						diff: money(Math.abs(shortfall)),
+					})}
 				</p>
 			)}
 

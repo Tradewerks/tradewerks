@@ -19,6 +19,7 @@ import type { JobVisit, VisitStatus } from "../../types/jobs";
 import { errorMessage, formatTime, FALLBACK_TIMEZONE } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
 import TechPage from "../../components/technician/TechPage";
+import { useTranslation } from "react-i18next";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -27,15 +28,23 @@ const UP_NEXT_MINUTES = 30;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-function formatNextDayHeader(d: Date, tz: string): string {
+function formatNextDayHeader(d: Date, tz: string, locale: string): string {
 	return d
-		.toLocaleDateString("en-US", {
+		.toLocaleDateString(locale, {
 			weekday: "long",
 			month: "short",
 			day: "numeric",
 			timeZone: tz,
 		})
 		.toUpperCase();
+}
+
+// Spanish dates come back lowercase; capitalize the weekday and month only.
+function formatHeaderDate(d: Date, tz: string, locale: string): string {
+	return new Intl.DateTimeFormat(locale, { weekday: "long", month: "long", day: "numeric", timeZone: tz })
+		.formatToParts(d)
+		.map((p) => (p.type === "weekday" || p.type === "month" ? p.value.charAt(0).toUpperCase() + p.value.slice(1) : p.value))
+		.join("");
 }
 
 /** Compare two Dates by calendar day in the org's timezone. */
@@ -46,12 +55,7 @@ function isSameDay(a: Date, b: Date, tz: string): boolean {
 	);
 }
 
-const BREAK_REASONS = [
-	{ value: "Lunch", label: "Lunch Break" },
-	{ value: "Rest", label: "Rest Break" },
-	{ value: "EquipmentIssue", label: "Equipment Issue" },
-	{ value: "Other", label: "Other" },
-];
+const BREAK_REASONS = ["Lunch", "Rest", "EquipmentIssue", "Other"] as const;
 
 export default function TechnicianDashboardPage() {
 	const { user } = useAuthStore();
@@ -77,6 +81,7 @@ export default function TechnicianDashboardPage() {
 	const [breakError, setBreakError] = useState<string | null>(null);
 	const [confirmingEndShift, setConfirmingEndShift] = useState(false);
 	const endShiftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const { t, i18n } = useTranslation();
 
 	useEffect(() => {
 		return () => { if (endShiftTimerRef.current) clearTimeout(endShiftTimerRef.current); };
@@ -213,6 +218,8 @@ export default function TechnicianDashboardPage() {
 		() => visits.some((v) => v.time_entries?.some((e) => !e.clocked_out_at)),
 		[visits],
 	);
+	// Head Back makes it three buttons; short labels keep the row on one line
+	const crowdedShiftRow = techProfile?.status === "Available" && !isClockedInAnywhere;
 
 	const handleStartBreak = async (reason: string) => {
 		if (!user?.userId) return;
@@ -221,7 +228,7 @@ export default function TechnicianDashboardPage() {
 			await goOnBreakMutation.mutateAsync({ techId: user.userId, reason });
 			setShowBreakPicker(false);
 		} catch (err) {
-			setBreakError(err instanceof Error ? err.message : "Failed to start break — try again.");
+			setBreakError(err instanceof Error ? err.message : t("dashboard.break_failed"));
 		}
 	};
 
@@ -258,7 +265,7 @@ export default function TechnicianDashboardPage() {
 			<TechPage>
 				<div className="p-4 bg-error/10 border border-error/20 rounded-lg">
 					<p className="text-sm text-error-text">
-						Failed to load schedule.
+						{t("dashboard.schedule_failed")}
 					</p>
 				</div>
 			</TechPage>
@@ -273,10 +280,16 @@ export default function TechnicianDashboardPage() {
 			<TechPage className="flex flex-col items-center justify-center min-h-[60vh] gap-6">
 				<div className="text-center">
 					<h1 className="text-2xl font-bold text-text-primary mb-1">
-						Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"},{" "}
-						{techProfile.name.split(" ")[0]}
+						{t(
+							new Date().getHours() < 12
+								? "dashboard.greeting_morning"
+								: new Date().getHours() < 17
+									? "dashboard.greeting_afternoon"
+									: "dashboard.greeting_evening",
+							{ name: techProfile.name.split(" ")[0] }
+						)}
 					</h1>
-					<p className="text-sm text-text-muted">Ready to start your shift?</p>
+					<p className="text-sm text-text-muted">{t("dashboard.ready_to_start")}</p>
 				</div>
 				<button
 					onClick={() => user?.userId && goAvailableMutation.mutate(user.userId)}
@@ -284,11 +297,11 @@ export default function TechnicianDashboardPage() {
 					className="flex items-center gap-2 px-8 py-4 rounded-xl bg-primary-hover hover:bg-primary text-on-primary font-semibold text-base transition-colors disabled:opacity-50"
 				>
 					<LogIn size={18} />
-					{goAvailableMutation.isPending ? "Starting…" : "Start Shift"}
+					{goAvailableMutation.isPending ? t("dashboard.starting") : t("dashboard.start_shift")}
 				</button>
 				{goAvailableMutation.isError && (
 					<p className="max-w-xs text-center text-sm text-red-500">
-						{errorMessage(goAvailableMutation.error, "Couldn't start your shift — try again.").replace(/^TIMESHEET_LOCKED: /, "")}
+						{errorMessage(goAvailableMutation.error, t("dashboard.start_shift_failed")).replace(/^TIMESHEET_LOCKED: /, "")}
 					</p>
 				)}
 				<button
@@ -296,7 +309,7 @@ export default function TechnicianDashboardPage() {
 					className="flex items-center gap-1.5 min-h-[44px] px-3 text-sm text-text-secondary hover:text-text-primary transition-colors"
 				>
 					<Clock size={15} />
-					View my hours
+					{t("dashboard.view_my_hours")}
 				</button>
 			</TechPage>
 		);
@@ -312,7 +325,7 @@ export default function TechnicianDashboardPage() {
 						className="flex items-center gap-2 flex-1 text-left text-sm"
 					>
 						<AlertTriangle size={15} className="shrink-0" />
-						No vehicle selected — tap to set up your truck
+						{t("dashboard.no_vehicle")}
 					</button>
 					<button
 						onClick={() => setVehicleBannerDismissed(true)}
@@ -327,25 +340,19 @@ export default function TechnicianDashboardPage() {
 			<div className="flex items-center justify-between mb-4">
 				<div>
 					<h1 className="text-xl font-bold text-text-primary tracking-tight">
-						My Dashboard
+						{t("dashboard.my_dashboard")}
 					</h1>
 					<p className="text-sm text-text-muted mt-0.5">
-						{new Date().toLocaleDateString("en-US", {
-							weekday: "long",
-							month: "long",
-							day: "numeric",
-							timeZone: tz,
-						})}
+						{formatHeaderDate(new Date(), tz, i18n.language)}
 					</p>
 				</div>
 				<div className="flex items-center gap-2 flex-shrink-0">
 					<span className="px-2.5 py-1 rounded-md bg-surface text-text-tertiary text-xs font-medium tabular-nums">
-						{todayVisits.length}{" "}
-						{todayVisits.length === 1 ? "visit" : "visits"}
+						{t("dashboard.visit", { count: todayVisits.length })}
 					</span>
 					{doneCount > 0 && (
 						<span className="px-2.5 py-1 rounded-md bg-surface text-success-text text-xs font-medium tabular-nums">
-							{doneCount} done
+							{t("dashboard.done_count", { count: doneCount })}
 						</span>
 					)}
 				</div>
@@ -358,7 +365,7 @@ export default function TechnicianDashboardPage() {
 					className="flex items-center justify-center gap-2 py-2.5 rounded-lg bg-base border border-border-subtle text-sm text-text-secondary hover:bg-surface hover:text-text-primary transition-colors w-full"
 				>
 					<Phone size={15} />
-					Call Dispatch
+					{t("dashboard.call_dispatch")}
 				</a>
 				{/* Break + End Shift row */}
 				<div className="flex gap-2">
@@ -369,16 +376,17 @@ export default function TechnicianDashboardPage() {
 							className="flex-1 flex items-center justify-center gap-2 min-h-[44px] py-3 rounded-lg bg-confirm hover:bg-confirm-hover text-sm text-on-primary font-medium transition-colors disabled:opacity-50"
 						>
 							<Coffee size={15} />
-							{goAvailableMutation.isPending ? "Returning…" : "End Break"}
+							{goAvailableMutation.isPending ? t("dashboard.returning") : t("dashboard.end_break")}
 						</button>
 					) : !isClockedInAnywhere && (
 						<button
 							onClick={() => setShowBreakPicker(true)}
 							disabled={goOnBreakMutation.isPending}
+							aria-label={t("dashboard.take_break")}
 							className="flex-1 flex items-center justify-center gap-2 min-h-[44px] py-3 rounded-lg bg-base border border-border-subtle text-sm text-text-secondary hover:bg-surface hover:text-text-primary transition-colors disabled:opacity-50"
 						>
-							<Coffee size={15} />
-							Take Break
+							<Coffee size={15} className="shrink-0" />
+							{t(crowdedShiftRow ? "dashboard.take_break_short" : "dashboard.take_break")}
 						</button>
 					)}
 					{techProfile?.status === "Available" && (
@@ -388,7 +396,7 @@ export default function TechnicianDashboardPage() {
 							className="flex-1 flex items-center justify-center gap-2 min-h-[44px] py-3 rounded-lg bg-base border border-border-subtle text-sm text-text-secondary hover:bg-surface hover:text-text-primary transition-colors disabled:opacity-50"
 						>
 							<MapPin size={15} />
-							Head back
+							{t("dashboard.head_back")}
 						</button>
 					)}
 					{!isClockedInAnywhere && techProfile?.status !== "Break" && (
@@ -413,8 +421,12 @@ export default function TechnicianDashboardPage() {
 									: "bg-base border border-border-subtle text-text-tertiary hover:bg-surface hover:text-text-primary"
 							}`}
 						>
-							<LogOut size={15} />
-							{goOfflineMutation.isPending ? "Ending…" : confirmingEndShift ? "Confirm?" : "End Shift"}
+							<LogOut size={15} className="shrink-0" />
+							{goOfflineMutation.isPending
+								? t("dashboard.ending")
+								: confirmingEndShift
+									? t("dashboard.confirm")
+									: t(crowdedShiftRow ? "dashboard.end_shift_short" : "dashboard.end_shift")}
 						</button>
 					)}
 				</div>
@@ -433,25 +445,25 @@ export default function TechnicianDashboardPage() {
 						className="w-full max-w-sm mx-4 mb-20 sm:mb-0 bg-base border border-border-subtle rounded-2xl p-5 space-y-3 max-h-[90dvh] overflow-y-auto"
 						onClick={(e) => e.stopPropagation()}
 					>
-						<p id="break-picker-title" className="text-sm font-semibold text-text-primary text-center">Why are you taking a break?</p>
+						<p id="break-picker-title" className="text-sm font-semibold text-text-primary text-center">{t("dashboard.break_question")}</p>
 						{breakError && (
 							<p role="alert" className="text-xs text-error-text text-center px-2">{breakError}</p>
 						)}
 						{BREAK_REASONS.map((r) => (
 							<button
-								key={r.value}
-								onClick={() => handleStartBreak(r.value)}
+								key={r}
+								onClick={() => handleStartBreak(r)}
 								disabled={goOnBreakMutation.isPending}
 								className="w-full min-h-[44px] py-3 rounded-xl text-sm font-medium bg-surface hover:bg-surface-raised border border-border text-text-primary transition-colors disabled:opacity-40"
 							>
-								{r.label}
+								{t(`dashboard.break_reasons.${r}`)}
 							</button>
 						))}
 						<button
 							onClick={() => { setShowBreakPicker(false); setBreakError(null); }}
 							className="w-full min-h-[44px] py-3 rounded-xl text-sm font-medium bg-surface border border-border text-text-tertiary hover:bg-surface-raised hover:text-text-primary transition-colors"
 						>
-							Cancel
+							{t("common.cancel")}
 						</button>
 					</div>
 				</div>
@@ -490,7 +502,7 @@ export default function TechnicianDashboardPage() {
 							) : heroType !== "wrapping-up" && heroType !== "heading-back" && (
 								<div className="rounded-xl border border-border-subtle bg-base px-4 py-6 text-center">
 									<p className="text-sm text-text-faint">
-										No visits scheduled. Check with dispatch.
+										{t("dashboard.no_visits_scheduled")}
 									</p>
 								</div>
 							)}
@@ -517,21 +529,18 @@ export default function TechnicianDashboardPage() {
 					<div>
 						<div className="flex items-center justify-between mb-3">
 							<span className="text-[10px] font-bold tracking-[0.1em] uppercase text-text-muted">
-								Today · {todayVisits.length}{" "}
-								{todayVisits.length === 1
-									? "visit"
-									: "visits"}
+								{t("dashboard.today_visit", { count: todayVisits.length })}
 							</span>
 							{doneCount > 0 && (
 								<span className="text-[10px] font-semibold text-success-text">
-									{doneCount} done
+									{t("dashboard.done_count", { count: doneCount })}
 								</span>
 							)}
 						</div>
 
 						{todayVisits.length === 0 ? (
 							<p className="text-sm text-text-faint py-2">
-								Nothing scheduled today.
+								{t("dashboard.nothing_today")}
 							</p>
 						) : (
 							<div className="space-y-3">
@@ -539,7 +548,7 @@ export default function TechnicianDashboardPage() {
 								{overdueVisits.length > 0 && (
 									<div>
 										<p className="text-[10px] font-bold uppercase tracking-widest text-error-text mb-1.5 px-0.5">
-											Overdue
+											{t("dashboard.overdue")}
 										</p>
 										<div className="rounded-xl border border-error/20 bg-base overflow-hidden divide-y divide-border-subtle">
 											{overdueVisits.map(
@@ -573,7 +582,7 @@ export default function TechnicianDashboardPage() {
 								{upNextVisits.length > 0 && (
 									<div>
 										<p className="text-[10px] font-bold uppercase tracking-widest text-warning-text mb-1.5 px-0.5">
-											Up Next
+											{t("dashboard.up_next")}
 										</p>
 										<div className="rounded-xl border border-warning/20 bg-base overflow-hidden divide-y divide-border-subtle">
 											{upNextVisits.map(
@@ -607,7 +616,7 @@ export default function TechnicianDashboardPage() {
 								{upcomingVisits.length > 0 && (
 									<div>
 										<p className="text-[10px] font-bold uppercase tracking-widest text-text-faint mb-1.5 px-0.5">
-											Upcoming
+											{t("dashboard.upcoming")}
 										</p>
 										<div className="rounded-xl border border-border-subtle bg-base overflow-hidden divide-y divide-border-subtle">
 											{upcomingVisits.map(
@@ -693,14 +702,12 @@ export default function TechnicianDashboardPage() {
 											nextDayVisits[0]
 												.scheduled_start_at
 										),
-										tz
+										tz,
+										i18n.language
 									)}
 								</span>
 								<span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-surface text-text-muted">
-									{nextDayVisits.length}{" "}
-									{nextDayVisits.length === 1
-										? "visit"
-										: "visits"}
+									{t("dashboard.visit", { count: nextDayVisits.length })}
 								</span>
 							</div>
 							<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
@@ -718,7 +725,7 @@ export default function TechnicianDashboardPage() {
 										<p className="text-sm font-semibold text-text-tertiary truncate">
 											{nextDayVisits[0]
 												.name ??
-												"Visit"}
+												t("dashboard.visit_fallback")}
 										</p>
 										<p className="text-xs text-text-faint truncate">
 											{nextDayVisits[0]
@@ -746,10 +753,7 @@ export default function TechnicianDashboardPage() {
 										className="w-full px-3 py-2 border-t border-border-subtle text-center hover:bg-surface-raised transition-colors duration-150"
 									>
 										<span className="text-[11px] text-text-muted">
-											+
-											{nextDayVisits.length -
-												1}{" "}
-											more
+											{t("dashboard.more_count", { count: nextDayVisits.length - 1 })}
 										</span>
 									</button>
 								)}
@@ -784,6 +788,7 @@ export default function TechnicianDashboardPage() {
 // ─── sub-components ───────────────────────────────────────────────────────────
 
 function WrappingUpCard({ onAvailable, onHeadBack, isLoading }: { onAvailable: () => void; onHeadBack: () => void; isLoading: boolean }) {
+	const { t } = useTranslation();
 	return (
 		<div
 			style={{
@@ -796,25 +801,25 @@ function WrappingUpCard({ onAvailable, onHeadBack, isLoading }: { onAvailable: (
 				<div className="flex items-center gap-2">
 					<div className="w-2 h-2 rounded-full bg-gradient-tech-teal animate-pulse" />
 					<span className="text-[10px] font-bold tracking-[0.1em] uppercase text-gradient-tech-teal">
-						Wrapping Up
+						{t("dashboard.wrapping_up")}
 					</span>
 				</div>
 				<p className="text-sm text-text-tertiary">
-					Job complete. Mark yourself available when you're ready.
+					{t("dashboard.wrapping_up_body")}
 				</p>
 				<button
 					onClick={onAvailable}
 					disabled={isLoading}
 					className="w-full py-2.5 rounded-lg bg-gradient-tech-teal/10 border border-gradient-tech-teal/20 text-gradient-tech-teal-text text-sm font-medium hover:bg-gradient-tech-teal/20 transition-colors disabled:opacity-40"
 				>
-					I'm Available
+					{t("dashboard.im_available")}
 				</button>
 				<button
 					onClick={onHeadBack}
 					disabled={isLoading}
 					className="w-full py-2.5 rounded-lg border border-border-subtle text-text-primary text-sm font-medium hover:bg-surface-raised bg-surface transition-colors disabled:opacity-40"
 				>
-					Head back
+					{t("dashboard.head_back")}
 				</button>
 			</div>
 		</div>
@@ -822,6 +827,7 @@ function WrappingUpCard({ onAvailable, onHeadBack, isLoading }: { onAvailable: (
 }
 
 function HeadingBackCard({ onBack, isLoading }: { onBack: () => void; isLoading: boolean }) {
+	const { t } = useTranslation();
 	return (
 		<div
 			style={{
@@ -834,11 +840,11 @@ function HeadingBackCard({ onBack, isLoading }: { onBack: () => void; isLoading:
 				<div className="flex items-center gap-2">
 					<div className="w-2 h-2 rounded-full bg-action-drive animate-pulse" />
 					<span className="text-[10px] font-bold tracking-[0.1em] uppercase text-primary-text">
-						Heading Back
+						{t("dashboard.heading_back")}
 					</span>
 				</div>
 				<p className="text-sm text-text-tertiary">
-					Your drive is being logged. Tap when you're back.
+					{t("dashboard.heading_back_body")}
 				</p>
 				<button
 					onClick={onBack}
@@ -846,7 +852,7 @@ function HeadingBackCard({ onBack, isLoading }: { onBack: () => void; isLoading:
 					className="w-full py-2.5 rounded-lg flex items-center justify-center gap-2 bg-action-drive hover:bg-action-drive-hover text-on-primary text-sm font-medium transition-colors disabled:opacity-40"
 				>
 					<MapPin size={16} />
-					I'm Back
+					{t("dashboard.im_back")}
 				</button>
 			</div>
 		</div>
@@ -863,6 +869,7 @@ interface ScheduleRowProps {
 }
 
 function ScheduleRow({ visit, tz, isOverdue, isUpNext, onClick }: ScheduleRowProps) {
+	const { t } = useTranslation();
 	const isActive = ACTIVE_STATUSES.includes(visit.status);
 	const isDone = visit.status === "Completed" || visit.status === "Cancelled";
 	const diffMin = isUpNext
@@ -911,7 +918,7 @@ function ScheduleRow({ visit, tz, isOverdue, isUpNext, onClick }: ScheduleRowPro
 							: "text-text-primary"
 					}`}
 				>
-					{visit.name ?? "Visit"}
+					{visit.name ?? t("dashboard.visit_fallback")}
 				</p>
 				<p className="text-xs text-text-faint truncate">
 					{visit.job?.client?.name ?? "—"}
@@ -920,19 +927,19 @@ function ScheduleRow({ visit, tz, isOverdue, isUpNext, onClick }: ScheduleRowPro
 			<div className="flex-shrink-0 text-right">
 				{isDone ? (
 					<span className="text-[11px] text-success-text font-medium">
-						Done
+						{t("dashboard.done")}
 					</span>
 				) : isActive ? (
 					<span className="text-[11px] text-primary-text font-medium">
-						Active
+						{t("dashboard.active")}
 					</span>
 				) : isOverdue ? (
 					<span className="text-[11px] text-error-text font-medium">
-						Overdue · {formatTime(visit.scheduled_start_at, tz)}
+						{t("dashboard.overdue_at", { time: formatTime(visit.scheduled_start_at, tz) })}
 					</span>
 				) : isUpNext ? (
 					<span className="text-[11px] text-warning-text font-medium tabular-nums">
-						In {diffMin} min
+						{t("dashboard.in_minutes", { count: diffMin })}
 					</span>
 				) : (
 					<span className="text-xs text-text-muted tabular-nums">

@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight, ImageOff } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface ImageCarouselProps {
 	images: string[];
@@ -24,6 +25,7 @@ export default function ImageCarousel({
 	objectFit = "cover",
 	frameClassName,
 }: ImageCarouselProps) {
+	const { t } = useTranslation();
 	const [currentIndex, setCurrentIndex] = useState(index ?? 0);
 	const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
 
@@ -95,7 +97,7 @@ export default function ImageCarousel({
 					}
 				}}
 				src={images[currentIndex]}
-				alt={`Image ${currentIndex + 1}`}
+				alt={t("tracking.imageAlt", { n: currentIndex + 1 })}
 				onLoad={() => setStatus("loaded")}
 				onError={() => setStatus("error")}
 				className={`absolute transition-opacity duration-150 ${

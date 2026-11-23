@@ -35,6 +35,7 @@ export const updateTechnicianSchema = z
 		status: technicianStatusEnum.optional(),
 		cost_rate: z.number().min(0, "Cost rate cannot be negative").nullable().optional(),
 		theme: z.enum(["dark", "light", "system"]).optional(),
+		language: z.enum(["en", "es"]).optional(),
 		coords: coordsSchema.optional(),
 		hire_date: z
 			.preprocess(
@@ -65,6 +66,7 @@ export const updateTechnicianSchema = z
 			data.status !== undefined ||
 			data.cost_rate !== undefined ||
 			data.theme !== undefined ||
+			data.language !== undefined ||
 			data.coords !== undefined ||
 			data.hire_date !== undefined ||
 			data.last_login !== undefined,

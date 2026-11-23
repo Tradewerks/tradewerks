@@ -1,5 +1,6 @@
 import type { VehicleMaintenanceRecord, VehicleMaintenanceReminder } from "../types/vehicles";
 import { formatDateOnly, addInterval, daysUntil } from "./util";
+import i18n from "../i18n";
 
 export function latestOf(records: VehicleMaintenanceRecord[]): VehicleMaintenanceRecord | undefined {
 	return [...records].sort((a, b) => b.performed_at.localeCompare(a.performed_at) || b.created_at.localeCompare(a.created_at))[0];
@@ -37,7 +38,7 @@ export function dueFor(
 	currentOdometerMi: number | null,
 ): ReminderDue {
 	if (!reminder.repeats && reminder.completed_at != null) {
-		return { status: "none", dueLines: ["Completed"], urgency: Infinity };
+		return { status: "none", dueLines: [i18n.t("vehicle.due.completed")], urgency: Infinity };
 	}
 
 	let dueDate: string | null = null;
@@ -64,7 +65,7 @@ export function dueFor(
 	if (daysLeft == null && milesLeft == null) {
 		return {
 			status: "none",
-			dueLines: [reminder.repeats ? "No service logged yet" : "—"],
+			dueLines: [reminder.repeats ? i18n.t("vehicle.due.noService") : "—"],
 			urgency: Infinity,
 		};
 	}
@@ -76,12 +77,18 @@ export function dueFor(
 		: "upcoming";
 
 	const parts: string[] = [];
-	if (dueDate != null) parts.push(daysLeft! < 0 ? `was due ${formatDateOnly(dueDate)}` : `due ${formatDateOnly(dueDate)}`);
+	if (dueDate != null) {
+		const date = formatDateOnly(dueDate);
+		parts.push(i18n.t(daysLeft! < 0 ? "vehicle.due.wasDue" : "vehicle.due.due", { date }));
+	}
 	if (dueMiles != null) {
+		const miles = dueMiles.toLocaleString();
 		parts.push(
-			milesLeft != null
-				? `${dueMiles.toLocaleString()} mi (${milesLeft < 0 ? "past" : `${milesLeft.toLocaleString()} left`})`
-				: `${dueMiles.toLocaleString()} mi`
+			milesLeft == null
+				? i18n.t("vehicle.due.miles", { miles })
+				: milesLeft < 0
+					? i18n.t("vehicle.due.milesPast", { miles })
+					: i18n.t("vehicle.due.milesLeft", { miles, left: milesLeft.toLocaleString() })
 		);
 	}
 	return { status, dueLines: parts, urgency };

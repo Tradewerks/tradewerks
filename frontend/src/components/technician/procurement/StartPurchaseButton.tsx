@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Loader2, Receipt, ShieldOff } from "lucide-react";
 import {
 	useCreateFieldPurchase,
@@ -41,6 +42,7 @@ interface Props {
  * is about to read. The job, when not already known, is asked once after the shot.
  */
 export default function StartPurchaseButton({ job, vehicleId, label, hint }: Props) {
+	const { t } = useTranslation();
 	const canRequest = usePermission("request_field_purchase");
 	const navigate = useNavigate();
 	const [scanning, setScanning] = useState(false);
@@ -114,7 +116,7 @@ export default function StartPurchaseButton({ job, vehicleId, label, hint }: Pro
 		} catch (err) {
 			// The photo is still held, so the way out is picking again rather than
 			// photographing the receipt a second time.
-			setFailure(errorMessage(err, "Could not attach the receipt"));
+			setFailure(errorMessage(err, t("purchase.attachFailed")));
 		} finally {
 			setBusyJobId(null);
 		}
@@ -130,9 +132,7 @@ export default function StartPurchaseButton({ job, vehicleId, label, hint }: Pro
 			<div className="flex items-start gap-3 rounded-xl border border-border bg-base px-4 py-3">
 				<ShieldOff aria-hidden size={16} className="mt-0.5 flex-shrink-0 text-text-muted" />
 				<div className="min-w-0">
-					<p className="text-sm font-medium text-text-primary">
-						Field purchasing is not enabled for you
-					</p>
+					<p className="text-sm font-medium text-text-primary">{t("purchase.notEnabled")}</p>
 					<div className="mt-1">
 						<AskForAccessButton />
 					</div>
@@ -156,7 +156,7 @@ export default function StartPurchaseButton({ job, vehicleId, label, hint }: Pro
 				<Receipt aria-hidden size={16} className="flex-shrink-0 text-text-muted" />
 				<span className="min-w-0">
 					<span className="block text-sm font-medium text-text-primary">
-						{label ?? "Record a field purchase"}
+						{label ?? t("visitDetail.recordPurchase")}
 					</span>
 					{hint && <span className="block text-xs text-text-muted">{hint}</span>}
 				</span>
@@ -164,8 +164,8 @@ export default function StartPurchaseButton({ job, vehicleId, label, hint }: Pro
 
 			{scanning && (
 				<ReceiptScanner
-					title="Photograph receipt"
-					confirmLabel={job ? "Start field purchase" : "Use photo"}
+					title={t("purchase.photographReceipt")}
+					confirmLabel={job ? t("purchase.startPurchase") : t("purchase.usePhoto")}
 					onAccept={onAccept}
 					onClose={() => setScanning(false)}
 				/>
@@ -216,6 +216,7 @@ function JobChooser({
 	onRetake: () => void;
 	onCancel: () => void;
 }) {
+	const { t } = useTranslation();
 	const busy = busyJobId !== null;
 	// Escape, initial focus, the Tab trap and focus return, same as ApprovalSheet.
 	const dialogProps = useDialogA11y<HTMLDivElement>(() => {
@@ -227,31 +228,24 @@ function JobChooser({
 	return (
 		<div
 			{...dialogProps}
-			aria-label="Which job is this for?"
+			aria-label={t("purchase.whichJob")}
 			className="fixed inset-0 z-[60] flex items-end bg-overlay"
 		>
 			<div className="max-h-[80vh] w-full overflow-y-auto rounded-t-2xl border-t border-border bg-canvas p-4">
-				<h2 className="text-sm font-semibold text-text-primary">Which job is this for?</h2>
-				<p className="mt-1 text-xs text-text-muted">
-					The receipt is saved. This is what puts the cost on the right invoice.
-				</p>
+				<h2 className="text-sm font-semibold text-text-primary">{t("purchase.whichJob")}</h2>
+				<p className="mt-1 text-xs text-text-muted">{t("purchase.receiptSaved")}</p>
 
 				{failure && <p className="mt-2 text-xs text-warning-text">{failure}</p>}
 
 				{jobsLoading ? (
-					<p className="mt-3 text-sm text-text-muted">Loading your jobs…</p>
+					<p className="mt-3 text-sm text-text-muted">{t("purchase.loadingJobs")}</p>
 				) : jobsFailed ? (
 					// Distinct from the empty case on purpose, same as ApprovalSheet:
 					// "no jobs assigned" reads as dispatch's doing and sends the
 					// technician to argue with the wrong person over a dropped request.
-					<p className="mt-3 text-sm text-warning-text">
-						Could not load your jobs. Check your signal — the photo is saved, so
-						Retake is not needed.
-					</p>
+					<p className="mt-3 text-sm text-warning-text">{t("purchase.jobsFailed")}</p>
 				) : jobs.length === 0 ? (
-					<p className="mt-3 text-sm text-text-muted">
-						You have no jobs assigned right now — dispatch has to attach this one.
-					</p>
+					<p className="mt-3 text-sm text-text-muted">{t("purchase.noJobs")}</p>
 				) : (
 					<ul className="mt-3 space-y-2">
 						{jobs.map((j) => (
@@ -266,7 +260,7 @@ function JobChooser({
 										<Loader2 aria-hidden size={14} className="animate-spin" />
 									)}
 									<span className="min-w-0 truncate">
-										{j.job_name || `Job ${j.job_number ?? ""}`.trim()}
+										{j.job_name || t("purchase.jobNumber", { number: j.job_number ?? "" }).trim()}
 									</span>
 								</button>
 							</li>
@@ -281,7 +275,7 @@ function JobChooser({
 						onClick={onRetake}
 						className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-border bg-surface text-sm font-medium text-text-primary disabled:opacity-40"
 					>
-						Retake
+						{t("purchase.retake")}
 					</button>
 					<button
 						type="button"
@@ -289,7 +283,7 @@ function JobChooser({
 						onClick={onCancel}
 						className="inline-flex h-11 flex-1 items-center justify-center rounded-md border border-border bg-surface text-sm font-medium text-text-secondary hover:enabled:bg-surface-raised disabled:opacity-40"
 					>
-						Cancel
+						{t("common.cancel")}
 					</button>
 				</div>
 			</div>

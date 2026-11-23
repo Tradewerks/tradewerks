@@ -1,5 +1,6 @@
 import { useId } from "react";
-import { DISPOSITION_LABELS, type FieldPurchaseDisposition } from "../../../types/fieldPurchases";
+import { useTranslation } from "react-i18next";
+import type { FieldPurchaseDisposition } from "../../../types/fieldPurchases";
 import { dispositionSentence } from "../../fieldPurchases/dispositionSummary";
 import { isNegativeLine, type LineDraft, type SheetDisposition } from "./lineDrafts";
 
@@ -67,6 +68,7 @@ export default function BulkDispositionBar({
 	onMatchAll: () => void;
 }) {
 	const id = useId();
+	const { t } = useTranslation();
 
 	if (!editable) {
 		const sentence = dispositionSentence(
@@ -75,13 +77,13 @@ export default function BulkDispositionBar({
 				vehicleName: l.disposition_vehicle_id
 					? l.disposition_vehicle_id === myVehicle?.id
 						? myVehicle.name
-						: "your truck"
+						: t("stock.yourTruck")
 					: null,
 			}))
 		);
 		return sentence ? (
 			<p className="mb-3 text-xs text-text-secondary">
-				<span className="text-text-muted">Stock &amp; billing · </span>
+				<span className="text-text-muted">{t("stock.titleDot")}</span>
 				{sentence}
 			</p>
 		) : null;
@@ -109,7 +111,7 @@ export default function BulkDispositionBar({
 	return (
 		<div className="mb-3 rounded-lg border border-border bg-surface p-2.5">
 			<p id={`${id}-what`} className="mb-1.5 text-xs text-text-muted">
-				Stock &amp; billing · all items
+				{t("stock.allItemsLabel")}
 			</p>
 			<Segmented
 				labelledBy={`${id}-what`}
@@ -118,21 +120,21 @@ export default function BulkDispositionBar({
 				// The job first: it is the ordinary answer.
 				options={(["non_stock", "receive"] as const).map((k) => ({
 					value: k,
-					label: DISPOSITION_LABELS[k],
+					label: t(`stock.disposition.${k}`),
 				}))}
 			/>
 
 			{value.disposition === "receive" && (
 				<div className="mt-2">
 					<p id={`${id}-dest`} className="mb-1 text-xs text-text-muted">
-						Goes onto
+						{t("stock.goesOnto")}
 					</p>
 					<Segmented
 						labelledBy={`${id}-dest`}
 						value={value.vehicleId}
 						onPick={(vehicleId) => onChange({ ...value, vehicleId })}
 						options={[
-							{ value: "", label: "Warehouse" },
+							{ value: "", label: t("stock.warehouse") },
 							...(myVehicle
 								? [{ value: myVehicle.id, label: myVehicle.name }]
 								: []),
@@ -140,8 +142,7 @@ export default function BulkDispositionBar({
 					/>
 					{!myVehicle && (
 						<p className="mt-1 text-xs text-text-muted">
-							No truck assigned — ask dispatch to sign you onto one to
-							stock it.
+							{t("stock.noTruck")}
 						</p>
 					)}
 				</div>
@@ -155,8 +156,7 @@ export default function BulkDispositionBar({
 					{pinned > 0 && (
 						<>
 							<span>
-								{pinned} item{pinned === 1 ? "" : "s"} set
-								separately
+								{t("stock.setSeparately", { count: pinned })}
 							</span>
 							<span aria-hidden>·</span>
 							<button
@@ -164,15 +164,14 @@ export default function BulkDispositionBar({
 								onClick={onMatchAll}
 								className="inline-flex min-h-9 items-center font-medium text-primary underline-offset-2 hover:underline"
 							>
-								Make all match
+								{t("stock.makeAllMatch")}
 							</button>
 						</>
 					)}
 					{pinned > 0 && exempt > 0 && <span aria-hidden>·</span>}
 					{exempt > 0 && (
 						<span>
-							{exempt} discount{exempt === 1 ? " stays" : "s stay"} on
-							the job
+							{t("stock.discountsStay", { count: exempt })}
 						</span>
 					)}
 				</div>

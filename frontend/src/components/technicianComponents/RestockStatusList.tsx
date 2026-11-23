@@ -1,7 +1,9 @@
+import { useTranslation } from "react-i18next";
 import { useVehicleRestockRequestsQuery } from "../../hooks/useVehicleStock";
 import type { RestockRequest } from "../../types/vehicles";
 
 export default function RestockStatusList({ vehicleId }: { vehicleId: string }) {
+	const { t } = useTranslation();
 	const { data: requests = [], isLoading } = useVehicleRestockRequestsQuery(vehicleId);
 
 	if (isLoading) return null;
@@ -15,12 +17,12 @@ export default function RestockStatusList({ vehicleId }: { vehicleId: string }) 
 	return (
 		<div className="rounded-xl border border-border-subtle bg-base overflow-hidden">
 			<div className="px-4 py-3 border-b border-border-subtle text-xs font-medium text-text-tertiary uppercase tracking-wide">
-				Restock Requests
+				{t("restockStatus.title")}
 			</div>
 
 			{pending.length > 0 && (
 				<div className="border-b border-border-subtle">
-					<div className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-text-muted">Pending</div>
+					<div className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-text-muted">{t("restockStatus.pending")}</div>
 					{pending.map((r) => (
 						<div
 							key={r.id}
@@ -35,7 +37,9 @@ export default function RestockStatusList({ vehicleId }: { vehicleId: string }) 
 								{name(r)}
 							</span>
 							<span className="text-xs text-text-muted shrink-0 ml-2">
-								requested {r.qty_requested != null ? Number(r.qty_requested) : "—"}
+								{t("restockStatus.requested", {
+									qty: r.qty_requested != null ? Number(r.qty_requested) : "—",
+								})}
 							</span>
 						</div>
 					))}
@@ -44,7 +48,7 @@ export default function RestockStatusList({ vehicleId }: { vehicleId: string }) 
 
 			{resolved.length > 0 && (
 				<div>
-					<div className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-text-faint">Recent</div>
+					<div className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-text-faint">{t("restockStatus.recent")}</div>
 					{resolved.map((r) => (
 						<div
 							key={r.id}
@@ -57,7 +61,7 @@ export default function RestockStatusList({ vehicleId }: { vehicleId: string }) 
 								{name(r)}
 							</span>
 							<span className="text-[11px] text-text-faint shrink-0 ml-2">
-								{r.status === "dismissed" ? "dismissed" : "resolved"}
+								{t(r.status === "dismissed" ? "restockStatus.dismissed" : "restockStatus.resolved")}
 							</span>
 						</div>
 					))}

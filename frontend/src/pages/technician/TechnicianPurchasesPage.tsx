@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, ShieldOff, Undo2, WifiOff } from "lucide-react";
 import { useFieldPurchaseQueue, useMyPurchaseAuthority } from "../../hooks/useFieldPurchases";
 import AskForAccessButton from "../../components/technician/procurement/AskForAccessButton";
@@ -9,26 +10,15 @@ import StartPurchaseButton from "../../components/technician/procurement/StartPu
 import { money } from "../../components/fieldPurchases/fieldPurchaseFormat";
 import TechPage from "../../components/technician/TechPage";
 import { refundStateLabel } from "../../components/technician/procurement/sheetCopy";
-import {
-	FIELD_PURCHASE_STATUS_LABELS,
-	isPrePurchase,
-	type FieldPurchase,
-	type FieldPurchaseStatus,
-} from "../../types/fieldPurchases";
+import { isPrePurchase, type FieldPurchase, type FieldPurchaseStatus } from "../../types/fieldPurchases";
 
 /** One screenful of history, with more a tap away. */
 const PAGE = 20;
 
-/** The statuses where the purchase is waiting on the technician, not on dispatch. */
-const NUDGE: Partial<Record<FieldPurchaseStatus, string>> = {
-	draft: "Not finished",
-	preauth_approved: "Approved — go buy it",
-	preauth_denied: "Dispatch said no — you can ask again",
-	// Named the way the status label and the notification name it, not the
-	// generic status word — of the three nudges, this is the one a technician
-	// must act on, so the copy says what to do.
-	queried: "Dispatch needs a change from you",
-};
+/** The statuses where the purchase is waiting on the technician, not on dispatch. Text in `purchases.nudge`. */
+const NUDGE = ["draft", "preauth_approved", "preauth_denied", "queried"] as const;
+type NudgeStatus = (typeof NUDGE)[number];
+const isNudge = (s: FieldPurchaseStatus): s is NudgeStatus => (NUDGE as readonly string[]).includes(s);
 
 function statusTone(purchase: FieldPurchase) {
 	switch (purchase.status) {
@@ -52,6 +42,7 @@ function statusTone(purchase: FieldPurchase) {
  * the history, which is an archive.
  */
 export default function TechnicianPurchasesPage() {
+	const { t } = useTranslation();
 	const {
 		data: authority,
 		isLoading: authorityLoading,
@@ -76,11 +67,11 @@ export default function TechnicianPurchasesPage() {
 	// Scoped to the page that is loaded: a purchase still waiting on its
 	// technician is a recent one, and a query per status would cost four round
 	// trips to say so.
-	const needsYou = purchases.filter((p) => p.status in NUDGE);
-	const rest = purchases.filter((p) => !(p.status in NUDGE));
+	const needsYou = purchases.filter((p) => isNudge(p.status));
+	const rest = purchases.filter((p) => !isNudge(p.status));
 
 	if (authorityLoading) {
-		return <p className="p-4 text-sm text-text-muted">Loading…</p>;
+		return <p className="p-4 text-sm text-text-muted">{t("common.loading")}</p>;
 	}
 
 	// Before the not-authorized branch: a failed request leaves `grant` null, which
@@ -92,11 +83,9 @@ export default function TechnicianPurchasesPage() {
 				<WifiOff aria-hidden size={18} className="mt-0.5 flex-shrink-0 text-warning-text" />
 				<div>
 					<h1 className="text-sm font-semibold text-text-primary">
-						Could not load your purchasing limits
+						{t("purchases.limitsFailed")}
 					</h1>
-					<p className="mt-1 text-xs text-text-muted">
-						Check your signal and reload. Your authority has not changed.
-					</p>
+					<p className="mt-1 text-xs text-text-muted">{t("purchases.limitsFailedHint")}</p>
 				</div>
 			</TechPage>
 		);
@@ -110,11 +99,9 @@ export default function TechnicianPurchasesPage() {
 				<ShieldOff aria-hidden size={18} className="mt-0.5 flex-shrink-0 text-text-muted" />
 				<div>
 					<h1 className="text-sm font-semibold text-text-primary">
-						Field purchasing is not enabled for you
+						{t("purchase.notEnabled")}
 					</h1>
-					<p className="mt-1 text-xs text-text-muted">
-						Dispatch enables it per technician and sets your limits.
-					</p>
+					<p className="mt-1 text-xs text-text-muted">{t("purchases.enabledPerTech")}</p>
 					<div className="mt-2">
 						<AskForAccessButton />
 					</div>
@@ -126,11 +113,8 @@ export default function TechnicianPurchasesPage() {
 	return (
 		<TechPage className="space-y-4">
 			<header>
-				<h1 className="text-base font-semibold text-text-primary">Field purchases</h1>
-				<p className="mt-1 text-xs text-text-muted">
-					Parts you buy at a store or supply house instead of pulling
-					them off your truck.
-				</p>
+				<h1 className="text-base font-semibold text-text-primary">{t("profile.field_purchases")}</h1>
+				<p className="mt-1 text-xs text-text-muted">{t("purchases.intro")}</p>
 				<div className="mt-2">
 					<AuthorityStrip grant={grant} spent={authority!.spent} />
 				</div>
@@ -140,34 +124,38 @@ export default function TechnicianPurchasesPage() {
 				<StartPurchaseButton
 					job={null}
 					vehicleId={vehicleId}
-					label="Record a field purchase"
-					hint="Already paid at the counter. Photograph the receipt to get reimbursed and put the cost on the job."
+					label={t("visitDetail.recordPurchase")}
+					hint={t("visitDetail.recordPurchaseHint")}
 				/>
 				<RequestApprovalButton preselectedJobId={preselected} autoOpen={!!preselected} />
 			</div>
 
 			{needsYou.length > 0 && (
 				<section>
-					<h2 className="mb-2 text-sm font-semibold text-text-primary">Needs you</h2>
+					<h2 className="mb-2 text-sm font-semibold text-text-primary">{t("purchases.needsYou")}</h2>
 					<ul className="space-y-2">
 						{needsYou.map((p) => (
-							<PurchaseRow key={p.id} purchase={p} nudge={NUDGE[p.status]} />
+							<PurchaseRow
+								key={p.id}
+								purchase={p}
+								nudge={isNudge(p.status) ? t(`purchases.nudge.${p.status}`) : undefined}
+							/>
 						))}
 					</ul>
 				</section>
 			)}
 
 			<section>
-				<h2 className="mb-2 text-sm font-semibold text-text-primary">Your purchases</h2>
+				<h2 className="mb-2 text-sm font-semibold text-text-primary">{t("purchases.yourPurchases")}</h2>
 				{isLoading ? (
-					<p className="text-sm text-text-muted">Loading…</p>
+					<p className="text-sm text-text-muted">{t("common.loading")}</p>
 				) : listFailed ? (
 					<p className="rounded-xl border border-border bg-base p-4 text-sm text-warning-text">
-						Could not load your purchases. Check your signal and reload.
+						{t("purchases.listFailed")}
 					</p>
 				) : rest.length === 0 ? (
 					<p className="rounded-xl border border-border bg-base p-4 text-sm text-text-muted">
-						{needsYou.length > 0 ? "Nothing else yet." : "Nothing yet."}
+						{needsYou.length > 0 ? t("purchases.nothingElse") : t("purchases.nothingYet")}
 					</p>
 				) : (
 					<ul className="space-y-2">
@@ -182,7 +170,7 @@ export default function TechnicianPurchasesPage() {
 						onClick={() => setLimit((n) => n + PAGE)}
 						className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-md border border-border bg-surface text-sm font-medium text-text-secondary hover:bg-surface-raised"
 					>
-						Show older ({page.total - purchases.length} more)
+						{t("purchases.showOlder", { count: page.total - purchases.length })}
 					</button>
 				)}
 			</section>
@@ -191,6 +179,7 @@ export default function TechnicianPurchasesPage() {
 }
 
 function PurchaseRow({ purchase, nudge }: { purchase: FieldPurchase; nudge?: string }) {
+	const { t, i18n } = useTranslation();
 	const isRefund = purchase.kind === "refund";
 	return (
 		<li>
@@ -208,11 +197,11 @@ function PurchaseRow({ purchase, nudge }: { purchase: FieldPurchase; nudge?: str
 									size={13}
 									className="flex-shrink-0 text-text-muted"
 								/>
-								<span className="sr-only">Refund:</span>
+								<span className="sr-only">{t("purchases.refundSr")}</span>
 							</>
 						)}
 						<span className="truncate">
-							{purchase.vendor_name || "Vendor not recorded"}
+							{purchase.vendor_name || t("purchases.noVendor")}
 						</span>
 					</span>
 					<span className="flex-shrink-0 text-sm tabular-nums text-text-primary">
@@ -224,9 +213,9 @@ function PurchaseRow({ purchase, nudge }: { purchase: FieldPurchase; nudge?: str
 									aria-hidden
 									className="mr-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
 								>
-									Est.
+									{t("purchases.est")}
 								</span>
-								<span className="sr-only">Estimated</span>
+								<span className="sr-only">{t("purchases.estimated")}</span>
 							</>
 						)}
 						{isRefund ? "−" : ""}
@@ -238,12 +227,12 @@ function PurchaseRow({ purchase, nudge }: { purchase: FieldPurchase; nudge?: str
 						<span className={`text-xs font-medium ${statusTone(purchase)}`}>
 							{isRefund
 								? refundStateLabel(purchase)
-								: FIELD_PURCHASE_STATUS_LABELS[purchase.status]}
+								: t(`status.fieldPurchase.${purchase.status}`)}
 						</span>
 						{/* Two trips to the same counter in a week look identical without it. */}
 						{purchase.purchased_at && (
 							<span className="truncate text-xs text-text-muted">
-								· {new Date(purchase.purchased_at).toLocaleDateString()}
+								· {new Date(purchase.purchased_at).toLocaleDateString(i18n.language)}
 							</span>
 						)}
 					</span>

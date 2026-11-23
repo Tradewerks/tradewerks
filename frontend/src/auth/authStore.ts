@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useRememberedAccountsStore } from "../stores/rememberedAccountsStore";
+import i18n from "../i18n/index";
 
 interface User {
 	role: "dispatcher" | "technician" | "admin";
@@ -38,6 +39,8 @@ export const useAuthStore = create<AuthState>()(
 					useRememberedAccountsStore.getState().removeAccount(useAuthStore.getState().user?.userId || "");
 				}
 				set({ user: null });
+				// sets browser to english for next user to sign in
+				i18n.changeLanguage("en");
 			},
 			setHasHydrated: (v) => set({ _hasHydrated: v }),
 		}),

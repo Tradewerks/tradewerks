@@ -19,7 +19,7 @@ import { useAuthStore } from "../../auth/authStore";
 import { usePermission } from "../../hooks/usePermission";
 import { useTechnicianByIdQuery } from "../../hooks/useTechnicians";
 import { useVehiclesQuery, useSetTechnicianVehicleMutation, useVehicleMaintenanceReminderQuery } from "../../hooks/useVehicles";
-import { dueFor, STATUS_RANK, STATUS_LABEL, STATUS_CLASSNAME, type ReminderDue } from "../../util/vehicleMaintenanceStatus";
+import { dueFor, STATUS_RANK, STATUS_CLASSNAME, type ReminderDue } from "../../util/vehicleMaintenanceStatus";
 import {
 	useVehicleStockQuery,
 	useRestockRequestMutation,
@@ -57,12 +57,13 @@ import type {
 	BulkRestockInput,
 	VehicleMaintenanceReminder,
 } from "../../types/vehicles";
-import { MAINTENANCE_CATEGORY_LABELS } from "../../types/vehicles";
 import type { InventoryItem } from "../../types/inventory";
 import { unitLabel } from "../../lib/units";
 import CreateMaintenanceReminderModal from "../../components/vehicles/maintenance/CreateMaintenanceReminderModal";
 import TechPage from "../../components/technician/TechPage";
 import UpdateMaintenanceReminderModal from "../../components/vehicles/maintenance/UpdateMaintenanceReminderModal";
+import { useTranslation } from "react-i18next";
+import { dateLocale } from "../../i18n";
 
 // ── Vehicle Status ────────────────────────────────────────────────────────────
 
@@ -82,23 +83,18 @@ function getVehicleSubtitle(v: Pick<Vehicle, "color" | "type" | "license_plate">
 }
 
 function VehicleStatusBadge({ status }: { status: VehicleStatus }) {
+	const { t } = useTranslation();
 	const styles: Record<VehicleStatus, string> = {
 		unavailable: "bg-surface-raised text-text-tertiary",
 		"in-use": "bg-warning/10 text-warning-text",
 		stocked: "bg-success/10 text-success-text",
 		available: "bg-surface text-text-tertiary",
 	};
-	const labels: Record<VehicleStatus, string> = {
-		unavailable: "Unavailable",
-		"in-use": "In-use",
-		stocked: "Stocked",
-		available: "Available",
-	};
 	return (
 		<span
 			className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${styles[status]}`}
 		>
-			{labels[status]}
+			{t(`vehicle.status.${status}`)}
 		</span>
 	);
 }
@@ -126,12 +122,13 @@ function VehicleList({
 	onRideAlongConfirm: (vehicleId: string) => void;
 	isPending?: boolean;
 }) {
+	const { t } = useTranslation();
 	if (vehicles.length === 0) {
 		return (
 			<EmptyState
 				icon={<Truck size={28} />}
-				title="No vehicles available"
-				description="Contact your dispatcher to get a vehicle assigned."
+				title={t("vehicle.noVehicles")}
+				description={t("vehicle.noVehiclesHint")}
 			/>
 		);
 	}
@@ -162,7 +159,7 @@ function VehicleList({
 							<VehicleStatusBadge status={status} />
 							{isCurrent ? (
 								<span className="text-xs font-medium px-3 py-1.5 rounded-lg bg-surface-raised text-text-tertiary shrink-0">
-									Current
+									{t("vehicle.current")}
 								</span>
 							) : status !== "unavailable" ? (
 								<button
@@ -178,21 +175,18 @@ function VehicleList({
 									disabled={isPending}
 									className="text-xs font-medium px-3 py-2.5 rounded-lg bg-primary-hover hover:bg-primary text-on-primary transition-colors shrink-0 disabled:opacity-50 disabled:pointer-events-none"
 								>
-									Select
+									{t("vehicle.select")}
 								</button>
 							) : null}
 						</div>
 						{isRideAlongPending && (
 							<div className="px-4 py-3 bg-warning/5 border-b border-warning/20 flex items-center justify-between gap-3">
 								<p className="text-xs text-warning-text">
-									Ride along with{" "}
-									{(
-										v.current_technicians ??
-										[]
-									)
-										.map((t) => t.name)
-										.join(", ")}
-									?
+									{t("vehicle.rideAlong", {
+										names: (v.current_technicians ?? [])
+											.map((c) => c.name)
+											.join(", "),
+									})}
 								</p>
 								<div className="flex items-center gap-2 shrink-0">
 									<button
@@ -202,7 +196,7 @@ function VehicleList({
 										disabled={isPending}
 										className="text-xs text-text-tertiary hover:text-text-primary transition-colors disabled:opacity-50 py-2.5 px-1"
 									>
-										Cancel
+										{t("common.cancel")}
 									</button>
 									<button
 										onClick={() =>
@@ -213,7 +207,7 @@ function VehicleList({
 										disabled={isPending}
 										className="text-xs font-medium px-3 py-2.5 rounded-lg bg-warning/20 text-warning-text hover:bg-warning/30 transition-colors disabled:opacity-50 disabled:pointer-events-none"
 									>
-										Confirm
+										{t("vehicle.confirm")}
 									</button>
 								</div>
 							</div>
@@ -226,7 +220,7 @@ function VehicleList({
 					onClick={onCancel}
 					className="w-full py-3 text-sm text-text-muted hover:text-text-secondary transition-colors text-center border-t border-border-subtle"
 				>
-					Cancel
+					{t("common.cancel")}
 				</button>
 			)}
 		</div>
@@ -261,6 +255,7 @@ function StockItemRow({
 	isHighlighted?: boolean;
 	rowRef?: (el: HTMLDivElement | null) => void;
 }) {
+	const { t } = useTranslation();
 	const isEmpty = Number(item.qty_on_hand) === 0;
 	const isLow =
 		Number(item.qty_on_hand) > 0 && Number(item.qty_on_hand) <= Number(item.qty_min);
@@ -331,14 +326,16 @@ function StockItemRow({
 						</>
 					)}
 					<span className="text-[10px] text-text-muted">
-						Min {Number(item.qty_min)}{" "}
-						{unitLabel(unit, Number(item.qty_min))}
+						{t("vehicle.min", {
+							qty: Number(item.qty_min),
+							unit: unitLabel(unit, Number(item.qty_min)),
+						})}
 					</span>
 					<span className="text-[10px] text-text-faint">·</span>
 					<span
 						className={`text-[10px] tabular-nums ${warehouseColor}`}
 					>
-						Stock {warehouseQty}
+						{t("vehicle.warehouseStock", { qty: warehouseQty })}
 					</span>
 					{item.inventory_item.alt_ids &&
 						item.inventory_item.alt_ids.length > 0 && (
@@ -374,7 +371,7 @@ function StockItemRow({
 								Math.max(0, (batchQty ?? 0) - 1)
 							)
 						}
-						aria-label="Decrease quantity"
+						aria-label={t("vehicle.decrease")}
 						className="w-7 h-7 rounded border border-border text-text-secondary text-sm font-semibold hover:bg-surface transition-colors leading-none"
 					>
 						−
@@ -395,7 +392,7 @@ function StockItemRow({
 								(batchQty ?? 0) + 1
 							)
 						}
-						aria-label="Increase quantity"
+						aria-label={t("vehicle.increase")}
 						className="w-7 h-7 rounded border border-border text-text-secondary text-sm font-semibold hover:bg-surface transition-colors leading-none"
 					>
 						+
@@ -404,8 +401,8 @@ function StockItemRow({
 			) : !batchMode && (isEmpty || isLow) ? (
 				<button
 					onClick={() => onRestock(item)}
-					title="Request restock"
-					aria-label={`Request restock for ${item.inventory_item.name}`}
+					title={t("vehicle.requestRestock")}
+					aria-label={t("vehicle.requestRestockFor", { name: item.inventory_item.name })}
 					className="flex items-center justify-center w-11 h-11 rounded-lg bg-warning/10 text-warning-text hover:bg-warning/20 transition-colors shrink-0"
 				>
 					<RotateCcw size={14} />
@@ -449,19 +446,20 @@ function VehicleCardSkeleton() {
 // ── Stock Conflict Warning ────────────────────────────────────────────────────
 
 function StockConflictWarning({ conflicts }: { conflicts: VehicleStockConflict[] }) {
+	const { t } = useTranslation();
 	return (
 		<div className="rounded-xl border border-error bg-base overflow-hidden">
 			<div className="px-4 py-2.5 bg-error/10 border-b border-error/30 flex items-center gap-2">
 				<AlertTriangle size={14} className="text-error-text shrink-0" />
 				<span className="text-sm font-semibold text-error-text">
-					Stock issue for today's visits
+					{t("vehicle.conflictTitle")}
 				</span>
 			</div>
 			<div className="divide-y divide-border-subtle">
 				{conflicts.map((conflict, i) => {
 					const time = new Date(
 						conflict.scheduledAt
-					).toLocaleTimeString([], {
+					).toLocaleTimeString(dateLocale(), {
 						hour: "numeric",
 						minute: "2-digit",
 					});
@@ -490,7 +488,7 @@ function StockConflictWarning({ conflicts }: { conflicts: VehicleStockConflict[]
 										</span>
 										<div className="flex items-center gap-2">
 											<span className="text-xs text-text-muted">
-												Need{" "}
+												{t("vehicle.need")}{" "}
 												<span className="text-text-primary font-semibold">
 													{
 														item.qtyNeeded
@@ -500,7 +498,7 @@ function StockConflictWarning({ conflicts }: { conflicts: VehicleStockConflict[]
 											<span
 												className={`text-xs font-bold ${item.qtyOnHand === 0 ? "text-error-text" : "text-warning-text"}`}
 											>
-												Have{" "}
+												{t("vehicle.have")}{" "}
 												{
 													item.qtyOnHand
 												}
@@ -521,6 +519,7 @@ function MaintenanceReminderWarning(
 	{ reminders, setIsCreateReminderModalOpen, onEdit }:
 	{ reminders: { reminder: VehicleMaintenanceReminder; due: ReminderDue }[]; setIsCreateReminderModalOpen: (open: boolean) => void; onEdit: (reminder: VehicleMaintenanceReminder) => void }
 ) {
+	const { t } = useTranslation();
 	const canUseVehicle = usePermission("use_vehicles");
 	const noneDue = reminders.length <= 0;
 	const hasOverdue = reminders.some(({ due }) => due.status === "overdue");
@@ -529,14 +528,14 @@ function MaintenanceReminderWarning(
 			<div className={`px-4 py-2.5 border-b flex items-center gap-2 ${hasOverdue ? "bg-error/10 border-error/30" : "bg-warning/10 border-warning/30"}`}>
 				{hasOverdue && (<AlertTriangle size={14} className={`shrink-0 ${hasOverdue ? "text-error-text" : "text-warning-text"}`} />)}
 				<span className={`text-sm font-semibold flex-1 ${hasOverdue ? "text-error-text" : "text-warning-text"}`}>
-					{hasOverdue ? "Maintenance due" : "Maintenance reminders"}
+					{t(hasOverdue ? "vehicle.maintenanceDue" : "vehicle.maintenanceReminders")}
 				</span>
 				{canUseVehicle && (
 					<button
 						className="inline-flex items-center gap-1.5 rounded-md bg-primary hover:bg-primary-hover px-3 py-1.5 text-xs font-semibold text-on-primary transition-colors"
 						onClick={() => setIsCreateReminderModalOpen(true)}
 					>
-						<BellPlus size={14}/> Create Reminder
+						<BellPlus size={14}/> {t("vehicle.createReminder")}
 					</button>
 				)}
 			</div>
@@ -544,7 +543,7 @@ function MaintenanceReminderWarning(
 				{noneDue 
 				?  (
 					<>
-						<p className="p-2">No upcoming reminders</p>
+						<p className="p-2">{t("vehicle.noReminders")}</p>
 					</>
 				)
 				: reminders.map(({ reminder, due }) => (
@@ -552,20 +551,20 @@ function MaintenanceReminderWarning(
 						<div className="min-w-0 flex-1">
 							<span className="text-sm font-semibold text-text-primary">{reminder.title}</span>
 							<div className="text-xs text-text-muted">
-								{MAINTENANCE_CATEGORY_LABELS[reminder.category]}
+								{t(`vehicle.maintCat.${reminder.category}`)}
 							</div>
 						</div>
 						<div className="items-center gap-2 shrink-0">
 							{due.status !== "none" && (
 								<div className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 ml-auto w-fit rounded-full ${STATUS_CLASSNAME[due.status]}`}>
-									{STATUS_LABEL[due.status]}
+									{t(`vehicle.reminderStatus.${due.status}`)}
 								</div>
 							)}
 							<span className="text-xs text-text-muted">{due.dueLines[0]}</span>
 						</div>
 						{canUseVehicle && (
 							<button
-								aria-label="Edit reminder"
+								aria-label={t("vehicle.editReminder")}
 								className="shrink-0 flex items-center justify-center h-8 w-8 rounded-md border border-border-subtle hover:bg-surface-raised"
 								onClick={() => onEdit(reminder)}
 							>
@@ -590,6 +589,7 @@ function AddStockItemSheet({
 	existingIds: Set<string>;
 	onDone: () => void;
 }) {
+	const { t } = useTranslation();
 	const [search, setSearch] = useState("");
 	const [qtyMin, setQtyMin] = useState("1");
 	const [qtyStandard, setQtyStandard] = useState("1");
@@ -655,7 +655,7 @@ function AddStockItemSheet({
 			<div className="flex items-center gap-2">
 				<div className="flex items-center gap-1.5">
 					<label className="text-[10px] text-text-muted whitespace-nowrap">
-						Min qty
+						{t("vehicle.minQty")}
 					</label>
 					<input
 						type="number"
@@ -668,7 +668,7 @@ function AddStockItemSheet({
 				</div>
 				<div className="flex items-center gap-1.5">
 					<label className="text-[10px] text-text-muted whitespace-nowrap">
-						Standard
+						{t("vehicle.standard")}
 					</label>
 					<input
 						type="number"
@@ -684,7 +684,7 @@ function AddStockItemSheet({
 					{allCategories.length > 0 && (
 						<button
 							onClick={() => setShowFilter((v) => !v)}
-							title="Filter by category"
+							title={t("vehicle.filterCategory")}
 							className={`flex items-center justify-center w-8 h-8 rounded-lg border transition-colors ${
 								showFilter
 									? "bg-primary-hover/20 border-primary-hover/40 text-primary-text"
@@ -700,11 +700,7 @@ function AddStockItemSheet({
 								m === "name" ? "category" : "name"
 							)
 						}
-						title={
-							sortMode === "name"
-								? "Sort by category"
-								: "Sort by name"
-						}
+						title={t(sortMode === "name" ? "vehicle.sortCategory" : "vehicle.sortName")}
 						className={`flex items-center justify-center w-8 h-8 rounded-lg border transition-colors ${
 							sortMode === "category"
 								? "bg-primary-hover/20 border-primary-hover/40 text-primary-text"
@@ -739,7 +735,7 @@ function AddStockItemSheet({
 							className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-full text-text-muted hover:text-text-secondary transition-colors"
 						>
 							<X size={10} />
-							Clear
+							{t("vehicle.clear")}
 						</button>
 					)}
 				</div>
@@ -749,13 +745,13 @@ function AddStockItemSheet({
 				<input
 					value={search}
 					onChange={(e) => setSearch(e.target.value)}
-					placeholder="Search catalog…"
+					placeholder={t("vehicle.searchCatalog")}
 					className="flex-1 text-sm bg-transparent text-text-primary placeholder:text-faint outline-none"
 				/>
 				{search && (
 					<button
 						onClick={() => setSearch("")}
-						aria-label="Clear search"
+						aria-label={t("vehicle.clearSearch")}
 						className="text-text-faint hover:text-text-secondary transition-colors"
 					>
 						<X size={13} />
@@ -797,11 +793,11 @@ function AddStockItemSheet({
 				</div>
 			) : q || selectedCategories.length > 0 ? (
 				<p className="text-xs text-text-muted text-center py-2">
-					No matching items
+					{t("vehicle.noMatches")}
 				</p>
 			) : (
 				<p className="text-xs text-text-muted text-center py-2">
-					Search or filter to browse the catalog
+					{t("vehicle.browseHint")}
 				</p>
 			)}
 		</div>
@@ -832,6 +828,7 @@ export default function TechnicianVehiclePage() {
 	const restockMutation = useRestockRequestMutation();
 	const bulk = useBulkRestockMutation(currentVehicleId ?? "");
 	const toast = useToast();
+	const { t } = useTranslation();
 
 	const canStock = usePermission("stock_own_vehicle");
 	const canRestock = usePermission("complete_own_restock");
@@ -933,7 +930,7 @@ export default function TechnicianVehiclePage() {
 	const findStockItemOrWarn = (inventoryItemId: string): VehicleStockItem | null => {
 		const stockItem = stockItems.find((s) => s.inventory_item_id === inventoryItemId);
 		if (!stockItem) {
-			toast.error("Item not on this vehicle.");
+			toast.error(t("vehicle.notOnVehicle"));
 			return null;
 		}
 		return stockItem;
@@ -960,7 +957,7 @@ export default function TechnicianVehiclePage() {
 		onItem: focusStockItem,
 		onSerial: (serial) =>
 			setSerialTarget({ mode: "serial", serialId: serial.serialUnitId }),
-		onNotFound: () => toast.error("No item found for that code."),
+		onNotFound: () => toast.error(t("vehicle.noItemForCode")),
 	});
 
 	useBarcodeScanner(handleBarcodeScan, canFieldLoss);
@@ -974,25 +971,25 @@ export default function TechnicianVehiclePage() {
 			setSwitchPendingId(vehicleId);
 			return;
 		}
-		assignVehicle(vehicleId, "Failed to assign vehicle. Please try again.");
+		assignVehicle(vehicleId, t("vehicle.assignFailed"));
 		setShowVehicleList(false);
 	};
 
 	const handleConfirmSwitch = () => {
 		if (!switchPendingId) return;
-		assignVehicle(switchPendingId, "Failed to switch vehicle. Please try again.");
+		assignVehicle(switchPendingId, t("vehicle.switchFailed"));
 		setSwitchPendingId(null);
 		setShowVehicleList(false);
 	};
 
 	const handleRideAlongConfirm = (vehicleId: string) => {
-		assignVehicle(vehicleId, "Failed to assign vehicle. Please try again.");
+		assignVehicle(vehicleId, t("vehicle.assignFailed"));
 		setRideAlongPendingId(null);
 		setShowVehicleList(false);
 	};
 
 	const handleCheckOut = () => {
-		assignVehicle(null, "Failed to check out. Please try again.");
+		assignVehicle(null, t("vehicle.checkOutFailed"));
 		setShowCheckOutConfirm(false);
 	};
 
@@ -1029,12 +1026,9 @@ export default function TechnicianVehiclePage() {
 			{
 				onSuccess: () =>
 					toast.success(
-						`Restock requested for ${item.inventory_item.name}`
+						t("vehicle.restockRequested", { name: item.inventory_item.name })
 					),
-				onError: () =>
-					toast.error(
-						"Failed to send restock request. Please try again."
-					),
+				onError: () => toast.error(t("vehicle.restockFailed")),
 			}
 		);
 		setRestockTarget(null);
@@ -1051,13 +1045,11 @@ export default function TechnicianVehiclePage() {
 		const input: BulkRestockInput = { items };
 		try {
 			await bulk.mutateAsync(input);
-			toast.success(
-				`Restock requested for ${items.length} item${items.length > 1 ? "s" : ""}`
-			);
+			toast.success(t("vehicle.restockRequestedN", { count: items.length }));
 			setBatchMode(false);
 			setBatchQtys({});
 		} catch {
-			toast.error("Failed to send restock request. Please try again.");
+			toast.error(t("vehicle.restockFailed"));
 		}
 	};
 
@@ -1146,7 +1138,7 @@ export default function TechnicianVehiclePage() {
 		if (sortMode !== "category") return null;
 		const groups: { label: string; items: VehicleStockItem[] }[] = [];
 		for (const item of sortedItems) {
-			const label = item.inventory_item.category || "Uncategorized";
+			const label = item.inventory_item.category || t("vehicle.uncategorized");
 			const last = groups[groups.length - 1];
 			if (last && last.label === label) {
 				last.items.push(item);
@@ -1155,7 +1147,7 @@ export default function TechnicianVehiclePage() {
 			}
 		}
 		return groups;
-	}, [sortedItems, sortMode]);
+	}, [sortedItems, sortMode, t]);
 
 	const selectedCount = Object.values(batchQtys).filter((q) => q > 0).length;
 	const selectedEntries = Object.entries(batchQtys).filter(([, q]) => q > 0);
@@ -1203,20 +1195,15 @@ export default function TechnicianVehiclePage() {
 					<div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
 						<Truck size={15} className="text-text-muted" />
 						<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide">
-							Switch Vehicle
+							{t("vehicle.switchVehicle")}
 						</span>
 					</div>
 					<div className="px-4 py-5">
 						<p className="text-sm text-text-secondary mb-1">
-							Switch to{" "}
-							<span className="text-text-primary font-medium">
-								{pending?.name}
-							</span>
-							?
+							{t("vehicle.switchTo", { name: pending?.name })}
 						</p>
 						<p className="text-xs text-text-muted mb-4">
-							Parts tracked today stay on record —
-							switching won't remove them.
+							{t("vehicle.switchNote")}
 						</p>
 						<div className="flex gap-2">
 							<button
@@ -1226,16 +1213,14 @@ export default function TechnicianVehiclePage() {
 								disabled={setVehicle.isPending}
 								className="flex-1 py-2 text-sm rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors disabled:opacity-50"
 							>
-								Cancel
+								{t("common.cancel")}
 							</button>
 							<button
 								onClick={handleConfirmSwitch}
 								disabled={setVehicle.isPending}
 								className="flex-1 py-2 text-sm rounded-lg bg-primary-hover hover:bg-primary text-on-primary font-medium transition-colors disabled:opacity-50"
 							>
-								{setVehicle.isPending
-									? "Switching…"
-									: "Switch"}
+								{t(setVehicle.isPending ? "vehicle.switching" : "vehicle.switch")}
 							</button>
 						</div>
 					</div>
@@ -1251,7 +1236,7 @@ export default function TechnicianVehiclePage() {
 				<div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
 					<Truck size={15} className="text-text-muted" />
 					<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide">
-						Vehicle
+						{t("vehicle.vehicle")}
 					</span>
 				</div>
 
@@ -1263,10 +1248,10 @@ export default function TechnicianVehiclePage() {
 						<div className="px-4 py-5 border-b border-border-subtle">
 							<EmptyState
 								icon={<Truck size={17} />}
-								title="No vehicle selected"
-								description="Select a vehicle to begin your day"
+								title={t("vehicle.noneSelected")}
+								description={t("vehicle.noneSelectedHint")}
 								action={{
-									label: "Open vehicle list",
+									label: t("vehicle.openList"),
 									onClick: () =>
 										setShowVehicleList(
 											true
@@ -1312,15 +1297,10 @@ export default function TechnicianVehiclePage() {
 					/* ── Check-out confirmation ─────────────────────────────────── */
 					<div className="px-4 py-4">
 						<p className="text-sm text-text-secondary mb-1">
-							Check out of{" "}
-							<span className="text-text-primary font-medium">
-								{currentVehicle.name}
-							</span>
-							?
+							{t("vehicle.checkOutOf", { name: currentVehicle.name })}
 						</p>
 						<p className="text-xs text-text-muted mb-4">
-							Your stock records will remain. You can
-							select a vehicle again tomorrow.
+							{t("vehicle.checkOutNote")}
 						</p>
 						<div className="flex gap-2">
 							<button
@@ -1332,16 +1312,14 @@ export default function TechnicianVehiclePage() {
 								disabled={setVehicle.isPending}
 								className="flex-1 py-2 text-sm rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors disabled:opacity-50"
 							>
-								Cancel
+								{t("common.cancel")}
 							</button>
 							<button
 								onClick={handleCheckOut}
 								disabled={setVehicle.isPending}
 								className="flex-1 py-2 text-sm rounded-lg bg-error-strong/80 hover:bg-error-strong text-on-primary font-medium transition-colors disabled:opacity-50"
 							>
-								{setVehicle.isPending
-									? "Checking out…"
-									: "Check Out"}
+								{t(setVehicle.isPending ? "vehicle.checkingOut" : "vehicle.checkOut")}
 							</button>
 						</div>
 					</div>
@@ -1379,7 +1357,7 @@ export default function TechnicianVehiclePage() {
 									}
 									className="text-sm text-primary-text hover:text-primary-text font-medium transition-colors"
 								>
-									Switch
+									{t("vehicle.switch")}
 								</button>
 								<button
 									onClick={() =>
@@ -1389,7 +1367,7 @@ export default function TechnicianVehiclePage() {
 									}
 									className="text-sm text-text-muted hover:text-text-secondary font-medium transition-colors"
 								>
-									Check out
+									{t("vehicle.checkOut")}
 								</button>
 							</div>
 						</div>
@@ -1416,22 +1394,22 @@ export default function TechnicianVehiclePage() {
 					>
 						<Package size={15} className="text-text-muted" />
 						<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide flex-1">
-							Inventory
+							{t("vehicle.inventory")}
 						</span>
 						{!showInventory && outOfStockItems.length > 0 && (
 							<span className="text-[10px] font-semibold text-error-text">
-								{outOfStockItems.length} out
+								{t("vehicle.nOut", { count: outOfStockItems.length })}
 							</span>
 						)}
 						{!showInventory &&
 							outOfStockItems.length === 0 &&
 							lowStockItems.length > 0 && (
 								<span className="text-[10px] font-semibold text-warning-text">
-									{lowStockItems.length} low
+									{t("vehicle.nLow", { count: lowStockItems.length })}
 								</span>
 							)}
 						<span className="text-xs text-text-muted">
-							{showInventory ? "Hide" : "Open"}
+							{t(showInventory ? "vehicle.hide" : "vehicle.open")}
 						</span>
 					</button>
 
@@ -1464,12 +1442,7 @@ export default function TechnicianVehiclePage() {
 										size={13}
 										aria-hidden="true"
 									/>
-									{outOfStockItems.length}{" "}
-									item
-									{outOfStockItems.length > 1
-										? "s"
-										: ""}{" "}
-									out of stock
+									{t("vehicle.outOfStock", { count: outOfStockItems.length })}
 								</div>
 							)}
 							{/* Low stock bar */}
@@ -1482,11 +1455,7 @@ export default function TechnicianVehiclePage() {
 										size={13}
 										aria-hidden="true"
 									/>
-									{lowStockItems.length} item
-									{lowStockItems.length > 1
-										? "s"
-										: ""}{" "}
-									low stock
+									{t("vehicle.lowStock", { count: lowStockItems.length })}
 								</div>
 							)}
 
@@ -1500,7 +1469,7 @@ export default function TechnicianVehiclePage() {
 										/>
 										<input
 											type="text"
-											placeholder="Search items..."
+											placeholder={t("vehicle.searchItems")}
 											value={
 												searchQuery
 											}
@@ -1513,7 +1482,7 @@ export default function TechnicianVehiclePage() {
 														.value
 												)
 											}
-											aria-label="Search inventory items"
+											aria-label={t("vehicle.searchItemsAria")}
 											className="w-full bg-surface-inset border border-border rounded-lg pl-8 pr-8 py-1.5 text-sm text-text-primary placeholder:text-faint focus:outline-none focus:border-border-strong"
 										/>
 										{searchQuery && (
@@ -1523,7 +1492,7 @@ export default function TechnicianVehiclePage() {
 														""
 													)
 												}
-												aria-label="Clear search"
+												aria-label={t("vehicle.clearSearch")}
 												className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary transition-colors"
 											>
 												<X
@@ -1545,8 +1514,8 @@ export default function TechnicianVehiclePage() {
 														!v
 												)
 											}
-											aria-label="Filter by category"
-											title="Filter by category"
+											aria-label={t("vehicle.filterCategory")}
+											title={t("vehicle.filterCategory")}
 											className={`flex items-center justify-center w-11 h-11 rounded-lg border transition-colors shrink-0 ${
 												showFilter
 													? "bg-primary-hover/20 border-primary-hover/40 text-primary-text"
@@ -1572,18 +1541,8 @@ export default function TechnicianVehiclePage() {
 														: "name"
 											)
 										}
-										aria-label={
-											sortMode ===
-											"name"
-												? "Sort by category"
-												: "Sort by name"
-										}
-										title={
-											sortMode ===
-											"name"
-												? "Sort by category"
-												: "Sort by name"
-										}
+										aria-label={t(sortMode === "name" ? "vehicle.sortCategory" : "vehicle.sortName")}
+										title={t(sortMode === "name" ? "vehicle.sortCategory" : "vehicle.sortName")}
 										className={`flex items-center justify-center w-11 h-11 rounded-lg border transition-colors shrink-0 ${
 											sortMode ===
 											"category"
@@ -1647,7 +1606,7 @@ export default function TechnicianVehiclePage() {
 															10
 														}
 													/>
-													Clear
+													{t("vehicle.clear")}
 												</button>
 											)}
 										</div>
@@ -1658,21 +1617,7 @@ export default function TechnicianVehiclePage() {
 							{batchMode && (
 								<div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-2.5 bg-canvas border-b border-border">
 									<span className="text-xs text-text-muted">
-										{selectedCount >
-										0 ? (
-											<span className="font-semibold text-text-primary">
-												{
-													selectedCount
-												}
-											</span>
-										) : (
-											"0"
-										)}{" "}
-										item
-										{selectedCount !== 1
-											? "s"
-											: ""}{" "}
-										selected
+										{t("vehicle.selected", { count: selectedCount })}
 									</span>
 									<div className="flex items-center gap-2">
 										<button
@@ -1686,7 +1631,7 @@ export default function TechnicianVehiclePage() {
 											}}
 											className="px-3 py-1.5 text-xs font-medium bg-surface border border-border rounded-md text-text-secondary hover:bg-surface-raised transition-colors"
 										>
-											Cancel
+											{t("common.cancel")}
 										</button>
 										<button
 											onClick={() =>
@@ -1700,7 +1645,7 @@ export default function TechnicianVehiclePage() {
 											}
 											className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary-hover hover:enabled:bg-primary text-on-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 										>
-											Send Request
+											{t("vehicle.sendRequest")}
 											{selectedCount >
 											0
 												? ` (${selectedCount})`
@@ -1716,13 +1661,13 @@ export default function TechnicianVehiclePage() {
 									<EmptyState
 										title={
 											searchQuery && filtersActive
-												? `No items match "${searchQuery}" in selected categories`
+												? t("vehicle.noMatchInCats", { q: searchQuery })
 												: searchQuery
-													? `No items match "${searchQuery}"`
-													: "No items in selected categories"
+													? t("vehicle.noMatch", { q: searchQuery })
+													: t("vehicle.noneInCats")
 										}
 										action={{
-											label: "Clear filters",
+											label: t("vehicle.clearFilters"),
 											onClick: () => {
 												setSearchQuery("");
 												setSelectedCategories([]);
@@ -1736,7 +1681,7 @@ export default function TechnicianVehiclePage() {
 										action={
 											canStock
 												? {
-														label: "Add stock items",
+														label: t("vehicle.addStockItems"),
 														onClick: () => {
 															setStockEditMode("add");
 															setShowAddItem(true);
@@ -1795,10 +1740,10 @@ export default function TechnicianVehiclePage() {
 								className="text-text-muted"
 							/>
 							<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide flex-1">
-								Add / Remove Stock Items
+								{t("vehicle.addRemoveItems")}
 							</span>
 							<span className="text-xs text-text-muted">
-								{showAddItem ? "Hide" : "Open"}
+								{t(showAddItem ? "vehicle.hide" : "vehicle.open")}
 							</span>
 						</button>
 						{showAddItem && (
@@ -1808,14 +1753,14 @@ export default function TechnicianVehiclePage() {
 								    was the tell that one of them was hand-rolled. */}
 								<div className="px-3 py-2">
 									<SegmentedToggle<"add" | "remove">
-										ariaLabel="Stock list mode"
+										ariaLabel={t("vehicle.stockListMode")}
 										value={stockEditMode}
 										onChange={setStockEditMode}
 										fullWidth
 										variant="flat"
 										options={[
-											{ id: "add", label: "Add" },
-											{ id: "remove", label: "Remove" },
+											{ id: "add", label: t("vehicle.add") },
+											{ id: "remove", label: t("vehicle.remove") },
 										]}
 									/>
 								</div>
@@ -1870,10 +1815,10 @@ export default function TechnicianVehiclePage() {
 								className="text-text-muted"
 							/>
 							<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide flex-1">
-								Warehouse Restock
+								{t("vehicle.warehouseRestock")}
 							</span>
 							<span className="text-xs text-text-muted">
-								{restockOpen ? "Hide" : "Open"}
+								{t(restockOpen ? "vehicle.hide" : "vehicle.open")}
 							</span>
 						</button>
 						{restockOpen && (
@@ -1905,10 +1850,10 @@ export default function TechnicianVehiclePage() {
 								className="text-text-muted"
 							/>
 							<span className="text-xs font-medium text-text-tertiary uppercase tracking-wide flex-1">
-								Stock History
+								{t("vehicle.stockHistory")}
 							</span>
 							<span className="text-xs text-text-muted">
-								{showStockHistory ? "Hide" : "Open"}
+								{t(showStockHistory ? "vehicle.hide" : "vehicle.open")}
 							</span>
 						</button>
 						{showStockHistory && (
@@ -1967,7 +1912,7 @@ export default function TechnicianVehiclePage() {
 						setScanFocusItemId(null);
 						setPendingLostSerialId(null);
 					}}
-					onSuccess={() => toast.success("Stock adjusted")}
+					onSuccess={() => toast.success(t("vehicle.stockAdjusted"))}
 					onError={(message) => toast.error(message)}
 					initialType={scanFocusItemId ? "field_loss" : undefined}
 					initialFocusItemId={scanFocusItemId ?? undefined}
@@ -2008,16 +1953,13 @@ export default function TechnicianVehiclePage() {
 								className="text-sm font-semibold text-text-primary mb-0.5 line-clamp-2 break-words"
 								title={restockTarget.inventory_item.name}
 							>
-								Request restock —{" "}
-								{restockTarget.inventory_item.name}
+								{t("vehicle.requestRestockTitle", { name: restockTarget.inventory_item.name })}
 							</p>
 							<p className="text-xs text-text-muted mb-4">
-								On hand{" "}
-								{Number(restockTarget.qty_on_hand)}
-								{restockTarget.qty_standard !==
-									null &&
-									` · standard ${Number(restockTarget.qty_standard)}`}
-								{` · warehouse ${Number(restockTarget.inventory_item.quantity)}`}
+								{t("vehicle.onHand", { qty: Number(restockTarget.qty_on_hand) })}
+								{restockTarget.qty_standard !== null &&
+									` · ${t("vehicle.standardQty", { qty: Number(restockTarget.qty_standard) })}`}
+								{` · ${t("vehicle.warehouseQty", { qty: Number(restockTarget.inventory_item.quantity) })}`}
 							</p>
 							<div className="flex items-center justify-center gap-4 mb-4">
 								<button
@@ -2031,7 +1973,7 @@ export default function TechnicianVehiclePage() {
 										)
 									}
 									className="w-11 h-11 rounded-lg border border-border text-text-secondary text-lg font-semibold hover:bg-surface transition-colors"
-									aria-label="Decrease quantity"
+									aria-label={t("vehicle.decrease")}
 								>
 									−
 								</button>
@@ -2045,7 +1987,7 @@ export default function TechnicianVehiclePage() {
 										)
 									}
 									className="w-11 h-11 rounded-lg border border-border text-text-secondary text-lg font-semibold hover:bg-surface transition-colors"
-									aria-label="Increase quantity"
+									aria-label={t("vehicle.increase")}
 								>
 									+
 								</button>
@@ -2057,7 +1999,7 @@ export default function TechnicianVehiclePage() {
 										e.target.value
 									)
 								}
-								placeholder="Note (optional)"
+								placeholder={t("vehicle.noteOptional")}
 								maxLength={500}
 								className="w-full mb-4 bg-surface-inset border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-faint focus:outline-none focus:border-border-strong"
 							/>
@@ -2070,7 +2012,7 @@ export default function TechnicianVehiclePage() {
 									}
 									className="flex-1 py-2.5 text-sm rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
 								>
-									Cancel
+									{t("common.cancel")}
 								</button>
 								<button
 									onClick={submitRestock}
@@ -2079,9 +2021,7 @@ export default function TechnicianVehiclePage() {
 									}
 									className="flex-1 py-2.5 text-sm rounded-lg bg-primary-hover hover:bg-primary text-on-primary font-medium transition-colors disabled:opacity-50"
 								>
-									{restockMutation.isPending
-										? "Sending…"
-										: "Request"}
+									{t(restockMutation.isPending ? "vehicle.sending" : "vehicle.request")}
 								</button>
 							</div>
 						</div>
@@ -2101,11 +2041,11 @@ export default function TechnicianVehiclePage() {
 					>
 						<div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-shrink-0">
 							<span className="text-sm font-bold text-text-primary">
-								Fill to Standard
+								{t("vehicle.fillToStandard")}
 							</span>
 							<button
 								onClick={() => setFillOpen(false)}
-								aria-label="Close"
+								aria-label={t("common.close")}
 								className="text-text-faint hover:text-text-secondary transition-colors"
 							>
 								<X size={16} />
@@ -2116,9 +2056,7 @@ export default function TechnicianVehiclePage() {
 								vehicleId={currentVehicleId}
 								onClose={() => setFillOpen(false)}
 								onSuccess={() =>
-									toast.success(
-										"Vehicle filled to standard"
-									)
+									toast.success(t("vehicle.filled"))
 								}
 								onError={(message) =>
 									toast.error(message)
@@ -2147,18 +2085,10 @@ export default function TechnicianVehiclePage() {
 							<div className="flex items-center justify-between px-4 py-3.5 border-b border-border">
 								<div>
 									<p className="text-sm font-semibold text-text-primary">
-										Bulk Restock Request
+										{t("vehicle.bulkRestock")}
 									</p>
 									<p className="text-xs text-text-muted mt-0.5">
-										{
-											selectedEntries.length
-										}{" "}
-										item
-										{selectedEntries.length >
-										1
-											? "s"
-											: ""}{" "}
-										selected
+										{t("vehicle.selected", { count: selectedEntries.length })}
 									</p>
 								</div>
 								<button
@@ -2167,7 +2097,7 @@ export default function TechnicianVehiclePage() {
 											false
 										)
 									}
-									aria-label="Close"
+									aria-label={t("common.close")}
 									className="text-text-faint hover:text-text-secondary transition-colors p-1 -mr-1"
 								>
 									<X size={15} />
@@ -2245,7 +2175,7 @@ export default function TechnicianVehiclePage() {
 									}
 									className="flex-1 py-2.5 text-sm rounded-lg border border-border text-text-secondary hover:bg-surface transition-colors"
 								>
-									Cancel
+									{t("common.cancel")}
 								</button>
 								<button
 									onClick={() => {
@@ -2257,9 +2187,7 @@ export default function TechnicianVehiclePage() {
 									disabled={bulk.isPending}
 									className="flex-1 py-2.5 text-sm rounded-lg bg-primary-hover hover:bg-primary text-on-primary font-medium transition-colors disabled:opacity-50"
 								>
-									{bulk.isPending
-										? "Requesting…"
-										: "Request"}
+									{t(bulk.isPending ? "vehicle.requesting" : "vehicle.request")}
 								</button>
 							</div>
 						</div>

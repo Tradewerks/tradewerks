@@ -1,4 +1,5 @@
 import { Check, ScanLine } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { OcrFieldFlag, OcrFieldKey } from "../../../types/fieldPurchases";
 import { OcrFieldChip } from "../../fieldPurchases/OcrFieldChip";
 
@@ -9,6 +10,8 @@ interface Props {
 	entered: string;
 	/** What the receipt read, same formatting. Null where it read nothing. */
 	receipt: string | null;
+	/** How to show `receipt` when the field's own format isn't readable, such as a datetime-local value. */
+	display?: (value: string) => string;
 	/** Absent where there is nothing to take, such as a field with no input. */
 	onUse?: (value: string) => void;
 	/** Which header field this is, for the chip's wording. */
@@ -61,6 +64,7 @@ export default function ReceiptValueDiff({
 	label,
 	entered,
 	receipt,
+	display,
 	onUse,
 	field,
 	flag,
@@ -71,6 +75,7 @@ export default function ReceiptValueDiff({
 	confirmable = editable,
 	controlId,
 }: Props) {
+	const { t } = useTranslation();
 	const differs = receipt != null && valuesDiffer(entered, receipt, numeric);
 	const chip = flag && field ? { field, flag } : null;
 	// not_found is a fact, not a doubt, so it never asks for a press.
@@ -102,7 +107,7 @@ export default function ReceiptValueDiff({
 			{canConfirm && (
 				<button
 					type="button"
-					aria-label={`Looks right: ${label.toLowerCase()}`}
+					aria-label={t("procure.looksRightAria", { label: label.toLowerCase() })}
 					onClick={onConfirm}
 					// 40px of tap target without growing the label row: the padding is
 					// the target, the negative margin gives the height back. The pill
@@ -111,7 +116,7 @@ export default function ReceiptValueDiff({
 				>
 					<span className="inline-flex h-6 items-center gap-1 rounded-md border border-primary/50 bg-primary/10 px-2 text-xs font-medium text-primary shadow-sm transition-colors duration-150 ease-out group-hover:border-primary group-hover:bg-primary/20 group-active:bg-primary/30 group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-offset-1 group-focus-visible:outline-primary">
 						<Check aria-hidden size={12} strokeWidth={2.5} />
-						Looks right
+						{t("procure.looksRight")}
 					</span>
 				</button>
 			)}
@@ -123,9 +128,9 @@ export default function ReceiptValueDiff({
 						className="flex-shrink-0 text-text-muted"
 					/>
 					<span className="text-text-muted">
-						receipt reads{" "}
+						{t("procure.receiptReads")}{" "}
 						<span className="text-text-secondary">
-							{receipt}
+							{display ? display(receipt) : receipt}
 						</span>
 					</span>
 					{/* Past submit the reading is still a fact about the record, but
@@ -133,11 +138,11 @@ export default function ReceiptValueDiff({
 					{editable && onUse && (
 						<button
 							type="button"
-							aria-label={`Use the receipt's ${label.toLowerCase()}`}
+							aria-label={t("procure.useAria", { label: label.toLowerCase() })}
 							onClick={() => use(receipt)}
 							className="font-medium text-primary underline-offset-2 hover:underline"
 						>
-							use it
+							{t("procure.useIt")}
 						</button>
 					)}
 				</span>

@@ -8,6 +8,7 @@ import {
 	type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { Search, X } from "lucide-react";
 import { useCatalogSearchQuery, useReconcileTargetsQuery } from "../../hooks/useInventory";
 import { unitLabel } from "../../lib/units";
@@ -46,12 +47,13 @@ export default function CatalogItemPicker({
 	value,
 	onChange,
 	excludeId,
-	placeholder = "Search the catalog…",
+	placeholder,
 	disabled,
 	id,
 	ariaLabel,
 	scope = "reconcile",
 }: CatalogItemPickerProps) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [typed, setTyped] = useState("");
 	const [debounced, setDebounced] = useState("");
@@ -63,8 +65,8 @@ export default function CatalogItemPicker({
 
 	// A request per keystroke would refetch mid-word; the list is not that urgent.
 	useEffect(() => {
-		const t = setTimeout(() => setDebounced(typed.trim()), 200);
-		return () => clearTimeout(t);
+		const timer = setTimeout(() => setDebounced(typed.trim()), 200);
+		return () => clearTimeout(timer);
 	}, [typed]);
 
 	// Both hooks are declared because hooks cannot be conditional; only the one
@@ -181,16 +183,16 @@ export default function CatalogItemPicker({
 							: `${value.sku ? " · " : ""}${
 									value.cost != null
 										? `${money(value.cost)} / ${unitLabel(value.unit)}`
-										: "No cost yet"
+										: t("catalogPicker.noCost")
 								}`}
-						{value.provisional ? " · awaiting detail" : ""}
+						{value.provisional ? ` · ${t("catalogPicker.awaitingDetail")}` : ""}
 					</span>
 				</span>
 				<button
 					type="button"
 					onClick={() => onChange(null)}
 					disabled={disabled}
-					aria-label="Clear the selected item"
+					aria-label={t("catalogPicker.clear")}
 					className={`flex-shrink-0 cursor-pointer rounded p-1 text-text-muted transition-colors hover:bg-surface-raised hover:text-text-primary ${FOCUS_RING}`}
 				>
 					<X aria-hidden size={13} />
@@ -216,7 +218,7 @@ export default function CatalogItemPicker({
 				aria-label={ariaLabel}
 				disabled={disabled}
 				value={typed}
-				placeholder={placeholder}
+				placeholder={placeholder ?? t("stock.searchCatalog")}
 				onChange={(e) => {
 					setTyped(e.target.value);
 					setOpen(true);
@@ -249,17 +251,17 @@ export default function CatalogItemPicker({
 								    a technician reading "the catalog is empty" would go
 								    looking for the wrong problem. */}
 								{error
-									? "You do not have access to the catalog — ask dispatch to enable it."
+									? t("catalogPicker.noAccess")
 									: isFetching
-										? "Searching…"
+										? t("catalogPicker.searching")
 										: debounced
-											? `Nothing in the catalog matches "${debounced}".`
-											: "The catalog is empty."}
+											? t("catalogPicker.noMatch", { q: debounced })
+											: t("catalogPicker.empty")}
 							</p>
 						) : (
-							options.map((t, i) => (
+							options.map((opt, i) => (
 								<button
-									key={t.id}
+									key={opt.id}
 									type="button"
 									role="option"
 									aria-selected={i === cursor}
@@ -269,7 +271,7 @@ export default function CatalogItemPicker({
 									onMouseEnter={() =>
 										setCursor(i)
 									}
-									onClick={() => pick(t)}
+									onClick={() => pick(opt)}
 									className={`flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${
 										i === cursor
 											? "bg-primary-bg"
@@ -278,26 +280,20 @@ export default function CatalogItemPicker({
 								>
 									<span className="min-w-0 flex-1">
 										<span className="block truncate text-sm text-text-primary">
-											{t.name}
+											{opt.name}
 										</span>
 										<span className="block truncate text-[11px] text-text-muted">
-											{t.sku ??
-												"No SKU"}{" "}
+											{opt.sku ?? t("catalogPicker.noSku")}{" "}
 											·{" "}
-											{unitLabel(
-												t.unit
-											)}
-											{t.cost !=
-											null
-												? ` · ${money(t.cost)}`
-												: ""}
+											{unitLabel(opt.unit)}
+											{opt.cost != null ? ` · ${money(opt.cost)}` : ""}
 										</span>
 									</span>
 									{/* Mapping onto a row that still needs detail is legal and
 									    common; it just should not look like a finished item. */}
-									{t.provisional && (
+									{opt.provisional && (
 										<span className="flex-shrink-0 rounded border border-warning-border bg-warning-bg px-1 py-px text-[9px] font-medium uppercase tracking-wide text-warning-text">
-											Detail
+											{t("catalogPicker.detail")}
 										</span>
 									)}
 								</button>

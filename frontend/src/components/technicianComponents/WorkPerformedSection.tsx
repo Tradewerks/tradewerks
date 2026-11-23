@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { PlusCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useCreateJobNoteMutation, useJobNotesQuery } from "../../hooks/useJobs";
 import { formatDateTime, FALLBACK_TIMEZONE } from "../../util/util";
@@ -11,6 +12,7 @@ import type { NotePhoto } from "../../components/technicianComponents/AddNotePho
 // ── Note Item ─────────────────────────────────────────────────────────────────
 
 function NoteItem({ note, tz }: { note: JobNote; tz: string }) {
+	const { t } = useTranslation();
 	return (
 		<div className="px-4 py-3 border-b border-border-subtle last:border-0">
 			{note.content && (
@@ -22,7 +24,7 @@ function NoteItem({ note, tz }: { note: JobNote; tz: string }) {
 				</div>
 			)}
 			<p className="text-[11px] text-text-faint mt-1">
-				{note.creator_tech?.name ?? note.creator_dispatcher?.name ?? "You"} · {formatDateTime(note.created_at, tz)}
+				{note.creator_tech?.name ?? note.creator_dispatcher?.name ?? t("visitDetail.you")} · {formatDateTime(note.created_at, tz)}
 			</p>
 		</div>
 	);
@@ -37,6 +39,7 @@ export default function WorkPerformedSection({
 	jobId: string;
 	visitId: string;
 }) {
+	const { t } = useTranslation();
 	const { user } = useAuthStore();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
 	const { data: notes = [], isLoading: notesLoading } = useJobNotesQuery(jobId);
@@ -83,7 +86,7 @@ export default function WorkPerformedSection({
 				className="w-full flex items-center justify-between px-4 py-3 bg-base border-b border-border-subtle"
 			>
 				<span className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
-					Work Performed
+					{t("visitDetail.workPerformed")}
 					{visitNotes.length > 0 && (
 						<span className="ml-2 text-text-muted font-normal normal-case tracking-normal">
 							({visitNotes.length})
@@ -102,7 +105,7 @@ export default function WorkPerformedSection({
 							className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-surface border border-border text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors"
 						>
 							<PlusCircle size={14} />
-							Add Note / Photo
+							{t("visit.addNotePhoto")}
 						</button>
 					</div>
 
@@ -115,7 +118,7 @@ export default function WorkPerformedSection({
 							<div className="h-2.5 w-1/4 bg-surface rounded" />
 						</div>
 					) : visitNotes.length === 0 ? (
-						<p className="px-4 py-6 text-center text-sm text-text-faint bg-surface">No notes yet</p>
+						<p className="px-4 py-6 text-center text-sm text-text-faint bg-surface">{t("visitDetail.noNotes")}</p>
 					) : (
 						<div className="bg-surface">
 							{visitNotes.map((note) => (
