@@ -15,13 +15,14 @@ export async function sendLowStockAlert(item: AlertableItem): Promise<void> {
 	if (!item.alert_emails_enabled || !item.alert_email) return;
 
 	try {
-		await sendEmail(item.alert_email, "low-stock-alert", {
+		const sent = await sendEmail(item.alert_email, "low-stock-alert", {
 			item_name: item.name,
 			// Decimal objects render as their object form, not "12.5", in the email template.
 			current_quantity: Number(item.quantity),
 			threshold: item.low_stock_threshold === null ? null : Number(item.low_stock_threshold),
 			inventory_url: `${process.env.FRONTEND_URL || "http://localhost:5173"}/app/dispatch/inventory`,
 		});
+		if (!sent) console.warn("Low stock alert email was not delivered");
 	} catch (e) {
 		console.error("Failed to send low stock alert email:", e);
 	}

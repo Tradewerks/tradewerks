@@ -34,6 +34,7 @@ import {
 	type VisitDragPayload,
 } from "./scheduleBoardUtils";
 import type { UpdateJobVisitInput } from "../../../types/jobs";
+import { visitVersion } from "../../../lib/apiErrors";
 import type { Technician } from "../../../types/technicians";
 import type { OccurrenceWithPlan, VisitWithJob } from "./dashboardCalendarUtils";
 import type { RescheduleOccurrenceInput, VisitGenerationResult } from "../../../types/recurringPlans";
@@ -444,7 +445,10 @@ export default function ScheduleBoardDayColumn({
 		if (!pendingDrop) return;
 		onDropHandled?.();
 		try {
-			await updateVisit({ id: pendingDrop.id, data });
+			await updateVisit({
+				id: pendingDrop.id,
+				data: { ...data, expected_updated_at: visitVersion(pendingDrop.visitObj) },
+			});
 			onRescheduleConfirmed?.();
 		} catch {
 			// reverts via query invalidation
@@ -527,7 +531,10 @@ export default function ScheduleBoardDayColumn({
 	async function handleClickRescheduleVisitSave(data: UpdateJobVisitInput) {
 		if (!pendingClickReschedule?.visit) return;
 		try {
-			await updateVisit({ id: pendingClickReschedule.visit.id, data });
+			await updateVisit({
+				id: pendingClickReschedule.visit.id,
+				data: { ...data, expected_updated_at: visitVersion(pendingClickReschedule.visit) },
+			});
 		} catch {
 			// reverts via query invalidation
 		}

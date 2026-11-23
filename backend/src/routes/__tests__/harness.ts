@@ -157,6 +157,8 @@ export function makeRes() {
 		return res as Response;
 	});
 	res.json = vi.fn().mockReturnValue(res as Response);
+	res.send = vi.fn().mockReturnValue(res as Response);
+	res.setHeader = vi.fn().mockReturnValue(res as Response);
 	return res as Response & { status: Mock; json: Mock; statusCode: number };
 }
 

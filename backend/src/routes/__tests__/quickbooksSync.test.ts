@@ -21,12 +21,13 @@ vi.mock("../../lib/requirePermissions.js", async (importActual) => ({
 vi.mock("../../services/qb/qbInvoices.js", async (importActual) => ({
 	...(await importActual<typeof import("../../services/qb/qbInvoices.js")>()),
 	pushInvoice: vi.fn(),
+	sendQbInvoiceEmail: vi.fn(),
 }));
 
 import quickbooksRouter from "../quickbooks.js";
 import { callRoute } from "./harness.js";
 import { db } from "../../db.js";
-import { pushInvoice } from "../../services/qb/qbInvoices.js";
+import { pushInvoice, sendQbInvoiceEmail } from "../../services/qb/qbInvoices.js";
 import { getScopedDb } from "../../lib/context.js";
 
 const mockPush = vi.mocked(pushInvoice);
@@ -85,5 +86,18 @@ describe("POST /quickbooks/invoices/:id/sync", () => {
 
 		expect(status).toBe(200);
 		expect(body.data).toEqual({ synced: true });
+	});
+});
+
+describe("POST /quickbooks/invoices/:id/email", () => {
+	it('returns 400 VALIDATION_ERROR for "not-an-email" and does not call the sender', async () => {
+		const { status, body } = await callRoute(quickbooksRouter, "post", "/invoices/:id/email", {
+			params: { id: "inv1" },
+			body: { sendTo: "not-an-email" },
+		});
+
+		expect(status).toBe(400);
+		expect(body.error.code).toBe("VALIDATION_ERROR");
+		expect(sendQbInvoiceEmail).not.toHaveBeenCalled();
 	});
 });

@@ -91,6 +91,7 @@ const AccountDeletedPage = lazy(() => import("./pages/AccountDeletedPage"));
 const MyProfilePage = lazy(() => import("./pages/MyProfilePage"));
 const QBCallbackPage = lazy(() => import("./pages/QBCallbackPage"));
 const SSOCompletePage = lazy(() => import("./pages/SSOCompletePage"));
+const PublicLinkPage = lazy(() => import("./pages/public/PublicLinkPage"));
 const ProjectsPage = lazy(() => import("./pages/dispatch/ProjectsPage"));
 const ProjectDetailPage = lazy(() => import("./pages/dispatch/ProjectDetailPage"));
 const JobProfitabilityPage = lazy(() => import("./pages/dispatch/JobProfitabilityPage"));
@@ -157,6 +158,7 @@ export default function AppRoutes() {
 			<Route path="/accept-invite" element={<AcceptInvitePage />} />
 			<Route path="/quickbooks/callback" element={<QBCallbackPage />} />
 			<Route path="/auth/sso/complete" element={<SSOCompletePage />} />
+			<Route path="/c/:token" element={<PublicLinkPage />} />
 			<Route
 				path="/dispatch/*"
 				element={

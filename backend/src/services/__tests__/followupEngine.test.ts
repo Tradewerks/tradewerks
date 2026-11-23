@@ -8,6 +8,7 @@ import {
 	decideStep,
 	evaluateAnchorStop,
 	resolveContactEmail,
+	resolveContact,
 	type AnchorLookupDb,
 } from "../followupEngine.js";
 
@@ -105,6 +106,16 @@ describe("decideStep (opens-only chaining)", () => {
 	it("sends when previous not opened", () => {
 		expect(decideStep(gated, notOpened, { trigger_type: "quote_sent", stop_on_open: true }).action).toBe("send");
 	});
+	it("decideStep sends the next reminder for a visit_scheduled sequence even when the previous one was opened and stop_on_open is true", () => {
+		const seq = { trigger_type: "visit_scheduled", stop_on_open: true };
+		expect(decideStep(always, opened, seq).action).toBe("send");
+		expect(decideStep(gated, opened, seq).action).toBe("send");
+	});
+	it("decideStep still stops a quote_sent sequence on open", () => {
+		const d = decideStep(always, opened, { trigger_type: "quote_sent", stop_on_open: true });
+		expect(d.action).toBe("stop");
+		expect(d.reason).toBe("recipient_opened");
+	});
 });
 
 describe("resolveContactEmail", () => {
@@ -134,6 +145,39 @@ describe("resolveContactEmail", () => {
 				{ contact: { email: "first@x.com" } },
 			]),
 		).toBe("first@x.com");
+	});
+});
+
+describe("resolveContact", () => {
+	const link = (
+		id: string,
+		over: Record<string, unknown> = {},
+		email: string | null = `${id}@x.com`,
+		cOver: Record<string, unknown> = {},
+	) => ({
+		contact_id: id,
+		...over,
+		contact: { email, is_active: true, type: "customer", ...cOver },
+	});
+	it("resolveContact skips an inactive primary and returns the billing contact", () => {
+		expect(
+			resolveContact([
+				link("p", { is_primary: true }, "p@x.com", { is_active: false }),
+				link("b", { is_billing: true }),
+			]),
+		).toEqual({ contact_id: "b", email: "b@x.com" });
+	});
+	it("resolveContact returns null when two unflagged contacts exist", () => {
+		expect(resolveContact([link("a"), link("b")])).toBeNull();
+	});
+	it("resolveContact returns the single eligible contact when none is flagged", () => {
+		expect(resolveContact([link("a"), link("b", {}, "b@x.com", { is_active: false })])).toEqual({
+			contact_id: "a",
+			email: "a@x.com",
+		});
+	});
+	it("resolveContact never returns a vendor contact", () => {
+		expect(resolveContact([link("v", { is_primary: true }, "v@x.com", { type: "vendor" })])).toBeNull();
 	});
 });
 

@@ -7,7 +7,7 @@ import {
 	onVisitCancelled,
 } from "../followupTriggers.js";
 
-const { scoped, isModuleOn } = vi.hoisted(() => ({
+const { scoped, isModuleOn, canSend } = vi.hoisted(() => ({
 	scoped: {
 		followup_sequence: { findMany: vi.fn() },
 		client: { findFirst: vi.fn() },
@@ -23,10 +23,12 @@ const { scoped, isModuleOn } = vi.hoisted(() => ({
 		},
 	},
 	isModuleOn: vi.fn(),
+	canSend: vi.fn(),
 }));
 
 vi.mock("../../lib/context.js", () => ({ getScopedDb: () => scoped }));
 vi.mock("../entitlementService.js", () => ({ isModuleOn }));
+vi.mock("../consentService.js", () => ({ canSend }));
 vi.mock("../appLogger.js", () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -40,6 +42,7 @@ function withContact(email: string) {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	canSend.mockResolvedValue(true);
 	scoped.followup_enrollment.create.mockResolvedValue({});
 	scoped.followup_enrollment.findMany.mockResolvedValue([]);
 });
@@ -50,6 +53,34 @@ describe("onQuoteSent", () => {
 		scoped.quote.findFirst.mockResolvedValue({ client_id: "c1" });
 		await onQuoteSent("q1", "org1");
 		expect(scoped.followup_sequence.findMany).not.toHaveBeenCalled();
+		expect(scoped.followup_enrollment.create).not.toHaveBeenCalled();
+	});
+
+	it("enrollForTrigger does not enroll an unsubscribed contact", async () => {
+		enable(true);
+		scoped.client.findFirst.mockResolvedValue({
+			contacts: [
+				{
+					is_primary: true,
+					contact_id: "ct1",
+					contact: { email: "client@x.com", is_active: true, type: "customer" },
+				},
+			],
+		});
+		canSend.mockResolvedValue(false);
+		scoped.quote.findFirst.mockResolvedValue({ client_id: "c1" });
+		scoped.followup_sequence.findMany.mockResolvedValue([
+			{
+				id: "seq1",
+				trigger_type: "quote_sent",
+				stop_on_open: true,
+				steps: [{ step_order: 1, delay_amount: 2, delay_unit: "days", condition: "if_previous_not_opened" }],
+			},
+		]);
+
+		await onQuoteSent("q1", "org1");
+
+		expect(canSend).toHaveBeenCalledWith(scoped, "ct1", "email");
 		expect(scoped.followup_enrollment.create).not.toHaveBeenCalled();
 	});
 
@@ -192,6 +223,80 @@ describe("onVisitRescheduled", () => {
 				data: { anchor_at: newStart, next_send_at: new Date(newStart.getTime() - DAY) },
 			}),
 		);
+	});
+});
+
+describe("onVisitRescheduled after every step was sent", () => {
+	const sentEnrollment = {
+		id: "e1",
+		current_step_order: 1,
+		sequence: {
+			trigger_type: "visit_scheduled",
+			stop_on_open: false,
+			steps: [{ step_order: 1, delay_amount: 1, delay_unit: "days" }],
+		},
+	};
+
+	it("rescheduling to a future time when every step is already sent resets current_step_order to 0 and sets next_send_at for step 1", async () => {
+		scoped.followup_enrollment.findMany.mockResolvedValue([sentEnrollment]);
+		const newStart = new Date(Date.now() + 5 * DAY);
+		await onVisitRescheduled("v1", "org1", newStart);
+
+		expect(scoped.followup_enrollment.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				where: { id: "e1" },
+				data: {
+					anchor_at: newStart,
+					current_step_order: 0,
+					next_send_at: new Date(newStart.getTime() - DAY),
+				},
+			}),
+		);
+	});
+
+	it("rescheduling a fully-sent 3-day/1-day chain to 2 days out re-arms the 1-day step", async () => {
+		scoped.followup_enrollment.findMany.mockResolvedValue([
+			{
+				id: "e1",
+				current_step_order: 2,
+				sequence: {
+					trigger_type: "visit_scheduled",
+					stop_on_open: false,
+					steps: [
+						{ step_order: 1, delay_amount: 3, delay_unit: "days" },
+						{ step_order: 2, delay_amount: 1, delay_unit: "days" },
+					],
+				},
+			},
+		]);
+		const newStart = new Date(Date.now() + 2 * DAY);
+		await onVisitRescheduled("v1", "org1", newStart);
+
+		expect(scoped.followup_enrollment.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				where: { id: "e1" },
+				data: {
+					anchor_at: newStart,
+					current_step_order: 1,
+					next_send_at: new Date(newStart.getTime() - DAY),
+				},
+			}),
+		);
+	});
+
+	it("rescheduling never leaves an active enrollment with next_send_at null", async () => {
+		scoped.followup_enrollment.findMany.mockResolvedValue([sentEnrollment]);
+		// Step 1 would have to send a day before a start that is only 2h away.
+		const newStart = new Date(Date.now() + 2 * 60 * 60 * 1000);
+		await onVisitRescheduled("v1", "org1", newStart);
+
+		const data = scoped.followup_enrollment.update.mock.calls[0][0].data;
+		expect(data).toMatchObject({
+			status: "completed",
+			stop_reason: "rescheduled_too_late",
+			next_send_at: null,
+		});
+		expect(data.completed_at).toBeInstanceOf(Date);
 	});
 });
 

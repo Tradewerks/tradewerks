@@ -41,6 +41,7 @@ import {
 	type TemplateSearchScopeToggle,
 } from "../ui/forms/TemplateSearch";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
+import { useModuleOn } from "../../hooks/useEntitlements";
 import { useFinancialCalculations } from "../../hooks/forms/useFinancialCalculations";
 
 type Step = 1 | 2 | 3 | 4;
@@ -131,6 +132,7 @@ const CreateJobVisit = ({
 	const { data: vehicles = [] } = useVehiclesQuery("active");
 
 	const { data: taxGroups = [] } = useTaxGroups();
+	const customerCommsOn = useModuleOn("customer_comms");
 	const autoModeLoaded = useAutoTaxMode();
 	const autoMode = autoModeLoaded === true;
 	const { data: job } = useJobByIdQuery(jobId);
@@ -846,6 +848,11 @@ const CreateJobVisit = ({
 								className="border border-border px-2.5 py-1.5 lg:py-2 w-full h-14 lg:h-20 xl:h-24 rounded bg-base text-text-primary text-sm lg:text-base resize-none focus:border-primary focus:outline-none transition-colors min-w-0"
 							/>
 							<ErrorDisplay path="description" />
+							{customerCommsOn && (
+								<p className="mt-0.5 text-xs text-text-muted">
+									Customers see this in their visit summary.
+								</p>
+							)}
 						</div>
 						<div
 							className="relative min-w-0"
@@ -1036,6 +1043,7 @@ const CreateJobVisit = ({
 	}, [
 		isSourceSearchOpen,
 		autoMode,
+		customerCommsOn,
 		sourceMode,
 		draftResults,
 		handleSelectDraft,

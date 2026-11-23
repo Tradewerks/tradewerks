@@ -8,6 +8,15 @@ import {
 import { createRecurringPlanSchema } from "../../lib/validate/recurringPlans.js";
 import { getScopedDb } from "../../lib/context.js";
 
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyVisitScheduled: vi.fn(async () => undefined),
+	notifyVisitRescheduled: vi.fn(async () => undefined),
+	notifyVisitCancelled: vi.fn(async () => undefined),
+	retimeVisitReminders: vi.fn(async () => undefined),
+	notifyJobCompleted: vi.fn(async () => undefined),
+	notifyVisitCompleted: vi.fn(async () => undefined),
+	notifyTechOnTheWay: vi.fn(async () => undefined),
+}));
 vi.mock("../../db.js", () => ({
 	db: {},
 	generateJobNumber: vi.fn().mockResolvedValue("J-0001"),
@@ -25,6 +34,17 @@ const { holdsKeptRate, recomputeVisitTotals } = vi.hoisted(() => ({
 	recomputeVisitTotals: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("../../lib/recomputeDocumentTotals.js", () => ({ holdsKeptRate, recomputeVisitTotals }));
+
+const { onVisitScheduled } = vi.hoisted(() => ({
+	onVisitScheduled: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("../../services/followupTriggers.js", () => ({ onVisitScheduled }));
+
+const lifecycle = vi.hoisted(() => ({
+	syncJobFromVisits: vi.fn(async (): Promise<unknown> => null),
+	runJobChangePostCommit: vi.fn(async () => undefined),
+}));
+vi.mock("../../services/visitLifecycle/index.js", () => lifecycle);
 
 const ORG = "org-1";
 const ITEM = "11111111-1111-4111-8111-111111111111";
@@ -387,6 +407,63 @@ describe("generateVisitFromOccurrence", () => {
 		expect([model, jobId, keptTx === tx]).toEqual(["job", "job-1", true]);
 		const [visitId, org, visitTx] = recomputeVisitTotals.mock.calls[0] as unknown[];
 		expect([visitId, org, visitTx === tx]).toEqual(["visit-1", ORG, true]);
+	});
+
+	it("generating a visit from an occurrence calls onVisitScheduled once, after the transaction commits", async () => {
+		const order: string[] = [];
+		onVisitScheduled.mockImplementation(() => {
+			order.push("notify");
+			return Promise.resolve();
+		});
+		const { sdb } = occurrenceSdb(vi.fn().mockResolvedValue({ id: "visit-1" }));
+		const realTx = sdb.$transaction;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		sdb.$transaction = vi.fn(async (cb: any) => {
+			const r = await realTx(cb);
+			order.push("commit");
+			return r;
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		vi.mocked(getScopedDb).mockReturnValue(sdb as any);
+		const result = await generateVisitFromOccurrence("occ", ORG);
+		expect(result.err).toBe("");
+		expect(onVisitScheduled).toHaveBeenCalledTimes(1);
+		expect(onVisitScheduled).toHaveBeenCalledWith("visit-1", ORG);
+		expect(order).toEqual(["commit", "notify"]);
+	});
+
+	it("re-derives the container job in the visit's transaction and runs its post-commit after", async () => {
+		const order: string[] = [];
+		const change = { from: "Completed", to: "Scheduled" };
+		lifecycle.syncJobFromVisits.mockImplementationOnce(async () => {
+			order.push("sync");
+			return change;
+		});
+		lifecycle.runJobChangePostCommit.mockImplementationOnce(async () => {
+			order.push("postCommit");
+		});
+		const { sdb, tx } = occurrenceSdb(vi.fn().mockResolvedValue({ id: "visit-1" }));
+		const realTx = sdb.$transaction;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		sdb.$transaction = vi.fn(async (cb: any) => {
+			const r = await realTx(cb);
+			order.push("commit");
+			return r;
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		vi.mocked(getScopedDb).mockReturnValue(sdb as any);
+
+		const result = await generateVisitFromOccurrence("occ", ORG);
+
+		expect(result.err).toBe("");
+		expect(result.item).not.toHaveProperty("jobChange");
+		const [syncTx, org, jobId] = lifecycle.syncJobFromVisits.mock.calls[0] as unknown[];
+		expect([syncTx === tx, org, jobId]).toEqual([true, ORG, "job-1"]);
+		expect(lifecycle.runJobChangePostCommit).toHaveBeenCalledWith(
+			{ orgId: ORG, jobId: "job-1", change },
+			undefined,
+		);
+		expect(order).toEqual(["sync", "commit", "postCommit"]);
 	});
 
 	it("leaves the visit alone on a container job with no kept rate", async () => {

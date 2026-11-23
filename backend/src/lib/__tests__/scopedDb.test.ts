@@ -455,3 +455,25 @@ describe("getScopedDb — same-key relation collision (H2)", () => {
 		});
 	}
 });
+
+describe("getScopedDb — consent and public links", () => {
+	it("contact_consent and public_link are org-scoped: a read with another org's scoped client returns nothing", async () => {
+		for (const model of ["contact_consent", "public_link"]) {
+			const { query } = await runHook(ORG_B, "findMany", model, { where: { contact_id: "c1" } });
+			expect(query).toHaveBeenCalledWith({
+				where: { AND: [{ contact_id: "c1" }, { organization_id: ORG_B }] },
+			});
+		}
+	});
+});
+
+describe("getScopedDb — customer message outbox", () => {
+	it("customer_message and customer_notification_setting are org-scoped", async () => {
+		for (const model of ["customer_message", "customer_notification_setting"]) {
+			const { query } = await runHook(ORG_B, "findMany", model, { where: { event: "visit_reminder" } });
+			expect(query).toHaveBeenCalledWith({
+				where: { AND: [{ event: "visit_reminder" }, { organization_id: ORG_B }] },
+			});
+		}
+	});
+});

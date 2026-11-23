@@ -26,6 +26,7 @@ import {
 	linkContactToClient,
 	updateClientContact,
 	unlinkContactFromClient,
+	setContactConsent,
 } from "../controllers/contactsController.js";
 import {
 	getClientNotes,
@@ -405,6 +406,30 @@ router.post("/clients/:clientId/contacts/link", requirePermission("edit_clients"
         }
 
         res.status(201).json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Dispatcher consent change (the contact manager's SMS / email switches)
+router.put("/contacts/:contactId/consent", requirePermission("edit_clients"), async (req, res, next) => {
+    try {
+        const contactId = req.params.contactId as string;
+        const orgId = req.user!.organization_id as string;
+        const result = await setContactConsent(contactId, req.body, orgId, getUserContext(req));
+
+        if (result.code) {
+            const code =
+                result.code === 404
+                    ? ErrorCodes.NOT_FOUND
+                    : result.code === 409
+                      ? ErrorCodes.CONFLICT
+                      : ErrorCodes.VALIDATION_ERROR;
+            return res.status(result.code).json(createErrorResponse(result.errorCode ?? code, result.err));
+        }
+
+        const contact = await getContactById(contactId, orgId);
+        res.json(createSuccessResponse(contact));
     } catch (err) {
         next(err);
     }

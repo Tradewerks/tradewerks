@@ -23,15 +23,10 @@ export const createJobSchema = z
 		address: z.string().min(1, "Address is required").optional(),
 		coords: coordsSchema.optional(),
 		status: z
-			.enum([
-				"Unscheduled",
-				"Scheduled",
-				"InProgress",
-				"Completed",
-				"Cancelled",
-			])
-			.optional()
-			.default("Unscheduled"),
+			.literal("Unscheduled", {
+				error: "A new job starts Unscheduled; its status follows its visits.",
+			})
+			.optional(),
 		request_id: z.string().uuid().optional().nullable(),
 		quote_id: z.string().uuid().optional().nullable(),
 		recurring_plan_id: z.string().uuid().optional().nullable(),
@@ -99,15 +94,6 @@ export const updateJobSchema = z
 			.optional(),
 		address: z.string().optional(),
 		coords: coordsSchema.optional(),
-		status: z
-			.enum([
-				"Unscheduled",
-				"Scheduled",
-				"InProgress",
-				"Completed",
-				"Cancelled",
-			])
-			.optional(),
 		line_items: z
 			.array(
 				z.object({
@@ -144,9 +130,24 @@ export const updateJobSchema = z
 		discount_value: z.number().min(0).optional().nullable(),
 		discount_amount: z.number().min(0).optional(),
 		estimated_total: z.number().min(0).optional(),
-		actual_total: z.number().min(0).optional(),
-		cancellation_reason: z.string().optional(),
 		address_tax_choice: addressTaxChoiceSchema.optional(),
+		// Declared only so the refine below can see them; the object schema would
+		// otherwise strip them and a status write would pass as a no-op.
+		status: z.unknown().optional(),
+		actual_total: z.unknown().optional(),
+		cancellation_reason: z.unknown().optional(),
+	})
+	.superRefine((data, ctx) => {
+		if (
+			data.status !== undefined ||
+			data.actual_total !== undefined ||
+			data.cancellation_reason !== undefined
+		)
+			ctx.addIssue({
+				code: "custom",
+				message:
+					"Job status and actual total follow the job's visits. To cancel, POST /jobs/:id/cancel.",
+			});
 	})
 	.transform((data) => ({
 		...data,
@@ -162,8 +163,6 @@ export const updateJobSchema = z
 		discount_value: data.discount_value ?? undefined,
 		discount_amount: data.discount_amount ?? undefined,
 		estimated_total: data.estimated_total ?? undefined,
-		actual_total: data.actual_total ?? undefined,
-		cancellation_reason: data.cancellation_reason || undefined,
 	}));
 
 export const createJobLineItemSchema = z
@@ -236,6 +235,7 @@ export const createJobNoteSchema = z
 					photo_url:   notePhotoUrl,
 					photo_label: z.enum(["Before", "After", "Other"]),
 					photo_name:  z.string().trim().max(120).nullish(),
+					share_with_customer: z.boolean().optional(),
 				}),
 			)
 			.optional()
@@ -261,8 +261,13 @@ export const updateJobNoteSchema = z.object({
 			photo_url: notePhotoUrl,
 			photo_label: z.enum(["Before", "After", "Other"]),
 			photo_name: z.string().trim().max(120).nullish(),
+			// Omitted on a kept photo leaves its current setting alone.
+			share_with_customer: z.boolean().optional(),
 		}),
 	).optional(),
+});
+export const cancelJobSchema = z.object({
+	reason: z.string().trim().min(1, "Give a reason").max(500),
 });
 export type CreateJobInput = z.infer<typeof createJobSchema>;
 export type UpdateJobInput = z.infer<typeof updateJobSchema>;

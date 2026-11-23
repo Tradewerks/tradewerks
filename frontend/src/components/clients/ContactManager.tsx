@@ -11,6 +11,7 @@ import {
 	Phone,
 } from "lucide-react";
 import Card from "../ui/Card";
+import ToggleSwitch from "../ui/ToggleSwitch";
 import { HEADER_BTN_PRIMARY, HEADER_BTN_SECONDARY } from "../ui/headerActions";
 import type {
 	ClientContactLink,
@@ -27,6 +28,7 @@ import {
 	useUnlinkContactFromClientMutation,
 	useSearchContactsQuery,
 	useLinkContactMutation,
+	useSetContactConsentMutation,
 } from "../../hooks/useClients";
 import { usePermission } from "../../hooks/usePermission";
 
@@ -414,6 +416,109 @@ const ContactForm = memo(function ContactForm({
 	);
 });
 
+const UNSUBSCRIBE_SOURCE_LABEL: Record<string, string> = {
+	bounce: "bounce",
+	spam_complaint: "spam complaint",
+	unsubscribe_link: "unsubscribe link",
+	dispatcher: "set by staff",
+	provider: "email provider",
+	sms_keyword: "text reply",
+};
+
+const SMS_OPT_OUT_LABEL: Record<string, string> = {
+	sms_keyword: "Replied STOP",
+	unsubscribe_link: "Opted out",
+};
+
+function formatConsentDate(iso: string): string {
+	return new Date(iso).toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+	});
+}
+
+interface ContactConsentRowsProps {
+	link: ClientContactLink;
+	canEdit: boolean;
+	/** A consent or visit-updates save for this contact is in flight. */
+	pending: boolean;
+	error: string | null;
+	onToggleTexts: () => void;
+	onToggleVisits: () => void;
+	onResubscribe: () => void;
+}
+
+// Email status is read-only: it only changes through the unsubscribe link, a
+// bounce, or a deliberate re-subscribe, never a casual toggle.
+const ContactConsentRows = memo(function ContactConsentRows({
+	link,
+	canEdit,
+	pending,
+	error,
+	onToggleTexts,
+	onToggleVisits,
+	onResubscribe,
+}: ContactConsentRowsProps) {
+	const { consent } = link.contact;
+	const texts = consent.sms === "subscribed";
+	// Re-consent after a customer's own opt-out has to come from the customer.
+	const smsOptOut = consent.sms_source
+		? SMS_OPT_OUT_LABEL[consent.sms_source]
+		: undefined;
+	const source = consent.email_source
+		? UNSUBSCRIBE_SOURCE_LABEL[consent.email_source]
+		: undefined;
+	return (
+		<div className="mt-3 pt-3 border-t border-border-subtle space-y-2 text-xs">
+			{consent.email === "unsubscribed" && (
+				<div className="flex items-center gap-2 text-error-text">
+					<Mail size={12} className="flex-shrink-0" />
+					<span>{source ? `Unsubscribed (${source})` : "Unsubscribed"}</span>
+					{canEdit && consent.email_resubscribable && (
+						<button
+							type="button"
+							onClick={onResubscribe}
+							className="ml-auto text-primary-text hover:underline"
+						>
+							Re-subscribe
+						</button>
+					)}
+				</div>
+			)}
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-text-secondary min-w-0">
+					Agreed to texts
+					{smsOptOut && (
+						<span className="block text-text-faint">{smsOptOut}</span>
+					)}
+					{texts && consent.sms_changed_at && (
+						<span className="block text-text-faint">
+							since {formatConsentDate(consent.sms_changed_at)}
+						</span>
+					)}
+				</span>
+				<ToggleSwitch
+					checked={texts}
+					onChange={onToggleTexts}
+					disabled={!canEdit || !!smsOptOut || pending}
+					ariaLabel="Agreed to texts"
+				/>
+			</div>
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-text-secondary">Gets visit updates</span>
+				<ToggleSwitch
+					checked={link.notify_visits}
+					onChange={onToggleVisits}
+					disabled={!canEdit || pending}
+					ariaLabel="Gets visit updates"
+				/>
+			</div>
+			{error && <p className="mt-1 text-xs text-error-text">{error}</p>}
+		</div>
+	);
+});
+
 export default function ContactManager({ clientId }: ContactManagerProps) {
 	const [formMode, setFormMode] = useState<FormMode>(null);
 	const [editingContactId, setEditingContactId] = useState<string | null>(null);
@@ -436,8 +541,26 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 	const createContact = useCreateContactMutation();
 	const updateContact = useUpdateContactMutation();
 	const updateRelationship = useUpdateClientContactMutation();
+	const setConsent = useSetContactConsentMutation();
 	const unlinkContact = useUnlinkContactFromClientMutation();
 	const linkContact = useLinkContactMutation();
+
+	const isVisitsSave = (contactId: string) =>
+		updateRelationship.variables?.contactId === contactId &&
+		updateRelationship.variables.data.notify_visits !== undefined;
+	const consentPending = (contactId: string) =>
+		(setConsent.isPending && setConsent.variables?.contactId === contactId) ||
+		(updateRelationship.isPending && isVisitsSave(contactId));
+	const consentError = (contactId: string): string | null => {
+		const failed =
+			setConsent.isError && setConsent.variables?.contactId === contactId
+				? setConsent.error
+				: updateRelationship.isError && isVisitsSave(contactId)
+					? updateRelationship.error
+					: null;
+		if (!failed) return null;
+		return failed instanceof Error ? failed.message : "Failed to save";
+	};
 
 	// permissions
 	const EDIT_CONTACTS = usePermission("edit_clients");
@@ -975,6 +1098,44 @@ export default function ContactManager({ clientId }: ContactManagerProps) {
 												</div>
 											)}
 										</div>
+										<ContactConsentRows
+											link={contactLink}
+											canEdit={EDIT_CONTACTS}
+											pending={consentPending(contact.id)}
+											error={consentError(contact.id)}
+											onToggleTexts={() =>
+												setConsent.mutate({
+													clientId,
+													contactId: contact.id,
+													data: {
+														channel: "sms",
+														status:
+															contact.consent.sms === "subscribed"
+																? "unsubscribed"
+																: "subscribed",
+													},
+												})
+											}
+											onResubscribe={() =>
+												setConsent.mutate({
+													clientId,
+													contactId: contact.id,
+													data: {
+														channel: "email",
+														status: "subscribed",
+													},
+												})
+											}
+											onToggleVisits={() =>
+												updateRelationship.mutate({
+													clientId,
+													contactId: contact.id,
+													data: {
+														notify_visits: !contactLink.notify_visits,
+													},
+												})
+											}
+										/>
 									</div>
 
 									<div className="flex flex-col gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0">

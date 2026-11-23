@@ -7,6 +7,7 @@ import {
     sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
+import { REFUSAL_STATUS } from '../lib/refusalStatus.js';
 import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
 import { requireAssigned } from '../lib/requireAssigned.js';
 import { acknowledgeTaxReviewRoute } from './tax.js';
@@ -18,7 +19,9 @@ import {
     insertJob,
     updateJob,
     deleteJob,
+    cancelJob,
 } from "../controllers/jobsController.js";
+import { cancelJobSchema } from "../lib/validate/jobs.js";
 import {
     getJobNotes,
     getJobNotesByVisitId,
@@ -73,6 +76,11 @@ router.post("/", requirePermission("create_jobs"), async (req, res, next) => {
         const context = getUserContext(req);
         const result = await insertJob(req, context);
 
+        if (result.err && result.code) {
+            return res
+                .status(REFUSAL_STATUS[result.code])
+                .json(createErrorResponse(result.code, result.err));
+        }
         if (result.err) {
             return res
                 .status(400)
@@ -105,6 +113,31 @@ router.patch("/:id", requirePermission("edit_jobs"), async (req, res, next) => {
             return sendResultErr(res, result.err);
         }
 
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.post("/:id/cancel", requirePermission("edit_jobs"), async (req, res, next) => {
+    try {
+        const parsed = cancelJobSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+            return res.status(400).json(
+                createErrorResponse(
+                    ErrorCodes.VALIDATION_ERROR,
+                    parsed.error.issues.map((i) => i.message).join(", "),
+                ),
+            );
+        }
+        const orgId = req.user!.organization_id as string;
+        const id = req.params.id as string;
+        const result = await cancelJob(id, parsed.data.reason, orgId, getUserContext(req));
+        if (result.err) {
+            const status = result.code ? REFUSAL_STATUS[result.code] : 500;
+            const code = result.code ?? ErrorCodes.SERVER_ERROR;
+            return res.status(status).json(createErrorResponse(code, result.err));
+        }
         res.json(createSuccessResponse(result.item));
     } catch (err) {
         next(err);

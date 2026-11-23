@@ -21,11 +21,13 @@ const handlers = {
 	complete: noop,
 	delay: noop,
 	cancel: noop,
+	restore: noop,
 };
 
 const ctx = (over: Record<string, unknown> = {}) => ({
 	status: "Scheduled" as VisitStatus,
 	canUpdateStatus: true,
+	canRestore: true,
 	handlers,
 	...over,
 });
@@ -61,6 +63,7 @@ describe("visitActions", () => {
 			"delay",
 			"complete",
 			"cancel",
+			"restore",
 		]);
 
 		for (const status of VisitStatusValues) {
@@ -117,10 +120,38 @@ describe("visitActions", () => {
 	});
 
 	it("refuses everything without update_visit_status", () => {
-		for (const a of visitActions(ctx({ canUpdateStatus: false }))) {
+		const actions = visitActions(
+			ctx({ canUpdateStatus: false, canRestore: false, status: "Cancelled" })
+		);
+		for (const a of actions) {
 			expect(a.disabled).toBe(true);
 			expect(a.disabledReason).toMatch(/permission/i);
 		}
+	});
+});
+
+describe("restore", () => {
+	const restore = (over: Record<string, unknown>) =>
+		visitActions(ctx(over)).find((a) => a.id === "restore")!;
+
+	it("Restore is offered on a Cancelled visit only to dispatchers who can edit", () => {
+		expect(restore({ status: "Cancelled", canRestore: true }).disabled).toBe(false);
+		const denied = restore({ status: "Cancelled", canRestore: false });
+		expect(denied.disabled).toBe(true);
+		expect(denied.disabledReason).toMatch(/permission/i);
+	});
+
+	it("is neutral and hidden on every status but Cancelled", () => {
+		expect(restore({ status: "Cancelled" }).intent).toBe("neutral");
+		for (const status of VisitStatusValues) {
+			if (status === "Cancelled") continue;
+			expect(restore({ status }).hidden, status).toBe(true);
+		}
+	});
+
+	it("comes after Cancel Visit", () => {
+		const ids = visitActions(ctx()).map((a) => a.id);
+		expect(ids.indexOf("restore")).toBe(ids.indexOf("cancel") + 1);
 	});
 });
 

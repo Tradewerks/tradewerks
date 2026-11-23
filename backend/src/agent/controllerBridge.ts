@@ -109,7 +109,7 @@ export function unwrap<T>(outcome: ControllerOutcome<T>, what: string): T {
 	if (/validation failed|must be|is required|invalid/i.test(message)) {
 		throw new AgentToolError(AgentErrorCodes.VALIDATION_ERROR, message);
 	}
-	if (/transition|already|conflict|overlap/i.test(message)) {
+	if (/transition|already|conflict|overlap|clocked in/i.test(message)) {
 		throw new AgentToolError(AgentErrorCodes.CONFLICT, message);
 	}
 	throw new AgentToolError(AgentErrorCodes.SERVER_ERROR, message);

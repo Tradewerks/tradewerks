@@ -1,3 +1,5 @@
+import type { LifecycleRefusalCode } from "../services/visitLifecycle/applyStatusChange.js";
+
 /**
  * Centralized status transition rules.
  *
@@ -38,6 +40,16 @@ const REQUEST_TRANSITIONS: Record<string, readonly string[]> = {
 	ConvertedToJob: [],
 	Cancelled:      [],
 };
+
+// Conversion writes the request status directly, outside REQUEST_TRANSITIONS.
+// Direct conversion is refused while a quote is out (Quoted) or rejected.
+// QuoteApproved stays convertible, so the quote path claims the request with
+// the same guarded write: whichever conversion lands first wins the request.
+export const REQUEST_DIRECT_CONVERTIBLE = ["New", "Reviewing", "QuoteApproved"] as const;
+
+// Statuses a new quote may move to Quoted. Quoted/QuoteApproved are already
+// further along and must not be walked back by a second quote.
+export const REQUEST_QUOTABLE_INTO = ["New", "Reviewing", "QuoteRejected"] as const;
 
 const INVOICE_TRANSITIONS: Record<string, readonly string[]> = {
 	// Two delivery doors, not two steps: Issued is "final, I deliver it
@@ -91,7 +103,12 @@ export class InvalidTransitionError extends Error {
  */
 export class DocumentRuleError extends Error {
 	status = 422;
-	constructor(message: string) {
+	// Set only where a route should answer with a refusal status instead of a
+	// 400; a bare DocumentRuleError stays an input-validation message.
+	constructor(
+		message: string,
+		public code?: LifecycleRefusalCode,
+	) {
 		super(message);
 		this.name = "DocumentRuleError";
 	}

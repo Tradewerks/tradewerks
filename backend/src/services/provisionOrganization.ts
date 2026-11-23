@@ -3,6 +3,7 @@ import { db } from "../db.js";
 import { ErrorCodes, httpError } from "../types/responses.js";
 import { getAllPermissions } from "../lib/permissionCatalogs.js";
 import { getBusinessType } from "../lib/entitlements/businessTypes.js";
+import { NEW_ORG_EMAIL_DEFAULTS } from "./customerComms/events.js";
 
 export type Tx = Parameters<Parameters<typeof db.$transaction>[0]>[0];
 
@@ -113,6 +114,25 @@ export async function provisionOrganization(tx: Tx, input: ProvisionInput) {
 			}),
 		},
 	});
+
+	// An org that enables customer_comms later starts all-off; its Admin tab is where
+	// events get switched on. Grants don't exist yet at provisioning, so plan + choice decide.
+	const effectivePlanId = input.trial?.planVersionId ?? input.planVersionId;
+	const plan = await tx.plan_version.findUnique({
+		where: { id: effectivePlanId },
+		select: { modules: true },
+	});
+	if (plan?.modules.includes("customer_comms") && type.moduleDefaults.customer_comms === true) {
+		await tx.customer_notification_setting.createMany({
+			data: NEW_ORG_EMAIL_DEFAULTS.map((d) => ({
+				organization_id: org.id,
+				event: d.event,
+				email_enabled: true,
+				sms_enabled: false,
+				config: d.config as Prisma.InputJsonValue,
+			})),
+		});
+	}
 
 	// default organization roles — full access derived from catalog
 	await tx.organization_role.createMany({

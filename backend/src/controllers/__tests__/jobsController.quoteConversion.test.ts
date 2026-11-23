@@ -7,7 +7,7 @@ const { mockDb } = vi.hoisted(() => {
 	const mockDb = {
 		client: { findUnique: vi.fn(), update: vi.fn() },
 		quote: { findUnique: vi.fn(), update: vi.fn() },
-		request: { findUnique: vi.fn(), update: vi.fn() },
+		request: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
 		document_dispute: { findFirst: vi.fn() },
 		job: { create: vi.fn(), findUnique: vi.fn() },
 		job_line_item: { createMany: vi.fn() },
@@ -43,9 +43,10 @@ vi.mock("../../services/socketService.js", () => ({
 	getSocket: vi.fn(() => ({ emit: vi.fn() })),
 }));
 
-const { taxMode, recomputeJobTotals } = vi.hoisted(() => ({
+const { taxMode, recomputeJobTotals, lockDocumentTaxSnapshot } = vi.hoisted(() => ({
 	taxMode: vi.fn(async () => "manual"),
 	recomputeJobTotals: vi.fn(async () => ({ ok: true })),
+	lockDocumentTaxSnapshot: vi.fn(async () => undefined),
 }));
 vi.mock("../../services/tax/taxMode.js", () => ({
 	getEffectiveTaxMode: taxMode,
@@ -53,6 +54,7 @@ vi.mock("../../services/tax/taxMode.js", () => ({
 }));
 vi.mock("../../lib/recomputeDocumentTotals.js", () => ({
 	recomputeJobTotals,
+	lockDocumentTaxSnapshot,
 	holdsKeptRate: vi.fn(async () => false),
 }));
 
@@ -65,10 +67,10 @@ const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 const CLIENT = "3f1c2a8e-9b4d-4c6a-8e2f-1a2b3c4d5e6f";
 const QUOTE = "7a9e4b21-5c3d-4f8a-9b1e-2c4d6e8f0a1b";
 
-const convert = () =>
+const convert = (body: Record<string, unknown> = {}) =>
 	insertJob(
 		{
-			body: { client_id: CLIENT, quote_id: QUOTE },
+			body: { client_id: CLIENT, quote_id: QUOTE, ...body },
 			user: { organization_id: "org1" },
 		} as unknown as Request,
 		{ dispatcherId: "d1" },
@@ -76,6 +78,10 @@ const convert = () =>
 
 const aQuote = (overrides: Record<string, unknown> = {}) => ({
 	id: QUOTE,
+	client_id: CLIENT,
+	issued_at: new Date("2026-01-01T00:00:00Z"),
+	approved_at: null,
+	approved_via: null,
 	status: "Sent",
 	title: "Replace condenser",
 	description: "Swap the failed unit",
@@ -116,6 +122,7 @@ describe("converting a quote to a job", () => {
 			client_id: CLIENT,
 		});
 		mockFn(db.job.findUnique).mockResolvedValue({ id: "j1" });
+		mockFn(db.request.updateMany).mockResolvedValue({ count: 1 });
 	});
 
 	it("refuses a quote under an open dispute and leaves it untouched", async () => {
@@ -185,8 +192,128 @@ describe("converting a quote to a job", () => {
 		expect(result.err).toBe("");
 		expect(db.quote.update).toHaveBeenCalledWith({
 			where: { id: QUOTE },
-			data: { status: "Approved" },
+			data: expect.objectContaining({ status: "Approved" }),
 		});
+	});
+
+	it("refuses with WRONG_STATE when the request already has a job", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(aQuote());
+		mockFn(db.request.updateMany).mockResolvedValue({ count: 0 });
+
+		const result = await convert();
+
+		expect(result.err).toBe("This request already has a job.");
+		expect(result.code).toBe("WRONG_STATE");
+		expect(mockFn(db.request.updateMany).mock.calls[0][0]).toMatchObject({
+			where: { id: "r1", status: { notIn: ["ConvertedToJob", "Cancelled"] } },
+		});
+		expect(db.job.create).not.toHaveBeenCalled();
+	});
+
+	it("refuses with WRONG_STATE when the quote's request was cancelled", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(aQuote());
+		mockFn(db.request.updateMany).mockResolvedValue({ count: 0 });
+		mockFn(db.request.findUnique).mockResolvedValue({ status: "Cancelled" });
+
+		const result = await convert();
+
+		expect(result).toMatchObject({
+			err: "This request was cancelled.",
+			code: "WRONG_STATE",
+		});
+		expect(db.job.create).not.toHaveBeenCalled();
+	});
+
+	it("refuses a body request_id that isn't the quote's request, before writing anything", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(aQuote());
+
+		const result = await convert({ request_id: "9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f" });
+
+		expect(result.err).toBe("This request isn't the quote's request.");
+		expect("code" in result ? result.code : undefined).toBeUndefined();
+		expect(db.quote.update).not.toHaveBeenCalled();
+		expect(db.request.updateMany).not.toHaveBeenCalled();
+		expect(db.job.create).not.toHaveBeenCalled();
+	});
+
+	it("writes the quote's request_id on the job, whatever the body omits", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(aQuote());
+
+		const result = await convert();
+
+		expect(result.err).toBe("");
+		expect(mockFn(db.job.create).mock.calls[0][0].data.request_id).toBe("r1");
+	});
+
+	// Database errors carry internals; they go to the 500 handler, not the caller.
+	it("rethrows a database error instead of returning its message", async () => {
+		const dbErr = Object.assign(new Error("connection reset by peer at 10.0.0.5"), { name: "PrismaClientUnknownRequestError" });
+		mockFn(db.quote.findUnique).mockRejectedValue(dbErr);
+
+		await expect(convert()).rejects.toBe(dbErr);
+	});
+
+	it("maps a lost quote_id unique race to CONFLICT", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(aQuote());
+		const { Prisma } = await import("../../../generated/prisma/client.js");
+		mockFn(db.job.create).mockRejectedValue(
+			new Prisma.PrismaClientKnownRequestError("dup", {
+				code: "P2002",
+				clientVersion: "x",
+				meta: { target: ["quote_id"] },
+			}),
+		);
+
+		const result = await convert();
+
+		expect(result.err).toBe("This quote was already converted to a job.");
+		expect(result.code).toBe("CONFLICT");
+	});
+
+	it("quote conversion with another client's id is refused", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(aQuote({ client_id: "someone-else" }));
+
+		const result = await convert();
+
+		expect(result.err).toMatch(/different client/);
+		expect(db.quote.update).not.toHaveBeenCalled();
+		expect(db.job.create).not.toHaveBeenCalled();
+	});
+
+	it("converting a Draft quote sets issued_at, approved_at and locks the tax snapshot", async () => {
+		mockFn(db.quote.findUnique).mockResolvedValue(
+			aQuote({ status: "Draft", issued_at: null }),
+		);
+
+		const result = await convert();
+
+		expect(result.err).toBe("");
+		const data = mockFn(db.quote.update).mock.calls[0][0].data;
+		expect(data).toMatchObject({ status: "Approved", approved_via: "staff" });
+		expect(data.issued_at).toBeInstanceOf(Date);
+		expect(data.approved_at).toBeInstanceOf(Date);
+		expect(lockDocumentTaxSnapshot).toHaveBeenCalledWith(
+			"quote",
+			QUOTE,
+			"org1",
+			mockDb,
+			data.issued_at,
+		);
+	});
+
+	it("keeps an existing approval stamp and does not relock an issued quote", async () => {
+		const approvedAt = new Date("2026-02-01T00:00:00Z");
+		mockFn(db.quote.findUnique).mockResolvedValue(
+			aQuote({ status: "Approved", approved_at: approvedAt, approved_via: "client" }),
+		);
+
+		await convert();
+
+		const data = mockFn(db.quote.update).mock.calls[0][0].data;
+		expect(data).not.toHaveProperty("approved_at");
+		expect(data).not.toHaveProperty("approved_via");
+		expect(data).not.toHaveProperty("issued_at");
+		expect(lockDocumentTaxSnapshot).not.toHaveBeenCalled();
 	});
 
 	it("carries each quote line's taxable flag and tax group onto the job", async () => {

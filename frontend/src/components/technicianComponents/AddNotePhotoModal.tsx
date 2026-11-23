@@ -111,6 +111,7 @@ export default function AddNotePhotoModal({
 				<div className="px-4 pb-3 space-y-2">
 					<NotePhotoPicker
 						jobId={selectedVisit?.job_id ?? ""}
+						shareable
 						photos={photos}
 						onPhotosChange={setPhotos}
 						disabled={isSaving || !selectedVisit}

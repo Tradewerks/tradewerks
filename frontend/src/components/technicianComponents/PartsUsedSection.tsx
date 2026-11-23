@@ -12,7 +12,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useVehicleStockQuery, useAddPartsUsedMutation, useUpdatePartsUsedQtyMutation } from "../../hooks/useVehicleStock";
-import { useUpdateJobVisitMutation } from "../../hooks/useJobs";
+import { useUpdateFieldLineQuantityMutation } from "../../hooks/useJobs";
 import { useToast } from "../ui/useToast";
 
 import { useTechnicianByIdQuery } from "../../hooks/useTechnicians";
@@ -480,7 +480,7 @@ export default function PartsUsedSection({
 	const { data: techProfile } = useTechnicianByIdQuery(user?.userId ?? null);
 	const vehicleId = techProfile?.current_vehicle_id ?? null;
 	const { data: stockItems = [] } = useVehicleStockQuery(vehicleId);
-	const updateVisit = useUpdateJobVisitMutation();
+	const updateFieldLine = useUpdateFieldLineQuantityMutation();
 	const updatePartsQty = useUpdatePartsUsedQtyMutation();
 	const toast = useToast();
 
@@ -504,40 +504,11 @@ export default function PartsUsedSection({
 			return;
 		}
 
-		const updatedItems =
-			newQty <= 0
-				? lineItems.filter((li) => li.id !== item.id)
-				: lineItems.map((li) =>
-						li.id === item.id
-							? {
-									...li,
-									quantity: newQty,
-									total: parseFloat(
-										(newQty * Number(li.unit_price)).toFixed(2)
-									),
-								}
-							: li
-					);
+		if (!item.id) return;
 		try {
-			await updateVisit.mutateAsync({
-				id: visitId,
-				data: {
-					// Lines arrive in sort_order; omitting it would reset every line to 0.
-					line_items: updatedItems.map((li, idx) => ({
-						id: li.id,
-						sort_order: idx,
-						name: li.name,
-						description: li.description ?? null,
-						quantity: Number(li.quantity),
-						unit_price: Number(li.unit_price),
-						total: parseFloat(
-							(Number(li.quantity) * Number(li.unit_price)).toFixed(2)
-						),
-						item_type: li.item_type ?? null,
-						source: li.source,
-					})),
-				},
-			});
+			// Quantity only: the server prices from the stored row, so a technician
+			// never sends (or can change) a unit price.
+			await updateFieldLine.mutateAsync({ visitId, lineItemId: item.id, quantity: newQty });
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : t("partsUsed.updateFailed"));
 		}
@@ -658,7 +629,7 @@ export default function PartsUsedSection({
 									<EditPartsTab
 										lineItems={lineItems}
 										onUpdateQty={handleQtyChange}
-										isPending={updateVisit.isPending || updatePartsQty.isPending}
+										isPending={updateFieldLine.isPending || updatePartsQty.isPending}
 										highlightedPartId={highlightedPartId}
 									/>
 								</div>

@@ -9,12 +9,12 @@
 // Available variables (the send-time template model):
 //   {{brand.name}} {{brand.logo_url}} {{brand.color}}
 //   {{brand.address}} {{brand.phone}} {{brand.website}}
-//   {{client_name}}
+//   {{client_name}} {{unsubscribe_url}} (empty when the send has no contact)
 // Sections like {{#brand.logo_url}}…{{/brand.logo_url}} conditionally render a
 // block only when the value is present.
 // ============================================================================
 
-import type { email_template_category } from "../../generated/prisma/client.js";
+import type { EmailTemplateCategoryValue } from "../lib/validate/emailTemplates.js";
 
 export interface DefaultTemplate {
 	name: string;
@@ -68,7 +68,7 @@ ${body}
 </td>
 </tr>
 </table>
-<p style="margin:16px 0 0; color:#9ca3af; font-size:11px;">You received this email from {{brand.name}}.</p>
+<p style="margin:16px 0 0; color:#9ca3af; font-size:11px;">You received this email from {{brand.name}}.{{#unsubscribe_url}} <a href="{{unsubscribe_url}}" style="color:#9ca3af; text-decoration:underline;">Unsubscribe</a>{{/unsubscribe_url}}</p>
 </td>
 </tr>
 </table>
@@ -96,40 +96,43 @@ The {{brand.name}} team
 
 {{brand.name}}{{#brand.address}} · {{brand.address}}{{/brand.address}}{{#brand.phone}}
 {{brand.phone}}{{/brand.phone}}{{#brand.website}}
-{{brand.website}}{{/brand.website}}`;
+{{brand.website}}{{/brand.website}}{{#unsubscribe_url}}
+
+Unsubscribe: {{unsubscribe_url}}{{/unsubscribe_url}}`;
 }
 
-export const DEFAULT_TEMPLATES: Record<email_template_category, DefaultTemplate> = {
+// Followup categories only; the lifecycle categories are customer messages.
+export const DEFAULT_TEMPLATES: Record<EmailTemplateCategoryValue, DefaultTemplate> = {
 	followup: {
 		name: "General follow-up",
 		subject: "Following up, {{client_name}}",
 		html: layout(
 			"Just checking in — we'd love to hear from you.",
 			`${greeting}
-${p("We wanted to follow up and make sure everything is on track. If there's anything at all we can help you with, just reply to this email — we're happy to help.")}
+${p("We wanted to follow up and make sure everything is on track. If there's anything at all we can help you with,{{#brand.reply_to}} just reply to this email{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}} just call us at {{brand.phone}}{{/brand.phone}}{{^brand.phone}} just let us know{{/brand.phone}}{{/brand.reply_to}} — we're happy to help.")}
 ${p("If now isn't the right time, no problem at all. We'll be here whenever you're ready.")}
 ${signoff}`,
 		),
 		text: textLayout(
-			`We wanted to follow up and make sure everything is on track. If there's anything at all we can help you with, just reply to this email — we're happy to help.
+			`We wanted to follow up and make sure everything is on track. If there's anything at all we can help you with,{{#brand.reply_to}} just reply to this email{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}} just call us at {{brand.phone}}{{/brand.phone}}{{^brand.phone}} just let us know{{/brand.phone}}{{/brand.reply_to}} — we're happy to help.
 
 If now isn't the right time, no problem at all. We'll be here whenever you're ready.`,
 		),
 	},
 	reminder: {
 		name: "Appointment reminder",
-		subject: "Reminder from {{brand.name}}",
+		subject: "{{#visit.date}}Reminder: your visit on {{visit.date}}{{/visit.date}}{{^visit.date}}Reminder from {{brand.name}}{{/visit.date}}",
 		html: layout(
 			"A friendly reminder about your upcoming appointment.",
 			`${greeting}
-${p("This is a friendly reminder about your upcoming appointment with our team. We're looking forward to seeing you.")}
-${p("If you need to reschedule or have any questions before then,{{#brand.phone}} give us a call at {{brand.phone}} or{{/brand.phone}} simply reply to this email.")}
+${p("This is a friendly reminder about your upcoming appointment{{#visit.date}} on {{visit.date}}, arriving {{visit.window}}{{#visit.address}} at {{visit.address}}{{/visit.address}}.{{#visit.tech_names}} {{visit.tech_names}} will be taking care of you.{{/visit.tech_names}}{{/visit.date}}{{^visit.date}} with our team.{{/visit.date}} We're looking forward to seeing you.")}
+${p("If you need to reschedule or have any questions before then, {{#brand.reply_to}}simply reply to this email.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}give us a call at {{brand.phone}}.{{/brand.phone}}{{^brand.phone}}please contact us.{{/brand.phone}}{{/brand.reply_to}}")}
 ${signoff}`,
 		),
 		text: textLayout(
-			`This is a friendly reminder about your upcoming appointment with our team. We're looking forward to seeing you.
+			`This is a friendly reminder about your upcoming appointment{{#visit.date}} on {{visit.date}}, arriving {{visit.window}}{{#visit.address}} at {{visit.address}}{{/visit.address}}.{{#visit.tech_names}} {{visit.tech_names}} will be taking care of you.{{/visit.tech_names}}{{/visit.date}}{{^visit.date}} with our team.{{/visit.date}} We're looking forward to seeing you.
 
-If you need to reschedule or have any questions before then,{{#brand.phone}} give us a call at {{brand.phone}} or{{/brand.phone}} simply reply to this email.`,
+If you need to reschedule or have any questions before then, {{#brand.reply_to}}simply reply to this email.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}give us a call at {{brand.phone}}.{{/brand.phone}}{{^brand.phone}}please contact us.{{/brand.phone}}{{/brand.reply_to}}`,
 		),
 	},
 	quote_chase: {
@@ -139,13 +142,13 @@ If you need to reschedule or have any questions before then,{{#brand.phone}} giv
 			"Your quote is ready whenever you are.",
 			`${greeting}
 ${p("We recently sent over a quote and wanted to check in to see if you had any questions. We'd be glad to walk you through the details or make any adjustments.")}
-${p("Whenever you're ready to move forward, just reply to this email{{#brand.phone}} or call us at {{brand.phone}}{{/brand.phone}} and we'll take care of the rest.")}
+${p("Whenever you're ready to move forward, {{#brand.reply_to}}just reply to this email and we'll take care of the rest.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}just call us at {{brand.phone}} and we'll take care of the rest.{{/brand.phone}}{{^brand.phone}}just let us know and we'll take care of the rest.{{/brand.phone}}{{/brand.reply_to}}")}
 ${signoff}`,
 		),
 		text: textLayout(
 			`We recently sent over a quote and wanted to check in to see if you had any questions. We'd be glad to walk you through the details or make any adjustments.
 
-Whenever you're ready to move forward, just reply to this email{{#brand.phone}} or call us at {{brand.phone}}{{/brand.phone}} and we'll take care of the rest.`,
+Whenever you're ready to move forward, {{#brand.reply_to}}just reply to this email and we'll take care of the rest.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}just call us at {{brand.phone}} and we'll take care of the rest.{{/brand.phone}}{{^brand.phone}}just let us know and we'll take care of the rest.{{/brand.phone}}{{/brand.reply_to}}`,
 		),
 	},
 	invoice_chase: {
@@ -155,13 +158,13 @@ Whenever you're ready to move forward, just reply to this email{{#brand.phone}} 
 			"A gentle reminder about your outstanding invoice.",
 			`${greeting}
 ${p("This is a gentle reminder that you have an invoice with an outstanding balance. When you have a moment, we'd appreciate you settling it at your convenience.")}
-${p("If you've already sent payment, please disregard this message. If you have any questions about the invoice,{{#brand.phone}} reach us at {{brand.phone}} or{{/brand.phone}} reply to this email and we'll be happy to help.")}
+${p("If you've already sent payment, please disregard this message. If you have any questions about the invoice, {{#brand.reply_to}}reply to this email and we'll be happy to help.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}reach us at {{brand.phone}} and we'll be happy to help.{{/brand.phone}}{{^brand.phone}}contact us and we'll be happy to help.{{/brand.phone}}{{/brand.reply_to}}")}
 ${signoff}`,
 		),
 		text: textLayout(
 			`This is a gentle reminder that you have an invoice with an outstanding balance. When you have a moment, we'd appreciate you settling it at your convenience.
 
-If you've already sent payment, please disregard this message. If you have any questions about the invoice,{{#brand.phone}} reach us at {{brand.phone}} or{{/brand.phone}} reply to this email and we'll be happy to help.`,
+If you've already sent payment, please disregard this message. If you have any questions about the invoice, {{#brand.reply_to}}reply to this email and we'll be happy to help.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}reach us at {{brand.phone}} and we'll be happy to help.{{/brand.phone}}{{^brand.phone}}contact us and we'll be happy to help.{{/brand.phone}}{{/brand.reply_to}}`,
 		),
 	},
 	request_ack: {
@@ -171,13 +174,13 @@ If you've already sent payment, please disregard this message. If you have any q
 			"Thanks for reaching out — we've got your request.",
 			`${greeting}
 ${p("Thank you for reaching out! This is a quick note to let you know we've received your request and our team is reviewing it now.")}
-${p("We'll be in touch shortly with next steps. In the meantime, if anything changes or you'd like to add details,{{#brand.phone}} call us at {{brand.phone}} or{{/brand.phone}} just reply to this email.")}
+${p("We'll be in touch shortly with next steps. In the meantime, if anything changes or you'd like to add details, {{#brand.reply_to}}just reply to this email.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}call us at {{brand.phone}}.{{/brand.phone}}{{^brand.phone}}contact us.{{/brand.phone}}{{/brand.reply_to}}")}
 ${signoff}`,
 		),
 		text: textLayout(
 			`Thank you for reaching out! This is a quick note to let you know we've received your request and our team is reviewing it now.
 
-We'll be in touch shortly with next steps. In the meantime, if anything changes or you'd like to add details,{{#brand.phone}} call us at {{brand.phone}} or{{/brand.phone}} just reply to this email.`,
+We'll be in touch shortly with next steps. In the meantime, if anything changes or you'd like to add details, {{#brand.reply_to}}just reply to this email.{{/brand.reply_to}}{{^brand.reply_to}}{{#brand.phone}}call us at {{brand.phone}}.{{/brand.phone}}{{^brand.phone}}contact us.{{/brand.phone}}{{/brand.reply_to}}`,
 		),
 	},
 	custom: {

@@ -11,6 +11,7 @@ import PreferencesCard from "../components/profile/PreferencesCard";
 import PermissionsCard from "../components/profile/PermissionsCard";
 import MFACard from "../components/mfa/MFACard"
 import UserActivityCard from "../components/profile/UserActivityCard";
+import TechnicianPhotoField from "../components/technicians/TechnicianPhotoField";
 import NotificationPreferenceCard from "../components/profile/NotificationPreferenceCard";
 import DeleteAccountCard from "../components/profile/DeleteAccountCard";
 
@@ -130,7 +131,13 @@ export default function MyProfilePage() {
 			</div>
 
 			{activeTab === "profile" && (
-				<div role="tabpanel" id="tabpanel-profile" aria-labelledby="tab-profile">
+				<div role="tabpanel" id="tabpanel-profile" aria-labelledby="tab-profile" className="space-y-6">
+					{isTech && user?.userId && (
+						<div className="rounded-lg border border-border-subtle bg-base px-5 py-5">
+							<p className="mb-3 text-xs font-medium text-text-tertiary">Photo</p>
+							<TechnicianPhotoField technicianId={user.userId} />
+						</div>
+					)}
 					<ProfileDetailsForm
 						initial={{
 							phone: record.phone ?? "",

@@ -231,6 +231,9 @@ export const updateJobVisitSchema = z
 		line_items: z.array(visitLineItemInputSchema).optional(),
 
 		reschedule_scope: z.enum(["this", "future"]).optional(),
+
+		// Optional so agent/MCP callers keep last-write-wins; the web app always sends it.
+		expected_updated_at: z.string().datetime().optional(),
 	})
 	.refine(
 		(data) => {
@@ -347,5 +350,22 @@ export const updateJobVisitSchema = z
 		},
 	);
 
+const techIdList = z.array(z.string().uuid("Invalid technician ID")).max(20).default([]);
+
+// No default: a missing list must not read as "remove everyone".
+export const putVisitTechniciansSchema = z.object({
+	tech_ids: z
+		.array(z.string().uuid("Invalid technician ID"), { error: "tech_ids must be an array" })
+		.max(20, "A visit can have at most 20 technicians"),
+});
+
+export const patchVisitTechniciansSchema = z
+	.object({ add: techIdList, remove: techIdList })
+	.refine((d) => !d.add.some((id) => d.remove.includes(id)), {
+		message: "A technician can't be both added and removed",
+		path: ["remove"],
+	});
+
+export type PatchVisitTechniciansInput = z.infer<typeof patchVisitTechniciansSchema>;
 export type CreateJobVisitInput = z.infer<typeof createJobVisitSchema>;
 export type UpdateJobVisitInput = z.infer<typeof updateJobVisitSchema>;

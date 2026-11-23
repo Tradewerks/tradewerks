@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import {
 	useMutation,
 	useQuery,
@@ -21,6 +22,7 @@ import type {
 } from "../types/jobs";
 import * as jobApi from "../api/jobs";
 import type { MyJobOption } from "../api/jobs";
+import { qk } from "../lib/queryKeys";
 
 // ============================================
 // JOB QUERIES
@@ -110,6 +112,26 @@ export const useUpdateJobMutation = (): UseMutationResult<
 			// Address edits re-tax the open visits server-side.
 			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 			await queryClient.invalidateQueries({ queryKey: ["clients"] });
+			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+		},
+	});
+};
+
+export const useCancelJobMutation = (): UseMutationResult<
+	Job,
+	Error,
+	{ jobId: string; reason: string }
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ jobId, reason }) => jobApi.cancelJob(jobId, reason),
+		onSuccess: async (job, variables) => {
+			queryClient.setQueryData(["jobs", variables.jobId], job);
+			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 			await queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
@@ -249,6 +271,32 @@ export const useCreateJobVisitMutation = (): UseMutationResult<
 	});
 };
 
+const refreshAfterVisitWrite = async (
+	queryClient: ReturnType<typeof useQueryClient>,
+	updatedVisit: JobVisit
+) => {
+	// Set fresh data first to avoid stale-cache race on line_items
+	queryClient.setQueryData(qk.visits.detail(updatedVisit.id), updatedVisit);
+
+	await queryClient.invalidateQueries({ queryKey: qk.visits.all });
+	await queryClient.invalidateQueries({
+		queryKey: [...qk.jobs.detail(updatedVisit.job_id), "visits"],
+	});
+	await queryClient.invalidateQueries({
+		queryKey: qk.jobs.detail(updatedVisit.job_id),
+	});
+	await queryClient.invalidateQueries({ queryKey: qk.jobs.all });
+	if (updatedVisit.visit_techs && updatedVisit.visit_techs.length > 0) {
+		for (const vt of updatedVisit.visit_techs) {
+			await queryClient.invalidateQueries({
+				queryKey: ["jobVisits", "tech", vt.tech_id],
+			});
+		}
+	}
+	await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+	await queryClient.invalidateQueries({ queryKey: ["changes"] });
+};
+
 export const useUpdateJobVisitMutation = (): UseMutationResult<
 	JobVisit,
 	Error,
@@ -258,28 +306,40 @@ export const useUpdateJobVisitMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: ({ id, data }) => jobApi.updateJobVisit(id, data),
-		onSuccess: async (updatedVisit) => {
-			// Set fresh data first to avoid stale-cache race on line_items
-			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
+		onSuccess: (updatedVisit) => refreshAfterVisitWrite(queryClient, updatedVisit),
+	});
+};
 
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({
-				queryKey: ["jobs", updatedVisit.job_id, "visits"],
-			});
-			await queryClient.invalidateQueries({
-				queryKey: ["jobs", updatedVisit.job_id],
-			});
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			if (updatedVisit.visit_techs && updatedVisit.visit_techs.length > 0) {
-				for (const vt of updatedVisit.visit_techs) {
-					await queryClient.invalidateQueries({
-						queryKey: ["jobVisits", "tech", vt.tech_id],
-					});
-				}
-			}
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+/**
+ * After a 409 on a visit save: refetch so the stale copy the user edited is replaced.
+ * qk.visits.all covers the visit detail and the board's date-range queries,
+ * which live under it until the board moves to qk.board.
+ */
+export const useReloadConflictedVisit = () => {
+	const queryClient = useQueryClient();
+	return useCallback(
+		async () => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: qk.visits.all }),
+				queryClient.invalidateQueries({ queryKey: qk.board.all }),
+				queryClient.invalidateQueries({ queryKey: qk.jobs.all }),
+			]);
 		},
+		[queryClient],
+	);
+};
+
+export const useUpdateFieldLineQuantityMutation = (): UseMutationResult<
+	JobVisit,
+	Error,
+	{ visitId: string; lineItemId: string; quantity: number }
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ visitId, lineItemId, quantity }) =>
+			jobApi.updateFieldLineQuantity(visitId, lineItemId, quantity),
+		onSuccess: (updatedVisit) => refreshAfterVisitWrite(queryClient, updatedVisit),
 	});
 };
 
@@ -306,6 +366,23 @@ export const useAssignTechniciansToVisitMutation = (): UseMutationResult<
 			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
 			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+		},
+	});
+};
+
+export const usePatchVisitTechniciansMutation = (): UseMutationResult<
+	JobVisit,
+	Error,
+	{ visitId: string; add?: string[]; remove?: string[] }
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ visitId, add, remove }) =>
+			jobApi.patchVisitTechnicians(visitId, { add, remove }),
+		onSuccess: async (updatedVisit) => {
+			await refreshAfterVisitWrite(queryClient, updatedVisit);
+			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
 		},
 	});
 };

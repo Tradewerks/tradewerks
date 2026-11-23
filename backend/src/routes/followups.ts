@@ -208,6 +208,16 @@ router.put("/templates/:category", requirePermission("manage_followups"), async 
 				.status(400)
 				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, parsed.error.issues[0].message));
 		}
+		if (parsed.data.sms_body != null) {
+			return res
+				.status(400)
+				.json(
+					createErrorResponse(
+						ErrorCodes.VALIDATION_ERROR,
+						"Follow-up templates have no text-message body",
+					),
+				);
+		}
 		const orgId = req.user!.organization_id as string;
 		const dispatcherId = req.user!.uid ?? null;
 		const item = await templatesController.upsertTemplate(orgId, category, parsed.data, dispatcherId);

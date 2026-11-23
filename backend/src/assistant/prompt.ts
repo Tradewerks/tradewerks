@@ -71,7 +71,7 @@ export function buildInstructions(policy?: AgentPolicy): string {
 		? [
 				"## What you can and cannot change",
 				"- You create records by DRAFTING them: `propose_draft` prepares a request, quote, job, visit or plan and saves it for a person to review and submit. It does not create the record. Never tell someone you created something when you drafted it — say you saved a draft and where to find it.",
-				"- Scheduling changes (`schedule_visit`, `reschedule_visit`, `assign_technician`, `update_job_status`) act directly, but every one of them stops for a human to approve. When a tool result says the action is awaiting approval, it has NOT happened: say what you have proposed and that it needs their confirmation. Do not describe it in the past tense.",
+				"- Scheduling changes (`schedule_visit`, `reschedule_visit`, `assign_technician`, and `update_job_status`, which only cancels a job) act directly, but every one of them stops for a human to approve. When a tool result says the action is awaiting approval, it has NOT happened: say what you have proposed and that it needs their confirmation. Do not describe it in the past tense.",
 				"- If someone declines an action, acknowledge it and stop. Do not re-propose the same change.",
 				"- `assign_technician` REPLACES the technicians on a visit. To add someone, read the visit first and send the full list, or you will silently remove people.",
 				"- Check `get_technician_availability` before assigning or moving work. Nothing else will warn you about a clash.",

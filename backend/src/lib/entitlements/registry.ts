@@ -195,6 +195,16 @@ export const MODULES: ModuleDef[] = [
 			"Sequences pause. Messages missed while off are not sent later.",
 	},
 	{
+		key: "customer_comms",
+		label: "Customer messages",
+		kind: "optional",
+		requires: [],
+		description:
+			"Automatic visit confirmations, reminders and notices to customers.",
+		permissions: { view_customer_comms: r, manage_customer_comms: w },
+		disableWarning: "Queued customer messages are skipped while off.",
+	},
+	{
 		key: "disputes",
 		label: "Disputes",
 		kind: "optional",
@@ -254,6 +264,16 @@ export const MODULES: ModuleDef[] = [
 		description: "Single sign-on and enforced two-step login.",
 		permissions: {},
 		disableWarning: "SSO login stops; users sign in with their password.",
+	},
+	{
+		key: "sms",
+		label: "Text messaging",
+		kind: "plan_gated",
+		requires: ["customer_comms"],
+		description:
+			"Send customer messages by text from the org's own number.",
+		permissions: {},
+		disableWarning: "Queued text messages are skipped while off.",
 	},
 ];
 
@@ -317,6 +337,7 @@ export const LIMIT_KEYS = [
 	"tax_lookups_month",
 	"ai_calls_month",
 	"receipt_scans_month",
+	"sms_segments_month",
 ] as const;
 export type LimitKey = (typeof LIMIT_KEYS)[number];
 
@@ -324,5 +345,6 @@ export const METER_KEYS = [
 	"ai_calls_month",
 	"tax_lookups_month",
 	"receipt_scans_month",
+	"sms_segments_month",
 ] as const satisfies readonly LimitKey[];
 export type MeterKey = (typeof METER_KEYS)[number];

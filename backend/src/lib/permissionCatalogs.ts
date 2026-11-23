@@ -20,6 +20,7 @@ const DISPATCHER_CATALOG = [
 	{ category: "Administration", permissions: ["view_admin", "manage_roles", "manage_organization", "manage_taxes"] },
 	{ category: "Vehicles", permissions: ["view_vehicles", "manage_vehicles"] },
 	{ category: "Followups", permissions: ["view_followups", "manage_followups"] },
+	{ category: "Customer messages", permissions: ["view_customer_comms", "manage_customer_comms"] },
 	{ category: "Projects", permissions: ["view_projects", "create_projects", "edit_projects", "delete_projects"] },
 	// Reviewing is separate from granting authority: the dispatcher who approves a
 	// reimbursement should not also be the one who sets its ceiling.

@@ -44,6 +44,8 @@ vi.mock("../../lib/upload.js", () => ({
 vi.mock("../../services/wasabiService.js", () => ({
 	uploadFile: vi.fn(),
 	signImageUrl: vi.fn(),
+	isOwnBucketUrl: vi.fn(() => true),
+	deleteFiles: vi.fn(),
 }));
 
 import jobsRouter from "../jobs.js";

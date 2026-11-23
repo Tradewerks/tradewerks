@@ -23,7 +23,7 @@ vi.mock("../../services/lowStockAlerts.js", () => ({
 	fireLowStockAlerts: vi.fn(),
 	sendLowStockAlert: vi.fn(),
 }));
-vi.mock("../../services/emailService.js", () => ({ sendEmail: vi.fn() }));
+vi.mock("../../services/emailService.js", () => ({ sendEmail: vi.fn().mockResolvedValue(true) }));
 vi.mock("../../services/socketService.js", () => ({ emitInventoryUpdated: vi.fn(), emitToOrg: vi.fn() }));
 
 vi.mock("../../lib/upload.js", () => ({

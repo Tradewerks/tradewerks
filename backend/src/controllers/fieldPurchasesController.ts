@@ -2585,7 +2585,8 @@ async function unbillLines(tx: Prisma.TransactionClient, orgId: string, purchase
 		where: { id: { in: billed.map((b) => b.id) } },
 		data: { visit_line_item_id: null },
 	});
-	for (const visitId of visitIds) await recomputeVisitTotals(visitId, orgId, tx);
+	// Sorted so concurrent txs lock visit and job rows in the same order.
+	for (const visitId of [...visitIds].sort()) await recomputeVisitTotals(visitId, orgId, tx);
 }
 
 /**
@@ -2703,7 +2704,7 @@ async function syncBilledLines(
 		});
 	}
 
-	for (const visitId of touched) await recomputeVisitTotals(visitId, orgId, tx);
+	for (const visitId of [...touched].sort()) await recomputeVisitTotals(visitId, orgId, tx);
 	return { billed, unbillable: billed < wanted.length };
 }
 

@@ -102,7 +102,22 @@ function makeLineItem(overrides: Record<string, unknown> = {}) {
  * Build a scoped-db mock whose $transaction executes the callback inline.
  * All inner tx methods are vi.fn() stubs that can be asserted on.
  */
-function makeSdb(stockItem: unknown = makeStockItem()) {
+const OTHER_TECH_ID = "99999999-9999-4999-8999-999999999999";
+
+function makeVisit(overrides: Record<string, unknown> = {}) {
+	return {
+		id: VISIT_ID,
+		status: "InProgress",
+		_count: { invoice_visits: 0 },
+		visit_techs: [{ tech_id: TECH_ID }],
+		...overrides,
+	};
+}
+
+function makeSdb(
+	stockItem: unknown = makeStockItem(),
+	opts: { visit?: unknown; technician?: unknown } = {},
+) {
 	const tx = {
 		job_visit_line_item: {
 			create: vi.fn().mockResolvedValue(makeLineItem()),
@@ -114,13 +129,10 @@ function makeSdb(stockItem: unknown = makeStockItem()) {
 
 	const sdb = {
 		vehicle_stock_item: { findFirst: vi.fn().mockResolvedValue(stockItem) },
-		job_visit: {
-			findFirst: vi.fn().mockResolvedValue({
-				status: "InProgress",
-				_count: { invoice_visits: 0 },
-			}),
+		job_visit: { findFirst: vi.fn().mockResolvedValue(opts.visit ?? makeVisit()) },
+		technician: {
+			findFirst: vi.fn().mockResolvedValue("technician" in opts ? opts.technician : { id: TECH_ID }),
 		},
-		technician: { findFirst: vi.fn().mockResolvedValue({ id: TECH_ID }) },
 		$transaction: vi.fn().mockImplementation(
 			async (fn: (tx: typeof tx) => unknown) => fn(tx),
 		),
@@ -322,37 +334,88 @@ describe("addPartsUsed", () => {
 		expect(mockRecordMovements).toHaveBeenCalledTimes(1);
 	});
 
-	// ── Frozen visits and attribution ──────────────────────────────────────────
+	// ── Who may write parts ─────────────────────────────────────────────────
 
-	it.each([
-		[{ status: "Completed", _count: { invoice_visits: 0 } }, /Completed visit/],
-		[{ status: "Cancelled", _count: { invoice_visits: 0 } }, /Cancelled visit/],
-		[{ status: "InProgress", _count: { invoice_visits: 1 } }, /invoiced/],
-	])("refuses a frozen visit %o without touching stock", async (visit, msg) => {
-		const sdb = makeSdb();
-		sdb.job_visit.findFirst.mockResolvedValue(visit);
+	it("a technician not assigned to the visit is FORBIDDEN, with no transaction", async () => {
+		const sdb = makeSdb(makeStockItem(), { visit: makeVisit({ visit_techs: [{ tech_id: OTHER_TECH_ID }] }) });
 
-		const result = await addPartsUsed(
-			VISIT_ID,
-			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: TECH_ID },
-			ORG_ID,
-		);
+		const result = await addPartsUsed(VISIT_ID, { stock_item_id: STOCK_ITEM_ID, qty_used: 1 }, ORG_ID, {
+			techId: TECH_ID,
+		});
 
-		expect(result.err).toMatch(msg);
+		expect(result).toMatchObject({ code: "FORBIDDEN" });
 		expect(sdb.$transaction).not.toHaveBeenCalled();
 	});
 
-	it("refuses a technician_id outside the org", async () => {
+	it("a technician naming another technician is FORBIDDEN", async () => {
 		const sdb = makeSdb();
-		sdb.technician.findFirst.mockResolvedValue(null);
+
+		const result = await addPartsUsed(
+			VISIT_ID,
+			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: OTHER_TECH_ID },
+			ORG_ID,
+			{ techId: TECH_ID },
+		);
+
+		expect(result).toMatchObject({ code: "FORBIDDEN" });
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("a technician is always the credited tech, without naming themself", async () => {
+		const sdb = makeSdb();
+
+		const result = await addPartsUsed(VISIT_ID, { stock_item_id: STOCK_ITEM_ID, qty_used: 1 }, ORG_ID, {
+			techId: TECH_ID,
+		});
+
+		expect(result.err).toBe("");
+		expect(sdb._tx.vehicle_stock_usage.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({ technician_id: TECH_ID }),
+		});
+		expect(mockRecordMovements.mock.calls[0][2]).toEqual({ actor_type: "technician", actor_id: TECH_ID });
+	});
+
+	it("a dispatcher naming a technician outside the org is NOT_FOUND", async () => {
+		const sdb = makeSdb(makeStockItem(), { technician: null });
+
+		const result = await addPartsUsed(
+			VISIT_ID,
+			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: OTHER_TECH_ID },
+			ORG_ID,
+			{ dispatcherId: "disp-1" },
+		);
+
+		expect(result).toMatchObject({ code: "NOT_FOUND", err: "Technician not found" });
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("a dispatcher must name the technician", async () => {
+		const sdb = makeSdb();
+
+		const result = await addPartsUsed(VISIT_ID, { stock_item_id: STOCK_ITEM_ID, qty_used: 1 }, ORG_ID, {
+			dispatcherId: "disp-1",
+		});
+
+		expect(result.err).toBe("technician_id is required");
+		expect("code" in result ? result.code : undefined).toBeUndefined();
+		expect(sdb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["a Completed visit", { status: "Completed" }],
+		["a Cancelled visit", { status: "Cancelled" }],
+		["an invoiced visit", { _count: { invoice_visits: 1 } }],
+	])("refuses %s with WRONG_STATE", async (_label, over) => {
+		const sdb = makeSdb(makeStockItem(), { visit: makeVisit(over) });
 
 		const result = await addPartsUsed(
 			VISIT_ID,
 			{ stock_item_id: STOCK_ITEM_ID, qty_used: 1, technician_id: TECH_ID },
 			ORG_ID,
+			{ dispatcherId: "disp-1" },
 		);
 
-		expect(result.err).toBe("Technician not found");
+		expect(result).toMatchObject({ code: "WRONG_STATE" });
 		expect(sdb.$transaction).not.toHaveBeenCalled();
 	});
 

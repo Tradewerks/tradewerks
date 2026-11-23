@@ -14,9 +14,11 @@ import * as invoicesController from '../controllers/invoicesController.js';
 import { createInvoiceRecord } from '../services/invoiceService.js';
 import { generateInvoicePdf } from '../lib/pdf/pdfService.js';
 import { sendInvoiceEmail } from '../services/emailService.js';
+import { recordDocumentSend } from '../services/documentSendTracking.js';
 import { isSendFailure } from '../services/emailErrors.js';
 import { onInvoiceSent } from '../services/followupTriggers.js';
 import { buildVisitInvoicePayload, buildRecurringPlanInvoicePayload } from '../services/invoiceGenerator.js';
+import { recipientEmailSchema } from '../lib/validate/shared.js';
 import { overlapCheckSchema, generateInvoiceSchema, createRefundSchema } from '../lib/validate/invoices.js';
 import { advanceNextInvoiceAt, calculateNextInvoiceAt, type ScheduleFrequency } from '../lib/invoiceSchedule.js';
 import { Prisma } from '../../generated/prisma/client.js';
@@ -98,13 +100,14 @@ router.get("/:id/pdf", requirePermission("view_invoices"), async (req, res, next
 router.post("/:id/send", requirePermission("send_invoices"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
-        const recipientEmail: string | undefined = req.body?.recipient_email;
-        if (!recipientEmail) {
+        const parsedEmail = recipientEmailSchema.safeParse(req.body?.recipient_email);
+        if (!parsedEmail.success) {
             return res
                 .status(400)
-                .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, "recipient_email is required"));
+                .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, "recipient_email must be a valid email address"));
         }
 
+        const recipientEmail = parsedEmail.data;
         const orgId = req.user!.organization_id as string;
 
         // Guard BEFORE the email, exactly as POST /quotes/:id/send does. The
@@ -154,7 +157,15 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
         }
 
         try {
-            await sendInvoiceEmail(id, recipientEmail, orgId);
+            const sent = await sendInvoiceEmail(id, recipientEmail, orgId);
+            await recordDocumentSend({
+                orgId,
+                event: 'invoice_sent',
+                entityId: id,
+                clientId: existing.client_id,
+                recipient: recipientEmail,
+                messageId: sent?.messageId ?? null,
+            });
         } catch (e: unknown) {
             // A missing document is not a delivery failure. Let the outer
             // handler answer it as a 404 rather than restating it as an email

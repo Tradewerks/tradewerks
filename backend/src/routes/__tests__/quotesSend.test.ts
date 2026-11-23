@@ -72,6 +72,8 @@ const mockGetQuoteById = vi.mocked(getQuoteById);
 const mockUpdateQuote = vi.mocked(updateQuote);
 const mockSendQuoteEmail = vi.mocked(sendQuoteEmail);
 import { logActivity } from "../../services/logger.js";
+import { getScopedDb } from "../../lib/context.js";
+const mockGetScopedDb = vi.mocked(getScopedDb);
 const mockLogActivity = vi.mocked(logActivity);
 
 beforeEach(() => {
@@ -315,5 +317,61 @@ describe("POST /quotes/:id/send auto-mode draft", () => {
 		expect(res.status).toBe(200);
 		expect(order).toEqual(["Issued", "email", "Sent"]);
 		expect(mockUpdateQuote.mock.calls[0]).toHaveLength(3);
+	});
+});
+
+describe("POST /quotes/:id/send recipient validation", () => {
+	it('returns 400 VALIDATION_ERROR for "not-an-email" and does not call the sender', async () => {
+		const res = await send({ recipient_email: "not-an-email" });
+
+		expect(res.status).toBe(400);
+		expect(res.body.error.code).toBe("VALIDATION_ERROR");
+		expect(mockSendQuoteEmail).not.toHaveBeenCalled();
+	});
+});
+
+describe("POST /quotes/:id/send tracking row", () => {
+	const create = vi.fn().mockResolvedValue({});
+	beforeEach(() => {
+		create.mockClear();
+		mockGetScopedDb.mockReturnValue({
+			contact: { findFirst: vi.fn().mockResolvedValue({ id: "ct1" }) },
+			customer_message: { create },
+		} as never);
+		mockGetQuoteById.mockResolvedValue({ id: "q1", status: "Issued", client_id: "cl1" } as never);
+		mockUpdateQuote.mockResolvedValue({ err: "", item: { id: "q1" } } as never);
+	});
+
+	it("sending a quote writes a customer_message row with the Postmark message id", async () => {
+		mockSendQuoteEmail.mockResolvedValueOnce({ messageId: "pm-9" });
+
+		const res = await send();
+
+		expect(res.body.success).toBe(true);
+		expect(create).toHaveBeenCalledWith({
+			data: expect.objectContaining({
+				organization_id: "org-1",
+				direction: "out",
+				event: "quote_sent",
+				channel: "email",
+				status: "sent",
+				recipient: "client@example.com",
+				entity_type: "quote",
+				entity_id: "q1",
+				client_id: "cl1",
+				contact_id: "ct1",
+				provider_message_id: "pm-9",
+				dedupe_key: "quote_sent:q1:pm-9",
+			}),
+		});
+	});
+
+	it("still answers success when the tracking row cannot be written", async () => {
+		mockSendQuoteEmail.mockResolvedValueOnce({ messageId: "pm-9" });
+		create.mockRejectedValueOnce(new Error("db down"));
+
+		const res = await send();
+
+		expect(res.body.success).toBe(true);
 	});
 });

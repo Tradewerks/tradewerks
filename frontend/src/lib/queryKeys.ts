@@ -18,7 +18,34 @@ interface InventoryListOpts {
 	lowStock?: boolean;
 }
 
+// Detail stays `[root, id]` rather than `[root, "detail", id]`: that is the
+// shape the existing record hooks already read and write.
+const recordKeys = <R extends string>(root: R) => ({
+	all: [root] as const,
+	list: (opts?: Record<string, unknown>) =>
+		opts ? ([root, "list", opts] as const) : ([root, "list"] as const),
+	detail: (id: string) => [root, id] as const,
+});
+
 export const qk = {
+	jobs: recordKeys("jobs"),
+	visits: {
+		all: ["jobVisits"] as const,
+		detail: (id: string) => ["jobVisits", id] as const,
+		assigned: (range?: { from?: string; to?: string }) =>
+			range
+				? (["jobVisits", "assigned", range] as const)
+				: (["jobVisits", "assigned"] as const),
+	},
+	board: {
+		all: ["board"] as const,
+		range: (from: string, to: string) => ["board", from, to] as const,
+	},
+	clients: recordKeys("clients"),
+	requests: recordKeys("requests"),
+	quotes: recordKeys("quotes"),
+	invoices: recordKeys("invoices"),
+	recurringPlans: recordKeys("recurringPlans"),
 	inventory: {
 		all: inventoryRoot,
 		list: (opts?: InventoryListOpts) =>

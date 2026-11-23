@@ -34,12 +34,15 @@ vi.mock("../../../hooks/useJobs", () => ({
 	useUpdateJobVisitMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useAssignTechniciansToVisitMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useJobByIdQuery: () => ({ data: job }),
+	useReloadConflictedVisit: () => vi.fn(),
 }));
 vi.mock("../../../hooks/useTechnicians", () => ({ useActiveTechniciansQuery: () => ({ data: [] }) }));
 vi.mock("../../../hooks/useVehicles", () => ({ useVehiclesQuery: () => ({ data: [] }) }));
 vi.mock("../../../hooks/useInventory", () => ({ useAllInventoryQuery: () => ({ data: [] }) }));
 vi.mock("../../../hooks/useAutoTaxMode", () => ({ useAutoTaxMode: () => false }));
 vi.mock("../../../hooks/useTaxGroups", () => ({ useTaxGroups: () => ({ data: [] }) }));
+const commsOn = vi.hoisted(() => ({ value: true }));
+vi.mock("../../../hooks/useEntitlements", () => ({ useModuleOn: () => commsOn.value }));
 vi.mock("../../ui/DatePicker", () => ({ default: () => null }));
 vi.mock("../../ui/forms/TimeConstraints", () => ({ default: () => null }));
 vi.mock("../../ui/forms/LineItemsSection", () => ({
@@ -94,5 +97,33 @@ describe("EditJobVisit kept rate inherited through the job's quote", () => {
 		);
 		await toLineItems();
 		expect(screen.getByText("no kept option")).toBeTruthy();
+	});
+});
+
+describe("EditJobVisit description hint", () => {
+	const renderForm = () => {
+		job = { id: "job-1", tax_snapshot: null, quote: null } as Job;
+		return render(
+			<EditJobVisit
+				isModalOpen
+				setIsModalOpen={vi.fn()}
+				visit={visit}
+				jobId="job-1"
+				clientExempt={false}
+			/>
+		);
+	};
+
+	it("tells the dispatcher customers see the description when customer messages are on", () => {
+		commsOn.value = true;
+		renderForm();
+		expect(screen.getByText("Customers see this in their visit summary.")).toBeTruthy();
+	});
+
+	it("shows no hint when customer messages are off", () => {
+		commsOn.value = false;
+		renderForm();
+		expect(screen.queryByText("Customers see this in their visit summary.")).toBeNull();
+		commsOn.value = true;
 	});
 });

@@ -19,3 +19,22 @@ export const registerOrganizationSchema = z.object({
 });
 
 export type RegisterOrganizationInput = z.infer<typeof registerOrganizationSchema>;
+
+const isHttps = (value: string) => {
+	try {
+		return new URL(value).protocol === "https:";
+	} catch {
+		return false;
+	}
+};
+
+/** The org's public review page; blank clears it. */
+export const reviewUrlSchema = z.preprocess(
+	(v) => (typeof v === "string" && v.trim() === "" ? null : v),
+	z
+		.string()
+		.trim()
+		.max(500, "The review link is too long")
+		.refine(isHttps, "The review link must be a full https:// address")
+		.nullable(),
+);

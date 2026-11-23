@@ -40,6 +40,8 @@ export function isVisitNonTerminalOffRamp(status: string): boolean {
 export interface VisitActionContext {
 	status: VisitStatus;
 	canUpdateStatus: boolean;
+	/** Dispatcher with edit_jobs; restoring undoes a cancellation, which technicians can't. */
+	canRestore: boolean;
 	handlers: Record<VisitVerb | "cancel", () => void>;
 }
 
@@ -61,12 +63,23 @@ function verbReason(ctx: VisitActionContext, verb: VisitVerb): ActionGate {
 	);
 }
 
+/** State before permission: a visit that was never cancelled shouldn't show a greyed Restore. */
+function restoreReason(ctx: VisitActionContext): ActionGate {
+	if (!canApplyVisitVerb("restore", ctx.status)) {
+		return notApplicable(
+			`Only available while the visit is ${fromPhrase("restore")} — this one is ${phrase(ctx.status)}.`
+		);
+	}
+	return ctx.canRestore ? null : NO_PERMISSION;
+}
+
 /**
  * The visit's offered actions, in a fixed order.
  *
  * Order follows the path (drive, arrive, start), then the interruptions
- * (pause, resume, delay), then the two exits. Every action is present in every
- * status; ones the current status rules out arrive hidden.
+ * (pause, resume, delay), then the two exits, then Restore (undoes Cancel).
+ * Every action is present in every status; ones the current status rules out
+ * arrive hidden.
  */
 export function visitActions(ctx: VisitActionContext): LifecycleAction[] {
 	const verb = (
@@ -92,5 +105,6 @@ export function visitActions(ctx: VisitActionContext): LifecycleAction[] {
 		verb("delay", "Mark Delayed", "warning"),
 		verb("complete", "Complete Visit", "primary"),
 		build("cancel", "Cancel Visit", "destructive", cancelReason, ctx.handlers.cancel),
+		build("restore", "Restore", "neutral", restoreReason(ctx), ctx.handlers.restore),
 	];
 }

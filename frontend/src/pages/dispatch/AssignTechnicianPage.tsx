@@ -4,7 +4,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Plus, Mail, Phone, Award, Panel
 import { useTechnicianByIdQuery } from "../../hooks/useTechnicians";
 import {
 	useAllJobsQuery,
-	useAssignTechniciansToVisitMutation,
+	usePatchVisitTechniciansMutation,
 	useCreateJobVisitMutation,
 } from "../../hooks/useJobs";
 import CreateJobVisit from "../../components/jobs/CreateJobVisit";
@@ -111,7 +111,7 @@ export default function AssignTechnicianPage() {
 
 	const { data: technician, isLoading: loadingTech } = useTechnicianByIdQuery(technicianId!);
 	const { data: jobs, isLoading: loadingJobs, refetch: refetchJobs } = useAllJobsQuery();
-	const assignTechnicians = useAssignTechniciansToVisitMutation();
+	const assignTechnicians = usePatchVisitTechniciansMutation();
 	const { mutateAsync: createJobVisitMutation } = useCreateJobVisitMutation();
 
 	const [isCreatingVisit, setIsCreatingVisit] = useState(false);
@@ -135,29 +135,18 @@ export default function AssignTechnicianPage() {
 
 		try {
 			if (isAlreadyAssigned) {
-				const otherTechs =
-					visit.visit_techs
-						?.filter((vt) => vt.tech_id !== technicianId)
-						.map((vt) => vt.tech_id) || [];
-
 				await assignTechnicians.mutateAsync({
 					visitId: visit.id,
-					techIds: otherTechs,
+					remove: [technicianId!],
 				});
 				toast.success(`${technician?.name ?? "Technician"} has been unassigned from ${visitName(visit)}`);
 			} else {
-				const currentTechs =
-					visit.visit_techs?.map((vt) => vt.tech_id) || [];
-				const newTechs = [...currentTechs, technicianId!];
-
 				await assignTechnicians.mutateAsync({
 					visitId: visit.id,
-					techIds: newTechs,
+					add: [technicianId!],
 				});
 				toast.success(`${technician?.name ?? "Technician"} has been assigned to ${visitName(visit)}`)
 			}
-
-			await refetchJobs();
 		} catch (error) {
 			toast.error(errorMessage(error, "Failed to update assignment"));
 		}

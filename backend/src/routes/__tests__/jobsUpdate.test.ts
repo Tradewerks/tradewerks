@@ -29,7 +29,11 @@ vi.mock("../../controllers/logsController.js", () => ({
 vi.mock("../../lib/upload.js", () => ({
 	imageUpload: { single: () => (_req: unknown, _res: unknown, next: () => void) => next() },
 }));
-vi.mock("../../services/wasabiService.js", () => ({ uploadFile: vi.fn(), signImageUrl: vi.fn() }));
+vi.mock("../../services/wasabiService.js", () => ({
+	uploadFile: vi.fn(),
+	signImageUrl: vi.fn(),
+	isOwnBucketUrl: vi.fn(() => true),
+}));
 
 import jobsRouter from "../jobs.js";
 import { updateJob } from "../../controllers/jobsController.js";

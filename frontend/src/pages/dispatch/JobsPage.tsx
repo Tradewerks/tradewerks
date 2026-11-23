@@ -719,7 +719,7 @@ export default function JobsPage() {
 					}}
 					columnVisibility={viewMode === "templates" ? undefined : { property: false }}
 					// One line per job: a wrapped title plus the address line was ~105px a row.
-					columnClamp={viewMode === "jobs" ? { jobNumber: { maxWidth: "20rem" } } : undefined}
+					columnClamp={viewMode === "jobs" ? { jobNumber: { maxWidth: "20rem", fill: true } } : undefined}
 					cellRenderers={{
 						jobNumber: (row) => {
 							const r = row as JobRow;

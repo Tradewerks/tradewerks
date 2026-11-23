@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockDb, taxMode, orgCtx, loadRateSet, resolveAddressTax, recomputeJobTotals } = vi.hoisted(
+const {
+	mockDb,
+	taxMode,
+	orgCtx,
+	loadRateSet,
+	resolveAddressTax,
+	recomputeJobTotals,
+	notifyJobCompleted,
+	notifyJobCancelled,
+} = vi.hoisted(
 	() => {
 		const $extends = vi.fn();
 		const mockDb: Record<string, any> = {
@@ -15,6 +24,8 @@ const { mockDb, taxMode, orgCtx, loadRateSet, resolveAddressTax, recomputeJobTot
 			loadRateSet: vi.fn(),
 			resolveAddressTax: vi.fn(),
 			recomputeJobTotals: vi.fn(),
+			notifyJobCompleted: vi.fn(async () => undefined),
+			notifyJobCancelled: vi.fn(async () => undefined),
 		};
 	},
 );
@@ -37,6 +48,10 @@ vi.mock("../../services/appLogger.js", () => ({
 vi.mock("../../services/socketService.js", () => ({
 	getSocket: vi.fn(() => ({ emit: vi.fn() })),
 	emitToOrg: vi.fn(),
+}));
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyJobCompleted,
+	notifyJobCancelled,
 }));
 vi.mock("../../services/entitlementService.js", () => ({ isModuleOn: vi.fn() }));
 vi.mock("../../services/disputeService.js", () => ({ hasOpenDispute: vi.fn(async () => false) }));
@@ -130,6 +145,8 @@ const QUOTE_LINE = {
 function seed(quoteSnapshot: unknown, job: Row | null = null) {
 	const quote: Row = {
 		id: QUOTE,
+		client_id: CLIENT,
+		issued_at: new Date("2026-01-01T00:00:00Z"),
 		status: "Sent",
 		title: "Furnace replacement",
 		description: "Replace furnace",
@@ -303,5 +320,41 @@ describe("updateJob — kept address rate in manual mode", () => {
 
 		expect(recomputeJobTotals).not.toHaveBeenCalled();
 		expect(state.job!.tax_amount).toBe(34.65);
+	});
+});
+
+describe("job status is not writable through /jobs", () => {
+	const patch = (body: Record<string, unknown>) =>
+		updateJob({ params: { id: "j1" }, body } as unknown as Request, "org1", {
+			dispatcherId: "d1",
+		});
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		orgCtx.mockResolvedValue(MANUAL_ORG);
+	});
+
+	it("PATCH /jobs/:id with status is 400", async () => {
+		const result = await patch({ status: "Completed" });
+		expect(result.err).toContain("POST /jobs/:id/cancel");
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("PATCH /jobs/:id with actual_total is 400", async () => {
+		const result = await patch({ actual_total: 10 });
+		expect(result.err).toContain("POST /jobs/:id/cancel");
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
+	});
+
+	it("POST /jobs with status Completed is 400", async () => {
+		const result = await insertJob(
+			{
+				body: { client_id: CLIENT, name: "n", description: "d", status: "Completed" },
+				user: { organization_id: "org1" },
+			} as unknown as Request,
+			{ dispatcherId: "d1" },
+		);
+		expect(result.err).toContain("starts Unscheduled");
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
 	});
 });

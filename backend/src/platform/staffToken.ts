@@ -42,6 +42,13 @@ export function platformProxyWarning(
 	return "PLATFORM_ALLOWED_IPS is set but TRUST_PROXY is not: behind a load balancer every request carries the balancer's IP, so the allow-list and the sign-in rate limit see one address.";
 }
 
+export function publicLinkProxyWarning(
+	env: Record<string, string | undefined>,
+): string | null {
+	if (env.NODE_ENV !== "production" || env.TRUST_PROXY?.trim()) return null;
+	return "TRUST_PROXY is not set: behind a load balancer every request carries the balancer's IP, so the public link rate limits and the IPs recorded on customer approvals see one address.";
+}
+
 function secret(): string {
 	const s = platformSecret();
 	if (!s)

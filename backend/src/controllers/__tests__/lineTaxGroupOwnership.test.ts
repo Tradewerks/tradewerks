@@ -96,7 +96,7 @@ describe("insertQuote — tax group ownership", () => {
 		mockDb.client.findFirst.mockResolvedValue({ id: CLIENT });
 		mockDb.quote.create.mockResolvedValue({ id: "q1" });
 		mockDb.inventory_item.findMany.mockResolvedValue([]);
-		mockDb.tax_group.count.mockResolvedValue(0);
+		mockDb.tax_group.findMany.mockResolvedValue([]);
 	});
 
 	it("rejects a line whose tax_group_id belongs to another organization", async () => {
@@ -114,8 +114,9 @@ describe("insertQuote — tax group ownership", () => {
 		);
 
 		expect(result.err).toBe("Tax group not found");
-		expect(mockDb.tax_group.count).toHaveBeenCalledWith({
+		expect(mockDb.tax_group.findMany).toHaveBeenCalledWith({
 			where: { id: { in: [FOREIGN_GROUP] }, organization_id: ORG },
+			select: { id: true },
 		});
 		expect(mockDb.quote_line_item.createMany).not.toHaveBeenCalled();
 	});

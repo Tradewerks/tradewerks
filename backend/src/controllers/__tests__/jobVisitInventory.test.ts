@@ -6,11 +6,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { updateJobVisit } from "../jobVisitsController.js";
 import { db } from "../../db.js";
-import { deductInventoryForVisit } from "../inventoryController.js";
+import { applyStatusChange } from "../../services/visitLifecycle/applyStatusChange.js";
 import { recordMovements } from "../../services/stockMovements.js";
 import type { Request } from "express";
 
 // Module gating is not under test here: every module reads as on.
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyVisitScheduled: vi.fn(async () => undefined),
+	notifyVisitRescheduled: vi.fn(async () => undefined),
+	notifyVisitCancelled: vi.fn(async () => undefined),
+	retimeVisitReminders: vi.fn(async () => undefined),
+	notifyJobCompleted: vi.fn(async () => undefined),
+	notifyVisitCompleted: vi.fn(async () => undefined),
+	notifyTechOnTheWay: vi.fn(async () => undefined),
+}));
 vi.mock("../../services/entitlementService.js", () => ({
 	isModuleOn: vi.fn(async () => true),
 	getEntitlements: vi.fn(),
@@ -43,13 +52,43 @@ vi.mock("../inventoryController.js", () => ({
 	deductInventoryForVisit: vi.fn().mockResolvedValue({ lowStockItemIds: [] }),
 }));
 
+// Notices after commit are covered by postCommit.test.ts.
+vi.mock("../../services/visitLifecycle/postCommit.js", () => ({
+	runPostCommit: vi.fn(),
+}));
+
+// Completion (and its stock deduction) belongs to the lifecycle service; its
+// pg tests cover the deduct-once guarantee. Here: the PUT hands it over.
+vi.mock("../../services/visitLifecycle/applyStatusChange.js", () => ({
+	LifecycleRefusal: class extends Error {},
+	syncJobFromVisits: vi.fn(),
+	applyStatusChange: vi.fn(async (_tx: unknown, args: { orgId: string; visitId: string; action: string }) => ({
+		orgId: args.orgId,
+		visitId: args.visitId,
+		jobId: "job-1",
+		action: args.action,
+		from: "Scheduled",
+		to: "Completed",
+		at: new Date(),
+		jobChange: null,
+		lowStockItemIds: [],
+		autoInvoicePlanId: null,
+		wrappingUpTechIds: [],
+		activatedTechIds: [],
+		cancelledTechIds: [],
+		suppressCustomerNotice: false,
+		cancellationReason: null,
+	})),
+}));
+
 vi.mock("../../services/lowStockAlerts.js", () => ({
 	fireLowStockAlerts: vi.fn().mockResolvedValue(undefined),
 	sendLowStockAlert: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockDb = vi.mocked(db);
-const mockDeduct = vi.mocked(deductInventoryForVisit);
+const mockApply = vi.mocked(applyStatusChange);
+const dispatcher = { dispatcherId: "d-1" };
 
 function makeRequest(visitId: string, body: object): Request {
 	return { params: { id: visitId }, body } as unknown as Request;
@@ -91,6 +130,7 @@ function setupTransaction(allVisits: { id: string; status: string }[]) {
 		notes: [],
 	};
 	const mockTx = {
+		$queryRaw: vi.fn().mockResolvedValue([]),
 		job_visit: {
 			update: vi.fn().mockResolvedValue(updatedVisit),
 			findMany: vi.fn().mockResolvedValue(allVisits),
@@ -111,64 +151,51 @@ function setupTransaction(allVisits: { id: string; status: string }[]) {
 	return mockTx;
 }
 
-describe("updateJobVisit — inventory consumption", () => {
+describe("updateJobVisit — completion goes through the lifecycle service", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("consumes inventory exactly once when a visit is marked Completed", async () => {
+	it("hands exactly one completion of this visit to the service when it is marked Completed", async () => {
 		mockDb.job_visit.findFirst.mockResolvedValue(
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			makeExistingVisit("Scheduled", "InProgress") as any,
 		);
 		setupTransaction([{ id: "visit-1", status: "Completed" }]);
 
-		await updateJobVisit(makeRequest("visit-1", { status: "Completed" }));
+		await updateJobVisit(makeRequest("visit-1", { status: "Completed" }), "org-1", dispatcher);
 
-		expect(mockDeduct).toHaveBeenCalledOnce();
-		expect(mockDeduct).toHaveBeenCalledWith("visit-1", expect.anything(), undefined, undefined);
+		expect(mockApply).toHaveBeenCalledOnce();
+		expect(mockApply).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ visitId: "visit-1", action: "record_complete" }),
+		);
 	});
 
-	it("does not consume if the visit was already Completed before this update", async () => {
+	it("does not complete again if the visit was already Completed before this update", async () => {
 		mockDb.job_visit.findFirst.mockResolvedValue(
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			makeExistingVisit("Completed", "InProgress") as any,
 		);
 		setupTransaction([{ id: "visit-1", status: "Completed" }]);
 
-		await updateJobVisit(makeRequest("visit-1", { status: "Completed" }));
+		await updateJobVisit(makeRequest("visit-1", { status: "Completed" }), "org-1", dispatcher);
 
-		expect(mockDeduct).not.toHaveBeenCalled();
+		expect(mockApply).not.toHaveBeenCalled();
 	});
 
-	it("does not consume when status changes to something other than Completed", async () => {
+	it("refuses a status move with no lifecycle edge before any write", async () => {
 		mockDb.job_visit.findFirst.mockResolvedValue(
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			makeExistingVisit("Scheduled", "Scheduled") as any,
 		);
 		setupTransaction([{ id: "visit-1", status: "InProgress" }]);
 
-		await updateJobVisit(makeRequest("visit-1", { status: "InProgress" }));
+		const res = await updateJobVisit(makeRequest("visit-1", { status: "InProgress" }), "org-1", dispatcher);
 
-		expect(mockDeduct).not.toHaveBeenCalled();
-	});
-
-	it("only consumes for the completing visit, not sibling visits, when the job completes", async () => {
-		mockDb.job_visit.findFirst.mockResolvedValue(
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			makeExistingVisit("Scheduled", "InProgress") as any,
-		);
-		// After the update, all visits are Completed → job becomes Completed
-		setupTransaction([
-			{ id: "visit-1", status: "Completed" },
-			{ id: "visit-2", status: "Completed" },
-		]);
-
-		await updateJobVisit(makeRequest("visit-1", { status: "Completed" }));
-
-		// visit-2 already consumed at its own completion — never again here
-		expect(mockDeduct).toHaveBeenCalledOnce();
-		expect(mockDeduct).toHaveBeenCalledWith("visit-1", expect.anything(), undefined, undefined);
+		expect(res).toMatchObject({ code: "WRONG_STATE" });
+		expect(mockApply).not.toHaveBeenCalled();
+		expect(mockDb.$transaction).not.toHaveBeenCalled();
 	});
 });
 

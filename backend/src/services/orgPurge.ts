@@ -49,6 +49,7 @@ export const GLOBAL_TABLES: readonly string[] = [
 // URLs that can be ours are queued; inline data: images have nothing to delete.
 export const FILE_COLUMNS: readonly { table: string; column: string; array?: true }[] = [
 	{ table: "organization", column: "logo_url" },
+	{ table: "technician", column: "photo_url" },
 	{ table: "job_note_photo", column: "photo_url" },
 	{ table: "project_note_photo", column: "photo_url" },
 	{ table: "inventory_item", column: "image_urls", array: true },

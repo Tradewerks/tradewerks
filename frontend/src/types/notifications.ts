@@ -47,6 +47,9 @@ export type DispatcherNotificationType =
 	| "tax_rate_changed"
 	| "qb_tax_code_needed"
 	| "timesheet_issue_reported"
+	| "customer_message_failed"
+	| "sms_registration_update"
+	| "customer_sms_reply"
 
 export interface DispatcherNotification {
 	id: string;
@@ -87,6 +90,9 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "followup_email_opened", group: "Sales & billing", permission: "view_followups", label: "Follow-up opens", description: "A client opened a follow-up email" },
 	{ type: "invoice_paid", group: "Sales & billing", permission: "view_invoices", label: "Invoice payments", description: "A payment was recorded on an invoice" },
 	{ type: "dispute_opened", group: "Sales & billing", permission: "resolve_disputes", label: "Disputes", description: "A dispute was opened on a document" },
+	{ type: "customer_message_failed", group: "Sales & billing", permission: "view_customer_comms", label: "Customer message failures", description: "An automatic message to a customer failed or may not have arrived" },
+	{ type: "sms_registration_update", group: "Sales & billing", permission: "view_customer_comms", label: "Text messaging setup", description: "Your text messaging registration was approved, needs changes, or was suspended" },
+	{ type: "customer_sms_reply", group: "Sales & billing", permission: "view_customer_comms", label: "Customer texts", description: "A customer replied to one of your texts" },
 	{ type: "tax_rate_changed", group: "Sales & billing", permission: "manage_taxes", label: "Tax rate changes", description: "A jurisdiction's rate changed on open drafts" },
 	{ type: "qb_tax_code_needed", group: "Sales & billing", permission: "manage_taxes", label: "QuickBooks tax codes", description: "QuickBooks needs a tax code before automatic tax can sync" },
 	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },

@@ -139,6 +139,8 @@ export interface Technician {
 	theme: "dark" | "light" | "system";
 	language: "en" | "es";
 	mfaEnabled?: boolean;
+	/** Signed, short-lived; only on the single-technician read. */
+	photo_url?: string | null;
 }
 
 export interface CreateTechnicianInput {

@@ -704,7 +704,7 @@ export function pushInvoiceDetached(invoiceId: string, organizationId: string): 
 		});
 }
 
-export async function sendInvoiceEmail(invoiceId: string, orgId: string, sendTo: string): Promise<void>{
+export async function sendQbInvoiceEmail(invoiceId: string, orgId: string, sendTo: string): Promise<void>{
 	const invoice = await db.invoice.findFirst({
 		where: { id: invoiceId, organization_id: orgId },
 		select: { status: true, qb_invoice_id: true, qb_sync_status: true },

@@ -24,6 +24,9 @@ export const DispatcherNotificationTypeEnum = z.enum([
 	"tax_rate_changed",
 	"qb_tax_code_needed",
 	"timesheet_issue_reported",
+	"customer_message_failed",
+	"sms_registration_update",
+	"customer_sms_reply",
 ]);
 
 const reportLayoutSchema = z.record(

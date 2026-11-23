@@ -16,8 +16,10 @@ import {
     returnFromJob,
     markAvailable,
     deactivateTechnician,
-    reactivateTechnician
+    reactivateTechnician,
+    setTechnicianPhoto
 } from "../controllers/techniciansController.js";
+import { imageUpload } from "../lib/upload.js";
 import { requestPasswordReset } from '../controllers/authenticationController.js';
 import { resetMfa } from '../controllers/mfaController.js';
 import { setRefreshToken } from '../services/jwtService.js';
@@ -273,6 +275,46 @@ router.delete("/:id", requirePermission("manage_technicians"), async (req, res, 
                 id,
             }),
         );
+    } catch (err) {
+        next(err);
+    }
+});
+
+// The photo customers see on the visit page and the on-my-way email.
+router.post("/:id/photo", requirePermissionOrSelf("manage_technicians"), imageUpload.single("image"), async (req, res, next) => {
+    try {
+        if (!req.file) {
+            return res
+                .status(400)
+                .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, "No image file provided"));
+        }
+        const result = await setTechnicianPhoto(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            req.file,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+        }
+        res.json(createSuccessResponse({ url: result.url }));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.delete("/:id/photo", requirePermissionOrSelf("manage_technicians"), async (req, res, next) => {
+    try {
+        const result = await setTechnicianPhoto(
+            req.params.id as string,
+            req.user!.organization_id as string,
+            null,
+            getUserContext(req),
+        );
+        if (result.err) {
+            return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, result.err));
+        }
+        res.json(createSuccessResponse(null));
     } catch (err) {
         next(err);
     }

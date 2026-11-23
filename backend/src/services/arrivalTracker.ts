@@ -12,6 +12,7 @@ import {
 } from "../lib/arrivalForecast.js";
 import { fetchTrafficLegs, MAX_ROUTE_STOPS, toLatLon, type LatLon } from "../lib/mapboxDirections.js";
 import { log } from "./appLogger.js";
+import { notifyRunningLate } from "./customerComms/visitEvents.js";
 import { emitToOrg } from "./socketService.js";
 
 // Every minute, forecast each working tech's arrival at the visits queued for them in
@@ -306,10 +307,11 @@ async function forecastTech(
 	for (const { s, f, prev } of entries) {
 		const orgId = s.c.visit.job.organization_id!;
 		const action = decideAlert(f, prev?.alerted_late_minutes ?? null);
+		const delayMin = Math.round((f.delaySeconds ?? 0) / 60);
 
 		const alertFields =
 			action === "late" || action === "worse"
-				? { alerted_late_minutes: Math.round((f.delaySeconds ?? 0) / 60), alerted_at: now }
+				? { alerted_late_minutes: delayMin, alerted_at: now }
 				: action === "recovered"
 					? { alerted_late_minutes: null, alerted_at: now }
 					: {};
@@ -338,6 +340,13 @@ async function forecastTech(
 		});
 
 		if (action) await sendAlert(action, s, f, techId, orgId);
+		// Every late tick, not just alert transitions: the customer's threshold is
+		// usually higher than the grace that triggers the first alert. Only the
+		// first stop with a routed ETA is firm enough to promise; the notifier's
+		// per-day dedupe keeps repeats from sending.
+		if (f.status === "late" && f.stopIndex === 0 && f.basis === "traffic" && f.etaAt) {
+			void notifyRunningLate(s.c.visit.id, orgId, { etaAt: f.etaAt, delayMinutes: delayMin });
+		}
 	}
 	return requested;
 }

@@ -149,3 +149,20 @@ export const reactivateTechnician = async (id: string): Promise<Technician> => {
 	}
 	return response.data.data;
 };
+
+// Shown to customers on the visit page and in the on-my-way email.
+export const uploadTechnicianPhoto = async (id: string, file: File): Promise<string | null> => {
+	const formData = new FormData();
+	formData.append("image", file);
+	const response = await api.post<ApiResponse<{ url: string | null }>>(
+		`/technicians/${id}/photo`,
+		formData,
+		{ headers: { "Content-Type": "multipart/form-data" } }
+	);
+	if (!response.data.success) throw new Error(response.data.error?.message || "Upload failed");
+	return response.data.data?.url ?? null;
+};
+
+export const deleteTechnicianPhoto = async (id: string): Promise<void> => {
+	await api.delete(`/technicians/${id}/photo`);
+};

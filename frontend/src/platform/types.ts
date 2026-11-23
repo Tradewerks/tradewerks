@@ -4,7 +4,8 @@ export type LimitKey =
 	| "technicians"
 	| "ai_calls_month"
 	| "tax_lookups_month"
-	| "receipt_scans_month";
+	| "receipt_scans_month"
+	| "sms_segments_month";
 export type ModuleState = "on" | "off_by_org" | "not_in_plan";
 
 export interface StaffSession {

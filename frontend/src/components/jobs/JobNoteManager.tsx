@@ -83,8 +83,18 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 		const updateData: UpdateJobNoteInput = {
 			content,
 			photos: [
-				...existingPhotos.map((p) => ({ id: p.id, photo_url: p.photo_url, photo_label: p.photo_label })),
-				...editPhotos.map((p) => ({ photo_url: p.photo_url, photo_label: p.photo_label, photo_name: p.photo_name })),
+				...existingPhotos.map((p) => ({
+					id: p.id,
+					photo_url: p.photo_url,
+					photo_label: p.photo_label,
+					...(p.share_with_customer !== undefined && { share_with_customer: p.share_with_customer }),
+				})),
+				...editPhotos.map((p) => ({
+					photo_url: p.photo_url,
+					photo_label: p.photo_label,
+					photo_name: p.photo_name,
+					share_with_customer: p.share_with_customer ?? false,
+				})),
 			],
 		};
 		await updateNote.mutateAsync({
@@ -163,6 +173,7 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 										photo_url: p.photo_url,
 										photo_label: p.photo_label,
 										photo_name: p.photo_name,
+										share_with_customer: p.share_with_customer ?? false,
 									})),
 								},
 							});
@@ -175,6 +186,8 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 							<NotePhotoPicker
 								jobId={jobId}
 								capture={false}
+								// Only a visit's page shows shared photos.
+								shareable={!!visitId}
 								photos={composerPhotos}
 								onPhotosChange={setComposerPhotos}
 								disabled={!EDIT_NOTES || isLoading || createNote.isPending}
@@ -197,11 +210,19 @@ export default function JobNoteManager({ jobId, visits, visitId }: JobNoteManage
 								<NotePhotoPicker
 									jobId={jobId}
 									capture={false}
+									shareable={!!note.visit_id}
 									photos={editPhotos}
 									onPhotosChange={setEditPhotos}
 									existingPhotos={existingPhotos}
 									onRemoveExisting={(id) =>
 										setExistingPhotos((prev) => prev.filter((p) => p.id !== id))
+									}
+									onToggleShareExisting={(id) =>
+										setExistingPhotos((prev) =>
+											prev.map((p) =>
+												p.id === id ? { ...p, share_with_customer: !p.share_with_customer } : p
+											)
+										)
 									}
 									disabled={updateNote.isPending}
 								/>

@@ -10,6 +10,7 @@ vi.mock("../../lib/socket", () => ({
 	socket: {
 		on: (event: string, fn: (e: unknown) => void) => handlers.set(event, fn),
 		off: (event: string) => handlers.delete(event),
+		io: { on: () => undefined, off: () => undefined },
 	},
 }));
 

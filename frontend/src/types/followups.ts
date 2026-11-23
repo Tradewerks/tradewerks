@@ -129,7 +129,7 @@ export interface FollowupSend {
 	template_alias: string | null;
 	recipient_email: string;
 	postmark_message_id: string | null;
-	status: "sent" | "skipped" | "failed";
+	status: "sent" | "skipped" | "failed" | "sending";
 	sent_at: Date | string;
 	opened_at: string | null;
 	open_count: number;

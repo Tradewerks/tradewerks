@@ -95,7 +95,15 @@ export const VisitStatusColors: Record<VisitStatus, string> = {
 	Cancelled:  "bg-surface-raised/40 text-text-muted border-border-strong/40",
 };
 
-export type LifecycleAction = "drive" | "arrive" | "start" | "pause" | "resume" | "complete" | "delay";
+export type LifecycleAction =
+	| "drive"
+	| "arrive"
+	| "start"
+	| "pause"
+	| "resume"
+	| "complete"
+	| "delay"
+	| "restore";
 
 // Re-export constraint types from recurringPlans for convenience
 export { ArrivalConstraintValues, FinishConstraintValues };
@@ -216,22 +224,21 @@ export interface CreateJobInput extends PricingBreakdown, ExecutionTotals {
 	coords?: Coordinates;
 	description: string;
 	priority?: Priority;
-	status?: JobStatus;
+	status?: "Unscheduled";
 	request_id?: string;
 	quote_id?: string;
 	recurring_plan_id?: string;
 	line_items?: CreateJobLineItemInput[];
 }
 
-export interface UpdateJobInput extends PricingBreakdown, ExecutionTotals {
+export interface UpdateJobInput
+	extends PricingBreakdown,
+		Omit<ExecutionTotals, "actual_total"> {
 	name?: string;
 	address?: string;
 	coords?: Coordinates;
 	description?: string;
 	priority?: Priority;
-	status?: JobStatus;
-
-	cancellation_reason?: string;
 	line_items?: UpdateJobLineItemInput[];
 	address_tax_choice?: AddressTaxChoice;
 }
@@ -424,6 +431,8 @@ export interface UpdateJobVisitInput {
 	tech_ids?: string[];
 	line_items?: UpdateVisitLineItemInput[];
 	reschedule_scope?: "this" | "future";
+	/** The visit's updated_at as loaded; a stale value makes the server answer 409. */
+	expected_updated_at?: string;
 }
 
 // ============================================================================
@@ -436,6 +445,7 @@ export interface JobNotePhoto {
 	photo_url: string;
 	photo_label: "Before" | "After" | "Other";
 	photo_name?: string | null;
+	share_with_customer?: boolean;
 	created_at: string;
 }
 
@@ -444,6 +454,7 @@ export interface NotePhoto {
 	photo_label: "Before" | "After" | "Other";
 	photo_name: string;
 	preview_url: string;
+	share_with_customer?: boolean;
 }
 
 export interface JobNote extends BaseNote {
@@ -456,13 +467,24 @@ export interface JobNote extends BaseNote {
 export interface CreateJobNoteInput {
 	content: string;
 	visit_id?: string | null;
-	photos?: { photo_url: string; photo_label: string; photo_name?: string | null }[];
+	photos?: {
+		photo_url: string;
+		photo_label: string;
+		photo_name?: string | null;
+		share_with_customer?: boolean;
+	}[];
 }
 
 export interface UpdateJobNoteInput {
 	content: string;
 	visit_id?: string | null;
-	photos?: { id?: string; photo_url: string; photo_label: string; photo_name?: string | null }[];
+	photos?: {
+		id?: string;
+		photo_url: string;
+		photo_label: string;
+		photo_name?: string | null;
+		share_with_customer?: boolean;
+	}[];
 }
 
 // ============================================================================
@@ -532,10 +554,7 @@ export const UpdateJobSchema = z.object({
 		.optional(),
 	description: z.string().min(1, "Description is required").optional(),
 	priority: z.enum(PriorityValues).optional(),
-	status: z.enum(JobStatusValues).optional(),
 	estimated_total: z.number().nonnegative().optional().nullable(),
-	actual_total: z.number().nonnegative().optional().nullable(),
-	cancellation_reason: z.string().optional(),
 	line_items: z
 		.array(
 			z.object({
@@ -835,6 +854,7 @@ export const UpdateJobNoteSchema = z.object({
 			photo_url: z.string().url(),
 			photo_label: z.enum(["Before", "After", "Other"]),
 			photo_name: z.string().max(120).nullish(),
+			share_with_customer: z.boolean().optional(),
 		}),
 	).optional(),
 });

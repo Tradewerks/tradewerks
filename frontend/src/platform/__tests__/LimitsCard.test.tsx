@@ -35,6 +35,7 @@ const detail = (overrides: Record<string, number | null> = {}): OrgDetail => ({
 			ai_calls_month: { tier: 100, effective: 100 },
 			tax_lookups_month: { tier: 50, effective: 50 },
 			receipt_scans_month: { tier: 300, effective: 300 },
+			sms_segments_month: { tier: 500, effective: 500 },
 		},
 		baseTier: { key: "pro", label: "Pro", version: 2 },
 		trialTier: null,

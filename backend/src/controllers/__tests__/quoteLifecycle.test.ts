@@ -13,7 +13,10 @@ const { mockDb } = vi.hoisted(() => {
 		},
 		quote_note: { deleteMany: vi.fn() },
 		quote_line_item: { deleteMany: vi.fn() },
-		request: { update: vi.fn() },
+		request: {
+			update: vi.fn(),
+			updateMany: vi.fn(async () => ({ count: 1 })),
+		},
 		document_dispute: { findFirst: vi.fn() },
 		$transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(mockDb)),
 		$extends,
@@ -158,10 +161,35 @@ describe("quote reject vs cancel", () => {
 		expect(written.status).toBe("Rejected");
 		expect(written.rejection_reason).toBe("Too expensive");
 		expect(written.rejected_at).toBeInstanceOf(Date);
-		expect(mockFn(db.request.update)).toHaveBeenCalledWith({
-			where: { id: "r1" },
+		expect(mockFn(db.request.updateMany)).toHaveBeenCalledWith({
+			where: {
+    id: "r1",
+    status: { notIn: ["ConvertedToJob", "Cancelled"] },
+   },
 			data: { status: "QuoteRejected" },
 		});
+	});
+
+	it("approving leaves a request that already became a job alone and logs nothing for it", async () => {
+		const { logActivity } = await import("../../services/logger.js");
+		mockFn(db.quote.findFirst).mockResolvedValue(aSentQuote());
+		mockFn(db.quote.update).mockResolvedValue({
+			id: "q1",
+			request_id: "r1",
+			request: { status: "ConvertedToJob" },
+		});
+		// The status guard matches no row: ConvertedToJob can't become QuoteApproved.
+		mockFn(db.request.updateMany).mockResolvedValue({ count: 0 });
+
+		const result = await updateQuote(makeReq({ status: "Approved" }), "org1");
+
+		expect(result.err).toBeFalsy();
+		expect(mockFn(db.request.update)).not.toHaveBeenCalled();
+		expect(
+			mockFn(logActivity).mock.calls.some(
+				([p]) => p.entity_type === "request",
+			),
+		).toBe(false);
 	});
 
 	it("cancelling keeps the reason but leaves the request alone", async () => {
@@ -180,6 +208,7 @@ describe("quote reject vs cancel", () => {
 		// Not a client decision, so rejected_at must stay unset.
 		expect(written.rejected_at).toBeUndefined();
 		expect(mockFn(db.request.update)).not.toHaveBeenCalled();
+		expect(mockFn(db.request.updateMany)).not.toHaveBeenCalled();
 	});
 
 	// Disputed → Cancelled is a legal transition, so nothing in the table stops

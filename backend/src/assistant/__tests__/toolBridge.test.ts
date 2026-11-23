@@ -143,7 +143,7 @@ describe("summariseToolResult", () => {
 		],
 		["assign_technician", {}, { assigned: 2 }, "Assigned 2 technicians to the visit"],
 		["assign_technician", {}, { assigned: 0 }, "Cleared every technician from the visit"],
-		["update_job_status", {}, { job_number: "J-0013", status: "InProgress" }, "Set job J-0013 to InProgress"],
+		["update_job_status", {}, { job_number: "J-0013", status: "Cancelled" }, "Cancelled job J-0013"],
 		["add_job_note", { content: "Gate code is 4821." }, { id: "n1" }, "Added a note — “Gate code is 4821.”"],
 	])("summarises the %s write by what it changed", (tool, input, data, expected) => {
 		expect(summariseToolResult(tool, input, data)).toBe(expected);

@@ -44,15 +44,28 @@ vi.mock("../../services/entitlementService.js", () => ({
 }));
 vi.mock("../../controllers/jobVisitsController.js", () => ({ getJobVisitsByTechId: vi.fn(async () => []) }));
 vi.mock("../../controllers/vehiclesController.js", () => ({ setTechnicianVehicle: vi.fn() }));
+const photoUpload = vi.hoisted(() => ({
+	file: null as null | { buffer: Buffer; mimetype: string; originalname: string },
+}));
+vi.mock("../../lib/upload.js", () => ({
+	imageUpload: {
+		single: () => (req: { file?: unknown }, _res: unknown, next: () => void) => {
+			if (photoUpload.file) req.file = photoUpload.file;
+			next();
+		},
+	},
+}));
 vi.mock("../../services/wasabiService.js", () => ({
-	uploadFile: vi.fn(),
-	deleteFile: vi.fn(),
-	signImageUrl: vi.fn(async (u: string | null) => u),
+	uploadFile: vi.fn(async () => "https://s3.us-east-1.wasabisys.com/bucket/technicians/new.jpg"),
+	deleteFile: vi.fn(async () => undefined),
+	signImageUrl: vi.fn(async (u: string | null) => (u ? `${u}?X-Amz-Signature=sig` : null)),
 	signImageUrls: vi.fn(async (u: string[]) => u),
 	isOwnBucketUrl: () => true,
 }));
 
 import techniciansRouter from "../technicians.js";
+import { deleteFile, uploadFile } from "../../services/wasabiService.js";
+import { logActivity } from "../../services/logger.js";
 import { db } from "../../db.js";
 import { callRoute, leaves, type FakeDb } from "./harness.js";
 
@@ -288,5 +301,74 @@ describe("technician seats and deactivation (build plan 2)", () => {
 		});
 		expect(r.status).toBe(200);
 		expect(fake.technician.update.mock.calls[0][0].data).toEqual({ deactivated_at: null });
+	});
+});
+
+describe("technician photo", () => {
+	const OLD = "https://s3.us-east-1.wasabisys.com/bucket/technicians/old.jpg";
+	const NEW = "https://s3.us-east-1.wasabisys.com/bucket/technicians/new.jpg";
+
+	beforeEach(() => {
+		photoUpload.file = { buffer: Buffer.from("img"), mimetype: "image/jpeg", originalname: "me.jpg" };
+		fake.technician.findFirst.mockResolvedValue({ ...technicianRow, photo_url: OLD });
+		fake.technician.update.mockResolvedValue({});
+	});
+
+	it("a technician uploads their own photo: stored raw, returned signed, old object deleted", async () => {
+		const res = await callRoute(techniciansRouter, "post", "/:id/photo", {
+			user: { uid: "tech-1", role: "technician", permissions: [] },
+			params: { id: "tech-1" },
+		});
+		expect(res.status).toBe(200);
+		expect(uploadFile).toHaveBeenCalledWith(expect.any(Buffer), "image/jpeg", "me.jpg", "technicians");
+		expect(fake.technician.update.mock.calls[0][0].data).toEqual({ photo_url: NEW });
+		expect(res.body.data).toEqual({ url: `${NEW}?X-Amz-Signature=sig` });
+		expect(deleteFile).toHaveBeenCalledWith(OLD);
+	});
+
+	it("another technician's photo needs manage_technicians", async () => {
+		const res = await callRoute(techniciansRouter, "post", "/:id/photo", {
+			user: { uid: "tech-2", role: "technician", permissions: [] },
+			params: { id: "tech-1" },
+		});
+		expect(res.status).toBe(403);
+		expect(uploadFile).not.toHaveBeenCalled();
+	});
+
+	it("DELETE clears the photo", async () => {
+		const res = await callRoute(techniciansRouter, "delete", "/:id/photo", {
+			user: { uid: "disp-1", role: "dispatcher", permissions: ["manage_technicians"] },
+			params: { id: "tech-1" },
+		});
+		expect(res.status).toBe(200);
+		expect(fake.technician.update.mock.calls[0][0].data).toEqual({ photo_url: null });
+		expect(deleteFile).toHaveBeenCalledWith(OLD);
+		expect(vi.mocked(logActivity).mock.calls[0][0]).toMatchObject({
+			event_type: "technician.updated",
+			entity_id: "tech-1",
+			changes: { photo: { old: "set", new: null } },
+		});
+	});
+
+	it("an upload logs the photo change without any URL", async () => {
+		fake.technician.findFirst.mockResolvedValue({ ...technicianRow, photo_url: null });
+		await callRoute(techniciansRouter, "post", "/:id/photo", {
+			user: { uid: "tech-1", role: "technician", permissions: [] },
+			params: { id: "tech-1" },
+		});
+		const entry = vi.mocked(logActivity).mock.calls[0][0];
+		expect(entry).toMatchObject({
+			event_type: "technician.updated",
+			changes: { photo: { old: null, new: "set" } },
+		});
+		expect(JSON.stringify(entry)).not.toContain("wasabisys");
+	});
+
+	it("the detail returns the photo signed, never raw", async () => {
+		const one = await callRoute(techniciansRouter, "get", "/:id", {
+			user: { uid: "tech-1", role: "technician", permissions: [] },
+			params: { id: "tech-1" },
+		});
+		expect(one.body.data.photo_url).toBe(`${OLD}?X-Amz-Signature=sig`);
 	});
 });

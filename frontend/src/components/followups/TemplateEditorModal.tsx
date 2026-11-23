@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Code2, Info, Loader2, Monitor, RotateCcw, Smartphone, X } from "lucide-react";
 import FullPopup from "../ui/FullPopup";
 import { renderTemplate, extractVariables } from "../../lib/renderTemplate";
-import { EmailTemplateCategoryLabels } from "../../types/followups";
+import { smsSegments } from "../../lib/smsSegments";
+import { EmailTemplateCategoryLabels, type EmailTemplateCategory } from "../../types/followups";
 import type { EmailTemplate, TemplatePreviewContext } from "../../types/emailTemplates";
 import { LABEL, INPUT, TEXTAREA } from "./shared";
 
@@ -19,8 +20,83 @@ const VAR_META: Record<string, { label: string; group: "brand" | "content"; hint
 	"brand.address": { label: "Address", group: "brand" },
 	"brand.phone": { label: "Phone", group: "brand" },
 	"brand.website": { label: "Website", group: "brand" },
+	"brand.reply_to": {
+		label: "Reply-to email",
+		group: "brand",
+		hint: "Customer messages only; blank when the organization has no valid email",
+	},
+	"brand.review_url": {
+		label: "Review link",
+		group: "brand",
+		hint: "Review requests only; set in Admin → Customer messages",
+	},
 	client_name: { label: "Client name", group: "content" },
 	anchor_type: { label: "Anchor type", group: "content" },
+	unsubscribe_url: {
+		label: "Unsubscribe link",
+		group: "content",
+		hint: "Filled per recipient at send time",
+	},
+	"visit.date": { label: "Visit date", group: "content", hint: "Visit reminders only" },
+	"visit.window": { label: "Arrival window", group: "content", hint: "Visit reminders only" },
+	"visit.address": { label: "Visit address", group: "content", hint: "Visit reminders only" },
+	"visit.job_title": { label: "Job title", group: "content", hint: "Visit reminders only" },
+	"visit.name": { label: "Visit name", group: "content", hint: "Visit messages only" },
+	"visit.description": {
+		label: "Visit description",
+		group: "content",
+		hint: "Visit messages only; may be long, so keep it out of texts",
+	},
+	"visit.tech_names": {
+		label: "Technician names",
+		group: "content",
+		hint: "Visit reminders only",
+	},
+	"visit.tech_first_name": {
+		label: "First technician",
+		group: "content",
+		hint: "Visit reminders only",
+	},
+	"visit.eta": {
+		label: "Arrival estimate",
+		group: "content",
+		hint: "On-my-way messages only; blank when no estimate is available",
+	},
+	"tech.name": {
+		label: "Driving technician",
+		group: "content",
+		hint: "Visit reminders only",
+	},
+	"tech.title": {
+		label: "Technician title",
+		group: "content",
+		hint: "Visit reminders only",
+	},
+	"tech.photo_url": {
+		label: "Technician photo",
+		group: "content",
+		hint: "Email only; blank when the technician has no photo",
+	},
+	"link.visit": {
+		label: "Appointment link",
+		group: "content",
+		hint: "Customer visit messages only; filled per recipient at send time",
+	},
+};
+
+// Preview-only stand-ins; real values come from the visit at send time.
+const VISIT_SAMPLES: Record<string, string> = {
+	"visit.date": "Tuesday, November 17",
+	"visit.window": "between 8:00 AM and 10:00 AM",
+	"visit.address": "123 Main St",
+	"visit.job_title": "Furnace tune-up",
+	"visit.name": "Annual furnace tune-up",
+	"visit.description": "Cleaned the burners and replaced the filter.",
+	"visit.tech_names": "Ann and Bob",
+	"visit.tech_first_name": "Ann",
+	"visit.eta": "3:30 PM",
+	"tech.name": "Ann Lee",
+	"tech.title": "Lead Technician",
 };
 
 // The standard variables offered as one-click "insert" chips in the HTML editor.
@@ -32,6 +108,9 @@ const INSERTABLE_VARS = [
 	"brand.address",
 	"brand.phone",
 	"brand.website",
+	"brand.reply_to",
+	"unsubscribe_url",
+	...Object.keys(VISIT_SAMPLES),
 ];
 
 /** Flatten the preview context into the flat, dotted-key value map the form edits. */
@@ -43,8 +122,12 @@ function flattenContext(ctx: TemplatePreviewContext): Record<string, string> {
 		"brand.address": ctx.brand.address ?? "",
 		"brand.phone": ctx.brand.phone ?? "",
 		"brand.website": ctx.brand.website ?? "",
+		"brand.reply_to": ctx.brand.reply_to ?? "",
 		client_name: ctx.samples.client_name ?? "",
 		anchor_type: ctx.samples.anchor_type ?? "",
+		unsubscribe_url: "https://example.com/unsubscribe",
+		"link.visit": "https://example.com/app/c/sample",
+		...VISIT_SAMPLES,
 	};
 }
 
@@ -58,7 +141,8 @@ function buildModel(values: Record<string, string>): Record<string, unknown> {
 			if (i === keys.length - 1) {
 				cur[key] = value;
 			} else {
-				if (typeof cur[key] !== "object" || cur[key] === null) cur[key] = {};
+				if (typeof cur[key] !== "object" || cur[key] === null)
+					cur[key] = {};
 				cur = cur[key] as Record<string, unknown>;
 			}
 		});
@@ -72,8 +156,17 @@ interface TemplateEditorModalProps {
 	readOnly: boolean;
 	isPending: boolean;
 	onClose: () => void;
-	onSave: (data: { name: string; subject: string; html: string; text: string }) => Promise<void>;
+	onSave: (data: {
+		name: string;
+		subject: string;
+		html: string;
+		text: string;
+		sms_body?: string;
+	}) => Promise<void>;
 	onReset: () => Promise<void>;
+	/** Shows the text-message body field (customer-message templates only). */
+	withSms?: boolean;
+	categoryLabel?: string;
 }
 
 export default function TemplateEditorModal({
@@ -84,13 +177,16 @@ export default function TemplateEditorModal({
 	onClose,
 	onSave,
 	onReset,
+	withSms = false,
+	categoryLabel,
 }: TemplateEditorModalProps) {
 	const [name, setName] = useState(template.name);
 	const [subject, setSubject] = useState(template.subject);
 	const [html, setHtml] = useState(template.html);
 	const [text, setText] = useState(template.text ?? "");
+	const [sms, setSms] = useState(template.sms_body ?? "");
 	const [values, setValues] = useState<Record<string, string>>(() =>
-		context ? flattenContext(context) : {},
+		context ? flattenContext(context) : {}
 	);
 	// If the preview context resolves after the modal opened, seed the form once.
 	const seeded = useRef(!!context);
@@ -112,8 +208,8 @@ export default function TemplateEditorModal({
 
 	// Variables the template actually references (subject + HTML + text), deduped in order.
 	const templateVars = useMemo(
-		() => extractVariables(`${subject}\n${html}\n${text}`),
-		[subject, html, text],
+		() => extractVariables(`${subject}\n${html}\n${text}${withSms ? `\n${sms}` : ""}`),
+		[subject, html, text, sms, withSms]
 	);
 
 	// The render model: every referenced variable, prefilled from context where known.
@@ -123,9 +219,21 @@ export default function TemplateEditorModal({
 		return buildModel({ ...values, ...merged });
 	}, [values, templateVars]);
 
-	const renderedSubject = useMemo(() => renderTemplate(subject, model), [subject, model]);
+	const renderedSubject = useMemo(
+		() => renderTemplate(subject, model, { escape: false }),
+		[subject, model]
+	);
 	const renderedHtml = useMemo(() => renderTemplate(html, model), [html, model]);
-	const renderedText = useMemo(() => renderTemplate(text, model), [text, model]);
+	const renderedText = useMemo(
+		() => renderTemplate(text, model, { escape: false }),
+		[text, model]
+	);
+
+	const renderedSms = useMemo(
+		() => renderTemplate(sms, model, { escape: false }),
+		[sms, model]
+	);
+	const smsInfo = useMemo(() => smsSegments(renderedSms), [renderedSms]);
 
 	// Debounce the doc fed to the iframe so fast typing doesn't thrash reloads.
 	const [previewDoc, setPreviewDoc] = useState(renderedHtml);
@@ -179,14 +287,24 @@ export default function TemplateEditorModal({
 		if (!subject.trim()) return setError("Subject is required.");
 		if (!html.trim()) return setError("Template HTML is required.");
 		try {
-			await onSave({ name: name.trim() || template.name, subject, html, text });
+			await onSave({
+				name: name.trim() || template.name,
+				subject,
+				html,
+				text,
+				...(withSms ? { sms_body: sms } : {}),
+			});
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Failed to save template.");
 		}
 	};
 
 	const handleReset = async () => {
-		if (!window.confirm("Reset this template to the built-in default? Your changes will be lost."))
+		if (
+			!window.confirm(
+				"Reset this template to the built-in default? Your changes will be lost."
+			)
+		)
 			return;
 		setError(null);
 		setResetting(true);
@@ -199,7 +317,9 @@ export default function TemplateEditorModal({
 	};
 
 	const brandVars = templateVars.filter((v) => (VAR_META[v]?.group ?? "content") === "brand");
-	const contentVars = templateVars.filter((v) => (VAR_META[v]?.group ?? "content") === "content");
+	const contentVars = templateVars.filter(
+		(v) => (VAR_META[v]?.group ?? "content") === "content"
+	);
 
 	const renderField = (key: string) => {
 		const meta = VAR_META[key];
@@ -215,8 +335,14 @@ export default function TemplateEditorModal({
 					{isColor && (
 						<input
 							type="color"
-							value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : "#1e3a5f"}
-							onChange={(e) => setValue(key, e.target.value)}
+							value={
+								/^#[0-9a-fA-F]{6}$/.test(value)
+									? value
+									: "#1e3a5f"
+							}
+							onChange={(e) =>
+								setValue(key, e.target.value)
+							}
 							className="h-[34px] w-10 flex-shrink-0 cursor-pointer rounded border border-border bg-base"
 							aria-label={`${meta?.label ?? key} color picker`}
 						/>
@@ -247,7 +373,10 @@ export default function TemplateEditorModal({
 						{readOnly ? "Preview" : "Edit"} Template
 					</h2>
 					<span className="rounded-full border border-border bg-surface px-2 py-0.5 text-xs font-medium text-text-tertiary">
-						{EmailTemplateCategoryLabels[template.category]}
+						{categoryLabel ??
+							EmailTemplateCategoryLabels[
+								template.category as EmailTemplateCategory
+							]}
 					</span>
 				</div>
 				<button
@@ -290,28 +419,78 @@ export default function TemplateEditorModal({
 					<div>
 						<label className={LABEL}>Plain-text version</label>
 						<p className="mb-1.5 text-[11px] text-text-muted">
-							Shown by email apps that don't render HTML. Tweak the wording here; leave it blank
-							to auto-generate from the HTML.
+							Shown by email apps that don't render HTML.
+							Tweak the wording here; leave it blank to
+							auto-generate from the HTML.
 						</p>
 						<textarea
 							value={text}
 							onChange={(e) => setText(e.target.value)}
 							className={`${TEXTAREA} min-h-[150px] resize-y text-sm leading-relaxed`}
 							disabled={readOnly || isPending}
-							placeholder={"Hi {{client_name}},\n\nAdd your message here…"}
+							placeholder={
+								"Hi {{client_name}},\n\nAdd your message here…"
+							}
 						/>
 					</div>
 
+					{withSms && (
+						<div>
+							<label
+								className={LABEL}
+								htmlFor="template-sms-body"
+							>
+								Text message
+							</label>
+							<p className="mb-1.5 text-[11px] text-text-muted">
+								Keep it short. Customers are asked
+								to reply STOP on their first text;
+								that line is added for you.
+							</p>
+							<textarea
+								id="template-sms-body"
+								value={sms}
+								onChange={(e) =>
+									setSms(e.target.value)
+								}
+								className={`${TEXTAREA} min-h-[90px] resize-y text-sm leading-relaxed`}
+								disabled={readOnly || isPending}
+								placeholder={
+									"{{brand.name}}: Your appointment is …"
+								}
+							/>
+							<p
+								className="mt-1 text-[11px] text-text-muted"
+								aria-live="polite"
+								data-testid="sms-segment-count"
+							>
+								≈ {smsInfo.length} characters ·{" "}
+								{smsInfo.segments}{" "}
+								{smsInfo.segments === 1
+									? "segment"
+									: "segments"}{" "}
+								· {smsInfo.encoding}. Estimated from
+								the sample values above.
+								{smsInfo.encoding === "UCS-2" &&
+									" (a symbol outside the standard set shortens each segment)"}
+							</p>
+						</div>
+					)}
+
 					{/* Variables form — the primary editing surface, drives the live preview */}
 					<div>
-						<label className={LABEL}>Content &amp; branding</label>
+						<label className={LABEL}>
+							Content &amp; branding
+						</label>
 						<p className="mb-2 text-[11px] text-text-muted">
-							Change any value to see the preview update live. These are the same variables
+							Change any value to see the preview update
+							live. These are the same variables
 							substituted when the email is sent.
 						</p>
 						{templateVars.length === 0 ? (
 							<p className="rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-text-muted">
-								This template references no variables yet.
+								This template references no
+								variables yet.
 							</p>
 						) : (
 							<div className="space-y-3">
@@ -320,7 +499,9 @@ export default function TemplateEditorModal({
 										<p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
 											Branding
 										</p>
-										{brandVars.map(renderField)}
+										{brandVars.map(
+											renderField
+										)}
 									</div>
 								)}
 								{contentVars.length > 0 && (
@@ -328,7 +509,9 @@ export default function TemplateEditorModal({
 										<p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
 											Content
 										</p>
-										{contentVars.map(renderField)}
+										{contentVars.map(
+											renderField
+										)}
 									</div>
 								)}
 							</div>
@@ -344,7 +527,10 @@ export default function TemplateEditorModal({
 							className="flex w-full items-center justify-between px-3 py-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-raised/40"
 						>
 							<span className="flex items-center gap-1.5">
-								<Code2 size={13} className="text-text-muted" />
+								<Code2
+									size={13}
+									className="text-text-muted"
+								/>
 								Advanced — edit HTML
 							</span>
 							<ChevronDown
@@ -356,11 +542,23 @@ export default function TemplateEditorModal({
 							<div className="space-y-2 border-t border-border-subtle p-3">
 								{!readOnly && (
 									<div className="flex flex-wrap gap-1.5">
-										{INSERTABLE_VARS.map((v) => (
+										{(withSms
+											? [
+													...INSERTABLE_VARS,
+													"link.visit",
+												]
+											: INSERTABLE_VARS
+										).map((v) => (
 											<button
-												key={v}
+												key={
+													v
+												}
 												type="button"
-												onClick={() => insertVariable(v)}
+												onClick={() =>
+													insertVariable(
+														v
+													)
+												}
 												className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] text-text-secondary transition-colors hover:border-primary hover:text-primary"
 												title={`Insert {{${v}}}`}
 											>
@@ -372,14 +570,26 @@ export default function TemplateEditorModal({
 								<textarea
 									ref={htmlRef}
 									value={html}
-									onChange={(e) => setHtml(e.target.value)}
+									onChange={(e) =>
+										setHtml(
+											e.target
+												.value
+										)
+									}
 									className={`${TEXTAREA} min-h-[280px] resize-y font-mono text-xs leading-relaxed`}
 									spellCheck={false}
-									disabled={readOnly || isPending}
+									disabled={
+										readOnly ||
+										isPending
+									}
 								/>
 								<p className="text-[11px] text-text-muted">
-									Full HTML control. Use <span className="font-mono">{"{{variable}}"}</span> tokens;
-									they appear in the form above.
+									Full HTML control. Use{" "}
+									<span className="font-mono">
+										{"{{variable}}"}
+									</span>{" "}
+									tokens; they appear in the
+									form above.
 								</p>
 							</div>
 						)}
@@ -393,17 +603,29 @@ export default function TemplateEditorModal({
 							<span className="text-[11px] uppercase tracking-wider text-text-muted">
 								Subject
 							</span>
-							<p className="truncate text-sm font-medium text-text-primary" title={renderedSubject}>
-								{renderedSubject || <span className="text-text-muted">(empty)</span>}
+							<p
+								className="truncate text-sm font-medium text-text-primary"
+								title={renderedSubject}
+							>
+								{renderedSubject || (
+									<span className="text-text-muted">
+										(empty)
+									</span>
+								)}
 							</p>
 						</div>
 						<div className="flex flex-shrink-0 items-center gap-1.5">
 							<div className="flex items-center gap-0.5 rounded-md border border-border bg-base p-0.5">
 								<button
 									type="button"
-									onClick={() => setPreviewMode("html")}
+									onClick={() =>
+										setPreviewMode(
+											"html"
+										)
+									}
 									className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
-										previewMode === "html"
+										previewMode ===
+										"html"
 											? "bg-surface-raised text-text-primary"
 											: "text-text-muted hover:text-text-primary"
 									}`}
@@ -412,9 +634,14 @@ export default function TemplateEditorModal({
 								</button>
 								<button
 									type="button"
-									onClick={() => setPreviewMode("text")}
+									onClick={() =>
+										setPreviewMode(
+											"text"
+										)
+									}
 									className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${
-										previewMode === "text"
+										previewMode ===
+										"text"
 											? "bg-surface-raised text-text-primary"
 											: "text-text-muted hover:text-text-primary"
 									}`}
@@ -426,27 +653,41 @@ export default function TemplateEditorModal({
 								<div className="flex items-center gap-1 rounded-md border border-border bg-base p-0.5">
 									<button
 										type="button"
-										onClick={() => setDevice("desktop")}
+										onClick={() =>
+											setDevice(
+												"desktop"
+											)
+										}
 										title="Desktop width"
 										className={`rounded p-1.5 transition-colors ${
-											device === "desktop"
+											device ===
+											"desktop"
 												? "bg-surface-raised text-text-primary"
 												: "text-text-muted hover:text-text-primary"
 										}`}
 									>
-										<Monitor size={14} />
+										<Monitor
+											size={14}
+										/>
 									</button>
 									<button
 										type="button"
-										onClick={() => setDevice("mobile")}
+										onClick={() =>
+											setDevice(
+												"mobile"
+											)
+										}
 										title="Mobile width"
 										className={`rounded p-1.5 transition-colors ${
-											device === "mobile"
+											device ===
+											"mobile"
 												? "bg-surface-raised text-text-primary"
 												: "text-text-muted hover:text-text-primary"
 										}`}
 									>
-										<Smartphone size={14} />
+										<Smartphone
+											size={14}
+										/>
 									</button>
 								</div>
 							)}
@@ -456,7 +697,13 @@ export default function TemplateEditorModal({
 						{previewMode === "html" ? (
 							<div
 								className="mx-auto transition-all"
-								style={{ width: device === "mobile" ? 375 : "100%", maxWidth: "100%" }}
+								style={{
+									width:
+										device === "mobile"
+											? 375
+											: "100%",
+									maxWidth: "100%",
+								}}
 							>
 								<iframe
 									ref={previewRef}
@@ -464,13 +711,16 @@ export default function TemplateEditorModal({
 									srcDoc={previewDoc}
 									sandbox="allow-same-origin"
 									onLoad={measurePreview}
-									style={{ height: previewHeight }}
+									style={{
+										height: previewHeight,
+									}}
 									className="w-full rounded-md border border-border bg-white"
 								/>
 							</div>
 						) : (
 							<pre className="mx-auto max-w-[640px] overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-white p-5 font-mono text-[12.5px] leading-relaxed text-[#111827]">
-								{renderedText.trim() || "(no plain-text body — auto-generated from HTML at send time)"}
+								{renderedText.trim() ||
+									"(no plain-text body — auto-generated from HTML at send time)"}
 							</pre>
 						)}
 					</div>
@@ -487,11 +737,22 @@ export default function TemplateEditorModal({
 							disabled={isPending || resetting}
 							className="inline-flex items-center gap-1.5 text-xs font-medium text-text-tertiary transition-colors hover:text-text-primary disabled:opacity-50"
 						>
-							{resetting ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+							{resetting ? (
+								<Loader2
+									size={12}
+									className="animate-spin"
+								/>
+							) : (
+								<RotateCcw size={12} />
+							)}
 							Reset to default
 						</button>
 					)}
-					{error && <p className="truncate text-xs text-error-text">{error}</p>}
+					{error && (
+						<p className="truncate text-xs text-error-text">
+							{error}
+						</p>
+					)}
 				</div>
 				<div className="flex flex-shrink-0 items-center gap-2">
 					<button
@@ -507,7 +768,12 @@ export default function TemplateEditorModal({
 							disabled={isPending}
 							className="inline-flex h-8 items-center gap-1.5 rounded-md bg-confirm px-4 text-sm font-semibold text-on-primary transition-colors hover:bg-confirm-hover disabled:cursor-not-allowed disabled:opacity-50"
 						>
-							{isPending && <Loader2 size={12} className="animate-spin" />}
+							{isPending && (
+								<Loader2
+									size={12}
+									className="animate-spin"
+								/>
+							)}
 							Save Template
 						</button>
 					)}

@@ -119,6 +119,13 @@ export const DISPATCHER_CATALOG = [
 		],
 	},
 	{
+		category: "Customer messages",
+		permissions: [
+			{ id: "view_customer_comms", label: "View Customer Messages" },
+			{ id: "manage_customer_comms", label: "Manage Customer Messages" },
+		],
+	},
+	{
 		category: "Projects",
 		permissions: [
 			{ id: "view_projects", label: "View Projects" },

@@ -49,4 +49,20 @@ export interface FieldPurchaseGrantRequestedEvent {
 	technicianId: string;
 }
 
+/** Mirrors backend/src/services/recordChanged.ts. Ids only; listeners refetch. */
+export type RecordType =
+	| "visit"
+	| "job"
+	| "client"
+	| "request"
+	| "quote"
+	| "invoice"
+	| "recurring_plan";
+
+export interface RecordChangedEvent {
+	type: RecordType;
+	id: string;
+	jobId?: string;
+}
+
 export type { VisitStatusEvent };

@@ -1,8 +1,9 @@
 import { getScopedDb } from "../lib/context.js";
 import { Prisma, followup_trigger_type } from "../../generated/prisma/client.js";
-import { resolveStepSendAt, resolveContactEmail } from "./followupEngine.js";
+import { resolveStepSendAt, resolveContact } from "./followupEngine.js";
 import { log } from "./appLogger.js";
 import { isModuleOn } from "./entitlementService.js";
+import { canSend } from "./consentService.js";
 
 // ============================================================================
 // Followup triggers — best-effort hooks called from entity controllers to
@@ -31,14 +32,17 @@ function run(fn: () => Promise<void>, label: string, ctx: Record<string, unknown
 
 const orgFollowupsEnabled = (orgId: string): Promise<boolean> => isModuleOn(orgId, "followups");
 
-/** Pick a client's best contact email (primary → billing → first, among those with an email). */
-async function resolveClientRecipient(sdb: ScopedDb, clientId: string): Promise<string | null> {
+/** Pick a client's followup contact (see resolveContact for the eligibility rules). */
+async function resolveClientRecipient(
+	sdb: ScopedDb,
+	clientId: string,
+): Promise<{ contact_id: string; email: string } | null> {
 	const client = await sdb.client.findFirst({
 		where: { id: clientId },
 		include: { contacts: { include: { contact: true } } },
 	});
 	if (!client) return null;
-	return resolveContactEmail(client.contacts);
+	return resolveContact(client.contacts);
 }
 
 // Reasons that mean "this address should not be contacted again" — a re-fired
@@ -75,6 +79,7 @@ async function enrollForTrigger(p: EnrollParams): Promise<void> {
 		log.warn({ orgId: p.orgId, clientId: p.clientId, trigger: p.triggerType }, "followup trigger: no recipient email");
 		return;
 	}
+	if (!(await canSend(sdb, recipient.contact_id, "email"))) return;
 
 	// Suppress re-enrollment against this anchor if a prior enrollment for it was
 	// stopped for a deliverability reason (bounce/spam) — never re-chase that address.
@@ -110,7 +115,8 @@ async function enrollForTrigger(p: EnrollParams): Promise<void> {
 					organization_id: p.orgId,
 					sequence_id: seq.id,
 					client_id: p.clientId,
-					recipient_email: recipient,
+					contact_id: recipient.contact_id,
+					recipient_email: recipient.email,
 					status: "active",
 					current_step_order: 0,
 					next_send_at,
@@ -251,13 +257,59 @@ export function onVisitRescheduled(visitId: string, orgId: string, newStart: Dat
 			const now = new Date();
 			for (const e of enrollments) {
 				const nextStep = e.sequence.steps.find((s) => s.step_order > e.current_step_order);
-				const next_send_at = nextStep
-					? resolveStepSendAt(e.sequence, nextStep, { base: now, anchorAt: newStart })
-					: null;
-				await sdb.followup_enrollment.update({
-					where: { id: e.id },
-					data: { anchor_at: newStart, next_send_at },
-				});
+				if (nextStep) {
+					await sdb.followup_enrollment.update({
+						where: { id: e.id },
+						data: {
+							anchor_at: newStart,
+							next_send_at: resolveStepSendAt(e.sequence, nextStep, {
+								base: now,
+								anchorAt: newStart,
+							}),
+						},
+					});
+					continue;
+				}
+
+				// Every step already went out for the old time. Re-arm from the first
+				// step whose send time for the new start is still ahead (a 3-day/1-day
+				// chain moved 2 days out re-arms the 1-day step); if none is, end it
+				// explicitly rather than leaving an active enrollment with no next_send_at.
+				const steps = e.sequence.steps;
+				let rearmIdx = -1;
+				let rearmAt: Date | null = null;
+				for (let i = 0; i < steps.length; i++) {
+					const at = resolveStepSendAt(e.sequence, steps[i], {
+						base: now,
+						anchorAt: newStart,
+					});
+					if (at.getTime() > now.getTime()) {
+						rearmIdx = i;
+						rearmAt = at;
+						break;
+					}
+				}
+				if (rearmIdx >= 0 && rearmAt) {
+					await sdb.followup_enrollment.update({
+						where: { id: e.id },
+						data: {
+							anchor_at: newStart,
+							current_step_order: rearmIdx === 0 ? 0 : steps[rearmIdx - 1].step_order,
+							next_send_at: rearmAt,
+						},
+					});
+				} else {
+					await sdb.followup_enrollment.update({
+						where: { id: e.id },
+						data: {
+							anchor_at: newStart,
+							status: "completed",
+							completed_at: now,
+							stop_reason: "rescheduled_too_late",
+							next_send_at: null,
+						},
+					});
+				}
 			}
 		},
 		"onVisitRescheduled",

@@ -1,9 +1,10 @@
 import z, { ZodError } from "zod";
-import type { technician_shift } from "../../generated/prisma/client.js";
+import type { Prisma, technician_shift } from "../../generated/prisma/client.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { isClientMessage } from "../types/responses.js";
 import { localDateString, weekRangeIn, weekStartOf } from "../lib/dayRange.js";
 import { approveTimesheetSchema, editShiftSchema, PAID_BREAK_REASONS, reviewCorrectionSchema } from "../lib/validate/timesheets.js";
+import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import { logActivity } from "../services/logger.js";
 import { deleteTimeActivity } from "../services/qb/qbTimeActivity.js";
 import { createNotification, notifyDispatchers } from "./notificationsController.js";
@@ -466,17 +467,7 @@ export async function editShift(
             }
 
             for (const visitId of visitIds) {
-                const visit = await tx.job_visit.findUnique({
-                    where: { id: visitId },
-                    include: { line_items: true },
-                });
-                if (!visit) continue;
-                const subtotal = visit.line_items.reduce((s, li) => s + Number(li.total), 0);
-                const tax = parseFloat((subtotal * Number(visit.tax_rate)).toFixed(2));
-                await tx.job_visit.update({
-                    where: { id: visitId },
-                    data: { subtotal, tax_amount: tax, total: parseFloat((subtotal + tax).toFixed(2)) },
-                });
+                await recomputeVisitTotals(visitId, orgId, tx as unknown as Prisma.TransactionClient);
             }
 
             const grossHours = hrs(start, end);

@@ -1,5 +1,7 @@
 import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from "express";
+import { REFUSAL_STATUS } from "../lib/refusalStatus.js";
+import { recipientEmailSchema } from "../lib/validate/shared.js";
 import {
 	ErrorCodes,
 	createSuccessResponse,
@@ -27,6 +29,7 @@ import {
 import { generateQuotePdf } from "../lib/pdf/pdfService.js";
 import { isAddressTaxChoiceRefusal } from "../lib/addressTaxChoice.js";
 import { sendQuoteEmail } from "../services/emailService.js";
+import { recordDocumentSend } from "../services/documentSendTracking.js";
 import { isSendFailure } from "../services/emailErrors.js";
 import { logActivity } from "../services/logger.js";
 import { onQuoteSent } from "../services/followupTriggers.js";
@@ -118,19 +121,21 @@ router.post(
 	async (req, res, next) => {
 		try {
 			const id = req.params.id as string;
-			const recipientEmail: string | undefined =
-				req.body?.recipient_email;
-			if (!recipientEmail) {
+			const parsedEmail = recipientEmailSchema.safeParse(
+				req.body?.recipient_email,
+			);
+			if (!parsedEmail.success) {
 				return res
 					.status(400)
 					.json(
 						createErrorResponse(
 							ErrorCodes.VALIDATION_ERROR,
-							"recipient_email is required",
+							"recipient_email must be a valid email address",
 						),
 					);
 			}
 
+			const recipientEmail = parsedEmail.data;
 			const orgId = req.user!.organization_id as string;
 
 			// Guard BEFORE the email. The status update below would reject an
@@ -184,7 +189,15 @@ router.post(
 			}
 
 			try {
-				await sendQuoteEmail(id, recipientEmail, orgId);
+				const sent = await sendQuoteEmail(id, recipientEmail, orgId);
+				await recordDocumentSend({
+					orgId,
+					event: "quote_sent",
+					entityId: id,
+					clientId: existing.client_id,
+					recipient: recipientEmail,
+					messageId: sent?.messageId ?? null,
+				});
 			} catch (e: unknown) {
 				// A missing document is not a delivery failure. Let the outer
 				// handler answer it as a 404 rather than restating it as an
@@ -264,6 +277,11 @@ router.post("/", requirePermission("create_quotes"), async (req, res, next) => {
 		const context = getUserContext(req);
 		const result = await insertQuote(req, orgId, context);
 
+		if (result.err && result.code) {
+			return res
+				.status(REFUSAL_STATUS[result.code])
+				.json(createErrorResponse(result.code, result.err));
+		}
 		if (result.err) {
 			return res
 				.status(400)

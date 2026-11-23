@@ -18,10 +18,11 @@ import {
 	insertJobVisit,
 	updateJobVisit,
 } from "../../controllers/jobVisitsController.js";
-import { updateJob } from "../../controllers/jobsController.js";
+import { cancelJob } from "../../controllers/jobsController.js";
 import { insertJobNote } from "../../controllers/jobNotesController.js";
 import { requestFor, unwrap, userContextFor, type ControllerOutcome } from "../controllerBridge.js";
 import { defineTool } from "../registry.js";
+import { AgentErrorCodes, AgentToolError } from "../types.js";
 
 const isoDateTime = z
 	.string()
@@ -173,42 +174,50 @@ export const assignTechnician = defineTool({
 	},
 });
 
+const REFUSAL_AGENT_CODE = {
+	FORBIDDEN: AgentErrorCodes.FORBIDDEN,
+	NOT_FOUND: AgentErrorCodes.NOT_FOUND,
+	WRONG_STATE: AgentErrorCodes.CONFLICT,
+	CONFLICT: AgentErrorCodes.CONFLICT,
+} as const;
+
 export const updateJobStatus = defineTool({
 	name: "update_job_status",
-	title: "Change a job's status",
+	title: "Cancel a job",
 	description:
-		"Move a job to a different status. Transitions are validated server-side — an invalid one is refused with " +
-		"an explanation rather than silently applied. Cancelling requires a reason. A person must approve first.",
+		"Cancel a job. Only Cancelled is accepted: every other job status follows the job's visits and cannot be " +
+		"set directly. Cancelling requires a reason and closes the job's open visits. A person must approve first.",
 	risk: "write",
 	requiresApproval: true,
-	permissions: ["edit_jobs", "update_job_status"],
-	input: z
-		.object({
-			job_id: z.string().uuid(),
-			status: z.enum(["Unscheduled", "Scheduled", "InProgress", "Completed", "Cancelled"]),
-			cancellation_reason: z.string().min(1).optional().describe("Required when cancelling."),
-		})
-		.refine(
-			(v) => v.status !== "Cancelled" || !!v.cancellation_reason,
-			{ message: "cancellation_reason is required when cancelling a job", path: ["cancellation_reason"] },
-		),
+	permissions: ["edit_jobs"],
+	input: z.object({
+		job_id: z.string().uuid(),
+		status: z.enum(["Cancelled"]),
+		cancellation_reason: z.string().trim().min(1).describe("Why the job is being cancelled."),
+	}),
 	audit: (input) => ({
 		event_type: "job.status_changed",
 		action: "updated",
 		entity_type: "job",
 		entity_id: input.job_id,
-		reason: `Status set to ${input.status} by the assistant with human approval`,
+		reason: "Cancelled by the assistant with human approval",
 	}),
 	invalidates: (input) => ["jobs", `job:${input.job_id}`],
 	async handler({ input, ctx }) {
-		const { job_id, ...changes } = input;
-		const outcome = (await updateJob(
-			requestFor(ctx, changes, { id: job_id }),
+		const outcome = await cancelJob(
+			input.job_id,
+			input.cancellation_reason,
 			ctx.organizationId,
 			userContextFor(ctx),
-		)) as ControllerOutcome<{ id: string; status: string; job_number: string }>;
-
-		const job = unwrap(outcome, "Updating the job");
+		);
+		// The refusal code says it plainly; unwrap would have to guess from the text.
+		if (outcome.err && outcome.code) {
+			throw new AgentToolError(REFUSAL_AGENT_CODE[outcome.code], outcome.err);
+		}
+		const job = unwrap(
+			outcome as ControllerOutcome<{ id: string; status: string; job_number: string }>,
+			"Cancelling the job",
+		);
 		return { id: job.id, job_number: job.job_number, status: job.status };
 	},
 });

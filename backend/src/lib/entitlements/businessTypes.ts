@@ -17,6 +17,7 @@ const ALL = [
 	"purchasing",
 	"field_purchases",
 	"followups",
+	"customer_comms",
 	"disputes",
 ];
 const only = (...keys: string[]): Record<string, boolean> =>
@@ -31,15 +32,28 @@ export const BUSINESS_TYPES: readonly BusinessType[] = [
 	{
 		key: "landscaping",
 		label: "Landscaping",
-		moduleDefaults: only("quotes", "recurring_plans", "fleet", "followups", "disputes"),
+		moduleDefaults: only(
+			"quotes",
+			"recurring_plans",
+			"fleet",
+			"followups",
+			"customer_comms",
+			"disputes",
+		),
 	},
 	{
 		key: "cleaning",
 		label: "Cleaning",
-		moduleDefaults: only("quotes", "recurring_plans", "followups", "disputes"),
+		moduleDefaults: only(
+			"quotes",
+			"recurring_plans",
+			"followups",
+			"customer_comms",
+			"disputes",
+		),
 	},
 	{ key: "towing", label: "Towing", moduleDefaults: only("fleet", "disputes") },
-	{ key: "general", label: "Other", moduleDefaults: except("followups") },
+	{ key: "general", label: "Other", moduleDefaults: except("followups", "customer_comms") },
 ];
 
 export const getBusinessType = (key: string) => BUSINESS_TYPES.find((t) => t.key === key);

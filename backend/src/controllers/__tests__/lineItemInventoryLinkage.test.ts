@@ -9,6 +9,15 @@ import { updateJobVisit } from "../jobVisitsController.js";
 import { db } from "../../db.js";
 import type { Request } from "express";
 
+vi.mock("../../services/customerComms/visitEvents.js", () => ({
+	notifyVisitScheduled: vi.fn(async () => undefined),
+	notifyVisitRescheduled: vi.fn(async () => undefined),
+	notifyVisitCancelled: vi.fn(async () => undefined),
+	retimeVisitReminders: vi.fn(async () => undefined),
+	notifyJobCompleted: vi.fn(async () => undefined),
+	notifyVisitCompleted: vi.fn(async () => undefined),
+	notifyTechOnTheWay: vi.fn(async () => undefined),
+}));
 vi.mock("../../db.js", () => {
 	const $extends = vi.fn();
 	const mockDb = {
@@ -89,6 +98,7 @@ function setup(existingLines: ExistingLine[], catalogIds: string[] = []) {
 	);
 
 	const mockTx = {
+		$queryRaw: vi.fn().mockResolvedValue([]),
 		job_visit: {
 			update: vi.fn().mockResolvedValue({ id: "visit-1", status: "Scheduled" }),
 			findMany: vi.fn().mockResolvedValue([{ id: "visit-1", status: "Scheduled" }]),

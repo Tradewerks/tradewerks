@@ -12,6 +12,7 @@ const ctx = (over: Record<string, unknown> = {}) => ({
 	visitCount: 2,
 	lineItemCount: 0,
 	openVisitCount: 1,
+	completedVisitCount: 0,
 	canEdit: true,
 	canCreateVisit: true,
 	canCreateInvoice: true,
@@ -95,5 +96,35 @@ describe("jobActions", () => {
 			expect(a.disabled).toBe(true);
 			expect(a.disabledReason).toMatch(/permission/i);
 		}
+	});
+
+	it("Schedule Visit is offered on a Completed job", () => {
+		const visit = jobActions(ctx({ status: "Completed" }))[0];
+		expect(visit.disabled).toBe(false);
+		expect(visit.hidden).toBeFalsy();
+	});
+
+	it("Schedule Visit is offered on a Cancelled job", () => {
+		expect(jobActions(ctx({ status: "Cancelled" }))[0].disabled).toBe(false);
+	});
+
+	it("Create Invoice is offered on a Cancelled job with a completed visit", () => {
+		const invoice = jobActions(ctx({ status: "Cancelled", completedVisitCount: 1 }))[1];
+		expect(invoice.disabled).toBe(false);
+	});
+
+	it("refuses to invoice a Cancelled job with no completed visit", () => {
+		const invoice = jobActions(ctx({ status: "Cancelled", completedVisitCount: 0 }))[1];
+		expect(invoice.disabled).toBe(true);
+		expect(invoice.disabledReason).toBe(
+			"This job was cancelled before any visit was completed."
+		);
+	});
+
+	it("Cancel Job is offered on a job with no visits", () => {
+		const cancel = jobActions(
+			ctx({ status: "Unscheduled", visitCount: 0, openVisitCount: 0 })
+		)[2];
+		expect(cancel.disabled).toBe(false);
 	});
 });

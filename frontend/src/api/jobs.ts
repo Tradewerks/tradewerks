@@ -1,6 +1,7 @@
 import axios, { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
+import { conflictFromResponse } from "../lib/apiErrors";
 import type {
 	CreateJobInput,
 	UpdateJobInput,
@@ -70,6 +71,17 @@ export const deleteJob = async (id: string): Promise<{ message: string; id: stri
 	} catch (err) {
 		throw new Error((isAxiosError(err) && err.response?.data?.error?.message) || "Failed to delete job");
 	}
+};
+
+/** One request cancels the job and every open visit in a single transaction. */
+export const cancelJob = async (jobId: string, reason: string): Promise<Job> => {
+	const response = await api.post<ApiResponse<Job>>(`/jobs/${jobId}/cancel`, { reason });
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to cancel job");
+	}
+
+	return response.data.data!;
 };
 
 // ============================================
@@ -156,10 +168,33 @@ export const updateJobVisit = async (
 	id: string,
 	updates: UpdateJobVisitInput
 ): Promise<JobVisit> => {
-	const response = await api.put<ApiResponse<JobVisit>>(`/job-visits/${id}`, updates);
+	let response;
+	try {
+		response = await api.put<ApiResponse<JobVisit>>(`/job-visits/${id}`, updates);
+	} catch (err) {
+		throw conflictFromResponse(err) ?? err;
+	}
 
 	if (!response.data.success) {
 		throw new Error(response.data.error?.message || "Failed to update job visit");
+	}
+
+	return response.data.data!;
+};
+
+// The technician's only line write: quantity only, priced server-side. 0 deletes the line.
+export const updateFieldLineQuantity = async (
+	visitId: string,
+	lineItemId: string,
+	quantity: number
+): Promise<JobVisit> => {
+	const response = await api.patch<ApiResponse<JobVisit>>(
+		`/job-visits/${visitId}/field-lines/${lineItemId}`,
+		{ quantity }
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to update line quantity");
 	}
 
 	return response.data.data!;
@@ -178,6 +213,22 @@ export const assignTechniciansToVisit = async (
 		throw new Error(
 			response.data.error?.message || "Failed to assign technicians to visit"
 		);
+	}
+
+	return response.data.data!;
+};
+
+export const patchVisitTechnicians = async (
+	visitId: string,
+	diff: { add?: string[]; remove?: string[] }
+): Promise<JobVisit> => {
+	const response = await api.patch<ApiResponse<JobVisit>>(
+		`/job-visits/${visitId}/technicians`,
+		diff
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to update the visit's technicians");
 	}
 
 	return response.data.data!;

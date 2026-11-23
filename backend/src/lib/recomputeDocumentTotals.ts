@@ -5,6 +5,7 @@
  * cannot drift. Locked snapshots never recompute (and so never resolve a rate).
  */
 import { Prisma } from "../../generated/prisma/client.js";
+import { recomputeJobActualTotal } from "../services/visitLifecycle/jobRollup.js";
 import { calculateDocumentTax, centsToDollars } from "../services/taxEngine.js";
 import { invoiceServiceLocation } from "../services/tax/address.js";
 import {
@@ -40,7 +41,7 @@ export type DocumentModel = "invoice" | "quote" | "job" | "job_visit";
  * already frozen (a legitimate no-op).
  */
 export type RecomputeResult =
-	| { ok: true }
+	| { ok: true; visit?: { status: string; job_id: string } }
 	| { ok: false; reason: "not_found" | "locked" };
 
 type LineRow = {
@@ -78,6 +79,8 @@ interface LoadedDoc {
 	address: string | null;
 	coords: unknown;
 	line_items: LineRow[];
+	/** Visit only: what the job rollup needs, read with the document. */
+	visit?: { status: string; job_id: string };
 }
 
 const LINE_SELECT = {
@@ -301,6 +304,8 @@ async function loadDocument(
 		where: { id: documentId },
 		select: {
 			...TAX_INPUTS,
+			status: true,
+			job_id: true,
 			line_items: LINE_SELECT,
 			job: {
 				select: {
@@ -327,6 +332,7 @@ async function loadDocument(
 		address: visit.job.address,
 		coords: visit.job.coords,
 		line_items: visit.line_items,
+		visit: { status: visit.status, job_id: visit.job_id },
 	};
 }
 
@@ -546,7 +552,7 @@ export async function recomputeDocumentTotals(
 		});
 	}
 
-	return { ok: true };
+	return { ok: true, visit: doc.visit };
 }
 
 export async function recomputeJobTotals(
@@ -562,7 +568,12 @@ export async function recomputeVisitTotals(
 	organizationId: string,
 	tx: Prisma.TransactionClient,
 ): Promise<RecomputeResult> {
-	return recomputeDocumentTotals("job_visit", visitId, organizationId, tx);
+	const result = await recomputeDocumentTotals("job_visit", visitId, organizationId, tx);
+	if (!result.ok) return result;
+	// A Completed visit's total feeds job.actual_total, so it must follow every change.
+	const visit = result.visit;
+	if (visit?.status === "Completed") await recomputeJobActualTotal(tx, visit.job_id);
+	return result;
 }
 
 type SnapshotModel = Extract<DocumentModel, "invoice" | "quote">;

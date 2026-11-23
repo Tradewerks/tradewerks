@@ -9,6 +9,7 @@ const meters = {
 	ai_calls_month: { used: 0, limit: 500 },
 	tax_lookups_month: { used: 0, limit: 2000 },
 	receipt_scans_month: { used: 12, limit: 300 },
+	sms_segments_month: { used: 40, limit: 500 },
 };
 
 const mod = (key: string, state: "on" | "off_by_org" | "not_in_plan") =>
@@ -22,6 +23,19 @@ describe("UsageMeters", () => {
 		expect(screen.getByRole("progressbar", { name: "Receipt scans" })).toHaveAttribute(
 			"aria-valuenow",
 			"12"
+		);
+	});
+
+	it("shows the text segment meter while the sms module is on", () => {
+		render(
+			<UsageMeters
+				usage={{ period_start: "2026-10-01", meters }}
+				modules={[...allOn, mod("sms", "on")]}
+			/>
+		);
+		expect(screen.getByRole("progressbar", { name: "Text segments" })).toHaveAttribute(
+			"aria-valuenow",
+			"40"
 		);
 	});
 
@@ -50,12 +64,14 @@ describe("UsageMeters", () => {
 					mod("field_purchases", "off_by_org"),
 					mod("ai_assistant", "not_in_plan"),
 					mod("tax_auto", "not_in_plan"),
+					mod("sms", "not_in_plan"),
 				]}
 			/>
 		);
 		expect(screen.queryByText("Receipt scans")).toBeNull();
 		expect(screen.queryByText("AI assistant requests")).toBeNull();
 		expect(screen.queryByText("Tax lookups")).toBeNull();
+		expect(screen.queryByText("Text segments")).toBeNull();
 		expect(screen.getByText("Dispatchers")).toBeInTheDocument();
 		expect(screen.getByText("Technicians")).toBeInTheDocument();
 	});

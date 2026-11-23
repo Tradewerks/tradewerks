@@ -293,6 +293,14 @@ export default function JobVisitDetailPage() {
 		}
 	};
 
+	const handleRestore = async () => {
+		try {
+			await transitionMutation.mutateAsync({ visitId: visitId!, action: "restore" });
+		} catch (error) {
+			toast.error(errorMessage(error, "Couldn't restore this visit."));
+		}
+	};
+
 	const handleCancelSubmit = async (reason: string) => {
 		try {
 			await cancelVisitMutation.mutateAsync({
@@ -360,6 +368,7 @@ export default function JobVisitDetailPage() {
 	const actions = visitActions({
 		status: visit.status,
 		canUpdateStatus: UPDATE_VISIT,
+		canRestore: EDIT_VISIT,
 		handlers: {
 			drive: requireTech(() => applyVerb("drive")),
 			arrive: requireTech(() => applyVerb("arrive")),
@@ -369,6 +378,7 @@ export default function JobVisitDetailPage() {
 			delay: () => setPendingConfirm("delay"),
 			complete: requireTech(() => setPendingConfirm("complete")),
 			cancel: () => setReasonModal("cancel"),
+			restore: () => void handleRestore(),
 		},
 	});
 

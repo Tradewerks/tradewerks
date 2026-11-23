@@ -6,6 +6,7 @@ import { usePermission } from "../../hooks/usePermission";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import DatePicker from "../ui/DatePicker";
 import Dropdown from "../ui/Dropdown";
+import TechnicianPhotoField from "./TechnicianPhotoField";
 
 interface EditTechnicianProps {
 	isOpen: boolean;
@@ -108,6 +109,12 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 	const formContent = useMemo(
 		() => (
 			<div className="space-y-2 lg:space-y-3 xl:space-y-4 min-w-0">
+				{/* Photo uploads on its own, outside Save Changes. */}
+				<div className="min-w-0">
+					<span className={LABEL}>Photo</span>
+					<TechnicianPhotoField technicianId={technician.id} />
+				</div>
+
 				{/* Name */}
 				<div className="min-w-0">
 					<label className={LABEL}>Full Name *</label>
@@ -238,7 +245,7 @@ export default function EditTechnician({ isOpen, onClose, technician }: EditTech
 				</div>
 			</div>
 		),
-		[name, email, phone, title, description, status, hireDate, organizationRoleId, technicianRoles, isLoading, costRate, canManage]
+		[name, email, phone, title, description, status, hireDate, organizationRoleId, technicianRoles, isLoading, costRate, canManage, technician.id]
 	);
 
 	return (
