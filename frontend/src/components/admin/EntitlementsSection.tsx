@@ -28,6 +28,7 @@ export default function EntitlementsSection() {
 	const [rowError, setRowError] = useState<{ key: string; message: string } | null>(null);
 
 	const mutation = useMutation({
+		meta: { silentError: true },
 		mutationFn: updateModuleChoices,
 		onSuccess: (next) => {
 			queryClient.setQueryData(ENTITLEMENTS_QUERY_KEY, next);

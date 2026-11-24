@@ -25,6 +25,7 @@ export const useMfaStatusQuery = () =>{
 export const useEnableMfaMutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        meta: { silentError: true },
         mutationFn: enableMfa,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["mfaStatus"]})
@@ -35,6 +36,7 @@ export const useEnableMfaMutation = () => {
 export const useDisableMfaMutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
+        meta: { silentError: true },
         mutationFn: disableMfa,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["mfaStatus"]})

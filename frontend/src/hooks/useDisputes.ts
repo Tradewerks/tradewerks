@@ -56,6 +56,7 @@ const invalidateBoth = (
 export const useOpenDisputeMutation = (kind: DisputeKind, documentId: string) => {
 	const queryClient = useQueryClient();
 	return useMutation({
+		meta: { silentError: true },
 		mutationFn: (input: OpenDisputeInput) => openDispute(kind, documentId, input),
 		onSuccess: () => invalidateBoth(queryClient, kind, documentId),
 	});
@@ -64,6 +65,7 @@ export const useOpenDisputeMutation = (kind: DisputeKind, documentId: string) =>
 export const useResolveDisputeMutation = (kind: DisputeKind, documentId: string) => {
 	const queryClient = useQueryClient();
 	return useMutation({
+		meta: { silentError: true },
 		mutationFn: ({ disputeId, ...input }: ResolveDisputeInput & { disputeId: string }) =>
 			resolveDispute(kind, documentId, disputeId, input),
 		onSuccess: () => invalidateBoth(queryClient, kind, documentId),

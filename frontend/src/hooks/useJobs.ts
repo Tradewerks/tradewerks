@@ -56,38 +56,38 @@ export const useCreateJobMutation = (): UseMutationResult<Job, Error, CreateJobI
 
 	return useMutation({
 		mutationFn: jobApi.createJob,
-		onSuccess: async (newJob: Job) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+		onSuccess: (newJob: Job) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", newJob.client_id],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["clients"] });
+			void queryClient.invalidateQueries({ queryKey: ["clients"] });
 
 			if (newJob.request_id) {
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["requests", newJob.request_id],
 				});
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["requests"],
 				});
 			}
 
 			if (newJob.quote_id) {
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["quotes", newJob.quote_id],
 				});
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["quotes"],
 				});
 				// Selling one quote closes Revise & Resend on its siblings, and
 				// those outcomes arrive with each sibling's disputes.
-				await queryClient.invalidateQueries({ queryKey: ["disputes"] });
+				void queryClient.invalidateQueries({ queryKey: ["disputes"] });
 			}
 
 			queryClient.setQueryData(["jobs", newJob.id], newJob);
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -101,18 +101,18 @@ export const useUpdateJobMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: ({ id, updates }) => jobApi.updateJob(id, updates),
-		onSuccess: async (updatedJob, variables) => {
+		onSuccess: (updatedJob, variables) => {
 			// Covers the case where a job goes from 0 → 1+ line items and the
 			// stale empty-array cache would otherwise win the race.
 			queryClient.setQueryData(["jobs", variables.id], updatedJob);
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", updatedJob.client_id],
 			});
 			// Address edits re-tax the open visits server-side.
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["clients"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["clients"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -126,13 +126,13 @@ export const useCancelJobMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: ({ jobId, reason }) => jobApi.cancelJob(jobId, reason),
-		onSuccess: async (job, variables) => {
+		onSuccess: (job, variables) => {
 			queryClient.setQueryData(["jobs", variables.jobId], job);
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -146,14 +146,14 @@ export const useDeleteJobMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: jobApi.deleteJob,
-		onSuccess: async (_, jobId) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			await queryClient.invalidateQueries({ queryKey: ["clients"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+		onSuccess: (_, jobId) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["clients"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 
 			queryClient.removeQueries({ queryKey: ["jobs", jobId] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -247,54 +247,55 @@ export const useCreateJobVisitMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: jobApi.createJobVisit,
-		onSuccess: async (newVisit) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({
+		onSuccess: (newVisit) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", newVisit.job_id, "visits"],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", newVisit.job_id],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 			if (newVisit.visit_techs && newVisit.visit_techs.length > 0) {
 				for (const vt of newVisit.visit_techs) {
-					await queryClient.invalidateQueries({
+					void queryClient.invalidateQueries({
 						queryKey: ["jobVisits", "tech", vt.tech_id],
 					});
 				}
 			}
 
 			queryClient.setQueryData(["jobVisits", newVisit.id], newVisit);
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
 
-const refreshAfterVisitWrite = async (
+const refreshAfterVisitWrite = (
 	queryClient: ReturnType<typeof useQueryClient>,
 	updatedVisit: JobVisit
 ) => {
 	// Set fresh data first to avoid stale-cache race on line_items
 	queryClient.setQueryData(qk.visits.detail(updatedVisit.id), updatedVisit);
 
-	await queryClient.invalidateQueries({ queryKey: qk.visits.all });
-	await queryClient.invalidateQueries({
+	void queryClient.invalidateQueries({ queryKey: qk.visits.all });
+	void queryClient.invalidateQueries({
 		queryKey: [...qk.jobs.detail(updatedVisit.job_id), "visits"],
 	});
-	await queryClient.invalidateQueries({
+	void queryClient.invalidateQueries({
 		queryKey: qk.jobs.detail(updatedVisit.job_id),
 	});
-	await queryClient.invalidateQueries({ queryKey: qk.jobs.all });
+	const jobsList = queryClient.invalidateQueries({ queryKey: qk.jobs.all });
 	if (updatedVisit.visit_techs && updatedVisit.visit_techs.length > 0) {
 		for (const vt of updatedVisit.visit_techs) {
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobVisits", "tech", vt.tech_id],
 			});
 		}
 	}
-	await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-	await queryClient.invalidateQueries({ queryKey: ["changes"] });
+	void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+	void queryClient.invalidateQueries({ queryKey: ["changes"] });
+	return jobsList;
 };
 
 export const useUpdateJobVisitMutation = (): UseMutationResult<
@@ -306,7 +307,9 @@ export const useUpdateJobVisitMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: ({ id, data }) => jobApi.updateJobVisit(id, data),
-		onSuccess: (updatedVisit) => refreshAfterVisitWrite(queryClient, updatedVisit),
+		onSuccess: (updatedVisit) => {
+			void refreshAfterVisitWrite(queryClient, updatedVisit);
+		},
 	});
 };
 
@@ -339,7 +342,9 @@ export const useUpdateFieldLineQuantityMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ visitId, lineItemId, quantity }) =>
 			jobApi.updateFieldLineQuantity(visitId, lineItemId, quantity),
-		onSuccess: (updatedVisit) => refreshAfterVisitWrite(queryClient, updatedVisit),
+		onSuccess: (updatedVisit) => {
+			void refreshAfterVisitWrite(queryClient, updatedVisit);
+		},
 	});
 };
 
@@ -353,19 +358,19 @@ export const useAssignTechniciansToVisitMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ visitId, techIds }) =>
 			jobApi.assignTechniciansToVisit(visitId, techIds),
-		onSuccess: async (updatedVisit) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({
+		onSuccess: (updatedVisit) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", updatedVisit.job_id, "visits"],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", updatedVisit.job_id],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 
 			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -380,9 +385,12 @@ export const usePatchVisitTechniciansMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ visitId, add, remove }) =>
 			jobApi.patchVisitTechnicians(visitId, { add, remove }),
+		// Awaited on purpose: the picker closes when this resolves and the card
+		// behind it must already show the new roster, not flash the old one.
 		onSuccess: async (updatedVisit) => {
-			await refreshAfterVisitWrite(queryClient, updatedVisit);
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			const jobsList = refreshAfterVisitWrite(queryClient, updatedVisit);
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			await jobsList;
 		},
 	});
 };
@@ -396,17 +404,17 @@ export const useAcceptJobVisitMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: ({ visitId, techId }) => jobApi.acceptJobVisit(visitId, techId),
-		onSuccess: async (updatedVisit) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({
+		onSuccess: (updatedVisit) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", updatedVisit.job_id, "visits"],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", updatedVisit.job_id],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -420,12 +428,12 @@ export const useDeleteJobVisitMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: jobApi.deleteJobVisit,
-		onSuccess: async (_, visitId) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
+		onSuccess: (_, visitId) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 			queryClient.removeQueries({ queryKey: ["jobVisits", visitId] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -439,7 +447,7 @@ export const useVisitTransitionMutation = (): UseMutationResult<JobVisit, Error,
 
 	return useMutation({
 		mutationFn: ({ visitId, action, pauseReason, techCoords }) => jobApi.transitionJobVisit(visitId, action, pauseReason, techCoords),
-		onSuccess: async (updatedVisit) => {
+		onSuccess: (updatedVisit) => {
 			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
 			if (updatedVisit.visit_techs?.length > 0) {
 				for (const vt of updatedVisit.visit_techs) {
@@ -453,13 +461,13 @@ export const useVisitTransitionMutation = (): UseMutationResult<JobVisit, Error,
 				["jobVisits"],
 				(old) => old?.map((v) => (v.id === updatedVisit.id ? updatedVisit : v)),
 			);
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -492,7 +500,7 @@ export const useDelayJobVisitMutation = (): UseMutationResult<JobVisit, Error, s
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: (visitId: string) => jobApi.delayJobVisit(visitId),
-		onSuccess: async (updatedVisit) => {
+		onSuccess: (updatedVisit) => {
 			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
 			if (updatedVisit.visit_techs?.length > 0) {
 				for (const vt of updatedVisit.visit_techs) {
@@ -502,13 +510,13 @@ export const useDelayJobVisitMutation = (): UseMutationResult<JobVisit, Error, s
 					);
 				}
 			}
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -522,22 +530,22 @@ export const useCancelJobVisitMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ visitId, cancellationReason }) =>
 			jobApi.cancelJobVisit(visitId, cancellationReason),
-		onSuccess: async (updatedVisit) => {
+		onSuccess: (updatedVisit) => {
 			queryClient.setQueryData(["jobVisits", updatedVisit.id], updatedVisit);
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 			for (const vt of updatedVisit.visit_techs ?? []) {
 				queryClient.setQueryData<JobVisit[]>(
 					["jobVisits", "tech", vt.tech_id],
 					(old) => old?.map((v) => (v.id === updatedVisit.id ? updatedVisit : v)),
 				);
-				await queryClient.invalidateQueries({ queryKey: ["technicians", vt.tech_id] });
+				void queryClient.invalidateQueries({ queryKey: ["technicians", vt.tech_id] });
 			}
-			await queryClient.invalidateQueries({ queryKey: ["technicians"] });
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -554,10 +562,10 @@ export const useClockInMutation = (): UseMutationResult<
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ visitId, techId }) => jobApi.clockInVisit(visitId, techId),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits", "tech", variables.techId] });
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits", variables.visitId] });
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits", "tech", variables.techId] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits", variables.visitId] });
 		},
 	});
 };
@@ -570,10 +578,10 @@ export const useClockOutMutation = (): UseMutationResult<
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ visitId, techId, pauseReason }) => jobApi.clockOutVisit(visitId, techId, pauseReason),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits", "tech", variables.techId] });
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits", variables.visitId] });
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits", "tech", variables.techId] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits", variables.visitId] });
 		},
 	});
 };
@@ -604,19 +612,19 @@ export const useCreateJobNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, data }: { jobId: string; data: CreateJobNoteInput }) =>
 			jobApi.createJobNote(jobId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "notes"],
 			});
 			if (variables.data.visit_id) {
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["jobVisits", variables.data.visit_id],
 				});
 			}
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -638,20 +646,20 @@ export const useUpdateJobNoteMutation = (): UseMutationResult<
 			noteId: string;
 			data: UpdateJobNoteInput;
 		}) => jobApi.updateJobNote(jobId, noteId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "notes"],
 			});
 			if (variables.data.visit_id) {
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["jobVisits", variables.data.visit_id],
 				});
 			}
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };
@@ -666,15 +674,15 @@ export const useDeleteJobNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, noteId }: { jobId: string; noteId: string }) =>
 			jobApi.deleteJobNote(jobId, noteId),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "notes"],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
-			await queryClient.invalidateQueries({ queryKey: ["changes"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["changes"] });
 		},
 	});
 };

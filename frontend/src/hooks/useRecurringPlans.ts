@@ -68,15 +68,15 @@ export const useCreateRecurringPlanMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: recurringPlanApi.createRecurringPlan,
-		onSuccess: async (newPlan: RecurringPlan) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (newPlan: RecurringPlan) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", newPlan.client_id],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["clients"] });
+			void queryClient.invalidateQueries({ queryKey: ["clients"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			if (newPlan.job_container?.id) {
 				queryClient.setQueryData(
@@ -87,7 +87,7 @@ export const useCreateRecurringPlanMutation = (): UseMutationResult<
 
 			// Set the plan by its own ID in cache
 			queryClient.setQueryData(["recurringPlans", newPlan.id], newPlan);
-			await queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
+			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 		},
 	});
 };
@@ -102,19 +102,19 @@ export const useUpdateRecurringPlanMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, updates }) =>
 			recurringPlanApi.updateRecurringPlan(jobId, updates),
-		onSuccess: async (updatedPlan, variables) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (updatedPlan, variables) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", updatedPlan.client_id],
 			});
-			await queryClient.invalidateQueries({ queryKey: ["clients"] });
+			void queryClient.invalidateQueries({ queryKey: ["clients"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			// If rule or line_items were updated, invalidate  related occurrences
 			if (variables.updates.rule || variables.updates.line_items) {
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["jobs", variables.jobId, "occurrences"],
 				});
 			}
@@ -141,10 +141,10 @@ export const useUpdateRecurringPlanLineItemsMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, updates }) =>
 			recurringPlanApi.updateRecurringPlanLineItems(jobId, updates),
-		onSuccess: async (updatedPlan, variables) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (updatedPlan, variables) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "occurrences"],
 			});
 
@@ -173,10 +173,10 @@ export const usePauseRecurringPlanMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: recurringPlanApi.pauseRecurringPlan,
-		onSuccess: async (updatedPlan, jobId) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (updatedPlan, jobId) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			queryClient.setQueryData(["jobs", jobId, "recurringPlan"], updatedPlan);
 			queryClient.setQueryData(["recurringPlans", updatedPlan.id], updatedPlan);
@@ -193,10 +193,10 @@ export const useResumeRecurringPlanMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: recurringPlanApi.resumeRecurringPlan,
-		onSuccess: async (updatedPlan, jobId) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (updatedPlan, jobId) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			queryClient.setQueryData(["jobs", jobId, "recurringPlan"], updatedPlan);
 			queryClient.setQueryData(["recurringPlans", updatedPlan.id], updatedPlan);
@@ -213,12 +213,12 @@ export const useCancelRecurringPlanMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: recurringPlanApi.cancelRecurringPlan,
-		onSuccess: async (updatedPlan, jobId) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (updatedPlan, jobId) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "occurrences"],
 			});
 
@@ -237,10 +237,10 @@ export const useCompleteRecurringPlanMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: recurringPlanApi.completeRecurringPlan,
-		onSuccess: async (updatedPlan, jobId) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+		onSuccess: (updatedPlan, jobId) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			queryClient.setQueryData(["jobs", jobId, "recurringPlan"], updatedPlan);
 			queryClient.setQueryData(["recurringPlans", updatedPlan.id], updatedPlan);
@@ -257,9 +257,9 @@ export const useRenewRecurringPlanMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: ({ jobId, ends_at }) => recurringPlanApi.renewRecurringPlan(jobId, ends_at),
-		onSuccess: async (updatedPlan, { jobId }) => {
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+		onSuccess: (updatedPlan, { jobId }) => {
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			queryClient.setQueryData(["jobs", jobId, "recurringPlan"], updatedPlan);
 			queryClient.setQueryData(["recurringPlans", updatedPlan.id], updatedPlan);
@@ -295,17 +295,17 @@ export const useGenerateOccurrencesMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, input }) =>
 			recurringPlanApi.generateOccurrences(jobId, input),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "occurrences"],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "recurringPlan"],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["recurringPlans"],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
 			});
 		},
@@ -322,22 +322,22 @@ export const useSkipOccurrenceMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ occurrenceId, input }) =>
 			recurringPlanApi.skipOccurrence(occurrenceId, input),
-		onSuccess: async (_, variables) => {
+		onSuccess: (_, variables) => {
 			const { jobId } = variables;
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "occurrences"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "recurringPlan"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["recurringPlans"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
 			});
 		},
@@ -358,7 +358,7 @@ export const useRescheduleOccurrenceMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ occurrenceId, input }) =>
 			recurringPlanApi.rescheduleOccurrence(occurrenceId, input),
-		onSuccess: async (updatedOccurrence, variables) => {
+		onSuccess: (updatedOccurrence, variables) => {
 			const { jobId } = variables;
 			const kept = updatedOccurrence.kept_visits ?? 0;
 			if (kept > 0) {
@@ -384,19 +384,19 @@ export const useRescheduleOccurrenceMutation = (): UseMutationResult<
 				});
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "occurrences"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "recurringPlan"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["recurringPlans"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
 			});
 		},
@@ -415,12 +415,12 @@ export const useBulkSkipOccurrencesMutation = (): UseMutationResult<
 
 	return useMutation({
 		mutationFn: recurringPlanApi.bulkSkipOccurrences,
-		onSuccess: async () => {
-			await queryClient.invalidateQueries({
+		onSuccess: () => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
 				predicate: (query) => query.queryKey.includes("occurrences"),
 			});
-			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
 		},
 		onError: (error) => {
 			console.error("Bulk skip occurrences mutation error:", error);
@@ -438,23 +438,23 @@ export const useGenerateVisitFromOccurrenceMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ occurrenceId }) =>
 			recurringPlanApi.generateVisitFromOccurrence(occurrenceId),
-		onSuccess: async (result, variables) => {
+		onSuccess: (result, variables) => {
 			const { jobId } = variables;
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "occurrences"],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "visits"],
 			});
 
-			await queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 
-			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 
 			if (result.visit_id) {
-				await queryClient.invalidateQueries({
+				void queryClient.invalidateQueries({
 					queryKey: ["jobVisits", result.visit_id],
 				});
 			}
@@ -493,8 +493,8 @@ export const useCreateRecurringPlanNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, data }) =>
 			recurringPlanApi.createRecurringPlanNote(jobId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "recurringPlan", "notes"],
 			});
 		},
@@ -511,8 +511,8 @@ export const useUpdateRecurringPlanNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, noteId, data }) =>
 			recurringPlanApi.updateRecurringPlanNote(jobId, noteId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "recurringPlan", "notes"],
 			});
 		},
@@ -529,8 +529,8 @@ export const useDeleteRecurringPlanNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ jobId, noteId }) =>
 			recurringPlanApi.deleteRecurringPlanNote(jobId, noteId),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["jobs", variables.jobId, "recurringPlan", "notes"],
 			});
 		},

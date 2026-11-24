@@ -192,12 +192,12 @@ export const useCreateRequestNoteMutation = (): UseMutationResult<
 			requestId: string;
 			data: CreateRequestNoteInput;
 		}) => requestApi.createRequestNote(requestId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["requests", variables.requestId],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["requests", variables.requestId, "notes"],
 			});
 		},
@@ -224,12 +224,12 @@ export const useUpdateRequestNoteMutation = (): UseMutationResult<
 			noteId: string;
 			data: UpdateRequestNoteInput;
 		}) => requestApi.updateRequestNote(requestId, noteId, data),
-		onSuccess: async (updatedNote, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (updatedNote, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["requests", variables.requestId],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["requests", variables.requestId, "notes"],
 			});
 
@@ -254,12 +254,12 @@ export const useDeleteRequestNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ requestId, noteId }: { requestId: string; noteId: string }) =>
 			requestApi.deleteRequestNote(requestId, noteId),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["requests", variables.requestId],
 			});
 
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["requests", variables.requestId, "notes"],
 			});
 

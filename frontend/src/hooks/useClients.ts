@@ -407,6 +407,7 @@ export const useSetContactConsentMutation = (): UseMutationResult<
 	const queryClient = useQueryClient();
 
 	return useMutation({
+		meta: { silentError: true },
 		mutationFn: ({ contactId, data }) => clientApi.setContactConsent(contactId, data),
 		onSuccess: (_, variables) => {
 			queryClient.invalidateQueries({
@@ -489,11 +490,11 @@ export const useCreateClientNoteMutation = (): UseMutationResult<
 			clientId: string;
 			data: CreateClientNoteInput;
 		}) => clientApi.createClientNote(clientId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", variables.clientId],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", variables.clientId, "notes"],
 			});
 		},
@@ -520,11 +521,11 @@ export const useUpdateClientNoteMutation = (): UseMutationResult<
 			noteId: string;
 			data: UpdateClientNoteInput;
 		}) => clientApi.updateClientNote(clientId, noteId, data),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", variables.clientId],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", variables.clientId, "notes"],
 			});
 		},
@@ -544,11 +545,11 @@ export const useDeleteClientNoteMutation = (): UseMutationResult<
 	return useMutation({
 		mutationFn: ({ clientId, noteId }: { clientId: string; noteId: string }) =>
 			clientApi.deleteClientNote(clientId, noteId),
-		onSuccess: async (_, variables) => {
-			await queryClient.invalidateQueries({
+		onSuccess: (_, variables) => {
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", variables.clientId],
 			});
-			await queryClient.invalidateQueries({
+			void queryClient.invalidateQueries({
 				queryKey: ["clients", variables.clientId, "notes"],
 			});
 		},

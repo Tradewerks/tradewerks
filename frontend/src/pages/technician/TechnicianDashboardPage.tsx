@@ -477,17 +477,17 @@ export default function TechnicianDashboardPage() {
 					{heroType === "wrapping-up" && (
 						<WrappingUpCard
 							onAvailable={() =>
-								user?.userId && markDoneMutation.mutateAsync(user.userId)
+								user?.userId && markDoneMutation.mutateAsync(user.userId).catch(() => undefined)
 							}
 							onHeadBack={() =>
-								user?.userId && returnFromJobMutation.mutateAsync(user.userId)
+								user?.userId && returnFromJobMutation.mutateAsync(user.userId).catch(() => undefined)
 							}
 							isLoading={markDoneMutation.isPending || returnFromJobMutation.isPending}
 						/>
 					)}
 					{heroType === "heading-back" && (
 						<HeadingBackCard
-							onBack={() => user?.userId && markDoneMutation.mutateAsync(user.userId)}
+							onBack={() => user?.userId && markDoneMutation.mutateAsync(user.userId).catch(() => undefined)}
 							isLoading={markDoneMutation.isPending}
 						/>
 					)}

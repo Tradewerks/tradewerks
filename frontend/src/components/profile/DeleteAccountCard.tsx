@@ -71,6 +71,7 @@ export default function DeleteAccountCard() {
 	const preview = useQuery({ queryKey: ["account-deletion-preview"], queryFn: getAccountDeletionPreview });
 
 	const mutation = useMutation({
+		meta: { silentError: true },
 		mutationFn: deleteAccount,
 		// The server has already ended the session. Leave the signed-in layout first;
 		// AccountDeletedPage then drops the local session. Signing out here would let
