@@ -158,6 +158,8 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	recurring_invoice_created: "view_invoices",
 	recurring_invoice_failed: "view_invoices",
 	recurring_plan_expiring: "view_recurring_plans",
+	qb_sync_failed: "edit_invoices",
+	qb_connection_lost: "manage_organization",
 };
 
 // Notify every dispatcher in the org who can see this type and hasn't muted it

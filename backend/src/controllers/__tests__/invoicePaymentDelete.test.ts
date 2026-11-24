@@ -64,6 +64,7 @@ import { deleteInvoicePayment } from "../invoicesController.js";
 import { getOrgRealmId, isQBConnected } from "../../services/quickbooksService.js";
 import { deleteQBPayment } from "../../services/qb/qbPayments.js";
 import { logExternalSync } from "../../services/qb/qbSyncLog.js";
+import { log } from "../../services/appLogger.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -94,7 +95,10 @@ function paidSum(amount: number) {
 }
 
 describe("deleteInvoicePayment", () => {
-	beforeEach(() => vi.clearAllMocks());
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockFn(db.invoice.updateMany).mockImplementation(async () => ({ count: 1 }));
+	});
 
 	it("locks the invoice before reading the payment", async () => {
 		mockFn(db.invoice.findFirst).mockResolvedValue(anInvoice({ amount_paid: 100 }));
@@ -268,6 +272,41 @@ describe("deleteInvoicePayment", () => {
 		);
 		expect(logExternalSync).toHaveBeenCalledWith(
 			expect.objectContaining({ action: "delete_failed", external_id: "qb-9" }),
+		);
+	});
+
+	it("logs a failure to flag the QuickBooks delete failure instead of dropping it", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(
+			anInvoice({ amount_paid: 100, qb_invoice_id: "158", account_id: "realm1" }),
+		);
+		mockFn(db.invoice_payment.findFirst).mockResolvedValue({
+			...aPayment(100),
+			qb_payment_id: "qb-9",
+			account_id: "realm1",
+		});
+		paidSum(100);
+		mockFn(db.invoice_payment.count).mockResolvedValue(0);
+		mockFn(getOrgRealmId).mockResolvedValue("realm1");
+		mockFn(isQBConnected).mockResolvedValueOnce(true);
+		mockFn(deleteQBPayment).mockRejectedValueOnce(new Error("QuickBooks 500"));
+		const boom = new Error("pool exhausted");
+		mockFn(db.invoice.updateMany).mockImplementation(async (args: { data: object }) => {
+			if ("qb_diverged_at" in args.data) throw boom;
+			return { count: 1 };
+		});
+
+		await deleteInvoicePayment("inv1", "pay1", "org1", { dispatcherId: "d1" });
+
+		await vi.waitFor(() =>
+			expect(log.error).toHaveBeenCalledWith(
+				expect.objectContaining({
+					err: boom,
+					invoiceId: "inv1",
+					organizationId: "org1",
+					qbPaymentId: "qb-9",
+				}),
+				"Could not record the failed QuickBooks payment delete",
+			),
 		);
 	});
 });

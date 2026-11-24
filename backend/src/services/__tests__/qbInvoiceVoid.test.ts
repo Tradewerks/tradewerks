@@ -85,7 +85,7 @@ describe("mirrorInvoiceVoidToQuickBooks", () => {
 			"QuickBooks void failed",
 		);
 		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
-			where: { id: "inv1" },
+			where: { id: "inv1", qb_sync_status: { not: "failed" } },
 			data: { qb_sync_status: "failed" },
 		});
 	});
@@ -166,7 +166,7 @@ describe("mirrorInvoiceVoidToQuickBooks for a credit adjustment", () => {
 		).resolves.toBeUndefined();
 
 		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
-			where: { id: "adj1" },
+			where: { id: "adj1", qb_sync_status: { not: "failed" } },
 			data: { qb_sync_status: "failed" },
 		});
 	});
@@ -226,7 +226,7 @@ describe("pushInvoiceDetached", () => {
 			"QuickBooks invoice push failed",
 		);
 		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
-			where: { id: "inv1" },
+			where: { id: "inv1", qb_sync_status: { not: "failed" } },
 			data: { qb_sync_status: "failed" },
 		});
 	});

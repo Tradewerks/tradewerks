@@ -15,6 +15,7 @@ import {
 	type TaxableItemRef,
 } from "./qbTaxableItem.js";
 import { isCreditAdjustment, pushCreditMemo } from "./qbCreditMemos.js";
+import { notifyQbProblem } from "./qbNotify.js";
 import {
 	buildInvoicePayload,
 	classifyTaxReadback,
@@ -673,20 +674,53 @@ export async function mirrorInvoiceVoidToQuickBooks(
 		else await voidQBInvoice(orgId, qbInvoiceId as string);
 	} catch (err) {
 		log.error({ err, invoiceId, orgId }, "QuickBooks void failed");
-		await markQbSyncFailed(invoiceId, orgId);
+		await markQbSyncFailed(invoiceId, orgId, "void_failed");
 	}
 }
 
-/** Never rejects. */
-export async function markQbSyncFailed(invoiceId: string, organizationId: string): Promise<void> {
-	await getScopedDb(organizationId)
-		.invoice.updateMany({ where: { id: invoiceId }, data: { qb_sync_status: "failed" } })
-		.catch((markErr: unknown) =>
-			log.error(
-				{ err: markErr, invoiceId, organizationId },
-				"Could not mark the invoice's QuickBooks sync as failed",
-			),
+/**
+ * Never rejects. True only on the transition into failed, so a repeat of the
+ * same failure does not notify dispatchers again.
+ */
+export async function markQbSyncFailed(
+	invoiceId: string,
+	organizationId: string,
+	kind: "push_failed" | "payment_push_failed" | "void_failed" = "push_failed",
+): Promise<boolean> {
+	const sdb = getScopedDb(organizationId);
+	let count: number;
+	try {
+		({ count } = await sdb.invoice.updateMany({
+			where: { id: invoiceId, qb_sync_status: { not: "failed" } },
+			data: { qb_sync_status: "failed" },
+		}));
+	} catch (markErr) {
+		log.error(
+			{ err: markErr, invoiceId, organizationId },
+			"Could not mark the invoice's QuickBooks sync as failed",
 		);
+		return false;
+	}
+	if (count === 0) return false;
+	try {
+		const invoice = await sdb.invoice.findFirst({
+			where: { id: invoiceId },
+			select: { invoice_number: true },
+		});
+		if (invoice) {
+			await notifyQbProblem(
+				organizationId,
+				{ id: invoiceId, invoice_number: invoice.invoice_number },
+				kind,
+			);
+		}
+	} catch (err) {
+		log.error(
+			{ err, invoiceId, organizationId },
+			"Invoice marked QuickBooks-failed but dispatchers were not notified",
+		);
+	}
+	return true;
 }
 
 /** Fire-and-forget: a QuickBooks failure must never fail the local write that triggered it. */

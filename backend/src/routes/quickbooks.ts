@@ -60,6 +60,7 @@ import type { ProfitAndLossQuery } from "../services/qb/qbReports.js";
 import { pushPurchase, queryQBPurchaseOrders, getQBPurchaseOrderAsPDF, pushFieldPurchase } from "../services/qb/qbPurchases.js";
 import { pushTimesheet } from "../services/qb/qbTimeActivity.js";
 import { listUnsynced, syncUnsynced } from "../services/qb/qbUnsynced.js";
+import { pushPaymentToQB } from "../services/qb/qbPayments.js";
 import { setQBPassthroughTaxCode } from "../controllers/taxSettingsController.js";
 import { sendTaxResult } from "./tax.js";
 import { log } from "../services/appLogger.js";
@@ -136,6 +137,23 @@ router.post("/invoices/:id/sync", requirePermission("edit_invoices"), async (req
 	const orgId = req.user!.organization_id!;
 	try {
 		const pushed = await pushInvoice(invoiceId, orgId);
+		if (pushed !== undefined) {
+			// Retry sync is the door a failed payment push points at, since a
+			// payment has no sync status of its own. Each payment links to the
+			// invoice in QuickBooks, so they go after it, one at a time; a
+			// failure lands in the catch and leaves the invoice failed.
+			const accountId = await getOrgRealmId(orgId);
+			const payments = await getScopedDb(orgId).invoice_payment.findMany({
+				where: {
+					invoice_id: invoiceId,
+					amount: { gt: 0 },
+					OR: [{ qb_payment_id: null }, { account_id: { not: accountId } }],
+				},
+				orderBy: { paid_at: "asc" },
+				select: { id: true },
+			});
+			for (const p of payments) await pushPaymentToQB(p.id, orgId);
+		}
 		res.json(createSuccessResponse({ synced: pushed !== undefined }));
 	} catch (err) {
 		// Scoped: the id comes from the URL, so it may belong to another org.

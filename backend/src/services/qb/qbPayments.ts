@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { isModuleOn } from "../entitlementService.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { getScopedDb } from "../../lib/context.js";
-import { qbFetch, getOrgRealmId } from "../quickbooksService.js";
+import { qbFetch, getOrgRealmId, isQBConnected } from "../quickbooksService.js";
 import { httpError, ErrorCodes } from "../../types/responses.js";
-import { pushInvoice } from "./qbInvoices.js"
+import { log } from "../appLogger.js";
+import { markQbSyncFailed, pushInvoice } from "./qbInvoices.js"
 import { ensureQBCustomerForClient } from "./qbCustomers.js"
 import {
     invoicePaidTotalCents,
@@ -122,6 +123,34 @@ export async function pushPaymentToQB(paymentId: string, organizationId: string)
 		}
 	});
 	return run;
+}
+
+/**
+ * Fire-and-forget. A payment carries no sync status of its own, so a failed
+ * push marks the parent invoice, where Retry sync pushes the payment again.
+ */
+export function pushPaymentDetached(
+	paymentId: string,
+	invoiceId: string,
+	organizationId: string,
+): void {
+	isQBConnected(organizationId)
+		.then((connected) => (connected ? pushPaymentToQB(paymentId, organizationId) : null))
+		.catch(async (err: unknown) => {
+			log.error(
+				{ err, paymentId, invoiceId, organizationId },
+				"QuickBooks payment push failed",
+			);
+			await logExternalSync({
+				provider: "quickbooks",
+				external_id: paymentId,
+				entity_type: "payment",
+				action: "push_failed",
+				payload: { message: String(err) },
+				organization_id: organizationId,
+			});
+			await markQbSyncFailed(invoiceId, organizationId, "payment_push_failed");
+		});
 }
 
 async function doPushPaymentToQB(paymentId: string, organizationId: string) {

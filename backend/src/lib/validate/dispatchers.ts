@@ -30,6 +30,8 @@ export const DispatcherNotificationTypeEnum = z.enum([
 	"recurring_invoice_created",
 	"recurring_invoice_failed",
 	"recurring_plan_expiring",
+	"qb_sync_failed",
+	"qb_connection_lost",
 ]);
 
 const reportLayoutSchema = z.record(

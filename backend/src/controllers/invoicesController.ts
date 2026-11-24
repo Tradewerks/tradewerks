@@ -50,7 +50,7 @@ import {
 	invoiceInclude,
 } from "../services/invoiceService.js";
 import { logExternalSync } from "../services/qb/qbSyncLog.js";
-import { pushPaymentToQB, deleteQBPayment } from "../services/qb/qbPayments.js"
+import { pushPaymentDetached, deleteQBPayment } from "../services/qb/qbPayments.js"
 import { markQbDiverged } from "../services/qb/qbDivergence.js";
 import { notifyDispatchers } from "./notificationsController.js";
 import { dropClientTaxTotals, getEffectiveTaxMode } from "../services/tax/taxMode.js";
@@ -958,16 +958,7 @@ export const insertInvoicePayment = async (
 			actionUrl: `/dispatch/invoices/${invoiceId}`,
 		}, organizationId, context?.dispatcherId).catch(() => {});
 
-		isQBConnected(organizationId)
-		.then((connected) => (connected ? pushPaymentToQB(created.id, organizationId) : null))
-		.catch((e) => logExternalSync({
-			provider: "quickbooks",
-			external_id: created.id,
-			entity_type: "payment",
-			action: "push_failed",
-			payload: { message: String(e) },
-			organization_id: organizationId
-		}));
+		pushPaymentDetached(created.id, invoiceId, organizationId);
 
 		return { err: "", item: created };
 	} catch (e) {
@@ -1077,17 +1068,27 @@ export const deleteInvoicePayment = async (
 			.then((connected) => (connected ? deleteQBPayment(qbPaymentId, organizationId) : null))
 			// The payment is gone here but still in QuickBooks; a re-push
 			// cannot remove it, so the invoice is flagged for a person.
-			.catch((e) => Promise.allSettled([
-				logExternalSync({
-					provider: "quickbooks",
-					external_id: qbPaymentId,
-					entity_type: "payment",
-					action: "delete_failed",
-					payload: { message: String(e) },
-					organization_id: organizationId
-				}),
-				markQbDiverged(invoiceId, organizationId, "qb_payment_delete_failed"),
-			]));
+			.catch(async (e) => {
+				const results = await Promise.allSettled([
+					logExternalSync({
+						provider: "quickbooks",
+						external_id: qbPaymentId,
+						entity_type: "payment",
+						action: "delete_failed",
+						payload: { message: String(e) },
+						organization_id: organizationId
+					}),
+					markQbDiverged(invoiceId, organizationId, "qb_payment_delete_failed"),
+				]);
+				for (const r of results) {
+					if (r.status === "rejected") {
+						log.error(
+							{ err: r.reason, invoiceId, organizationId, qbPaymentId },
+							"Could not record the failed QuickBooks payment delete",
+						);
+					}
+				}
+			});
 		}
 
 		return { err: "", item: { id: paymentId } };

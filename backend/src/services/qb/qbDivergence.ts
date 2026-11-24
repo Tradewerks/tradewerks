@@ -1,6 +1,7 @@
 import { getScopedDb, type UserContext } from "../../lib/context.js";
 import { logActivity } from "../logger.js";
 import { getOrgRealmId } from "../quickbooksService.js";
+import { notifyQbProblem } from "./qbNotify.js";
 
 export type QbDivergenceReason =
     | "refund_not_in_qb"
@@ -21,7 +22,7 @@ export async function markQbDiverged(
     const sdb = getScopedDb(organizationId);
     const invoice = await sdb.invoice.findFirst({
         where: { id: invoiceId },
-        select: { qb_invoice_id: true, account_id: true },
+        select: { qb_invoice_id: true, account_id: true, invoice_number: true },
     });
     if (!invoice?.qb_invoice_id || invoice.account_id !== realmId) {
         return false;
@@ -35,8 +36,13 @@ export async function markQbDiverged(
         },
         data: { qb_diverged_at: new Date(), qb_diverged_reason: reason },
     });
-    // Task 10: notifyQbProblem on transition
-    return count > 0;
+    if (count === 0) return false;
+    await notifyQbProblem(
+        organizationId,
+        { id: invoiceId, invoice_number: invoice.invoice_number },
+        reason,
+    );
+    return true;
 }
 
 export async function clearQbDivergence(

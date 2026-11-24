@@ -14,9 +14,11 @@ vi.mock("../quickbooksService.js", () => ({
 	getOrgRealmId: vi.fn(async () => "realm1"),
 }));
 vi.mock("../logger.js", () => ({ logActivity: vi.fn(async () => undefined) }));
+vi.mock("../qb/qbNotify.js", () => ({ notifyQbProblem: vi.fn(async () => undefined) }));
 
 import { clearQbDivergence, markQbDiverged } from "../qb/qbDivergence.js";
 import { logActivity } from "../logger.js";
+import { notifyQbProblem } from "../qb/qbNotify.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -26,6 +28,7 @@ describe("markQbDiverged", () => {
 		mockFn(sdb.invoice.findFirst).mockResolvedValue({
 			qb_invoice_id: "158",
 			account_id: "realm1",
+			invoice_number: "INV-1039",
 		});
 	});
 
@@ -48,6 +51,12 @@ describe("markQbDiverged", () => {
 			qb_diverged_at: expect.any(Date),
 			qb_diverged_reason: "refund_not_in_qb",
 		});
+		expect(notifyQbProblem).toHaveBeenCalledTimes(1);
+		expect(notifyQbProblem).toHaveBeenCalledWith(
+			"org1",
+			{ id: "inv1", invoice_number: "INV-1039" },
+			"refund_not_in_qb",
+		);
 	});
 
 	it("does not mark an invoice synced to another QuickBooks company", async () => {

@@ -6,6 +6,7 @@ import { isDifferentCompany, notifyTaxCodeNeeds } from "./qb/qbConnectTaxGuard.j
 import { signQbOAuthState, verifyQbOAuthState } from "./qb/qbOAuthState.js";
 import { log } from "./appLogger.js";
 import { QbHttpError } from "./qb/qbHttpError.js";
+import { notifyQbDisconnected } from "./qb/qbNotify.js";
 
 // ============================================================================
 // QUICKBOOKS TEMPORARILY DISABLED — integration not ready for production.
@@ -96,15 +97,18 @@ async function doRefresh(orgId: string): Promise<{ accessToken: string; realmId:
 
 	}catch (err) {
 		if (isAuthGrantExpired(err)) {
-			// Refresh token is invalid — clear tokens so status returns disconnected
-			await sdb.organization.update({
-				where: { id: orgId },
+			// Refresh token is invalid — clear tokens so status returns disconnected.
+			// Conditional on the token that failed: a reconnect that landed meanwhile
+			// is kept, and only the one caller that clears it notifies.
+			const { count } = await sdb.organization.updateMany({
+				where: { id: orgId, qb_refresh_token: org.qb_refresh_token },
 				data: {
 					qb_access_token: null,
 					qb_refresh_token: null,
 					qb_token_expires_at: null,
 				},
 			});
+			if (count > 0) await notifyQbDisconnected(orgId);
 			throw new Error("QuickBooks authorization expired. Please reconnect.");
 		}
 		throw httpError(503, ErrorCodes.VALIDATION_ERROR, "QuickBooks temporarily unavailable, please retry.");
