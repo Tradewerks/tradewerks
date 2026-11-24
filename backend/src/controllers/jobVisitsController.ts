@@ -379,6 +379,137 @@ export const getJobVisitsByTechId = async (techId: string, organization_id: stri
 	});
 };
 
+// Overlap, not "start or end inside": a visit spanning the whole range has
+// neither endpoint inside it. Half-open, so touching edges don't count.
+const overlaps = (from: Date, to: Date) => ({
+	scheduled_start_at: { lt: to },
+	scheduled_end_at: { gt: from },
+});
+
+// Only what the schedule board, week strip, dashboard schedule and assign page read.
+const BOARD_VISIT_SELECT = {
+	id: true,
+	job_id: true,
+	name: true,
+	description: true,
+	status: true,
+	scheduled_start_at: true,
+	scheduled_end_at: true,
+	arrival_constraint: true,
+	finish_constraint: true,
+	arrival_time: true,
+	arrival_window_start: true,
+	arrival_window_end: true,
+	finish_time: true,
+	actual_start_at: true,
+	actual_end_at: true,
+	updated_at: true,
+	_count: { select: { line_items: true } },
+	visit_techs: {
+		select: { tech_id: true, tech: { select: { id: true, name: true } } },
+	},
+	job: {
+		select: {
+			id: true,
+			job_number: true,
+			name: true,
+			description: true,
+			status: true,
+			priority: true,
+			address: true,
+			coords: true,
+			// Marks a plan-generated visit; the plan itself is not sent.
+			recurring_plan_id: true,
+			client: { select: { id: true, name: true } },
+		},
+	},
+} satisfies Prisma.job_visitSelect;
+
+// What the occurrence cards and popups read: slot times and constraints, the
+// plan's label fields and the job container it is filed under.
+const BOARD_OCCURRENCE_SELECT = {
+	id: true,
+	recurring_plan_id: true,
+	occurrence_start_at: true,
+	occurrence_end_at: true,
+	status: true,
+	arrival_constraint: true,
+	finish_constraint: true,
+	arrival_time: true,
+	arrival_window_start: true,
+	arrival_window_end: true,
+	finish_time: true,
+	job_visit_id: true,
+	recurring_plan: {
+		select: {
+			id: true,
+			name: true,
+			description: true,
+			address: true,
+			priority: true,
+			client: { select: { id: true, name: true } },
+			job_container: { select: { id: true, job_number: true, name: true } },
+		},
+	},
+} satisfies Prisma.recurring_occurrenceSelect;
+
+const UNSCHEDULED_RAIL_LIMIT = 200;
+
+export const getBoardVisits = async (
+	organization_id: string,
+	opts: {
+		from: Date;
+		to: Date;
+		techId?: string;
+		assignedTechId?: string;
+		includeUnscheduled?: boolean;
+		canListJobs?: boolean;
+	},
+) => {
+	const sdb = getScopedDb(organization_id);
+	const techFilters = [opts.techId, opts.assignedTechId]
+		.filter((t): t is string => !!t)
+		.map((t) => assignedTo(t));
+	const visits = await sdb.job_visit.findMany({
+		where: {
+			...overlaps(opts.from, opts.to),
+			...(techFilters.length ? { AND: techFilters } : {}),
+		},
+		select: BOARD_VISIT_SELECT,
+		orderBy: { scheduled_start_at: "asc" },
+	});
+	// Recurring slots are not visits yet; they ride along so the board can draw
+	// them without reading every plan. Gated like the rail: they come from plans.
+	const occurrences = opts.canListJobs
+		? await sdb.recurring_occurrence.findMany({
+				where: {
+					occurrence_start_at: { gte: opts.from, lt: opts.to },
+					status: "planned",
+					job_visit_id: null,
+				},
+				select: BOARD_OCCURRENCE_SELECT,
+				orderBy: { occurrence_start_at: "asc" },
+			})
+		: [];
+	if (!opts.includeUnscheduled) return { visits, occurrences };
+	const unscheduledJobs = !opts.canListJobs
+		? []
+		: await sdb.job.findMany({
+				where: { status: "Unscheduled", visits: { none: {} } },
+				select: {
+					id: true,
+					job_number: true,
+					name: true,
+					priority: true,
+					address: true,
+					client: { select: { id: true, name: true } },
+				},
+				orderBy: { created_at: "desc" },
+				take: UNSCHEDULED_RAIL_LIMIT,
+			});
+	return { visits, occurrences, unscheduledJobs };
+};
+
 export const getJobVisitsByDateRange = async (
 	startDate: Date,
 	endDate: Date,
@@ -389,20 +520,7 @@ export const getJobVisitsByDateRange = async (
 	return await sdb.job_visit.findMany({
 		where: {
 			...assignedTo(techId),
-			OR: [
-				{
-					scheduled_start_at: {
-						gte: startDate,
-						lte: endDate,
-					},
-				},
-				{
-					scheduled_end_at: {
-						gte: startDate,
-						lte: endDate,
-					},
-				},
-			],
+			...overlaps(startDate, endDate),
 		},
 		include: {
 			job: {

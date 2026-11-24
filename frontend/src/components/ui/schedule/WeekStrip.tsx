@@ -10,6 +10,7 @@ import VisitClickPopup from "./VisitClickPopup";
 import OccurrenceClickPopup from "./OccurrenceClickPopup";
 import {
 	buildTechOrder,
+	dateKeyAt,
 	getTechColor,
 	groupVisitsByDay,
 	visitStartLabel,
@@ -22,8 +23,7 @@ import {
 	prefersReducedMotion,
 } from "./scheduleBoardUtils";
 import {
-	extractVisits,
-	extractOccurrences,
+	boardToVisitWithJob,
 	formatTime,
 	buildAgendaGroups,
 	buildChronologicalAgenda,
@@ -44,7 +44,8 @@ import {
 	type ColMode,
 } from "./stripWindow";
 import { buildStripTemplate } from "./weekTemplate";
-import type { Job, UpdateJobVisitInput } from "../../../types/jobs";
+import type { UpdateJobVisitInput } from "../../../types/jobs";
+import type { BoardVisit } from "../../../types/board";
 import type { Technician } from "../../../types/technicians";
 import { visitVersion } from "../../../lib/apiErrors";
 import { useConflictGuardedVisitUpdate } from "./useConflictGuardedVisitUpdate";
@@ -76,9 +77,15 @@ interface ClickedOccurrence {
 }
 
 interface WeekStripProps {
-	jobs: Job[];
+	visits: BoardVisit[];
+	/** Planned recurring occurrences; the board endpoint does not carry them. */
+	occurrences?: OccurrenceWithPlan[];
 	technicians: Technician[];
+	/** The half-open [from, to) span of the visible window, for the parent to fetch. */
+	onRangeChange?: (from: Date, to: Date) => void;
 }
+
+const NO_OCCURRENCES: OccurrenceWithPlan[] = [];
 
 const STATUS_SORT_ORDER: Record<string, number> = {
 	InProgress: 0, OnSite: 0,
@@ -125,7 +132,7 @@ function buildCompactItems(
 	return items;
 }
 
-export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
+export default function WeekStrip({ visits, occurrences = NO_OCCURRENCES, technicians, onRangeChange }: WeekStripProps) {
 	const navigate = useNavigate();
 
 	const todayStr = useTodayKey();
@@ -250,12 +257,20 @@ export default function WeekStrip({ jobs, technicians }: WeekStripProps) {
 		setZoomedDay((d) => (d === day ? null : day));
 	}
 
-	const allVisits = useMemo(
-		() => extractVisits(jobs) as VisitWithJob[],
-		[jobs]
-	);
+	const rangeFrom = days[0];
+	const rangeTo = days[days.length - 1];
+	const onRangeChangeRef = useRef(onRangeChange);
+	onRangeChangeRef.current = onRangeChange;
+	useEffect(() => {
+		if (!rangeFrom || !rangeTo) return;
+		const to = dateKeyAt(rangeTo);
+		to.setDate(to.getDate() + 1);
+		onRangeChangeRef.current?.(dateKeyAt(rangeFrom), to);
+	}, [rangeFrom, rangeTo]);
+
+	const allVisits = useMemo(() => visits.map(boardToVisitWithJob), [visits]);
 	const { updateVisit, conflictDialog } = useConflictGuardedVisitUpdate(allVisits);
-	const allOccurrences = useMemo(() => extractOccurrences(jobs, todayStr), [jobs, todayStr]);
+	const allOccurrences = occurrences;
 
 	const filteredVisits = useMemo(() => {
 		const visible = showVisits ? allVisits : [];

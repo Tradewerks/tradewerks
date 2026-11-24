@@ -59,7 +59,7 @@ export const RECORD_INVALIDATIONS: Record<
 	request: recordKeys(qk.requests, [DASHBOARD_TODAY_KEY]),
 	quote: recordKeys(qk.quotes, [DASHBOARD_TODAY_KEY]),
 	invoice: recordKeys(qk.invoices),
-	recurring_plan: recordKeys(qk.recurringPlans),
+	recurring_plan: recordKeys(qk.recurringPlans, [qk.board.all]),
 };
 
 // Events emitted while disconnected are lost for good; refetch whatever is on screen.

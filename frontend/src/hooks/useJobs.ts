@@ -3,6 +3,7 @@ import {
 	useMutation,
 	useQuery,
 	useQueryClient,
+	keepPreviousData,
 	type UseMutationResult,
 	type UseQueryResult,
 } from "@tanstack/react-query";
@@ -22,6 +23,7 @@ import type {
 } from "../types/jobs";
 import * as jobApi from "../api/jobs";
 import type { MyJobOption } from "../api/jobs";
+import type { BoardResponse } from "../types/board";
 import { qk } from "../lib/queryKeys";
 
 // ============================================
@@ -58,6 +60,7 @@ export const useCreateJobMutation = (): UseMutationResult<Job, Error, CreateJobI
 		mutationFn: jobApi.createJob,
 		onSuccess: (newJob: Job) => {
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 
 			void queryClient.invalidateQueries({
 				queryKey: ["clients", newJob.client_id],
@@ -106,6 +109,7 @@ export const useUpdateJobMutation = (): UseMutationResult<
 			// stale empty-array cache would otherwise win the race.
 			queryClient.setQueryData(["jobs", variables.id], updatedJob);
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({
 				queryKey: ["clients", updatedJob.client_id],
 			});
@@ -129,6 +133,7 @@ export const useCancelJobMutation = (): UseMutationResult<
 		onSuccess: (job, variables) => {
 			queryClient.setQueryData(["jobs", variables.jobId], job);
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
@@ -148,6 +153,7 @@ export const useDeleteJobMutation = (): UseMutationResult<
 		mutationFn: jobApi.deleteJob,
 		onSuccess: (_, jobId) => {
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({ queryKey: ["clients"] });
 			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
@@ -217,20 +223,22 @@ export const useClientVisitHistoryQuery = (
 	});
 };
 
-export const useJobVisitsByDateRangeQuery = (
-	startDate: Date,
-	endDate: Date,
-	options?: { enabled?: boolean }
-): UseQueryResult<JobVisit[], Error> => {
+/**
+ * The schedule surfaces' read: visits overlapping [from, to) only, not the whole
+ * org's job list. Callers pass stable Dates (memoised) so the key does not churn.
+ */
+export const useBoardQuery = (
+	from: Date,
+	to: Date,
+	opts?: { includeUnscheduled?: boolean; enabled?: boolean },
+): UseQueryResult<BoardResponse, Error> => {
 	return useQuery({
-		queryKey: [
-			"jobVisits",
-			"dateRange",
-			startDate.toISOString(),
-			endDate.toISOString(),
-		],
-		queryFn: () => jobApi.getJobVisitsByDateRange(startDate, endDate),
-		enabled: options?.enabled !== undefined ? options.enabled : true,
+		queryKey: qk.board.range(from.toISOString(), to.toISOString(), opts),
+		queryFn: () => jobApi.getBoard(from, to, opts),
+		enabled: opts?.enabled ?? true,
+		placeholderData: keepPreviousData,
+		refetchOnWindowFocus: true,
+		staleTime: 30_000,
 	});
 };
 
@@ -256,6 +264,7 @@ export const useCreateJobVisitMutation = (): UseMutationResult<
 				queryKey: ["jobs", newVisit.job_id],
 			});
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			if (newVisit.visit_techs && newVisit.visit_techs.length > 0) {
 				for (const vt of newVisit.visit_techs) {
 					void queryClient.invalidateQueries({
@@ -285,7 +294,10 @@ const refreshAfterVisitWrite = (
 	void queryClient.invalidateQueries({
 		queryKey: qk.jobs.detail(updatedVisit.job_id),
 	});
-	const jobsList = queryClient.invalidateQueries({ queryKey: qk.jobs.all });
+	const jobsList = Promise.all([
+		queryClient.invalidateQueries({ queryKey: qk.jobs.all }),
+		queryClient.invalidateQueries({ queryKey: qk.board.all }),
+	]);
 	if (updatedVisit.visit_techs && updatedVisit.visit_techs.length > 0) {
 		for (const vt of updatedVisit.visit_techs) {
 			void queryClient.invalidateQueries({
@@ -315,8 +327,7 @@ export const useUpdateJobVisitMutation = (): UseMutationResult<
 
 /**
  * After a 409 on a visit save: refetch so the stale copy the user edited is replaced.
- * qk.visits.all covers the visit detail and the board's date-range queries,
- * which live under it until the board moves to qk.board.
+ * qk.visits.all covers the visit detail; the board has its own prefix.
  */
 export const useReloadConflictedVisit = () => {
 	const queryClient = useQueryClient();
@@ -431,6 +442,7 @@ export const useDeleteJobVisitMutation = (): UseMutationResult<
 		onSuccess: (_, visitId) => {
 			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 			queryClient.removeQueries({ queryKey: ["jobVisits", visitId] });
 			void queryClient.invalidateQueries({ queryKey: ["changes"] });
@@ -465,6 +477,7 @@ export const useVisitTransitionMutation = (): UseMutationResult<JobVisit, Error,
 			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 			void queryClient.invalidateQueries({ queryKey: ["changes"] });
@@ -514,6 +527,7 @@ export const useDelayJobVisitMutation = (): UseMutationResult<JobVisit, Error, s
 			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({ queryKey: ["technicians"] });
 			void queryClient.invalidateQueries({ queryKey: ["activity-feed"] });
 			void queryClient.invalidateQueries({ queryKey: ["changes"] });
@@ -536,6 +550,7 @@ export const useCancelJobVisitMutation = (): UseMutationResult<
 			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id, "visits"] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs", updatedVisit.job_id] });
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			for (const vt of updatedVisit.visit_techs ?? []) {
 				queryClient.setQueryData<JobVisit[]>(
 					["jobVisits", "tech", vt.tech_id],

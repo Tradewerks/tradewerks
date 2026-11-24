@@ -23,8 +23,8 @@ import {
 	CLICK_POPUP_H,
 	prefersReducedMotion,
 } from "./scheduleBoardUtils";
-import { extractOccurrences, type OccurrenceWithPlan, type VisitWithJob } from "./dashboardCalendarUtils";
-import type { Job } from "../../../types/jobs";
+import { boardToVisitWithJob, type OccurrenceWithPlan, type VisitWithJob } from "./dashboardCalendarUtils";
+import type { BoardVisit } from "../../../types/board";
 import type { Technician } from "../../../types/technicians";
 import { useConflictGuardedVisitUpdate } from "./useConflictGuardedVisitUpdate";
 import { useRescheduleOccurrenceMutation, useGenerateVisitFromOccurrenceMutation } from "../../../hooks/useRecurringPlans";
@@ -35,9 +35,15 @@ import ScheduleToolbar from "./ScheduleToolbar";
 import { TOOLBAR_FOCUS } from "./toolbarButton";
 
 interface ScheduleBoardProps {
-	jobs: Job[];
+	visits: BoardVisit[];
+	/** Planned recurring occurrences; the board endpoint does not carry them. */
+	occurrences?: OccurrenceWithPlan[];
 	technicians: Technician[];
+	/** The half-open [from, to) span currently on screen, for the parent to fetch. */
+	onRangeChange?: (from: Date, to: Date) => void;
 }
+
+const NO_OCCURRENCES: OccurrenceWithPlan[] = [];
 
 /** An occurrence with no specific time requirement – keyed off the arrival_constraint field. */
 function isAnytimeOccurrence(occ: OccurrenceWithPlan): boolean {
@@ -62,7 +68,7 @@ function hourLabel(h: number): string {
 	return h < 12 ? `${h} AM` : `${h - 12} PM`;
 }
 
-export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps) {
+export default function ScheduleBoard({ visits, occurrences = NO_OCCURRENCES, technicians, onRangeChange }: ScheduleBoardProps) {
 	const navigate = useNavigate();
 	const [viewMode, setViewMode] = useState<"week" | "month">("week");
 
@@ -158,6 +164,22 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 
 	const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart]);
 
+	// Month view shows six Monday-first weeks from the Monday on or before the 1st.
+	const rangeFrom = useMemo(() => {
+		if (viewMode === "week") return mondayOf(weekStart);
+		return mondayOf(new Date(monthYear.year, monthYear.month, 1));
+	}, [viewMode, weekStart, monthYear]);
+	const rangeTo = useMemo(() => {
+		const to = new Date(rangeFrom);
+		to.setDate(to.getDate() + (viewMode === "week" ? 7 : 42));
+		return to;
+	}, [rangeFrom, viewMode]);
+	const onRangeChangeRef = useRef(onRangeChange);
+	onRangeChangeRef.current = onRangeChange;
+	useEffect(() => {
+		onRangeChangeRef.current?.(rangeFrom, rangeTo);
+	}, [rangeFrom, rangeTo]);
+
 	// Measure each day column: widths differ once a day is zoomed, and DayColumn's
 	// overlap layout, ghost width and popup flip all key off its own width. Layout effect +
 	// sync measure so a new week's first paint uses real widths, not a placeholder or a
@@ -196,8 +218,8 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	const isAllSelected = selectedTechs.size === 0;
 
 	const allVisits: VisitWithJob[] = useMemo(
-		() => jobs.flatMap((job_obj) => (job_obj.visits ?? []).map((v) => ({ ...v, job_obj }))),
-		[jobs]
+		() => visits.map(boardToVisitWithJob),
+		[visits]
 	);
 	const { updateVisit, conflictDialog } = useConflictGuardedVisitUpdate(allVisits);
 
@@ -222,7 +244,7 @@ export default function ScheduleBoard({ jobs, technicians }: ScheduleBoardProps)
 	const anytimeByDay   = useMemo(() => groupVisitsByDay(anytimeVisits), [anytimeVisits]);
 
 	// All planned occurrences – split into timed (time-grid) and anytime (midnight signal)
-	const allOccs = useMemo(() => extractOccurrences(jobs), [jobs]);
+	const allOccs = occurrences;
 
 	const timedOccurrencesByDay = useMemo(() =>
 		allOccs.filter((o) => !isAnytimeOccurrence(o)).reduce((acc, occ) => {

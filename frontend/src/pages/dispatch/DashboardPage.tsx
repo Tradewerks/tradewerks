@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { ResponsiveGridLayout, useContainerWidth } from "react-grid-layout";
 import type { Layout, ResponsiveLayouts } from "react-grid-layout";
 import 'react-grid-layout/css/styles.css';
@@ -21,7 +21,8 @@ import Card from "../../components/ui/Card";
 import WeekStrip from "../../components/ui/schedule/WeekStrip";
 import { useAuthStore } from "../../auth/authStore";
 import { FALLBACK_TIMEZONE } from "../../util/util";
-import { useAllJobsQuery } from "../../hooks/useJobs";
+import { useAllJobsQuery, useBoardQuery } from "../../hooks/useJobs";
+import { boardToOccurrences } from "../../components/ui/schedule/dashboardCalendarUtils";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useAllRequestsQuery } from "../../hooks/useRequests";
 import { useAllQuotesQuery } from "../../hooks/useQuotes";
@@ -82,6 +83,8 @@ const TECH_STATUS_BORDER: Record<TechnicianStatus, string> = {
 	Offline:    "border-transparent",
 };
 
+const NO_BOARD_VISITS: never[] = [];
+
 const getStatusBorderClass = (status: TechnicianStatus) =>
 	TECH_STATUS_BORDER[status] ?? "border-transparent";
 
@@ -108,10 +111,30 @@ export default function DashboardPage() {
 
 	const updateDispatcher = useUpdateDispatcherMutation();
 
-	const { data: jobs = [], error: jobsError } = useAllJobsQuery();
+	const { data: jobs = [] } = useAllJobsQuery();
 	const { data: requests = [] } = useAllRequestsQuery();
 	const { data: quotes = [] } = useAllQuotesQuery();
 	const { data: recurringPlans = [] } = useAllRecurringPlansQuery();
+
+	// The schedule widget reads only the span its strip is showing.
+	const [stripRange, setStripRange] = useState<{ from: Date; to: Date } | null>(null);
+	const onStripRange = useCallback((from: Date, to: Date) => {
+		setStripRange((prev) =>
+			prev && prev.from.getTime() === from.getTime() && prev.to.getTime() === to.getTime()
+				? prev
+				: { from, to },
+		);
+	}, []);
+	const idleDate = useMemo(() => new Date(0), []);
+	const { data: board, error: boardError } = useBoardQuery(
+		stripRange?.from ?? idleDate,
+		stripRange?.to ?? idleDate,
+		{ enabled: !!stripRange },
+	);
+	const stripOccurrences = useMemo(
+		() => boardToOccurrences(board?.occurrences ?? [], new Date().toLocaleDateString("en-CA", { timeZone: tz })),
+		[board, tz],
+	);
 	const { data: allTechnicians = [], error: techsError } = useActiveTechniciansQuery();
 
 	const saveDashboardLayout = async (id: string, newLayout: Layout) => {
@@ -309,7 +332,7 @@ export default function DashboardPage() {
 	function renderWidget(id: string) {
 		switch (id) {
 			case "week-strip": return <Card className="mb-5 !p-0 h-full">
-					{jobsError ? (
+					{boardError ? (
 						<div className="flex items-center justify-center h-full">
 							<div className="flex items-center gap-2 p-4 bg-error/10 border border-error/20 rounded-lg">
 								<AlertCircle size={16} className="text-error-text" />
@@ -317,7 +340,12 @@ export default function DashboardPage() {
 							</div>
 						</div>
 					) : (
-						<WeekStrip jobs={jobs} technicians={allTechnicians} />
+						<WeekStrip
+							visits={board?.visits ?? NO_BOARD_VISITS}
+							occurrences={stripOccurrences}
+							technicians={allTechnicians}
+							onRangeChange={onStripRange}
+						/>
 					)}
 				</Card>;
 			case "pipeline": return <Card title="Operations Pipeline" className="h-full">

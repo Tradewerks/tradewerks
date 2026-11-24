@@ -119,6 +119,11 @@ describe("toCardModel — visits", () => {
 		expect(toCardModel({ kind: "visit", visit: three }, ctx).ref).toBe("J-0012 · 3 items");
 	});
 
+	it("reads the item count from a board row that carries _count instead of rows", () => {
+		const board = visit({ line_items: undefined, _count: { line_items: 2 } } as never);
+		expect(toCardModel({ kind: "visit", visit: board }, ctx).ref).toBe("J-0012 · 2 items");
+	});
+
 	it("prefers the visit description over the job's", () => {
 		const m = toCardModel(
 			{ kind: "visit", visit: visit({ description: "Bring lift" }, { description: "Job text" }) },

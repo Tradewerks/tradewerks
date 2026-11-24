@@ -387,7 +387,9 @@ export interface JobVisit extends PricingBreakdown {
 	time_entries?: VisitTechTimeEntry[];
 	invoice_visits?: BillingRef[];
 	_count?: {
-		invoice_visits: number;
+		invoice_visits?: number;
+		/** Board rows send the count instead of the rows. */
+		line_items?: number;
 	};
 }
 

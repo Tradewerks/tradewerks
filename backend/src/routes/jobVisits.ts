@@ -15,6 +15,7 @@ import {
     getMyJobsForPurchase,
     getJobVisitById,
     getJobVisitsByDateRange,
+    getBoardVisits,
     insertJobVisit,
     updateJobVisit,
     assignTechniciansToVisit,
@@ -91,6 +92,46 @@ router.get("/recent-status-events", requireAnyPermission("view_jobs", "view_visi
         const orgId = req.user!.organization_id as string;
         const events = await getRecentStatusEvents(orgId, ownVisitsOnly(req));
         res.json(createSuccessResponse(events));
+    } catch (err) {
+        next(err);
+    }
+});
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const BOARD_MAX_SPAN_DAYS = 62;
+const boardQuerySchema = z
+    .object({
+        from: z.coerce.date(),
+        to: z.coerce.date(),
+        techId: z.string().uuid().optional(),
+        includeUnscheduled: z.enum(["0", "1", "true", "false"]).optional(),
+    })
+    .refine((q) => q.to > q.from, { message: "to must be after from" })
+    .refine((q) => q.to.getTime() - q.from.getTime() <= BOARD_MAX_SPAN_DAYS * DAY_MS, {
+        message: `Range can span at most ${BOARD_MAX_SPAN_DAYS} days`,
+    });
+
+// Above "/:id" for the same reason as "/mine".
+router.get("/board", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
+    try {
+        const parsed = boardQuerySchema.safeParse(req.query);
+        if (!parsed.success) {
+            return res.status(400).json(
+                createErrorResponse(ErrorCodes.INVALID_INPUT, parsed.error.issues.map((i) => i.message).join(", ")),
+            );
+        }
+        const { from, to, techId, includeUnscheduled } = parsed.data;
+        const orgId = req.user!.organization_id as string;
+        const result = await getBoardVisits(orgId, {
+            from,
+            to,
+            techId,
+            assignedTechId: ownVisitsOnly(req),
+            includeUnscheduled: includeUnscheduled === "1" || includeUnscheduled === "true",
+            // The rail lists jobs, not visits, so it needs what GET /jobs needs.
+            canListJobs: hasPermission(req, "view_jobs"),
+        });
+        res.json(createSuccessResponse(result, { count: result.visits.length }));
     } catch (err) {
         next(err);
     }

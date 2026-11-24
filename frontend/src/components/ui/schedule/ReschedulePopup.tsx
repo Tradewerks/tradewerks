@@ -5,7 +5,7 @@ import TimePicker from "../TimePicker";
 import type { UpdateJobVisitInput } from "../../../types/jobs";
 import type { ArrivalConstraint, FinishConstraint } from "../../../types/recurringPlans";
 import type { Technician } from "../../../types/technicians";
-import type { VisitWithJob } from "./dashboardCalendarUtils";
+import { isPlanJob, type VisitWithJob } from "./dashboardCalendarUtils";
 import {
 	alignScheduleToConstraints,
 	formatDateDisplay,
@@ -118,7 +118,7 @@ export default function ReschedulePopup({
 	const popupRef = useRef<HTMLDivElement>(null);
 
 	const assignedTechIds = (visit.visit_techs ?? []).map((vt) => vt.tech_id);
-	const isRecurring = !!visit.job_obj?.recurring_plan;
+	const isRecurring = isPlanJob(visit.job_obj);
 
 	// Save is only valid when every selected constraint type has its required time filled
 	const isComplete =

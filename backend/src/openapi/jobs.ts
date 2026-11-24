@@ -933,7 +933,7 @@ authed(
 	{
 		summary: "List visits in a date range",
 		description:
-			"Requires any of `view_jobs`, `view_visits` or `view_assigned_jobs`. Visits whose scheduled start or end falls in the range, earliest first, with their job and line items. Every visit in the organization, not only the caller's.",
+			"Requires any of `view_jobs`, `view_visits` or `view_assigned_jobs`. Visits whose scheduled span overlaps the range (start before `endDate`, end after `startDate`), earliest first, with their job and line items. With only `view_assigned_jobs`, returns just the caller's visits.",
 		request: {
 			params: z.object({
 				startDate: z
@@ -950,6 +950,136 @@ authed(
 			400: json(
 				errorEnvelope,
 				"A date couldn't be parsed (`INVALID_INPUT`)",
+			),
+		},
+	},
+);
+
+const boardVisit = z
+	.object({
+		...jobVisit.pick({
+			id: true,
+			job_id: true,
+			name: true,
+			description: true,
+			status: true,
+			scheduled_start_at: true,
+			scheduled_end_at: true,
+			arrival_constraint: true,
+			finish_constraint: true,
+			arrival_time: true,
+			arrival_window_start: true,
+			arrival_window_end: true,
+			finish_time: true,
+			actual_start_at: true,
+			actual_end_at: true,
+			updated_at: true,
+		}).shape,
+		_count: z.object({ line_items: z.number().int() }),
+		visit_techs: z.array(
+			z.object({
+				tech_id: z.uuid(),
+				tech: z.object({ id: z.uuid(), name: z.string() }),
+			}),
+		),
+		job: job
+			.pick({
+				id: true,
+				job_number: true,
+				name: true,
+				description: true,
+				status: true,
+				priority: true,
+				address: true,
+				coords: true,
+				recurring_plan_id: true,
+			})
+			.extend({ client: z.object({ id: z.uuid(), name: z.string() }) }),
+	})
+	.meta({ id: "BoardVisit" });
+
+authed(
+	"get",
+	"/job-visits/board",
+	"Visits",
+	"view_jobs, view_visits or view_assigned_jobs",
+	{
+		summary: "List visits for the schedule board",
+		description:
+			"Requires any of `view_jobs`, `view_visits` or `view_assigned_jobs`. Slim visits whose scheduled span overlaps `[from, to)` (start before `to`, end after `from`), earliest first; no line items, notes, time entries or money fields. With only `view_assigned_jobs`, returns just the caller's visits; `techId` narrows further and never widens. `includeUnscheduled=1` adds up to 200 jobs with status `Unscheduled` and no visits, newest first; that list is empty without `view_jobs`. `occurrences` lists planned recurring slots in the range (same `view_jobs` gate). `meta.count` is the number of visits.",
+		request: {
+			query: z.object({
+				from: z.iso.datetime().describe("Range start (inclusive)"),
+				to: z.iso
+					.datetime()
+					.describe("Range end (exclusive); at most 62 days after `from`"),
+				techId: z.uuid().optional().describe("Only visits this technician is on"),
+				includeUnscheduled: z.enum(["0", "1", "true", "false"]).optional(),
+			}),
+		},
+		responses: {
+			200: json(
+				envelope(
+					z.object({
+						visits: z.array(boardVisit),
+						occurrences: z
+							.array(
+								z.object({
+									id: z.uuid(),
+									recurring_plan_id: z.uuid(),
+									occurrence_start_at: z.iso.datetime(),
+									occurrence_end_at: z.iso.datetime(),
+									status: z.literal("planned"),
+									arrival_constraint: z.string(),
+									finish_constraint: z.string(),
+									arrival_time: z.string().nullable(),
+									arrival_window_start: z.string().nullable(),
+									arrival_window_end: z.string().nullable(),
+									finish_time: z.string().nullable(),
+									job_visit_id: z.null(),
+									recurring_plan: z.object({
+										id: z.uuid(),
+										name: z.string(),
+										description: z.string(),
+										address: z.string(),
+										priority: z.string(),
+										client: z.object({ id: z.uuid(), name: z.string() }),
+										job_container: z
+											.object({
+												id: z.uuid(),
+												job_number: z.string(),
+												name: z.string(),
+											})
+											.nullable(),
+									}),
+								}),
+							)
+							.describe(
+								"Planned, not-yet-generated recurring occurrences starting in `[from, to)`; empty without `view_jobs`",
+							),
+						unscheduledJobs: z
+							.array(
+								job
+									.pick({
+										id: true,
+										job_number: true,
+										name: true,
+										priority: true,
+										address: true,
+									})
+									.extend({
+										client: z.object({ id: z.uuid(), name: z.string() }),
+									}),
+							)
+							.optional()
+							.describe("Present only with `includeUnscheduled`"),
+					}),
+				),
+				"Visits in range (empty array if none)",
+			),
+			400: json(
+				errorEnvelope,
+				"`from`/`to` missing or unparseable, `to` not after `from`, the span over 62 days, or `techId` not a UUID (`INVALID_INPUT`)",
 			),
 		},
 	},

@@ -21,6 +21,8 @@ import type {
 } from "../types/recurringPlans";
 import * as recurringPlanApi from "../api/recurringPlans";
 import { useToast } from "../components/ui/useToast";
+import { qk } from "../lib/queryKeys";
+import type { BoardResponse } from "../types/board";
 import type { Job } from "../types/jobs";
 
 const useQuery = moduleQuery("recurring_plans");
@@ -305,6 +307,7 @@ export const useGenerateOccurrencesMutation = (): UseMutationResult<
 			void queryClient.invalidateQueries({
 				queryKey: ["recurringPlans"],
 			});
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
 			});
@@ -336,6 +339,8 @@ export const useSkipOccurrenceMutation = (): UseMutationResult<
 			void queryClient.invalidateQueries({
 				queryKey: ["recurringPlans"],
 			});
+
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 
 			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
@@ -384,6 +389,30 @@ export const useRescheduleOccurrenceMutation = (): UseMutationResult<
 				});
 			});
 
+			// The board carries occurrences too; move the card now, refetch settles it.
+			queryClient.setQueriesData<BoardResponse>({ queryKey: qk.board.all }, (old) =>
+				old?.occurrences
+					? {
+							...old,
+							occurrences: old.occurrences.map((occ) =>
+								occ.id === updatedOccurrence.id
+									? {
+											...occ,
+											occurrence_start_at: String(updatedOccurrence.occurrence_start_at),
+											occurrence_end_at: String(updatedOccurrence.occurrence_end_at),
+											arrival_constraint: updatedOccurrence.arrival_constraint,
+											finish_constraint: updatedOccurrence.finish_constraint,
+											arrival_time: updatedOccurrence.arrival_time ?? null,
+											arrival_window_start: updatedOccurrence.arrival_window_start ?? null,
+											arrival_window_end: updatedOccurrence.arrival_window_end ?? null,
+											finish_time: updatedOccurrence.finish_time ?? null,
+										}
+									: occ,
+							),
+						}
+					: old,
+			);
+
 			void queryClient.invalidateQueries({
 				queryKey: ["jobs", jobId, "occurrences"],
 			});
@@ -395,6 +424,8 @@ export const useRescheduleOccurrenceMutation = (): UseMutationResult<
 			void queryClient.invalidateQueries({
 				queryKey: ["recurringPlans"],
 			});
+
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 
 			void queryClient.invalidateQueries({
 				queryKey: ["jobs"],
@@ -421,6 +452,7 @@ export const useBulkSkipOccurrencesMutation = (): UseMutationResult<
 				predicate: (query) => query.queryKey.includes("occurrences"),
 			});
 			void queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 		},
 		onError: (error) => {
 			console.error("Bulk skip occurrences mutation error:", error);
@@ -452,6 +484,7 @@ export const useGenerateVisitFromOccurrenceMutation = (): UseMutationResult<
 			void queryClient.invalidateQueries({ queryKey: ["jobVisits"] });
 
 			void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+			void queryClient.invalidateQueries({ queryKey: qk.board.all });
 
 			if (result.visit_id) {
 				void queryClient.invalidateQueries({

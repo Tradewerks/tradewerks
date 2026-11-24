@@ -1,3 +1,4 @@
+import type { BoardOccurrence, BoardVisit } from "../../../types/board";
 import type { Job, JobVisit } from "../../../types/jobs";
 import type { RecurringOccurrence, RecurringPlan } from "../../../types/recurringPlans";
 import type { Technician } from "../../../types/technicians";
@@ -12,34 +13,42 @@ export interface OccurrenceWithPlan extends RecurringOccurrence {
 	job_obj: Job;
 }
 
+/**
+ * A board row has only the fields the schedule draws, so this narrows by cast.
+ * Anything it omits (line item rows, money, notes) is not read on these surfaces.
+ */
+export function boardToVisitWithJob(v: BoardVisit): VisitWithJob {
+	return { ...v, job_obj: v.job } as unknown as VisitWithJob;
+}
+
+/** A plan-generated job, whether the full plan was loaded or only its id. */
+export function isPlanJob(job: Pick<Job, "recurring_plan" | "recurring_plan_id"> | null | undefined): boolean {
+	return !!(job?.recurring_plan || job?.recurring_plan_id);
+}
+
 export function formatTime(date: Date | string): string {
 	const d = typeof date === "string" ? new Date(date) : date;
 	return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export function extractVisits(jobs: Job[]): VisitWithJob[] {
-	return jobs.flatMap((job_obj) =>
-		(job_obj.visits ?? []).map((visit) => ({ ...visit, job_obj }))
-	);
-}
-
-/** Planned, ungenerated occurrences from `today` (a "YYYY-MM-DD" key) onward. */
-export function extractOccurrences(
-	jobs: Job[],
+/**
+ * Board occurrences become the card shape: the plan's priority and client ride
+ * on `job_obj` because the cards read them there. A slot whose plan has no job
+ * container has nothing to open, so it is dropped, as it was from the job list.
+ * Slots before `today` ("YYYY-MM-DD") are not shown.
+ */
+export function boardToOccurrences(
+	occurrences: BoardOccurrence[],
 	today: string = localDateKey(new Date()),
 ): OccurrenceWithPlan[] {
 	const startOfToday = dateKeyAt(today);
-	return jobs.flatMap((job_obj) => {
-		const plan = job_obj.recurring_plan as RecurringPlan | undefined | null;
-		if (!plan?.occurrences?.length) return [];
-		return plan.occurrences
-			.filter((occ) => {
-				if (occ.job_visit_id) return false;
-				if (new Date(occ.occurrence_start_at) < startOfToday) return false;
-				if (occ.status === "skipped" || occ.status === "cancelled") return false;
-				return occ.status === "planned";
-			})
-			.map((occ) => ({ ...occ, plan, job_obj }));
+	return occurrences.flatMap((o) => {
+		const { job_container, ...plan } = o.recurring_plan;
+		if (!job_container) return [];
+		if (new Date(o.occurrence_start_at) < startOfToday) return [];
+		const job_obj = { ...job_container, priority: plan.priority, client: plan.client };
+		const { recurring_plan: _plan, ...occ } = o;
+		return [{ ...occ, plan, job_obj }] as unknown as OccurrenceWithPlan[];
 	});
 }
 

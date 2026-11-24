@@ -1,6 +1,7 @@
 import axios, { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
+import type { BoardResponse } from "../types/board";
 import { conflictFromResponse } from "../lib/apiErrors";
 import type {
 	CreateJobInput,
@@ -140,18 +141,19 @@ export const getJobVisitsByTechId = async (techId: string): Promise<JobVisit[]> 
 	return response.data.data || [];
 };
 
-export const getJobVisitsByDateRange = async (
-	startDate: Date,
-	endDate: Date
-): Promise<JobVisit[]> => {
-	const start = startDate.toISOString().split("T")[0]; // YYYY-MM-DD
-	const end = endDate.toISOString().split("T")[0];
-
-	const response = await api.get<ApiResponse<JobVisit[]>>(
-		`/job-visits/date-range/${start}/${end}`
-	);
-
-	return response.data.data || [];
+export const getBoard = async (
+	from: Date,
+	to: Date,
+	opts?: { includeUnscheduled?: boolean },
+): Promise<BoardResponse> => {
+	const response = await api.get<ApiResponse<BoardResponse>>("/job-visits/board", {
+		params: {
+			from: from.toISOString(),
+			to: to.toISOString(),
+			...(opts?.includeUnscheduled ? { includeUnscheduled: 1 } : {}),
+		},
+	});
+	return response.data.data ?? { visits: [], occurrences: [] };
 };
 
 export const createJobVisit = async (input: CreateJobVisitInput): Promise<JobVisit> => {

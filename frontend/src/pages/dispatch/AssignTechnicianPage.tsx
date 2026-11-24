@@ -3,12 +3,13 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronLeft, ChevronRight, Plus, Mail, Phone, Award, PanelRight, TriangleAlert } from "lucide-react";
 import { useTechnicianByIdQuery } from "../../hooks/useTechnicians";
 import {
-	useAllJobsQuery,
+	useBoardQuery,
 	usePatchVisitTechniciansMutation,
 	useCreateJobVisitMutation,
 } from "../../hooks/useJobs";
 import CreateJobVisit from "../../components/jobs/CreateJobVisit";
-import { VisitStatusColors, VisitStatusLabels, type Job, type JobVisit } from "../../types/jobs";
+import { VisitStatusColors, VisitStatusLabels } from "../../types/jobs";
+import type { BoardVisit, UnscheduledJob } from "../../types/board";
 import { TechnicianStatusDotColors, TechnicianStatusLabels } from "../../types/technicians";
 import LoadSvg from "../../assets/icons/loading.svg?react";
 import BoxSvg from "../../assets/icons/box.svg?react";
@@ -55,7 +56,7 @@ const compareVisitDays = (
 	return pastA ? b.day.localeCompare(a.day) : a.day.localeCompare(b.day);
 };
 
-const constraintLines = (v: JobVisit) => {
+const constraintLines = (v: BoardVisit) => {
 	const t = formatConstraintTime;
 	return [
 		v.arrival_constraint === "at" && v.arrival_time && `Arrive at ${t(v.arrival_time)}`,
@@ -107,27 +108,40 @@ export default function AssignTechnicianPage() {
 	const [timelineDay, setTimelineDay] = useState<string | null>(null);
 	const dayPickerRef = useRef<HTMLInputElement>(null);
 	const shownDay = timelineDay ?? todayKey;
-	const [confirmVisit, setConfirmVisit] = useState<JobVisit | null>(null);
+	const [confirmVisit, setConfirmVisit] = useState<BoardVisit | null>(null);
 
 	const { data: technician, isLoading: loadingTech } = useTechnicianByIdQuery(technicianId!);
-	const { data: jobs, isLoading: loadingJobs, refetch: refetchJobs } = useAllJobsQuery();
+	// The page reads a +/-30 day window, not the whole org: the board endpoint caps
+	// a read at 62 days, so Past/Upcoming and the counts are window-bounded. It
+	// re-anchors on the picked day whenever that day gets within a day of an edge
+	// (set during render so the stale window never commits). Day keys are UTC
+	// midnights; the one-day margin also covers the org zone's offset.
+	const [windowAnchor, setWindowAnchor] = useState(todayKey);
+	if (Math.abs(Date.parse(shownDay) - Date.parse(windowAnchor)) > 29 * 864e5) {
+		setWindowAnchor(shownDay);
+	}
+	const boardFrom = useMemo(() => new Date(Date.parse(windowAnchor) - 30 * 864e5), [windowAnchor]);
+	const boardTo = useMemo(() => new Date(Date.parse(windowAnchor) + 30 * 864e5), [windowAnchor]);
+	const { data: board, isLoading: loadingJobs, refetch: refetchBoard } = useBoardQuery(boardFrom, boardTo, {
+		includeUnscheduled: true,
+	});
 	const assignTechnicians = usePatchVisitTechniciansMutation();
 	const { mutateAsync: createJobVisitMutation } = useCreateJobVisitMutation();
 
 	const [isCreatingVisit, setIsCreatingVisit] = useState(false);
-	const [creatingVisitForJob, setCreatingVisitForJob] = useState<Job | null>(null);
+	const [creatingVisitForJob, setCreatingVisitForJob] = useState<UnscheduledJob | null>(null);
 
 	//permissions 
 	const EDIT_JOBS = usePermission("edit_jobs");
 	const CREATE_VISIT = useAnyPermission(["create_jobs", "edit_jobs"]);
 
-	const isVisitAssigned = (visit: JobVisit) => {
+	const isVisitAssigned = (visit: BoardVisit) => {
 		return visit.visit_techs?.some((vt) => vt.tech_id === technicianId);
 	};
 
-	const visitName = (v: JobVisit) => v.name || jobs?.find((j) => j.id === v.job_id)?.name || "Unnamed visit";
+	const visitName = (v: BoardVisit) => v.name || v.job.name || "Unnamed visit";
 
-    const toggleVisitSelection = async (visit: JobVisit) => {
+    const toggleVisitSelection = async (visit: BoardVisit) => {
 		if (!EDIT_JOBS) return;
 		const isAlreadyAssigned = visit.visit_techs?.some(
 			(vt) => vt.tech_id === technicianId
@@ -152,15 +166,15 @@ export default function AssignTechnicianPage() {
 		}
 	};
 
-    const handleCreateVisit = (job: Job) => {
+    const handleCreateVisit = (job: UnscheduledJob) => {
 		if (!CREATE_VISIT) return;
 		setCreatingVisitForJob(job);
 		setIsCreatingVisit(true);
 	};
 
 	const allVisits = useMemo(() =>
-		(jobs ?? [])
-			.flatMap((j) => (j.visits ?? []).map((v) => ({ v, j, day: dayKey(v.scheduled_start_at, tz) })))
+		(board?.visits ?? [])
+			.map((v) => ({ v, j: v.job, day: dayKey(v.scheduled_start_at, tz) }))
 			.sort((a, b) =>
 				compareVisitDays(
 					{ day: a.day, at: a.v.scheduled_start_at },
@@ -168,16 +182,16 @@ export default function AssignTechnicianPage() {
 					todayKey
 				)
 			),
-	[jobs, tz, todayKey]);
+	[board, tz, todayKey]);
 
 	// Visit id → this tech's other visits it overlaps. Keys on the tech's own visits are double-bookings.
 	const conflicts = useMemo(() => {
 		const time = (d: Date | string) => new Date(d).getTime();
-		const isMine = (v: JobVisit) => v.visit_techs?.some((t) => t.tech_id === technicianId);
+		const isMine = (v: BoardVisit) => v.visit_techs?.some((t) => t.tech_id === technicianId);
 		const all = allVisits.map(({ v }) => v).filter((v) => v.status !== "Cancelled");
 		const mine = all.filter(isMine);
-		const map = new Map<string, JobVisit[]>();
-		// ponytail: O(visits × tech's visits) overlap scan, fine for one org's job list
+		const map = new Map<string, BoardVisit[]>();
+		// ponytail: O(visits × tech's visits) overlap scan, fine for the loaded window
 		for (const v of all) {
 			const hits = mine.filter((m) =>
 				m.id !== v.id &&
@@ -192,7 +206,7 @@ export default function AssignTechnicianPage() {
 	const q = search.trim().toLowerCase();
 
 	const sortedVisits = useMemo(() => {
-		const isMine = (v: JobVisit) => v.visit_techs?.some((t) => t.tech_id === technicianId);
+		const isMine = (v: BoardVisit) => v.visit_techs?.some((t) => t.tech_id === technicianId);
 
 		return allVisits.filter(({ v, j, day }) =>
 			v.status !== "Cancelled" &&
@@ -268,11 +282,8 @@ export default function AssignTechnicianPage() {
 	const upcomingUnassigned = upcoming.filter(({ v }) => !v.visit_techs?.length).length;
 	const upcomingConflicts = upcoming.filter(({ v }) => isVisitAssigned(v) && conflicts.has(v.id)).length;
 	const confirmOverlaps = (confirmVisit && conflicts.get(confirmVisit.id)) || [];
-	const jobsWithoutVisits = (jobs ?? []).filter(
+	const jobsWithoutVisits = (board?.unscheduledJobs ?? []).filter(
 		(j) =>
-			!j.visits?.length &&
-			j.status !== "Completed" &&
-			j.status !== "Cancelled" &&
 			(!q || [j.name, j.client?.name, j.address].some((s) => s?.toLowerCase().includes(q)))
 	);
 	const showChip = (c: typeof chip) => {
@@ -433,7 +444,7 @@ export default function AssignTechnicianPage() {
             <div className="flex flex-col lg:flex-row">
                 {/** Job visits */}
                 <div className="@container flex-1 min-w-0">
-                    {jobs?.length ? (
+                    {board?.visits.length || board?.unscheduledJobs?.length ? (
                         <div className="flex flex-col gap-2 p-6">
 							<div className="flex flex-wrap gap-3">
 								<SearchBar className="min-w-60 flex-1" placeholder="Search visits, clients, and addresses" value={search} onChange={setSearch} />
@@ -744,7 +755,7 @@ export default function AssignTechnicianPage() {
 					onSuccess={async () => {
 						setIsCreatingVisit(false);
 						setCreatingVisitForJob(null);
-						await refetchJobs();
+						await refetchBoard();
 					}}
 				/>
 			)}

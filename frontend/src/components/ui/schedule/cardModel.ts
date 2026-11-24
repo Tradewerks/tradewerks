@@ -1,5 +1,5 @@
 import { VisitStatusLabels, type VisitStatus } from "../../../types/jobs";
-import type { OccurrenceWithPlan, VisitWithJob } from "./dashboardCalendarUtils";
+import { isPlanJob, type OccurrenceWithPlan, type VisitWithJob } from "./dashboardCalendarUtils";
 import {
 	getPriorityColor,
 	hhmmToHours,
@@ -116,7 +116,7 @@ export function toCardModel(entry: CardEntry, ctx: CardModelCtx): CardModel {
 		const jobName = job?.name?.trim() ?? "";
 		const title = v.name?.trim() || jobName || "Visit";
 		const subtitle = jobName && jobName !== title ? jobName : undefined;
-		const items = v.line_items?.length ?? 0;
+		const items = v._count?.line_items ?? v.line_items?.length ?? 0;
 		const ref = job?.job_number
 			? items > 0
 				? `${job.job_number} · ${items} ${items === 1 ? "item" : "items"}`
@@ -124,7 +124,7 @@ export function toCardModel(entry: CardEntry, ctx: CardModelCtx): CardModel {
 			: undefined;
 		model = {
 			kind: "visit",
-			fromPlan: !!job?.recurring_plan,
+			fromPlan: isPlanJob(job),
 			title,
 			subtitle,
 			client: dedupeClient(job?.client?.name, title, subtitle),

@@ -36,7 +36,7 @@ import {
 import type { UpdateJobVisitInput } from "../../../types/jobs";
 import { visitVersion } from "../../../lib/apiErrors";
 import type { Technician } from "../../../types/technicians";
-import type { OccurrenceWithPlan, VisitWithJob } from "./dashboardCalendarUtils";
+import { isPlanJob, type OccurrenceWithPlan, type VisitWithJob } from "./dashboardCalendarUtils";
 import type { RescheduleOccurrenceInput, VisitGenerationResult } from "../../../types/recurringPlans";
 import { useVehicleStockConflictsQuery } from "../../../hooks/useVehicleStock";
 import { getSharedDragOffset, setSharedDragOffset } from "./scheduleBoardDragState";
@@ -283,7 +283,7 @@ export default function ScheduleBoardDayColumn({
 				arrival_window_end: visit.arrival_window_end ?? null,
 				finish_constraint: visit.finish_constraint,
 				finish_time: visit.finish_time ?? null,
-				isRecurring: !!visit.job_obj?.recurring_plan,
+				isRecurring: isPlanJob(visit.job_obj),
 				entityName: visit.job_obj?.name ?? "Visit",
 			})
 		);

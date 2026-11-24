@@ -39,7 +39,12 @@ export const qk = {
 	},
 	board: {
 		all: ["board"] as const,
-		range: (from: string, to: string) => ["board", from, to] as const,
+		// The range is the trailing segment so `all` still prefix-matches; the
+		// optional flag keeps the assign page's rail-bearing read a separate entry.
+		range: (from: string, to: string, opts?: { includeUnscheduled?: boolean }) =>
+			opts?.includeUnscheduled
+				? (["board", from, to, { includeUnscheduled: true }] as const)
+				: (["board", from, to] as const),
 	},
 	clients: recordKeys("clients"),
 	requests: recordKeys("requests"),
