@@ -1085,6 +1085,40 @@ authed(
 	},
 );
 
+authed(
+	"get",
+	"/job-visits/assigned",
+	"Visits",
+	"view_jobs, view_visits or view_assigned_jobs",
+	{
+		summary: "List the caller's visits for the technician phone",
+		description:
+			"Requires any of `view_jobs`, `view_visits` or `view_assigned_jobs`. Always the caller's own visits (any `techId` is ignored), with line items, notes and time entries. Without `scope`: visits overlapping `[from, to)` (default org-local yesterday through 14 days out, at most 62 days), earliest first, plus Scheduled visits with no technicians (no pricing) when the caller holds `edit_jobs` or `update_visit_status`; `meta.count` is the row count. With `scope=past`: every visit the caller is on that is Completed or Cancelled, or still open but ended before the default window starts (so it is never in both modes), with no lower date bound and no unassigned visits, newest first, paged; `meta.count` is the total, with `meta.page` and `meta.limit`.",
+		request: {
+			query: z.object({
+				scope: z.literal("past").optional(),
+				from: z.iso.datetime().optional().describe("Window start; with `to`. Ignored with `scope=past`"),
+				to: z.iso.datetime().optional().describe("Window end (exclusive)"),
+				page: z.coerce.number().int().min(1).optional().describe("`scope=past` only; default 1"),
+				limit: z.coerce
+					.number()
+					.int()
+					.min(1)
+					.max(200)
+					.optional()
+					.describe("`scope=past` only; default 20"),
+			}),
+		},
+		responses: {
+			200: json(envelope(z.array(jobVisit)), "Visits (empty array if none)"),
+			400: json(
+				errorEnvelope,
+				"An unknown `scope`; with `scope=past`, a bad `page`/`limit` or a `sort`/`dir` other than the fixed newest-first order; `from`/`to` unparseable, only one given, `to` not after `from`, or a span over 62 days (`INVALID_INPUT`)",
+			),
+		},
+	},
+);
+
 const jobParams = z.object({ jobId: z.uuid() });
 const jobNoteParams = jobParams.extend({ noteId: z.uuid() });
 const jobVisitParams = jobParams.extend({ visitId: z.uuid() });

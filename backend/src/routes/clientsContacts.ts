@@ -1,5 +1,5 @@
 import { requireModule } from "../lib/entitlements/requireModule.js";
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import {
 	ErrorCodes,
 	createSuccessResponse,
@@ -39,11 +39,19 @@ import { getJobsByClientId } from "../controllers/jobsController.js";
 import { getQuotesByClientId } from '../controllers/quotesController.js';
 import { getRequestsByClientId } from '../controllers/requestsController.js';
 import * as invoicesController from '../controllers/invoicesController.js';
-import { requirePermission, requireAnyPermission, denyTechnicians } from '../lib/requirePermissions.js';
+import { requirePermission, requireAnyPermission, denyTechnicians, hasPermission } from '../lib/requirePermissions.js';
+import { assignedOnly, assignedTechId } from '../lib/assignedScope.js';
 import { getProjectsByClientId } from '../controllers/projectsController.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 
 const router = Router();
+
+// view_clients alone (the default Technician role holds it) must not open up
+// job totals or quotes: those need their own permissions.
+const clientReadScope = (req: Request) => ({
+    assignedTechId: assignedTechId(req),
+    quotes: hasPermission(req, "view_quotes"),
+});
 
 // ============================================
 // CLIENTS
@@ -52,7 +60,7 @@ const router = Router();
 router.get("/clients", requirePermission("view_clients"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const clients = await getAllClients(orgId);
+        const clients = await getAllClients(orgId, clientReadScope(req));
         res.json(createSuccessResponse(clients, { count: clients.length }));
     } catch (err) {
         next(err);
@@ -63,7 +71,7 @@ router.get("/clients/:id", requirePermission("view_clients"), async (req, res, n
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
-        const client = await getClientById(id, orgId);
+        const client = await getClientById(id, orgId, clientReadScope(req));
 
         if (!client) {
             return res
@@ -160,7 +168,7 @@ router.delete("/clients/:id", requirePermission("delete_clients"), async (req, r
 });
 
 // Quotes for a client
-router.get("/clients/:clientId/quotes", requireModule("quotes"), requirePermission("view_clients"), async (req, res, next) => {
+router.get("/clients/:clientId/quotes", requireModule("quotes"), requirePermission("view_clients"), requirePermission("view_quotes"), async (req, res, next) => {
 	try {
 		const clientId = req.params.clientId as string;
 		const orgId = req.user!.organization_id as string;
@@ -176,7 +184,7 @@ router.get("/clients/:clientId/requests", requirePermission("view_clients"), asy
     try {
         const clientId = req.params.clientId as string;
         const orgId = req.user!.organization_id as string;
-        const requests = await getRequestsByClientId(clientId, orgId);
+        const requests = await getRequestsByClientId(clientId, orgId, clientReadScope(req));
         res.json(createSuccessResponse(requests, { count: requests.length }));
     } catch (err) {
         next(err);
@@ -184,7 +192,7 @@ router.get("/clients/:clientId/requests", requirePermission("view_clients"), asy
 });
 
 // invoices for a client
-router.get("/clients/:clientId/invoices", requirePermission("view_clients"), async (req, res, next) => {
+router.get("/clients/:clientId/invoices", requirePermission("view_clients"), requirePermission("view_invoices"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
         const invoices = await invoicesController.getInvoicesByClientId(
@@ -199,6 +207,10 @@ router.get("/clients/:clientId/invoices", requirePermission("view_clients"), asy
 
 router.get("/clients/:clientId/changes", requirePermission("view_clients"), async (req, res, next)=> {
     try {
+        // A client's log walks every job, quote and invoice under it.
+        if (assignedOnly(req)) {
+            return res.status(404).json(createErrorResponse(ErrorCodes.NOT_FOUND, "Client not found"));
+        }
         const orgId = req.user!.organization_id as string;
         const clientId = req.params.clientId as string;
         let limit: number;
@@ -608,7 +620,9 @@ router.get("/clients/:clientId/jobs", requireAnyPermission("view_clients", "view
     try {
         const clientId = req.params.clientId as string;
         const orgId = req.user!.organization_id as string;
-        const jobs = await getJobsByClientId(clientId, orgId);
+        // view_clients reaches this without a jobs permission; an assigned-only
+        // caller still sees only the jobs they are on.
+        const jobs = await getJobsByClientId(clientId, orgId, assignedTechId(req));
         res.json(createSuccessResponse(jobs, { count: jobs.length }));
     } catch (err) {
         next(err);

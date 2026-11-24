@@ -21,6 +21,12 @@ import {
 	type RecordType,
 } from "../records.js";
 import { AgentErrorCodes, AgentToolError, type AgentContext } from "../types.js";
+import { assignedOnlyFor } from "../../lib/assignedScope.js";
+
+// Job and visit loaders read this; the other types ignore it.
+const scopeFor = (ctx: AgentContext) => ({
+	assignedTechId: assignedOnlyFor(ctx.permissions) ? ctx.userId : undefined,
+});
 
 const recordType = z.enum(RECORD_TYPES);
 
@@ -58,7 +64,7 @@ export const getRecord = defineTool({
 	}),
 	async handler({ input, ctx, db }) {
 		assertMayRead(ctx, input.type);
-		const record = await RECORD_LOADERS[input.type].get(db, input.id);
+		const record = await RECORD_LOADERS[input.type].get(db, input.id, scopeFor(ctx));
 		if (!record) {
 			// Same message whichever the cause. `getScopedDb` folds the org filter
 			// into the query, so a record in another organization is indistinguishable
@@ -152,7 +158,7 @@ export const listRecords = defineTool({
 			clientId: input.client_id,
 			since: input.since ? new Date(input.since) : undefined,
 			until: input.until ? new Date(input.until) : undefined,
-		});
+		}, scopeFor(ctx));
 		return {
 			type: input.type,
 			rows,

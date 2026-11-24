@@ -10,12 +10,17 @@ import { getUserContext } from '../lib/context.js';
 import { REFUSAL_STATUS } from '../lib/refusalStatus.js';
 import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
 import { requireAssigned } from '../lib/requireAssigned.js';
+import { assignedTechId } from '../lib/assignedScope.js';
+import { ListQueryError, parseListQuery, sendList, sendListError } from '../lib/listQuery.js';
 import {
     getAllJobVisits,
     getMyJobsForPurchase,
     getJobVisitById,
     getJobVisitsByDateRange,
     getBoardVisits,
+    getAssignedVisits,
+    getAssignedPastVisits,
+    defaultAssignedWindow,
     insertJobVisit,
     updateJobVisit,
     assignTechniciansToVisit,
@@ -61,8 +66,7 @@ const router = Router();
 const assignedVisit = requireAssigned("visit", ["edit_jobs"], "id");
 
 // Caller's id when they may only see visits they're assigned to; undefined means every visit.
-const ownVisitsOnly = (req: Request) =>
-    hasPermission(req, "view_jobs") || hasPermission(req, "view_visits") ? undefined : (req.user!.uid as string);
+const ownVisitsOnly = (req: Request) => assignedTechId(req);
 
 router.get("/", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
     try {
@@ -137,11 +141,82 @@ router.get("/board", requireAnyPermission("view_jobs", "view_visits", "view_assi
     }
 });
 
-router.get("/:id", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("visit", ["view_jobs", "view_visits"], "id"), async (req, res, next) => {
+const assignedQuerySchema = z
+    .object({ from: z.coerce.date(), to: z.coerce.date() })
+    .refine((q) => q.to > q.from, { message: "to must be after from" })
+    .refine((q) => q.to.getTime() - q.from.getTime() <= BOARD_MAX_SPAN_DAYS * DAY_MS, {
+        message: `Range can span at most ${BOARD_MAX_SPAN_DAYS} days`,
+    });
+
+// Past history's order is fixed (newest first, id tiebreak): any other `sort` is
+// refused by the spec, and `dir` other than desc is refused rather than ignored.
+const PAST_SPEC = {
+    sortable: ["scheduled_start_at"] as const,
+    defaultSort: "scheduled_start_at" as const,
+    defaultDir: "desc" as const,
+    defaultLimit: 20,
+};
+
+// The technician phone's list. Above "/:id" like "/mine", and keyed to the
+// caller's own token for the same reason: any techId in the query is ignored.
+router.get("/assigned", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
+    try {
+        const orgId = req.user!.organization_id as string;
+        if (req.query.scope !== undefined) {
+            if (req.query.scope !== "past") {
+                return res.status(400).json(
+                    createErrorResponse(ErrorCodes.INVALID_INPUT, "scope must be past", null, "scope"),
+                );
+            }
+            let parsed;
+            try {
+                parsed = parseListQuery(req.query, PAST_SPEC);
+                if (parsed.dir !== "desc") throw new ListQueryError("dir", "dir must be desc");
+            } catch (err) {
+                if (sendListError(res, err)) return;
+                throw err;
+            }
+            const { rows, total } = await getAssignedPastVisits(orgId, req.user!.uid as string, parsed);
+            // Always paged: this mode is new, so there is no legacy array shape to keep.
+            return sendList(res, { ...parsed, paged: true }, rows, total);
+        }
+        let range: { from: Date; to: Date };
+        if (req.query.from === undefined && req.query.to === undefined) {
+            range = await defaultAssignedWindow(orgId);
+        } else {
+            const parsed = assignedQuerySchema.safeParse(req.query);
+            if (!parsed.success) {
+                return res.status(400).json(
+                    createErrorResponse(ErrorCodes.INVALID_INPUT, parsed.error.issues.map((i) => i.message).join(", ")),
+                );
+            }
+            range = parsed.data;
+        }
+        const visits = await getAssignedVisits(orgId, req.user!.uid as string, {
+            ...range,
+            // The Available tab: only callers who can accept a visit see the pool.
+            withClaimable: hasPermission(req, "edit_jobs") || hasPermission(req, "update_visit_status"),
+        });
+        res.json(createSuccessResponse(visits, { count: visits.length }));
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get("/:id", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
-        const visit = await getJobVisitById(id, orgId);
+        const techId = assignedTechId(req);
+        const visit = await getJobVisitById(
+            id,
+            orgId,
+            techId ? {
+                techId,
+                // The Available tab's Details button opens a visit before it is claimed.
+                withClaimable: hasPermission(req, "edit_jobs") || hasPermission(req, "update_visit_status"),
+            } : undefined,
+        );
 
         if (!visit) {
             return res

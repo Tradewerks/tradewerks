@@ -18,6 +18,7 @@ import {
 	SEARCH_TYPE_PERMISSIONS,
 } from "../../services/searchService.js";
 import { defineTool } from "../registry.js";
+import { assignedOnlyFor } from "../../lib/assignedScope.js";
 
 export const searchRecordsTool = defineTool({
 	name: "search_records",
@@ -67,6 +68,7 @@ export const searchRecordsTool = defineTool({
 			query: input.query,
 			types,
 			limit: input.limit,
+			assignedTechId: assignedOnlyFor(ctx.permissions) ? ctx.userId : undefined,
 		});
 
 		return {

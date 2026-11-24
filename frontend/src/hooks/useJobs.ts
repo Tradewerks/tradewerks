@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import {
+	useInfiniteQuery,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -174,6 +175,31 @@ export const useAllJobVisitsQuery = (): UseQueryResult<JobVisit[], Error> => {
 		queryFn: jobApi.getAllJobVisits,
 	});
 };
+
+export const useAssignedVisitsQuery = (
+	range?: { from: string; to: string },
+): UseQueryResult<JobVisit[], Error> => {
+	return useQuery({
+		queryKey: qk.visits.assigned(range),
+		queryFn: () => jobApi.getAssignedVisits(range),
+	});
+};
+
+export const PAST_VISITS_PAGE_SIZE = 20;
+
+export const useAssignedPastVisitsQuery = (enabled = true) =>
+	useInfiniteQuery({
+		queryKey: qk.visits.assignedPast(PAST_VISITS_PAGE_SIZE),
+		queryFn: ({ pageParam }) =>
+			jobApi.getAssignedPastVisits({ page: pageParam, limit: PAST_VISITS_PAGE_SIZE }),
+		initialPageParam: 1,
+		// An empty page also stops it, so a total that shrank mid-scroll can't loop.
+		getNextPageParam: (last, pages) =>
+			last.rows.length > 0 && pages.reduce((n, p) => n + p.rows.length, 0) < last.total
+				? last.page + 1
+				: undefined,
+		enabled,
+	});
 
 /**
  * The caller's own jobs, for pickers. Separate from `useAllJobVisitsQuery`, which

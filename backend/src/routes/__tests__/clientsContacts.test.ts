@@ -29,7 +29,10 @@ vi.mock("../../controllers/projectsController.js", () => ({
 import clientsContactsRouter from "../clientsContacts.js";
 import { db } from "../../db.js";
 import { getProjectsByClientId } from "../../controllers/projectsController.js";
-import { updateClient } from "../../controllers/clientsController.js";
+import { updateClient, getClientById } from "../../controllers/clientsController.js";
+import { getQuotesByClientId } from "../../controllers/quotesController.js";
+import { getRequestsByClientId } from "../../controllers/requestsController.js";
+import { getInvoicesByClientId } from "../../controllers/invoicesController.js";
 import { getJobsByClientId } from "../../controllers/jobsController.js";
 import { callRoute, type FakeDb } from "./harness.js";
 
@@ -88,14 +91,23 @@ describe("GET /clients/:clientId/jobs", () => {
 		});
 		expect(r.status).toBe(200);
 		// An undefined id is no filter in Prisma, so it returned every job in the org.
-		expect(getJobsByClientId).toHaveBeenCalledWith("client-1", "org-1");
+		expect(getJobsByClientId).toHaveBeenCalledWith("client-1", "org-1", undefined);
+	});
+
+	it("narrows to the technician's own jobs without view_all_jobs", async () => {
+		vi.mocked(getJobsByClientId).mockResolvedValue([] as never);
+		await callRoute(clientsContactsRouter, "get", "/clients/:clientId/jobs", {
+			user: { uid: "tech-1", role: "technician", permissions: ["view_clients", "view_assigned_jobs"] },
+			params: { clientId: "client-1" },
+		});
+		expect(getJobsByClientId).toHaveBeenCalledWith("client-1", "org-1", "tech-1");
 	});
 });
 
 describe("GET /clients/:clientId/changes — limit validation (review P2-11)", () => {
 	it.each(["-1", "0", "3.3", "nan", "999"])("returns 400 for limit=%s", async (limit) => {
 		const r = await callRoute(clientsContactsRouter, "get", "/clients/:clientId/changes", {
-			user: { uid: "disp-1", role: "dispatcher", permissions: ["view_clients"] },
+			user: { uid: "disp-1", role: "dispatcher", permissions: ["view_clients", "view_jobs"] },
 			params: { clientId: "client-1" },
 			query: { limit },
 		});
@@ -106,7 +118,7 @@ describe("GET /clients/:clientId/changes — limit validation (review P2-11)", (
 
 	it("returns history with meta for a valid limit", async () => {
 		const r = await callRoute(clientsContactsRouter, "get", "/clients/:clientId/changes", {
-			user: { uid: "disp-1", role: "dispatcher", permissions: ["view_clients"] },
+			user: { uid: "disp-1", role: "dispatcher", permissions: ["view_clients", "view_jobs"] },
 			params: { clientId: "client-1" },
 			query: { limit: "7" },
 		});
@@ -139,5 +151,51 @@ describe("PUT /clients/:id — address tax choice refusal", () => {
 
 		expect(r.status).toBe(409);
 		expect(r.body.error).toMatchObject({ code: "ADDRESS_TAX_CHOICE_REQUIRED", details });
+	});
+});
+
+// The default Technician role holds view_clients; that must not open pricing.
+describe("view_clients without job/quote/invoice permissions", () => {
+	const tech = { uid: "tech-1", role: "technician", permissions: ["view_clients", "view_assigned_jobs", "view_visits"] };
+	const params = { clientId: "client-1", id: "client-1" };
+
+	it("GET /clients/:clientId/quotes needs view_quotes", async () => {
+		const r = await callRoute(clientsContactsRouter, "get", "/clients/:clientId/quotes", { user: tech, params });
+		expect(r.status).toBe(403);
+		expect(getQuotesByClientId).not.toHaveBeenCalled();
+	});
+
+	it("GET /clients/:clientId/invoices needs view_invoices", async () => {
+		const r = await callRoute(clientsContactsRouter, "get", "/clients/:clientId/invoices", { user: tech, params });
+		expect(r.status).toBe(403);
+		expect(getInvoicesByClientId).not.toHaveBeenCalled();
+	});
+
+	it("GET /clients/:clientId/changes is not found for an assigned-only caller", async () => {
+		const r = await callRoute(clientsContactsRouter, "get", "/clients/:clientId/changes", { user: tech, params });
+		expect(r.status).toBe(404);
+		expect(fake.log.findMany).not.toHaveBeenCalled();
+	});
+
+	it("GET /clients/:id narrows jobs and drops quotes for an assigned-only caller", async () => {
+		vi.mocked(getClientById).mockResolvedValue({ id: "client-1" } as never);
+		const r = await callRoute(clientsContactsRouter, "get", "/clients/:id", { user: tech, params });
+		expect(r.status).toBe(200);
+		expect(getClientById).toHaveBeenCalledWith("client-1", "org-1", { assignedTechId: "tech-1", quotes: false });
+	});
+
+	it("GET /clients/:clientId/requests passes the client read scope", async () => {
+		vi.mocked(getRequestsByClientId).mockResolvedValue([] as never);
+		await callRoute(clientsContactsRouter, "get", "/clients/:clientId/requests", { user: tech, params });
+		expect(getRequestsByClientId).toHaveBeenCalledWith("client-1", "org-1", { assignedTechId: "tech-1", quotes: false });
+	});
+
+	it("GET /clients/:id is unscoped for a dispatcher with view_jobs and view_quotes", async () => {
+		vi.mocked(getClientById).mockResolvedValue({ id: "client-1" } as never);
+		await callRoute(clientsContactsRouter, "get", "/clients/:id", {
+			user: { uid: "disp-1", role: "dispatcher", permissions: ["view_clients", "view_jobs", "view_quotes"] },
+			params,
+		});
+		expect(getClientById).toHaveBeenCalledWith("client-1", "org-1", { assignedTechId: undefined, quotes: true });
 	});
 });

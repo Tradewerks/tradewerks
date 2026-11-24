@@ -12,6 +12,7 @@ import { CONSENT_SELECT, clientWithConsent } from "../lib/contactConsent.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { getEffectiveTaxMode } from "../services/tax/taxMode.js";
+import { jobAssignedWhere } from "../lib/assignedScope.js";
 import {
 	AddressTaxChoiceError,
 	addressMoves,
@@ -21,15 +22,26 @@ import {
 	keptFamily,
 } from "../lib/addressTaxChoice.js";
 
-const buildClientInclude = () => ({
+/**
+ * How much of a client a view_clients caller sees. `assignedTechId` (an
+ * assigned-only technician) narrows jobs to theirs and drops job totals;
+ * `quotes: false` (no view_quotes) drops the quote list, which carries totals.
+ */
+export interface ClientReadScope {
+	assignedTechId?: string;
+	quotes: boolean;
+}
+
+const buildClientInclude = (scope?: ClientReadScope) => ({
 	jobs: {
+		where: scope?.assignedTechId ? jobAssignedWhere(scope.assignedTechId) : undefined,
 		select: {
 			id: true,
 			job_number: true,
 			name: true,
 			status: true,
 			created_at: true,
-			actual_total: true,
+			actual_total: !scope?.assignedTechId,
 		},
 		orderBy: { created_at: "desc" as const },
 	},
@@ -75,38 +87,42 @@ const buildClientInclude = () => ({
 		},
 		orderBy: { created_at: "desc" as const },
 	},
-	quotes: {
-		select: {
-			id: true,
-			quote_number: true,
-			title: true,
-			status: true,
-			total: true,
-			is_active: true,
-			created_at: true,
-		},
-		orderBy: { created_at: "desc" as const },
-	},
+	...(scope && !scope.quotes
+		? {}
+		: {
+				quotes: {
+					select: {
+						id: true,
+						quote_number: true,
+						title: true,
+						status: true,
+						total: true,
+						is_active: true,
+						created_at: true,
+					},
+					orderBy: { created_at: "desc" as const },
+				},
+			}),
 });
 
 // ============================================================================
 // CLIENT CRUD
 // ============================================================================
 
-export const getAllClients = async (organizationId: string) => {
+export const getAllClients = async (organizationId: string, scope?: ClientReadScope) => {
 	const sdb = getScopedDb(organizationId);
 	const clients = await sdb.client.findMany({
-		include: buildClientInclude(),
+		include: buildClientInclude(scope),
 		orderBy: { last_activity: "desc" },
 	});
 	return clients.map(clientWithConsent);
 };
 
-export const getClientById = async (id: string, organizationId: string) => {
+export const getClientById = async (id: string, organizationId: string, scope?: ClientReadScope) => {
 	const sdb = getScopedDb(organizationId);
 	const client = await sdb.client.findFirst({
 		where: { id },
-		include: buildClientInclude(),
+		include: buildClientInclude(scope),
 	});
 	return client ? clientWithConsent(client) : null;
 };

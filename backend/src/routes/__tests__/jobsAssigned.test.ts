@@ -56,6 +56,7 @@ import {
 	techOnVisit,
 	techOnNote,
 } from "../../controllers/jobsController.js";
+import { getJobNotes } from "../../controllers/jobNotesController.js";
 import { callRoute } from "./harness.js";
 
 const tech = {
@@ -111,8 +112,9 @@ const routes = [
 beforeEach(() => vi.clearAllMocks());
 
 describe("job routes — technicians only reach what they're assigned to", () => {
+	// Reads answer 404 so an id can't be probed; writes keep the 403.
 	it.each(routes)(
-		"%s %s returns 403 for an unassigned tech",
+		"%s %s refuses an unassigned tech",
 		async (method, path, params, check, args) => {
 			vi.mocked(check).mockResolvedValue(false);
 			const r = await callRoute(jobsRouter, method, path, {
@@ -121,8 +123,9 @@ describe("job routes — technicians only reach what they're assigned to", () =>
 				body: { content: "x" },
 			});
 
-			expect(r.status).toBe(403);
-			expect(r.body.error.code).toBe("FORBIDDEN");
+			const read = method === "get";
+			expect(r.status).toBe(read ? 404 : 403);
+			expect(r.body.error.code).toBe(read ? "NOT_FOUND" : "FORBIDDEN");
 			expect(check).toHaveBeenCalledWith(...args);
 		},
 	);
@@ -203,4 +206,17 @@ describe("GET /jobs — assignment filter", () => {
 			expect(getAllJobs).toHaveBeenCalledWith("org-1", undefined);
 		},
 	);
+});
+
+describe("GET /jobs/:jobId/notes — note rule", () => {
+	it("an assigned tech gets only job-level notes and notes on their visits", async () => {
+		vi.mocked(techOnJob).mockResolvedValue(true);
+		await callRoute(jobsRouter, "get", "/:jobId/notes", { user: tech, params: { jobId: "j1" } });
+		expect(getJobNotes).toHaveBeenCalledWith("j1", "org-1", "tech-1");
+	});
+
+	it("a dispatcher's notes are unfiltered", async () => {
+		await callRoute(jobsRouter, "get", "/:jobId/notes", { user: dispatcher, params: { jobId: "j1" } });
+		expect(getJobNotes).toHaveBeenCalledWith("j1", "org-1", undefined);
+	});
 });

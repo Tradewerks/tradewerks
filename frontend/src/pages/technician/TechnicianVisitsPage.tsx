@@ -1,4 +1,8 @@
-﻿import { useAllJobVisitsQuery, useAcceptJobVisitMutation } from "../../hooks/useJobs";
+﻿import {
+	useAssignedVisitsQuery,
+	useAssignedPastVisitsQuery,
+	useAcceptJobVisitMutation,
+} from "../../hooks/useJobs";
 import type { VisitStatus } from "../../types/jobs";
 import { useAuthStore } from "../../auth/authStore";
 import { useMemo, useState, useEffect, useRef } from "react";
@@ -81,11 +85,11 @@ export default function TechnicianVisitsPage() {
 	const [sortMode, setSortMode] = useState<SortMode>("time");
 	const [acceptError, setAcceptError] = useState<string | null>(null);
 	const [acceptConfirm, setAcceptConfirm] = useState<string | null>(null);
-	const [showAllPast, setShowAllPast] = useState(false);
 	const [userPosition, setUserPosition] = useState<{ lat: number; lon: number } | null>(null);
 	const [geoSupported, setGeoSupported] = useState(false);
 
 	const pillRef = useRef<HTMLDivElement>(null);
+	const pastEndRef = useRef<HTMLDivElement>(null);
 	const trackRef = useRef<HTMLDivElement>(null);
 	const drag = useRef({
 		active: false,
@@ -176,7 +180,25 @@ export default function TechnicianVisitsPage() {
 		}
 	};
 
-	const { data: visits, isLoading, error } = useAllJobVisitsQuery();
+	const { data: visits, isLoading, error } = useAssignedVisitsQuery();
+	const isPast = tab === "past";
+	// The windowed list stops at yesterday, so history is its own paged read.
+	const pastQuery = useAssignedPastVisitsQuery(isPast);
+	const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = pastQuery;
+	// Offset paging can repeat a row when a visit moves into Past between page
+	// reads (e.g. at the org's midnight); keep the first copy.
+	const pastVisits = useMemo(() => {
+		if (!pastQuery.data) return undefined;
+		const seen = new Set<string>();
+		return pastQuery.data.pages
+			.flatMap((p) => p.rows)
+			.filter((v) => (seen.has(v.id) ? false : (seen.add(v.id), true)));
+	}, [pastQuery.data]);
+	const pastTotal = pastQuery.data?.pages.at(-1)?.total ?? 0;
+	const source = isPast ? pastVisits : visits;
+	const listLoading = isPast ? pastQuery.isLoading : isLoading;
+	// A failed later page keeps the loaded rows; it is reported by the Load more row.
+	const listError = isPast ? (pastVisits?.length ? null : pastQuery.error) : error;
 	const acceptMutation = useAcceptJobVisitMutation();
 
 	// Geolocation — request once on mount when switching to "mine" tab
@@ -202,6 +224,18 @@ export default function TechnicianVisitsPage() {
 	}, [tabIndex]);
 
 	useEffect(() => {
+		const el = pastEndRef.current;
+		// After a failed page the button is the retry; re-arming would loop on a 4xx.
+		if (!el || !hasNextPage || isFetchingNextPage || isFetchNextPageError) return;
+		if (typeof IntersectionObserver === "undefined") return;
+		const io = new IntersectionObserver((entries) => {
+			if (entries.some((e) => e.isIntersecting)) void fetchNextPage();
+		});
+		io.observe(el);
+		return () => io.disconnect();
+	}, [isPast, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+
+	useEffect(() => {
 		const el = trackRef.current;
 		if (!el) return;
 		const handler = (e: TouchEvent) => {
@@ -212,21 +246,16 @@ export default function TechnicianVisitsPage() {
 	}, []);
 
 	const display = useMemo(() => {
-		if (!visits) return [];
+		if (!source) return [];
 
-		let filtered = visits;
+		let filtered = source;
 
-		if (tab === "past") {
-			filtered = filtered
-				.filter((v) => v.status === "Completed" || v.status === "Cancelled")
-				.filter((v) =>
-					v.visit_techs?.some((vt) => vt.tech_id === user?.userId)
-				);
-		} else if (tab === "available") {
+		// Past rows arrive already scoped by the server (closed, or open and ended before Mine's window).
+		if (tab === "available") {
 			filtered = filtered
 				.filter((v) => v.status !== "Completed" && v.status !== "Cancelled")
 				.filter((v) => (v.visit_techs?.length ?? 0) === 0);
-		} else {
+		} else if (tab === "mine") {
 			filtered = filtered
 				.filter((v) => v.status !== "Completed" && v.status !== "Cancelled")
 				.filter((v) =>
@@ -278,6 +307,9 @@ export default function TechnicianVisitsPage() {
 				};
 			})
 			.sort((a, b) => {
+				// Past keeps the server's newest-first order so a loaded page
+				// appends below the last instead of reshuffling.
+				if (tab === "past") return 0;
 				// Clocked-in visit always first
 				const clockedDiff = (b._isClockedIn ? 1 : 0) - (a._isClockedIn ? 1 : 0);
 				if (clockedDiff !== 0) return clockedDiff;
@@ -291,16 +323,12 @@ export default function TechnicianVisitsPage() {
 				) {
 					return a.distanceMiles - b.distanceMiles;
 				}
-				// Past tab: most recent first; all others: soonest first
-				const timeDiff = a._scheduleDate.getTime() - b._scheduleDate.getTime();
-				return tab === "past" ? -timeDiff : timeDiff;
+				return a._scheduleDate.getTime() - b._scheduleDate.getTime();
 			})
 			.map(({ _scheduleDate, _isClockedIn, ...rest }) => rest);
-	}, [visits, tab, searchInput, user?.userId, sortMode, userPosition, tz, t]);
+	}, [source, tab, searchInput, user?.userId, sortMode, userPosition, tz, t]);
 
-	const cardData = tab === "past" && !showAllPast ? display.slice(0, 5) : display;
-
-	const visitsById = useMemo(() => new Map(visits?.map((v) => [v.id, v]) ?? []), [visits]);
+	const visitsById = useMemo(() => new Map(source?.map((v) => [v.id, v]) ?? []), [source]);
 
 	// Proximity awareness — count "mine" visits within threshold
 	const nearbyCount = useMemo(() => {
@@ -314,7 +342,6 @@ export default function TechnicianVisitsPage() {
 		setTab("past");
 		setAcceptConfirm(null);
 		setAcceptError(null);
-		setShowAllPast(false);
 	};
 
 	const handleAccept = async (e: React.MouseEvent, visitId: string) => {
@@ -469,24 +496,24 @@ export default function TechnicianVisitsPage() {
 			)}
 
 			{/* Card list */}
-			{isLoading && (
+			{listLoading && (
 				<p className="text-text-tertiary text-sm text-center py-8">
 					{t("visits.loading")}
 				</p>
 			)}
-			{error && (
+			{listError && (
 				<p className="text-error-text text-sm text-center py-8">
 					{t("visits.load_failed")}
 				</p>
 			)}
-			{!isLoading && !error && cardData.length === 0 && (
+			{!listLoading && !listError && display.length === 0 && (
 				<p className="text-text-muted text-sm text-center py-8">
 					{t("visits.none_found")}
 				</p>
 			)}
 
 			<div className="space-y-3">
-				{cardData.map((row) => {
+				{display.map((row) => {
 					// ── Available tab: existing flat card + Accept + Details ──────────────
 					if (tab === "available") {
 						return (
@@ -622,15 +649,34 @@ export default function TechnicianVisitsPage() {
 				})}
 			</div>
 
-			{tab === "past" && display.length > 5 && (
-				<button
-					onClick={() => setShowAllPast((prev) => !prev)}
-					className="mt-3 w-full py-3 min-h-[44px] text-sm text-primary-text hover:text-primary-text transition-colors"
-				>
-					{showAllPast
-						? t("visits.show_less")
-						: t("visits.view_all_past", { count: display.length })}
-				</button>
+			{isPast && !!pastVisits?.length && (
+				<div className="mt-3 flex flex-col gap-2">
+					{/* Auto-load trigger; the button below stays as the fallback. */}
+					<div ref={pastEndRef} aria-hidden="true" className="h-px" />
+					<p className="text-center text-xs text-text-muted tabular-nums">
+						{t("visits.showing_count", {
+							shown: pastVisits.length,
+							total: pastTotal,
+						})}
+					</p>
+					{isFetchNextPageError && !isFetchingNextPage && (
+						<p role="alert" className="text-center text-xs text-error-text">
+							{t("visits.load_more_failed")}
+						</p>
+					)}
+					{hasNextPage && (
+						<button
+							type="button"
+							onClick={() => void fetchNextPage()}
+							disabled={isFetchingNextPage}
+							className="w-full py-3 min-h-[44px] rounded-lg border border-border bg-surface text-sm font-medium text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors duration-150 disabled:opacity-50"
+						>
+							{isFetchingNextPage
+								? t("visits.loading_more")
+								: t("visits.load_more")}
+						</button>
+					)}
+				</div>
 			)}
 		</TechPage>
 	);

@@ -36,6 +36,8 @@ export const qk = {
 			range
 				? (["jobVisits", "assigned", range] as const)
 				: (["jobVisits", "assigned"] as const),
+		// Under the assigned prefix so the tech socket's invalidation reaches it.
+		assignedPast: (limit: number) => ["jobVisits", "assigned", { scope: "past", limit }] as const,
 	},
 	board: {
 		all: ["board"] as const,

@@ -15,6 +15,8 @@ import {
 	type entity,
 } from "../../controllers/logsController.js";
 import { defineTool } from "../registry.js";
+import { assignedOnlyFor } from "../../lib/assignedScope.js";
+import { techOnJob } from "../../controllers/jobsController.js";
 import { AgentErrorCodes, AgentToolError } from "../types.js";
 
 /** Types `ENTITY_GROUPS` in logsController knows how to walk. */
@@ -57,6 +59,18 @@ export const getEntityHistoryTool = defineTool({
 				AgentErrorCodes.FORBIDDEN,
 				`Not permitted to read ${input.type} history; needs one of: ${needed.join(", ")}`,
 			);
+		}
+
+		// An assigned-only caller gets a job's history only when on it, and no client
+		// history: a client's log walks every job, quote and invoice under it.
+		if (assignedOnlyFor(ctx.permissions)) {
+			const visible =
+				input.type === "job"
+					? await techOnJob(ctx.organizationId, ctx.userId, input.id)
+					: input.type !== "client";
+			if (!visible) {
+				throw new AgentToolError(AgentErrorCodes.NOT_FOUND, `No ${input.type} with that id in this organization`);
+			}
 		}
 
 		const result = await getEntityHistory(ctx.organizationId, input.type as entity, input.id, input.limit);

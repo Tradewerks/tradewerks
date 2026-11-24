@@ -60,6 +60,7 @@ import {
 	keptFamily,
 } from "../lib/addressTaxChoice.js";
 import { assertTaxGroupsInOrg, findForeignTaxGroupIds } from "../lib/taxHelpers.js";
+import { jobAssignedWhere, noteAssignedWhere, visitAssignedWhere } from "../lib/assignedScope.js";
 import {
 	dropClientTaxTotals,
 	getEffectiveTaxMode,
@@ -87,7 +88,7 @@ async function recomputeJobIfServerTaxed(
 }
 
 // Helper functions to check if the tech is assigned to related job or visit
-const onVisit = (techId: string) => ({ visit_techs: { some: { tech_id: techId }}});
+const onVisit = visitAssignedWhere;
 
 export async function techOnJob(orgId: string, techId: string, jobId: string) {
 	const job = await getScopedDb(orgId).job.findFirst({
@@ -123,13 +124,14 @@ export async function techOnNote(orgId: string, techId: string, noteId: string) 
 // JOB CRUD
 // ============================================================================
 
-// With techId, only jobs that tech is on a visit of.
+// With techId, only jobs that tech is on a visit of, carrying only that tech's
+// visits: a teammate's visit on the same job brings its own line items.
 export const getAllJobs = async (organizationId: string, techId?: string) => {
 	const now = new Date();
 	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
 	const sdb = getScopedDb(organizationId);
 	return await sdb.job.findMany({
-		where: techId ? { visits: { some: onVisit(techId) } } : undefined,
+		where: techId ? jobAssignedWhere(techId) : undefined,
 		include: {
 			client: {
 				select: {
@@ -153,6 +155,7 @@ export const getAllJobs = async (organizationId: string, techId?: string) => {
 				},
 			},
 			visits: {
+				where: techId ? visitAssignedWhere(techId) : undefined,
 				include: {
 					visit_techs: {
 						include: {
@@ -205,10 +208,12 @@ export const getAllJobs = async (organizationId: string, techId?: string) => {
 	});
 };
 
-export const getJobById = async (id: string, organizationId: string) => {
+// With techId: null unless that tech is on the job, and only their visits and
+// the notes they could open (techOnNote's rule).
+export const getJobById = async (id: string, organizationId: string, techId?: string) => {
 	const sdb = getScopedDb(organizationId);
 	return await sdb.job.findFirst({
-		where: { id },
+		where: { id, ...(techId ? jobAssignedWhere(techId) : {}) },
 		include: {
 			client: {
 				select: {
@@ -258,6 +263,7 @@ export const getJobById = async (id: string, organizationId: string) => {
 				},
 			},
 			visits: {
+				where: techId ? visitAssignedWhere(techId) : undefined,
 				include: {
 					visit_techs: {
 						include: {
@@ -294,6 +300,7 @@ export const getJobById = async (id: string, organizationId: string) => {
 				},
 			},
 			notes: {
+				where: techId ? noteAssignedWhere(techId) : undefined,
 				include: {
 					creator_tech: {
 						select: { id: true, name: true, email: true },
@@ -322,10 +329,10 @@ export const getJobById = async (id: string, organizationId: string) => {
 	});
 };
 
-export const getJobsByClientId = async (clientId: string, organizationId: string) => {
+export const getJobsByClientId = async (clientId: string, organizationId: string, techId?: string) => {
 	const sdb = getScopedDb(organizationId);
 	return await sdb.job.findMany({
-		where: { client_id: clientId },
+		where: { client_id: clientId, ...(techId ? jobAssignedWhere(techId) : {}) },
 		include: {
 			client: true,
 			request: {
@@ -343,6 +350,7 @@ export const getJobsByClientId = async (clientId: string, organizationId: string
 				},
 			},
 			visits: {
+				where: techId ? visitAssignedWhere(techId) : undefined,
 				include: {
 					visit_techs: {
 						include: {

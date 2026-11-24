@@ -16,6 +16,7 @@
 
 import { ENTITY_MODULE, namesWithModuleOn } from "../lib/entitlements/ownership.js";
 import { getScopedDb } from "../lib/context.js";
+import { jobAssignedWhere, visitAssignedWhere } from "../lib/assignedScope.js";
 
 export const SEARCHABLE_TYPES = [
 	"client",
@@ -50,6 +51,8 @@ export interface SearchOptions {
 	types?: readonly SearchEntityType[];
 	/** Hits per type, 1-50. Total results are at most limit × types.length. */
 	limit?: number;
+	/** Set for a view_assigned_jobs-only caller: job and visit hits are theirs alone. */
+	assignedTechId?: string;
 }
 
 export interface SearchOutcome {
@@ -101,7 +104,7 @@ const join = (...parts: Array<string | null | undefined>) => {
 	return kept.length ? kept.join(" · ") : undefined;
 };
 
-type Searcher = (db: ScopedDb, q: string, take: number) => Promise<SearchHit[]>;
+type Searcher = (db: ScopedDb, q: string, take: number, assignedTechId?: string) => Promise<SearchHit[]>;
 
 const SEARCHERS: Record<SearchEntityType, Searcher> = {
 	client: async (db, q, take) => {
@@ -120,10 +123,11 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 		}));
 	},
 
-	job: async (db, q, take) => {
+	job: async (db, q, take, assignedTechId) => {
 		const rows = await db.job.findMany({
 			where: {
 				OR: [{ job_number: like(q) }, { name: like(q) }, { description: like(q) }, { address: like(q) }],
+				...(assignedTechId ? jobAssignedWhere(assignedTechId) : {}),
 			},
 			select: {
 				id: true,
@@ -217,12 +221,13 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 		}));
 	},
 
-	visit: async (db, q, take) => {
+	visit: async (db, q, take, assignedTechId) => {
 		// job_visit has no organization_id of its own; getScopedDb pins it through
 		// the parent job (RELATION_SCOPED_MODELS in lib/context.ts).
 		const rows = await db.job_visit.findMany({
 			where: {
 				OR: [{ name: like(q) }, { description: like(q) }, { job: { job_number: like(q) } }],
+				...(assignedTechId ? visitAssignedWhere(assignedTechId) : {}),
 			},
 			select: {
 				id: true,
@@ -367,7 +372,9 @@ export async function searchRecords(organizationId: string, options: SearchOptio
 	}
 
 	const db = getScopedDb(organizationId);
-	const batches = await Promise.all(types.map((type) => SEARCHERS[type](db, query, limit)));
+	const batches = await Promise.all(
+		types.map((type) => SEARCHERS[type](db, query, limit, options.assignedTechId)),
+	);
 
 	return {
 		hits: batches.flat(),

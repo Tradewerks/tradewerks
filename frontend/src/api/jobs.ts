@@ -17,6 +17,8 @@ import type {
 	ClockOutResult,
 	VisitStatusEvent,
 } from "../types/jobs";
+import type { PagedResult } from "../types/paging";
+import { pagedResultFrom } from "../hooks/usePagedList";
 
 
 // ============================================
@@ -119,6 +121,30 @@ export const getClientVisitHistory = async (clientId: string, limit = 5): Promis
 		params: { client_id: clientId, limit, sort: "desc" },
 	});
 	return response.data.data || [];
+};
+
+/**
+ * The phone's visit list: the caller's own visits (with their pricing, notes and
+ * time) plus, for a caller who can accept, the unclaimed pool without pricing.
+ * The server picks the window (org-local yesterday through 14 days out) unless
+ * one is passed.
+ */
+export const getAssignedVisits = async (range?: { from: string; to: string }): Promise<JobVisit[]> => {
+	const response = await api.get<ApiResponse<JobVisit[]>>("/job-visits/assigned", {
+		params: range,
+	});
+	return response.data.data || [];
+};
+
+/** The Past tab: the caller's closed visits plus open ones that ended before the Mine window; newest first. */
+export const getAssignedPastVisits = async (params: {
+	page: number;
+	limit: number;
+}): Promise<PagedResult<JobVisit>> => {
+	const response = await api.get<ApiResponse<JobVisit[]>>("/job-visits/assigned", {
+		params: { scope: "past", ...params },
+	});
+	return pagedResultFrom(response.data, params);
 };
 
 export const getJobVisitById = async (id: string): Promise<JobVisit> => {

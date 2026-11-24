@@ -39,6 +39,8 @@ import {
 } from "../lib/inventory.js";
 import { applyOdometerIncrement, fetchRouteDistanceMiles } from "../lib/vehicleMileage.js";
 import { formatLocalDate, formatLocalTime } from "../lib/formatLocal.js";
+import { visitAssignedWhere, visitClaimableWhere } from "../lib/assignedScope.js";
+import { utcDayRange } from "../lib/dayRange.js";
 import {
 	HTTP_TRANSITION_ACTIONS,
 	NEEDS_TECH,
@@ -173,7 +175,7 @@ export const getMyJobsForPurchase = async (organization_id: string, technicianId
 };
 
 // techId limits results to visits that tech is assigned to.
-const assignedTo = (techId?: string) => (techId ? { visit_techs: { some: { tech_id: techId } } } : {});
+const assignedTo = (techId?: string) => (techId ? visitAssignedWhere(techId) : {});
 
 export const getAllJobVisits = async (organization_id: string, filters?: { clientId?: string; limit?: number; sort?: "asc" | "desc"; techId?: string }) => {
 	const sdb = getScopedDb(organization_id);
@@ -212,10 +214,33 @@ export const getAllJobVisits = async (organization_id: string, filters?: { clien
 	});
 };
 
-export const getJobVisitById = async (id: string, organization_id: string) => {
+/**
+ * With techId, null unless the visit is that tech's, so a read can't tell "not
+ * yours" from "doesn't exist". withClaimable also opens a visit they could
+ * accept from the Available tab, as the pool projection only: no quote, prices,
+ * invoices, notes or time.
+ */
+export const getJobVisitById = async (
+	id: string,
+	organization_id: string,
+	scope?: { techId: string; withClaimable?: boolean },
+) => {
 	const sdb = getScopedDb(organization_id);
+	const full = await getFullJobVisit(sdb, id, scope ? visitAssignedWhere(scope.techId) : {});
+	if (full || !scope?.withClaimable) return full;
 	return await sdb.job_visit.findFirst({
-		where: { id: id },
+		where: { id, ...visitClaimableWhere },
+		select: ASSIGNED_VISIT_SELECT,
+	});
+};
+
+const getFullJobVisit = async (
+	sdb: ReturnType<typeof getScopedDb>,
+	id: string,
+	visible: Prisma.job_visitWhereInput,
+) => {
+	return await sdb.job_visit.findFirst({
+		where: { id: id, ...visible },
 		include: {
 			job: {
 				include: {
@@ -292,10 +317,11 @@ export const getJobVisitById = async (id: string, organization_id: string) => {
 	});
 };
 
-export const getJobVisitsByJobId = async (jobId: string, organization_id: string) => {
+// With techId, only that tech's visits on the job: a teammate's carry their own pricing.
+export const getJobVisitsByJobId = async (jobId: string, organization_id: string, techId?: string) => {
 	const sdb = getScopedDb(organization_id);
 	return await sdb.job_visit.findMany({
-		where: { job_id: jobId },
+		where: { job_id: jobId, ...assignedTo(techId) },
 		include: {
 			visit_techs: {
 				include: {
@@ -508,6 +534,121 @@ export const getBoardVisits = async (
 				take: UNSCHEDULED_RAIL_LIMIT,
 			});
 	return { visits, occurrences, unscheduledJobs };
+};
+
+// The phone's own visits: what the cards and action buttons read, plus pricing,
+// notes and time for the caller's visits. Pool visits carry no pricing.
+const ASSIGNED_VISIT_SELECT = {
+	...BOARD_VISIT_SELECT,
+	visit_techs: {
+		select: {
+			tech_id: true,
+			tech_status: true,
+			tech: { select: { id: true, name: true } },
+		},
+	},
+	job: {
+		select: {
+			...BOARD_VISIT_SELECT.job.select,
+			project: { select: { id: true, project_number: true, status: true, name: true } },
+		},
+	},
+} satisfies Prisma.job_visitSelect;
+
+const OWN_VISIT_SELECT = {
+	...ASSIGNED_VISIT_SELECT,
+	line_items: {
+		select: { id: true, name: true, quantity: true, unit_price: true, total: true },
+		orderBy: { sort_order: "asc" as const },
+	},
+	notes: true,
+	time_entries: {
+		select: {
+			id: true,
+			visit_id: true,
+			tech_id: true,
+			clocked_in_at: true,
+			clocked_out_at: true,
+			tech: { select: { id: true, name: true } },
+		},
+		orderBy: { clocked_in_at: "asc" as const },
+	},
+} satisfies Prisma.job_visitSelect;
+
+/** Org-local yesterday through the end of today + 14 (plan Decision 8). */
+export const defaultAssignedWindow = async (organization_id: string, now = new Date()) => {
+	const org = await getScopedDb(organization_id).organization.findFirst({
+		where: { id: organization_id },
+		select: { timezone: true },
+	});
+	const tz = org?.timezone ?? "UTC";
+	const today = utcDayRange(now, 15, tz);
+	const yesterday = utcDayRange(new Date(today.start.getTime() - 1), 1, tz);
+	return { from: yesterday.start, to: today.end };
+};
+
+export const getAssignedVisits = async (
+	organization_id: string,
+	techId: string,
+	opts: { from: Date; to: Date; withClaimable: boolean },
+) => {
+	const sdb = getScopedDb(organization_id);
+	const range = overlaps(opts.from, opts.to);
+	const [own, claimable] = await Promise.all([
+		sdb.job_visit.findMany({
+			where: { ...range, ...visitAssignedWhere(techId) },
+			select: OWN_VISIT_SELECT,
+			orderBy: { scheduled_start_at: "asc" },
+		}),
+		opts.withClaimable
+			? sdb.job_visit.findMany({
+					where: { ...range, ...visitClaimableWhere },
+					select: ASSIGNED_VISIT_SELECT,
+					orderBy: { scheduled_start_at: "asc" },
+				})
+			: Promise.resolve([]),
+	]);
+	return [...own, ...claimable].sort(
+		(a, b) => a.scheduled_start_at.getTime() - b.scheduled_start_at.getTime(),
+	);
+};
+
+/**
+ * The Past tab: the caller's visits, newest first, one page at a time, with no
+ * window and no claimable pool. Past = closed, or open but ended before the Mine
+ * window starts: Mine and Past stay disjoint and an abandoned open visit still
+ * shows somewhere.
+ */
+export const getAssignedPastVisits = async (
+	organization_id: string,
+	techId: string,
+	page: { skip: number; take: number },
+) => {
+	const sdb = getScopedDb(organization_id);
+	const { from: mineStart } = await defaultAssignedWindow(organization_id);
+	const closed: visit_status[] = ["Completed", "Cancelled"];
+	const where = {
+		...visitAssignedWhere(techId),
+		OR: [
+			{ status: { in: closed } },
+			{
+				status: { notIn: closed },
+				// lte: Mine's overlap is end > start, so this closes the seam.
+				scheduled_end_at: { lte: mineStart },
+			},
+		],
+	};
+	const [rows, total] = await Promise.all([
+		sdb.job_visit.findMany({
+			where,
+			select: OWN_VISIT_SELECT,
+			orderBy: [{ scheduled_start_at: "desc" }, { id: "desc" }],
+			skip: page.skip,
+			take: page.take,
+		}),
+		sdb.job_visit.count({ where }),
+	]);
+	return { rows, total };
 };
 
 export const getJobVisitsByDateRange = async (

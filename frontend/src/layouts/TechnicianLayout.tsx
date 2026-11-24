@@ -23,7 +23,7 @@ export default function TechnicianLayout() {
 	const navigationCount = useRef(0);
 	const { t, i18n } = useTranslation();
 
-	useSocketQuerySync();
+	useSocketQuerySync("tech");
 
 	const toast = useToast();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;

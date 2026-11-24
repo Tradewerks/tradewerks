@@ -71,8 +71,8 @@ const dispatcher = {
 	permissions: ["view_jobs", "edit_jobs"],
 };
 
+// GET /:id is scoped in its query instead (assignedScope.test.ts).
 const routes = [
-	["get", "/:id", visits.getJobVisitById],
 	["post", "/:id/clock-in", clockInVisit],
 	["post", "/:id/clock-out", clockOutVisit],
 	["post", "/:id/start", visits.applyVisitTransition],
@@ -174,7 +174,14 @@ describe("job-visit list routes — assignment filter", () => {
 		);
 	});
 
-	it.each([["view_jobs"], ["view_visits"]])(
+	it("still filters with view_visits, which only opens the Visits tab", async () => {
+		await call({ ...tech, permissions: [...tech.permissions, "view_visits"] });
+		expect(visits.getAllJobVisits).toHaveBeenCalledWith("org-1", {
+			techId: "tech-1",
+		});
+	});
+
+	it.each([["view_jobs"], ["view_all_jobs"]])(
 		"returns every visit with %s",
 		async (perm) => {
 			await call({

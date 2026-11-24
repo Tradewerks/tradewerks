@@ -62,6 +62,14 @@ export const RECORD_INVALIDATIONS: Record<
 	recurring_plan: recordKeys(qk.recurringPlans, [qk.board.all]),
 };
 
+// A technician's screens read only visit keys (assigned list, own-tech list,
+// job picker, open detail), all under ["jobVisits"]; only mounted ones refetch.
+// They never mount the board or job lists, so those are left alone.
+const TECH_RECORD_INVALIDATIONS: Partial<typeof RECORD_INVALIDATIONS> = {
+	visit: (qc) => invalidateKeys(qc, [qk.visits.all]),
+	job: (qc) => invalidateKeys(qc, [qk.visits.all]),
+};
+
 // Events emitted while disconnected are lost for good; refetch whatever is on screen.
 const RECONNECT_KEYS = [
 	qk.board.all,
@@ -74,13 +82,16 @@ const RECONNECT_KEYS = [
 	qk.arrivals.all,
 	TECHNICIANS_KEY,
 ] as const;
+const TECH_RECONNECT_KEYS = [qk.visits.all, qk.arrivals.all, TECHNICIANS_KEY] as const;
+
+export type SocketSyncScope = "dispatch" | "tech";
 
 // Several writes refused in one burst should produce one message.
 let lastModuleRefusalToastAt = 0;
 
 // Single canonical event→invalidation map — mounted once in DispatchLayout and
 // TechnicianLayout so every socket-driven cache update lives in one place.
-export function useSocketQuerySync(): void {
+export function useSocketQuerySync(scope: SocketSyncScope = "dispatch"): void {
 	const qc = useQueryClient();
 
 	useEffect(() => {
@@ -102,22 +113,25 @@ export function useSocketQuerySync(): void {
 		// Legacy visit/job events also hit ["jobs"] and the board, so the board stays
 		// live even against a backend that does not emit record:changed yet.
 		// ["jobs"] also covers the job page's ["jobs", id, "visits"].
+		const tech = scope === "tech";
+		const jobsAndBoard = tech ? [] : [qk.jobs.all, qk.board.all];
 		const onJobVisitChanged = (_event: JobVisitUpdatedEvent | VisitStatusEvent) => {
-			invalidateKeys(qc, [qk.visits.all, TECHNICIANS_KEY, qk.jobs.all, qk.board.all]);
+			invalidateKeys(qc, [qk.visits.all, TECHNICIANS_KEY, ...jobsAndBoard]);
 		};
 		const onJobUpdated = (_event: JobUpdatedEvent) => {
-			invalidateKeys(qc, [qk.visits.all, qk.jobs.all, qk.board.all]);
+			invalidateKeys(qc, [qk.visits.all, ...jobsAndBoard]);
 		};
 		const onJobVisitCreatedOrDeleted = (_event: JobVisitCreatedEvent | JobVisitDeletedEvent) => {
-			invalidateKeys(qc, [qk.visits.all, qk.jobs.all, qk.board.all]);
+			invalidateKeys(qc, [qk.visits.all, ...jobsAndBoard]);
 		};
 		const onJobNoteCreated = (_event: JobNoteCreatedEvent) => {
 			qc.invalidateQueries({ queryKey: qk.visits.all });
 		};
 		const onRecordChanged = (event: RecordChangedEvent) => {
-			RECORD_INVALIDATIONS[event.type]?.(qc, event);
+			const run = (tech && TECH_RECORD_INVALIDATIONS[event.type]) || RECORD_INVALIDATIONS[event.type];
+			run?.(qc, event);
 		};
-		const onReconnect = () => invalidateKeys(qc, RECONNECT_KEYS);
+		const onReconnect = () => invalidateKeys(qc, tech ? TECH_RECONNECT_KEYS : RECONNECT_KEYS);
 		// Attach/detach moves a job between projects, so jobs refetch too.
 		const onProjectUpdated = (event: ProjectUpdatedEvent) => {
 			qc.invalidateQueries({ queryKey: ["projects"] });
@@ -224,5 +238,5 @@ export function useSocketQuerySync(): void {
 			socket.off("record:changed", onRecordChanged);
 			socket.io.off("reconnect", onReconnect);
 		};
-	}, [qc]);
+	}, [qc, scope]);
 }

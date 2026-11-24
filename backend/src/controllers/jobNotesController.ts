@@ -12,6 +12,7 @@ import { createNotification, notifyDispatchers } from "./notificationsController
 import { emitToOrg } from "../services/socketService.js";
 import { signImageUrl } from "../services/wasabiService.js";
 import { deleteStoredFiles } from "../lib/deleteStoredFiles.js";
+import { noteAssignedWhere } from "../lib/assignedScope.js";
 
 type NoteLike = { photos?: { photo_url: string }[] | null } | null | undefined;
 
@@ -70,10 +71,11 @@ const noteInclude = {
 	photos: { orderBy: { created_at: "asc" as const } },
 };
 
-export const getJobNotes = async (jobId: string, organizationId: string) => {
+// With techId, only the notes that tech could open (techOnNote's rule).
+export const getJobNotes = async (jobId: string, organizationId: string, techId?: string) => {
 	const sdb = getScopedDb(organizationId);
 	const notes = await sdb.job_note.findMany({
-		where: { job_id: jobId },
+		where: { job_id: jobId, ...(techId ? noteAssignedWhere(techId) : {}) },
 		include: noteInclude,
 		orderBy: { created_at: "desc" },
 	});

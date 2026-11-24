@@ -115,8 +115,10 @@
         "accept_failed": "Failed to accept visit.",
         "details": "Details",
         "view_details": "View visit details",
-        "show_less": "Show less",
-        "view_all_past": "View all {{count}} past visits"
+        "load_more": "Load more",
+        "loading_more": "Loading…",
+        "load_more_failed": "Couldn't load more",
+        "showing_count": "Showing {{shown}} of {{total}}"
     },
     "status": {
         "visit":{

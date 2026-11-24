@@ -8,8 +8,9 @@ import {
 } from "../types/responses.js";
 import { getUserContext } from '../lib/context.js';
 import { REFUSAL_STATUS } from '../lib/refusalStatus.js';
-import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
+import { requirePermission, requireAnyPermission } from '../lib/requirePermissions.js';
 import { requireAssigned } from '../lib/requireAssigned.js';
+import { assignedTechId, SEES_EVERY_JOB } from '../lib/assignedScope.js';
 import { acknowledgeTaxReviewRoute } from './tax.js';
 import { isAddressTaxChoiceRefusal } from '../lib/addressTaxChoice.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
@@ -43,19 +44,18 @@ const router = Router();
 router.get("/", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const seesAll = hasPermission(req, "view_jobs") || hasPermission(req, "view_all_jobs");
-        const jobs = await getAllJobs(orgId, seesAll ? undefined : req.user!.uid);
+        const jobs = await getAllJobs(orgId, assignedTechId(req));
         res.json(createSuccessResponse(jobs, { count: jobs.length }));
     } catch (err) {
         next(err);
     }
 });
 
-router.get("/:id", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), requireAssigned("job", ["view_jobs", "view_all_jobs"], "id"), async (req, res, next) => {
+router.get("/:id", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), requireAssigned("job", SEES_EVERY_JOB, "id", "hide"), async (req, res, next) => {
     try {
         const id = req.params.id as string;
         const orgId = req.user!.organization_id as string;
-        const job = await getJobById(id, orgId);
+        const job = await getJobById(id, orgId, assignedTechId(req));
 
         if (!job) {
             return res
@@ -169,11 +169,11 @@ router.delete("/:id", requirePermission("delete_jobs"), async (req, res, next) =
     }
 });
 
-router.get("/:jobId/visits", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("job", ["view_jobs", "view_visits"], "jobId"), async (req, res, next) => {
+router.get("/:jobId/visits", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("job", SEES_EVERY_JOB, "jobId", "hide"), async (req, res, next) => {
     try {
         const jobId = req.params.jobId as string;
         const orgId = req.user!.organization_id as string;
-        const visits = await getJobVisitsByJobId(jobId, orgId);
+        const visits = await getJobVisitsByJobId(jobId, orgId, assignedTechId(req));
         res.json(createSuccessResponse(visits, { count: visits.length }));
     } catch (err) {
         next(err);
@@ -189,11 +189,11 @@ router.get("/:jobId/visits", requireAnyPermission("view_jobs", "view_visits", "v
 // JOB NOTES
 // ============================================
 
-router.get("/:jobId/notes", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), requireAssigned("job", ["view_jobs", "view_all_jobs"], "jobId"), async (req, res, next) => {
+router.get("/:jobId/notes", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), requireAssigned("job", SEES_EVERY_JOB, "jobId", "hide"), async (req, res, next) => {
     try {
         const jobId = req.params.jobId as string;
         const orgId = req.user!.organization_id as string;
-        const notes = await getJobNotes(jobId, orgId);
+        const notes = await getJobNotes(jobId, orgId, assignedTechId(req));
         res.json(createSuccessResponse(notes, { count: notes.length }));
     } catch (err) {
         next(err);
@@ -213,7 +213,7 @@ router.get("/:jobId/visits/:visitId/invoices", requirePermission("view_invoices"
     }
 });
 
-router.get("/:jobId/visits/:visitId/notes", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("visit", ["view_jobs", "view_visits"], "visitId"), async (req, res, next) => {
+router.get("/:jobId/visits/:visitId/notes", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), requireAssigned("visit", SEES_EVERY_JOB, "visitId", "hide"), async (req, res, next) => {
     try {
         const { jobId, visitId } = req.params as { jobId: string; visitId: string };
         const orgId = req.user!.organization_id as string;

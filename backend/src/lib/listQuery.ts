@@ -21,6 +21,8 @@ export interface ListSpec<S extends string, St extends string> {
 	defaultSort: S;
 	defaultDir: "asc" | "desc";
 	statuses?: readonly St[];
+	// For a list whose rows are heavy enough that DEFAULT_LIMIT is too many.
+	defaultLimit?: number;
 }
 
 export interface ParsedList<S, St> {
@@ -93,7 +95,11 @@ export function parseListQuery<S extends string, St extends string>(
 ): ParsedList<S, St> {
 	const paged = "page" in query;
 	const page = positiveInt(query, "page", 1);
-	const take = positiveInt(query, "limit", DEFAULT_LIMIT);
+	const take = positiveInt(
+		query,
+		"limit",
+		spec.defaultLimit ?? DEFAULT_LIMIT,
+	);
 	if (take > MAX_LIMIT) {
 		throw new ListQueryError("limit", `limit must be at most ${MAX_LIMIT}`);
 	}

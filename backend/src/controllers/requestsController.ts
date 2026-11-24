@@ -15,6 +15,7 @@ import { fillCoords } from "../lib/geocode.js";
 import { formatZodError } from "../lib/validate/shared.js";
 import { assertValidRequestTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
 import { onRequestCreated } from "../services/followupTriggers.js";
+import { jobAssignedWhere } from "../lib/assignedScope.js";
 
 export const getAllRequests = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
@@ -119,21 +120,31 @@ export const getRequestById = async (requestId: string, organizationId: string) 
 	});
 };
 
-export const getRequestsByClientId = async (clientId: string, organizationId: string) => {
+// Same read scope as the client detail (clientsController.ClientReadScope).
+export const getRequestsByClientId = async (
+	clientId: string,
+	organizationId: string,
+	scope?: { assignedTechId?: string; quotes: boolean },
+) => {
 	const sdb = getScopedDb(organizationId);
 	return await sdb.request.findMany({
 		where: { client_id: clientId },
 		include: {
 			client: true,
-			quotes: {
-				select: {
-					id: true,
-					quote_number: true,
-					status: true,
-					total: true,
-				},
-			},
+			...(scope && !scope.quotes
+				? {}
+				: {
+						quotes: {
+							select: {
+								id: true,
+								quote_number: true,
+								status: true,
+								total: true,
+							},
+						},
+					}),
 			jobs: {
+				where: scope?.assignedTechId ? jobAssignedWhere(scope.assignedTechId) : undefined,
 				select: {
 					id: true,
 					job_number: true,

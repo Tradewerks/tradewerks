@@ -115,8 +115,10 @@
         "accept_failed": "No se pudo aceptar la visita.",
         "details": "Detalles",
         "view_details": "Ver detalles de la visita",
-        "show_less": "Ver Menos",
-        "view_all_past": "Ver las {{count}} visitas anteriores"
+        "load_more": "Cargar más",
+        "loading_more": "Cargando…",
+        "load_more_failed": "No se pudieron cargar más",
+        "showing_count": "Mostrando {{shown}} de {{total}}"
     },
     "status": {
         "visit":{

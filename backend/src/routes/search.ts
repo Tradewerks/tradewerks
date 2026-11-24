@@ -10,6 +10,7 @@ import {
 	type SearchEntityType,
 } from "../services/searchService.js";
 import { getAllPermissions } from "../lib/permissionCatalogs.js";
+import { assignedTechId } from "../lib/assignedScope.js";
 
 const router = Router();
 
@@ -97,7 +98,12 @@ router.get("/", async (req, res, next) => {
 		}
 
 		const orgId = req.user!.organization_id as string;
-		const outcome = await searchRecords(orgId, { query: q, types, limit });
+		const outcome = await searchRecords(orgId, {
+			query: q,
+			types,
+			limit,
+			assignedTechId: assignedTechId(req),
+		});
 
 		res.json(createSuccessResponse(outcome, { count: outcome.hits.length, hasMore: outcome.truncated }));
 	} catch (err) {

@@ -17,6 +17,7 @@
 
 import type { Prisma } from "../../generated/prisma/client.js";
 import type { ScopedDb } from "./types.js";
+import { jobAssignedWhere, visitAssignedWhere } from "../lib/assignedScope.js";
 
 export const RECORD_TYPES = [
 	"client",
@@ -143,9 +144,14 @@ const dateRange = (f: ListFilters) =>
 
 const clientRef = { select: { id: true, name: true } } as const;
 
+/** Set for a view_assigned_jobs-only caller: job and visit loaders see only their work. */
+export interface RecordScope {
+	assignedTechId?: string;
+}
+
 interface RecordLoader {
-	get(db: ScopedDb, id: string): Promise<unknown | null>;
-	list(db: ScopedDb, filters: ListFilters): Promise<ListOutcome>;
+	get(db: ScopedDb, id: string, scope?: RecordScope): Promise<unknown | null>;
+	list(db: ScopedDb, filters: ListFilters, scope?: RecordScope): Promise<ListOutcome>;
 }
 
 export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
@@ -223,9 +229,10 @@ export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
 
 	// ── Job ─────────────────────────────────────────────────────────────
 	job: {
-		async get(db, id) {
+		async get(db, id, scope) {
+			const techId = scope?.assignedTechId;
 			const r = await db.job.findFirst({
-				where: { id },
+				where: { id, ...(techId ? jobAssignedWhere(techId) : {}) },
 				select: {
 					id: true,
 					job_number: true,
@@ -251,6 +258,7 @@ export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
 						take: 50,
 					},
 					visits: {
+						where: techId ? visitAssignedWhere(techId) : undefined,
 						select: {
 							id: true,
 							name: true,
@@ -308,11 +316,12 @@ export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
 				counts: r._count,
 			});
 		},
-		async list(db, f) {
+		async list(db, f, scope) {
 			const where: Prisma.jobWhereInput = compact({
 				status: f.status as Prisma.jobWhereInput["status"],
 				client_id: f.clientId,
 				created_at: dateRange(f),
+				visits: scope?.assignedTechId ? jobAssignedWhere(scope.assignedTechId).visits : undefined,
 			});
 			const [rows, total] = await Promise.all([
 				db.job.findMany({
@@ -354,9 +363,9 @@ export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
 
 	// ── Visit ───────────────────────────────────────────────────────────
 	visit: {
-		async get(db, id) {
+		async get(db, id, scope) {
 			const r = await db.job_visit.findFirst({
-				where: { id },
+				where: { id, ...(scope?.assignedTechId ? visitAssignedWhere(scope.assignedTechId) : {}) },
 				select: {
 					id: true,
 					name: true,
@@ -421,11 +430,14 @@ export const RECORD_LOADERS: Record<RecordType, RecordLoader> = {
 				),
 			});
 		},
-		async list(db, f) {
+		async list(db, f, scope) {
 			const where: Prisma.job_visitWhereInput = compact({
 				status: f.status as Prisma.job_visitWhereInput["status"],
 				scheduled_start_at: dateRange(f),
 				job: f.clientId ? { client_id: f.clientId } : undefined,
+				visit_techs: scope?.assignedTechId
+					? visitAssignedWhere(scope.assignedTechId).visit_techs
+					: undefined,
 			});
 			const [rows, total] = await Promise.all([
 				db.job_visit.findMany({
