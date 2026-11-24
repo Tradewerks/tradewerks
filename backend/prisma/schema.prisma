@@ -3421,6 +3421,8 @@ model invoice {
   qb_sync_status           qb_sync_status @default(not_synced)
   qb_tax_amount            Decimal?       @db.Decimal(10, 2) // QuickBooks' TotalTax read back at last push
   account_id               String         @default("")
+  qb_diverged_at           DateTime?      // set when this app and QuickBooks disagree in a way a re-push cannot fix
+  qb_diverged_reason       String?        // refund_not_in_qb | qb_payment_delete_failed | qb_payment_overapplied
 
   version             Int      @default(1)
   previous_invoice_id String?  @unique
@@ -3455,6 +3457,7 @@ model invoice {
   @@index([organization_id, issue_date])
   @@index([adjusts_invoice_id])
   @@index([tax_resolution_id])
+  @@index([organization_id, qb_diverged_at])
   @@unique([organization_id, invoice_number])
   @@unique([account_id, qb_invoice_id])
   @@unique([account_id, qb_credit_memo_id])
@@ -3522,13 +3525,13 @@ model invoice_payment {
   recorded_by_tech_id       String?
   recorded_by_tech          technician? @relation(fields: [recorded_by_tech_id], references: [id], onDelete: SetNull)
   created_at                DateTime    @default(now())
-  qb_payment_id             String?     // uniqueness via @@unique([account_id, qb_payment_id])
+  qb_payment_id             String?     // one QB payment applied to several invoices is one row per invoice: @@unique([account_id, qb_payment_id, invoice_id])
   account_id                String      @default("")
 
   @@index([invoice_id])
   @@index([paid_at])
   @@index([recorded_by_tech_id])
-  @@unique([account_id, qb_payment_id])
+  @@unique([account_id, qb_payment_id, invoice_id])
 }
 
 model invoice_note {

@@ -6,11 +6,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { mockDb } = vi.hoisted(() => {
 	const $extends = vi.fn();
 	const mockDb = {
-		invoice: { findFirst: vi.fn(), update: vi.fn() },
+		invoice: {
+			findFirst: vi.fn(),
+			update: vi.fn(),
+			updateMany: vi.fn(async () => ({ count: 1 })),
+		},
 		invoice_payment: {
 			findFirst: vi.fn(),
 			findMany: vi.fn(async () => []),
 			aggregate: vi.fn(),
+			count: vi.fn(async () => 0),
 			delete: vi.fn(),
 		},
 		$queryRaw: vi.fn().mockResolvedValue([]),
@@ -41,12 +46,24 @@ vi.mock("../../services/logger.js", () => ({
 	buildChanges: vi.fn().mockReturnValue({}),
 }));
 
+vi.mock("../../services/qb/qbPayments.js", () => ({
+	pushPaymentToQB: vi.fn(),
+	deleteQBPayment: vi.fn(),
+}));
+
+vi.mock("../../services/qb/qbSyncLog.js", () => ({
+	logExternalSync: vi.fn(async () => undefined),
+}));
+
 vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
 import { db } from "../../db.js";
 import { deleteInvoicePayment } from "../invoicesController.js";
+import { getOrgRealmId, isQBConnected } from "../../services/quickbooksService.js";
+import { deleteQBPayment } from "../../services/qb/qbPayments.js";
+import { logExternalSync } from "../../services/qb/qbSyncLog.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -167,5 +184,90 @@ describe("deleteInvoicePayment", () => {
 		const invoiceRead = mockFn(db.invoice.findFirst).mock.invocationCallOrder[0];
 		expect(lockOrder).toBeDefined();
 		expect(lockOrder).toBeLessThan(invoiceRead);
+	});
+	it("refuses to delete one leg of a QuickBooks payment split across invoices", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(anInvoice({ amount_paid: 100 }));
+		mockFn(db.invoice_payment.findFirst).mockResolvedValue({
+			...aPayment(100),
+			qb_payment_id: "qb-7",
+			account_id: "realm1",
+		});
+		paidSum(100);
+		mockFn(db.invoice_payment.count).mockResolvedValue(1);
+
+		const result = await deleteInvoicePayment("inv1", "pay1", "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result).toEqual({
+			err: "This payment is split across several invoices in QuickBooks. Change it in QuickBooks.",
+			status: 409,
+			code: "QB_SPLIT_PAYMENT",
+		});
+		expect(db.invoice_payment.count).toHaveBeenCalledWith({
+			where: { qb_payment_id: "qb-7", account_id: "realm1", id: { not: "pay1" } },
+		});
+		const lockOrder = mockFn(db.$queryRaw).mock.invocationCallOrder[0];
+		const siblingRead = mockFn(db.invoice_payment.count).mock.invocationCallOrder[0];
+		expect(lockOrder).toBeLessThan(siblingRead);
+		expect(db.invoice_payment.delete).not.toHaveBeenCalled();
+		expect(db.invoice.update).not.toHaveBeenCalled();
+		expect(isQBConnected).not.toHaveBeenCalled();
+	});
+
+	it("still deletes a payment whose QuickBooks payment covers only this invoice", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(anInvoice({ amount_paid: 100 }));
+		mockFn(db.invoice_payment.findFirst).mockResolvedValue({
+			...aPayment(100),
+			qb_payment_id: "qb-8",
+			account_id: "realm1",
+		});
+		paidSum(100);
+		mockFn(db.invoice_payment.count).mockResolvedValue(0);
+		mockFn(getOrgRealmId).mockResolvedValue("realm1");
+
+		const result = await deleteInvoicePayment("inv1", "pay1", "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("");
+		expect(db.invoice_payment.delete).toHaveBeenCalledWith({ where: { id: "pay1" } });
+		// Reached the QuickBooks mirror step, unchanged for a single-invoice payment.
+		expect(isQBConnected).toHaveBeenCalledWith("org1");
+	});
+
+	it("a failed QB payment delete marks the invoice diverged with qb_payment_delete_failed", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(
+			anInvoice({ amount_paid: 100, qb_invoice_id: "158", account_id: "realm1" }),
+		);
+		mockFn(db.invoice_payment.findFirst).mockResolvedValue({
+			...aPayment(100),
+			qb_payment_id: "qb-9",
+			account_id: "realm1",
+		});
+		paidSum(100);
+		mockFn(db.invoice_payment.count).mockResolvedValue(0);
+		mockFn(getOrgRealmId).mockResolvedValue("realm1");
+		mockFn(isQBConnected).mockResolvedValueOnce(true);
+		mockFn(deleteQBPayment).mockRejectedValueOnce(new Error("QuickBooks 500"));
+
+		const result = await deleteInvoicePayment("inv1", "pay1", "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("");
+		// The QuickBooks mirror runs detached from the response.
+		await vi.waitFor(() =>
+			expect(db.invoice.updateMany).toHaveBeenCalledWith({
+				where: expect.objectContaining({ id: "inv1", qb_diverged_at: null }),
+				data: {
+					qb_diverged_at: expect.any(Date),
+					qb_diverged_reason: "qb_payment_delete_failed",
+				},
+			}),
+		);
+		expect(logExternalSync).toHaveBeenCalledWith(
+			expect.objectContaining({ action: "delete_failed", external_id: "qb-9" }),
+		);
 	});
 });

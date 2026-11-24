@@ -80,6 +80,8 @@ export const ErrorCodes = {
 	QB_TAX_REVIEW: 'QB_TAX_REVIEW',
 	QB_TAX_ZERO: 'QB_TAX_ZERO',
 	QB_SYNC_FAILED: 'QB_SYNC_FAILED',
+	// One QB payment backs rows on several invoices; deleting one leg here would delete it for all.
+	QB_SPLIT_PAYMENT: 'QB_SPLIT_PAYMENT',
 	// The address of a document taxed at a kept address rate changed; the caller must say which
 	// tax to use (address_tax_choice) rather than have it re-taxed silently.
 	ADDRESS_TAX_CHOICE_REQUIRED: 'ADDRESS_TAX_CHOICE_REQUIRED',

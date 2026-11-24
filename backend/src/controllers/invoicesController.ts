@@ -51,6 +51,7 @@ import {
 } from "../services/invoiceService.js";
 import { logExternalSync } from "../services/qb/qbSyncLog.js";
 import { pushPaymentToQB, deleteQBPayment } from "../services/qb/qbPayments.js"
+import { markQbDiverged } from "../services/qb/qbDivergence.js";
 import { notifyDispatchers } from "./notificationsController.js";
 import { dropClientTaxTotals, getEffectiveTaxMode } from "../services/tax/taxMode.js";
 import { qbAstTaxCents } from "../services/tax/snapshot.js";
@@ -1008,6 +1009,25 @@ export const deleteInvoicePayment = async (
 			});
 			if (!payment) return { err: "Payment not found" };
 
+			// Deleting this row mirrors as a delete of the whole QB payment,
+			// and that webhook would take the other invoices' rows with it.
+			if (payment.qb_payment_id) {
+				const siblings = await tx.invoice_payment.count({
+					where: {
+						qb_payment_id: payment.qb_payment_id,
+						account_id: payment.account_id,
+						id: { not: paymentId },
+					},
+				});
+				if (siblings > 0) {
+					return {
+						err: "This payment is split across several invoices in QuickBooks. Change it in QuickBooks.",
+						status: 409,
+						code: ErrorCodes.QB_SPLIT_PAYMENT,
+					};
+				}
+			}
+
 			// A refund row is negative, so deleting one only raises the total;
 			// deleting a positive payment a refund was drawn against would
 			// leave a net-negative paid total with no money behind the refund.
@@ -1022,7 +1042,9 @@ export const deleteInvoicePayment = async (
 			await syncInvoicePaymentTotals(invoiceId, txc);
 			return { err: "", payment };
 		});
-		if (!outcome.payment) return { err: outcome.err };
+		if (!outcome.payment) {
+			return { err: outcome.err, status: outcome.status, code: outcome.code };
+		}
 		const existing = outcome.payment;
 
 		await logActivity({
@@ -1053,14 +1075,19 @@ export const deleteInvoicePayment = async (
 		if (qbPaymentId && existing.account_id === currentRealmId) {
 			isQBConnected(organizationId)
 			.then((connected) => (connected ? deleteQBPayment(qbPaymentId, organizationId) : null))
-			.catch((e) => logExternalSync({
-				provider: "quickbooks",
-				external_id: qbPaymentId,
-				entity_type: "payment",
-				action: "delete_failed",
-				payload: { message: String(e) },
-				organization_id: organizationId
-			}));
+			// The payment is gone here but still in QuickBooks; a re-push
+			// cannot remove it, so the invoice is flagged for a person.
+			.catch((e) => Promise.allSettled([
+				logExternalSync({
+					provider: "quickbooks",
+					external_id: qbPaymentId,
+					entity_type: "payment",
+					action: "delete_failed",
+					payload: { message: String(e) },
+					organization_id: organizationId
+				}),
+				markQbDiverged(invoiceId, organizationId, "qb_payment_delete_failed"),
+			]));
 		}
 
 		return { err: "", item: { id: paymentId } };
@@ -1075,7 +1102,9 @@ export const deleteInvoicePayment = async (
  * syncInvoicePaymentTotals arithmetic, no new model. Recording a refund does
  * not move money: the card/bank action happens outside the system (Housecall
  * Pro model). Refund rows are never pushed to QuickBooks — qb_payment_id
- * stays null and qb_sync_status is untouched.
+ * stays null and qb_sync_status is untouched. Instead, an invoice already in
+ * the connected QuickBooks company is flagged diverged after the refund
+ * commits, so someone records the refund there by hand.
  *
  * Return shape follows this file's convention (insertInvoicePayment above):
  * `{ err: "", item }` on success, `{ err: "<message>" }` on failure — NOT the
@@ -1089,7 +1118,7 @@ export const recordRefund = async (
 ) => {
 	const sdb = getScopedDb(organizationId);
 
-	return await sdb.$transaction(async (tx) => {
+	const result = await sdb.$transaction(async (tx) => {
 		const txc = tx as unknown as Prisma.TransactionClient;
 
 		// Lock the invoice before reading it: two near-simultaneous refunds
@@ -1148,6 +1177,14 @@ export const recordRefund = async (
 
 		return { err: "", item: refund };
 	});
+
+	if (!result.err) {
+		// The refund is committed; a failed flag must not turn it into an error.
+		await markQbDiverged(invoiceId, organizationId, "refund_not_in_qb").catch((e) =>
+			log.error({ err: e, invoiceId }, "Flag QuickBooks divergence after refund failed"),
+		);
+	}
+	return result;
 };
 
 // ============================================================================

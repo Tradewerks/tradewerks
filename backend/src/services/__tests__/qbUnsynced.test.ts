@@ -28,7 +28,7 @@ vi.mock("../qb/qbCustomers.js", () => ({
 	}),
 }));
 
-import { listUnsynced } from "../qb/qbUnsynced.js";
+import { listUnsynced, syncUnsynced } from "../qb/qbUnsynced.js";
 import { pushPaymentToQB } from "../qb/qbPayments.js";
 import { pushInvoice } from "../qb/qbInvoices.js";
 
@@ -81,5 +81,50 @@ describe("pushPaymentToQB stale company", () => {
 		expect(pushInvoice).toHaveBeenCalledWith("inv1", "org1");
 		// re-fetch is by id only: a never-pushed payment has no account_id yet
 		expect(mockFn(sdb.invoice_payment.findFirst).mock.calls[1][0].where).toEqual({ id: "p1" });
+	});
+});
+
+// A re-push cannot fix a refund QuickBooks never saw, so a diverged invoice is
+// listed for a person to reconcile but never pushed by Sync all.
+describe("listUnsynced diverged invoices", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	it("listUnsynced includes a diverged invoice even when qb_sync_status is synced", async () => {
+		mockFn(sdb.invoice.findMany).mockResolvedValueOnce([
+			{
+				id: "i2",
+				invoice_number: "INV-2",
+				qb_sync_status: "synced",
+				account_id: "realm2",
+				qb_diverged_at: new Date(),
+				updated_at: new Date(),
+			},
+		]);
+
+		const rows = await listUnsynced("org1");
+
+		expect(mockFn(sdb.invoice.findMany).mock.calls[0][0].where.OR).toContainEqual({
+			qb_diverged_at: { not: null },
+			account_id: "realm2",
+		});
+		expect(rows).toEqual([expect.objectContaining({ id: "i2", status: "diverged" })]);
+	});
+
+	it("syncUnsynced does not re-push a diverged invoice", async () => {
+		mockFn(sdb.invoice.findMany).mockResolvedValueOnce([
+			{
+				id: "i2",
+				invoice_number: "INV-2",
+				qb_sync_status: "synced",
+				account_id: "realm2",
+				qb_diverged_at: new Date(),
+				updated_at: new Date(),
+			},
+		]);
+
+		const result = await syncUnsynced("org1");
+
+		expect(pushInvoice).not.toHaveBeenCalled();
+		expect(result).toEqual({ synced: 0, failed: [] });
 	});
 });

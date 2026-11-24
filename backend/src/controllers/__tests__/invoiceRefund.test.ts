@@ -7,7 +7,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const { mockDb } = vi.hoisted(() => {
 	const $extends = vi.fn();
 	const mockDb = {
-		invoice: { findFirst: vi.fn(), update: vi.fn() },
+		invoice: {
+			findFirst: vi.fn(),
+			update: vi.fn(),
+			updateMany: vi.fn(async () => ({ count: 1 })),
+		},
 		invoice_payment: {
 			create: vi.fn(),
 			findMany: vi.fn(),
@@ -48,6 +52,7 @@ vi.mock("../../services/appLogger.js", () => ({
 
 import { Prisma } from "../../../generated/prisma/client.js";
 import { db } from "../../db.js";
+import { getOrgRealmId } from "../../services/quickbooksService.js";
 import { insertInvoicePayment, recordRefund } from "../invoicesController.js";
 import { createRefundSchema } from "../../lib/validate/invoices.js";
 
@@ -370,5 +375,70 @@ describe("insertInvoicePayment", () => {
 
 		expect(result.err).toBe("Payment would exceed invoice total");
 		expect(db.invoice_payment.create).not.toHaveBeenCalled();
+	});
+});
+
+// Refunds stay out of QuickBooks (Decision 1), so a refund on a pushed invoice
+// leaves the two books disagreeing until someone reconciles it by hand.
+describe("recordRefund QuickBooks divergence", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockFn(getOrgRealmId).mockResolvedValue("realm1");
+		mockFn(db.invoice_payment.aggregate).mockResolvedValue({ _sum: { amount: 500 } });
+		mockFn(db.invoice_payment.create).mockResolvedValue({ id: "pay2", amount: -200 });
+		mockFn(db.invoice_payment.findMany).mockResolvedValue([{ amount: 500 }, { amount: -200 }]);
+	});
+
+	it("a refund on a QB-synced invoice marks it diverged with refund_not_in_qb", async () => {
+		const order: string[] = [];
+		mockFn(db.$transaction).mockImplementationOnce(async (fn: (tx: unknown) => unknown) => {
+			const out = await fn(mockDb);
+			order.push("commit");
+			return out;
+		});
+		mockFn(db.invoice.updateMany).mockImplementationOnce(async () => {
+			order.push("mark");
+			return { count: 1 };
+		});
+		mockFn(db.invoice.findFirst).mockResolvedValue({
+			id: "inv1",
+			status: "Paid",
+			total: 500,
+			organization_id: "org1",
+			invoice_number: "INV-1039",
+			qb_invoice_id: "158",
+			account_id: "realm1",
+		});
+
+		const result = await recordRefund("inv1", { amount: 200, reason: "goodwill" }, "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("");
+		expect(db.invoice.updateMany).toHaveBeenCalledWith({
+			where: expect.objectContaining({ id: "inv1", qb_diverged_at: null }),
+			data: { qb_diverged_at: expect.any(Date), qb_diverged_reason: "refund_not_in_qb" },
+		});
+		// Flagged after the refund commits, not inside its transaction.
+		expect(order).toEqual(["commit", "mark"]);
+	});
+
+	it("a refund on an invoice never pushed to QB does not mark it", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue({
+			id: "inv1",
+			status: "Paid",
+			total: 500,
+			organization_id: "org1",
+			invoice_number: "INV-1039",
+			qb_invoice_id: null,
+			account_id: "",
+		});
+
+		const result = await recordRefund("inv1", { amount: 200, reason: "goodwill" }, "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("");
+		expect(db.invoice.updateMany).not.toHaveBeenCalled();
 	});
 });

@@ -28,8 +28,22 @@ export async function listUnsynced(orgId: string) {
 	const accountId = await getOrgRealmId(orgId);
 	const [invoices, purchases, fieldPurchases, payments] = await Promise.all([
 		sdb.invoice.findMany({
-			where: { ...STALE(accountId), status: { not: "Void" } },
-			select: { id: true, invoice_number: true, qb_sync_status: true, updated_at: true },
+			where: {
+				OR: [
+					...STALE(accountId).OR,
+					// Synced, but QuickBooks disagrees in a way a re-push cannot fix.
+					{ qb_diverged_at: { not: null }, account_id: accountId },
+				],
+				status: { not: "Void" },
+			},
+			select: {
+				id: true,
+				invoice_number: true,
+				qb_sync_status: true,
+				account_id: true,
+				qb_diverged_at: true,
+				updated_at: true,
+			},
 		}),
 		// Modules the org cannot use are left out: their push routes are closed too.
 		(await isModuleOn(orgId, "purchasing"))
@@ -81,7 +95,14 @@ export async function listUnsynced(orgId: string) {
 			type: "invoice" as const,
 			id: d.id,
 			label: d.invoice_number,
-			status: shownStatus(d.qb_sync_status),
+			// A pending push still shows as such, so Sync all retries it; the
+			// divergence shows once the push has landed.
+			status:
+				d.qb_diverged_at &&
+				d.account_id === accountId &&
+				!UNSYNCED.in.includes(d.qb_sync_status as "not_synced" | "failed")
+					? ("diverged" as const)
+					: shownStatus(d.qb_sync_status),
 			updated_at: d.updated_at,
 		})),
 		...purchases.map((d) => ({
@@ -113,7 +134,8 @@ export async function listUnsynced(orgId: string) {
 export async function syncUnsynced(orgId: string) {
 	const failed: { type: string; id: string; label: string; message: string }[] = [];
 	let synced = 0;
-	const all = await listUnsynced(orgId);
+	// A diverged invoice needs a person in QuickBooks; pushing it again changes nothing.
+	const all = (await listUnsynced(orgId)).filter((d) => d.status !== "diverged");
 	// Payments last: each one links to its invoice in QuickBooks.
 	const docs = [
 		...all.filter((d) => d.type !== "payment"),

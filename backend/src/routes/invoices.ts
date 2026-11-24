@@ -523,12 +523,14 @@ router.delete(
                 context,
             );
             if (result.err) {
-                const status = result.err.includes("not found") ? 404 : 400;
+                const status =
+                    result.status ??
+                    (result.err.includes("not found") ? 404 : 400);
                 return res
                     .status(status)
                     .json(
                         createErrorResponse(
-                            ErrorCodes.DELETE_ERROR,
+                            result.code ?? ErrorCodes.DELETE_ERROR,
                             result.err,
                         ),
                     );

@@ -2,7 +2,7 @@ import { requireModule } from "../lib/entitlements/requireModule.js";
 import { Router } from "express";
 import { z } from "zod";
 import { requirePermission } from "../lib/requirePermissions.js";
-import { createSuccessResponse, createErrorResponse, ErrorCodes } from "../types/responses.js";
+import { createSuccessResponse, createErrorResponse, ErrorCodes, sendResultErr } from "../types/responses.js";
 import {
 	getAuthUrl,
 	disconnectOrg,
@@ -53,7 +53,8 @@ import {
 import { recipientEmailSchema } from "../lib/validate/shared.js";
 import { linkQBEmployeeSchema, linkQBItemSchema, linkQBVendorSchema, qbReportQuerySchema, qbReportTypeSchema } from "../lib/validate/quickbooks.js"
 import { db } from "../db.js";
-import { getScopedDb } from "../lib/context.js";
+import { getScopedDb, getUserContext } from "../lib/context.js";
+import { clearQbDivergence } from "../services/qb/qbDivergence.js";
 import { queryProfitAndLossQBReport, queryQBReport } from "../services/qb/qbReports.js";
 import type { ProfitAndLossQuery } from "../services/qb/qbReports.js";
 import { pushPurchase, queryQBPurchaseOrders, getQBPurchaseOrderAsPDF, pushFieldPurchase } from "../services/qb/qbPurchases.js";
@@ -152,6 +153,21 @@ router.post("/invoices/:id/sync", requirePermission("edit_invoices"), async (req
 					),
 				);
 		}
+		next(err);
+	}
+});
+
+// A person has made QuickBooks match (e.g. entered the refund there by hand).
+router.post("/invoices/:id/reconciled", requirePermission("edit_invoices"), async (req, res, next) => {
+	try {
+		const result = await clearQbDivergence(
+			req.params.id as string,
+			req.user!.organization_id as string,
+			getUserContext(req),
+		);
+		if (result.err) return sendResultErr(res, result.err);
+		res.json(createSuccessResponse({ reconciled: true }));
+	} catch (err) {
 		next(err);
 	}
 });
