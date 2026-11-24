@@ -32,12 +32,17 @@ vi.mock("../../services/qb/qbTax.js", () => ({
 vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
+vi.mock("../../services/qb/qbDivergence.js", () => ({
+	flagRefundsMissingFromQb: vi.fn(async () => undefined),
+	markQbDiverged: vi.fn(async () => false),
+}));
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { qbFetch } from "../../services/quickbooksService.js";
 import { pushInvoice } from "../../services/qb/qbInvoices.js";
 import { findOrCreateQBItem } from "../../services/qb/qbItems.js";
+import { flagRefundsMissingFromQb } from "../../services/qb/qbDivergence.js";
 import { currentQbFingerprint } from "../recomputeDocumentTotals.js";
 import type { TaxSnapshotV2 } from "../../services/tax/snapshot.js";
 
@@ -281,6 +286,24 @@ describe("QuickBooks push fingerprint seam", () => {
 			10,
 		);
 		expect(fresh).not.toBe(pushed!.fingerprint);
+	});
+
+	it("an invoice arriving in this QuickBooks company is checked for refunds QuickBooks lacks", async () => {
+		await pushInvoice("inv1", "org1", { finalizing: true });
+
+		expect(flagRefundsMissingFromQb).toHaveBeenCalledWith("inv1", "org1");
+	});
+
+	it("a re-push of an invoice already in this company does not re-flag its refunds", async () => {
+		fakeDb.invoice.findFirst.mockImplementation(async (args: { include?: any }) => ({
+			...findFirstLikePrisma(args),
+			qb_invoice_id: "qb-1",
+			account_id: "realm-now",
+		}));
+
+		await pushInvoice("inv1", "org1", { finalizing: true });
+
+		expect(flagRefundsMissingFromQb).not.toHaveBeenCalled();
 	});
 
 	it("is sensitive to the discount", async () => {

@@ -175,15 +175,34 @@ router.post("/invoices/:id/sync", requirePermission("edit_invoices"), async (req
 	}
 });
 
+const reconciledBodySchema = z.object({ diverged_at: z.string().datetime({ offset: true }) });
+
 // A person has made QuickBooks match (e.g. entered the refund there by hand).
 router.post("/invoices/:id/reconciled", requirePermission("edit_invoices"), async (req, res, next) => {
 	try {
+		const parsed = reconciledBodySchema.safeParse(req.body ?? {});
+		if (!parsed.success) {
+			return res
+				.status(400)
+				.json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, "diverged_at is required"));
+		}
 		const result = await clearQbDivergence(
 			req.params.id as string,
 			req.user!.organization_id as string,
 			getUserContext(req),
+			new Date(parsed.data.diverged_at),
 		);
 		if (result.err) return sendResultErr(res, result.err);
+		if (result.changed) {
+			return res
+				.status(409)
+				.json(
+					createErrorResponse(
+						ErrorCodes.QB_DIVERGENCE_CHANGED,
+						"QuickBooks problems on this invoice changed. Reload and check again.",
+					),
+				);
+		}
 		res.json(createSuccessResponse({ reconciled: true }));
 	} catch (err) {
 		next(err);

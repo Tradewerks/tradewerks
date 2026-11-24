@@ -1,4 +1,5 @@
 import { db } from "../../db.js"
+import { log } from "../appLogger.js"
 
 export async function logExternalSync(entry: {
     provider: string;        // "quickbooks"
@@ -15,7 +16,11 @@ export async function logExternalSync(entry: {
             }
         })
     } catch (error) {
-        console.error("Error logging external sync:", error)
+        // Rejection counting reads these rows; a lost one must leave a trace.
+        log.error(
+            { err: error, action: entry.action, externalId: entry.external_id, organizationId: entry.organization_id },
+            "Could not write the external sync log",
+        )
     }
 }
 

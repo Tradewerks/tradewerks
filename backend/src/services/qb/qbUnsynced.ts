@@ -6,6 +6,7 @@ import { pushInvoice } from "./qbInvoices.js";
 import { pushPurchase, pushFieldPurchase } from "./qbPurchases.js";
 import { pushPaymentToQB } from "./qbPayments.js";
 import { qbFaultDetail } from "./qbCreditMemos.js";
+import { log } from "../appLogger.js";
 
 const UNSYNCED = { in: ["not_synced", "failed"] as ("not_synced" | "failed")[] };
 // Synced to a previously connected company counts as unsynced in this one.
@@ -30,11 +31,12 @@ export async function listUnsynced(orgId: string) {
 		sdb.invoice.findMany({
 			where: {
 				OR: [
-					...STALE(accountId).OR,
-					// Synced, but QuickBooks disagrees in a way a re-push cannot fix.
+					// A void is never pushed, so only Sync now's rows leave it out.
+					{ AND: [STALE(accountId), { status: { not: "Void" as const } }] },
+					// Synced, but QuickBooks disagrees in a way a re-push cannot
+					// fix — including a void that never reached it.
 					{ qb_diverged_at: { not: null }, account_id: accountId },
 				],
-				status: { not: "Void" },
 			},
 			select: {
 				id: true,
@@ -42,6 +44,7 @@ export async function listUnsynced(orgId: string) {
 				qb_sync_status: true,
 				account_id: true,
 				qb_diverged_at: true,
+				status: true,
 				updated_at: true,
 			},
 		}),
@@ -98,9 +101,11 @@ export async function listUnsynced(orgId: string) {
 			// A pending push still shows as such, so Sync all retries it; the
 			// divergence shows once the push has landed.
 			status:
-				d.qb_diverged_at &&
-				d.account_id === accountId &&
-				!UNSYNCED.in.includes(d.qb_sync_status as "not_synced" | "failed")
+				// A Void row is here only as diverged; Sync all must never push it.
+				d.status === "Void" ||
+				(d.qb_diverged_at &&
+					d.account_id === accountId &&
+					!UNSYNCED.in.includes(d.qb_sync_status as "not_synced" | "failed"))
 					? ("diverged" as const)
 					: shownStatus(d.qb_sync_status),
 			updated_at: d.updated_at,
@@ -159,7 +164,12 @@ export async function syncUnsynced(orgId: string) {
 						: doc.type === "purchase"
 							? sdb.purchase.updateMany(where)
 							: sdb.field_purchase.updateMany(where)
-				).catch(() => {});
+				).catch((markErr: unknown) =>
+					log.error(
+						{ err: markErr, type: doc.type, id: doc.id, orgId },
+						"Could not mark the document's QuickBooks sync as failed",
+					),
+				);
 			failed.push({
 				type: doc.type,
 				id: doc.id,

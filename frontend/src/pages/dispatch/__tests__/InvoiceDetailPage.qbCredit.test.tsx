@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AxiosError } from "axios";
@@ -257,7 +257,117 @@ describe("InvoiceDetailPage — QuickBooks divergence", () => {
 			)
 		).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Mark as matching" }));
-		expect(reconcileMutation.mutateAsync).toHaveBeenCalledWith("inv-1");
+		// The time the page showed, so a problem added since is not cleared unseen.
+		expect(reconcileMutation.mutateAsync).toHaveBeenCalledWith({
+			invoiceId: "inv-1",
+			divergedAt: "2026-11-01T00:00:00.000Z",
+		});
+	});
+
+	it("a diverged invoice with several reasons lists each on its own line", () => {
+		invoice = {
+			...diverged(),
+			qb_diverged_reason: "refund_not_in_qb,qb_payment_duplicate,void_not_in_qb",
+		} as unknown as Invoice;
+		renderPage();
+		const banner = screen.getByRole("status", { name: "QuickBooks problems" });
+		const lines = within(banner).getAllByRole("listitem");
+		expect(lines.map((l) => l.textContent)).toEqual([
+			"Refund not in QuickBooks. Record the refund in QuickBooks, then mark the invoice reconciled.",
+			"Payment recorded twice in QuickBooks. Delete the extra payment in QuickBooks, then mark the invoice reconciled.",
+			"Void not in QuickBooks. Void the invoice in QuickBooks, then mark the invoice reconciled.",
+		]);
+		expect(within(banner).getAllByRole("button", { name: "Mark reconciled" })).toHaveLength(1);
+	});
+
+	it("shows the new divergence reasons with their own copy", () => {
+		invoice = {
+			...diverged(),
+			qb_diverged_reason: "qb_payment_on_void,refund_exceeds_payments",
+		} as unknown as Invoice;
+		renderPage();
+		expect(
+			screen.getByText(
+				/Move or refund the payment in QuickBooks, then mark the invoice reconciled\./
+			)
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(
+				/A payment was changed in QuickBooks\. Check it, then mark the invoice reconciled\./
+			)
+		).toBeInTheDocument();
+	});
+
+	it("a second confirm after a 409 still sends the diverged_at the dialog opened with", async () => {
+		invoice = diverged();
+		const conflict = new AxiosError("Request failed with status code 409");
+		conflict.response = {
+			status: 409,
+			data: {
+				success: false,
+				data: null,
+				error: {
+					code: "QB_DIVERGENCE_CHANGED",
+					message: "QuickBooks problems on this invoice changed. Reload and check again.",
+				},
+			},
+		} as never;
+		reconcileMutation.mutateAsync.mockClear();
+		reconcileMutation.mutateAsync.mockRejectedValueOnce(conflict);
+		const user = userEvent.setup();
+		const { rerender } = renderPage();
+		await user.click(screen.getByRole("button", { name: "Mark reconciled" }));
+		await user.click(screen.getByRole("button", { name: "Mark as matching" }));
+
+		// The 409 refetch lands while the dialog is still open.
+		invoice = {
+			...diverged(),
+			qb_diverged_at: "2026-11-02T00:00:00.000Z",
+			qb_diverged_reason: "refund_not_in_qb,qb_payment_duplicate",
+		} as unknown as Invoice;
+		rerender(
+			<QueryClientProvider client={new QueryClient()}>
+				<MemoryRouter initialEntries={["/dispatch/invoices/inv-1"]}>
+					<Routes>
+						<Route path="/dispatch/invoices/:invoiceId" element={<InvoiceDetailPage />} />
+					</Routes>
+				</MemoryRouter>
+			</QueryClientProvider>
+		);
+		await user.click(screen.getByRole("button", { name: "Mark as matching" }));
+
+		expect(reconcileMutation.mutateAsync).toHaveBeenCalledTimes(2);
+		expect(reconcileMutation.mutateAsync).toHaveBeenLastCalledWith({
+			invoiceId: "inv-1",
+			divergedAt: "2026-11-01T00:00:00.000Z",
+		});
+	});
+
+	it("a 409 from Mark reconciled shows the server's message inside the dialog", async () => {
+		invoice = diverged();
+		const conflict = new AxiosError("Request failed with status code 409");
+		conflict.response = {
+			status: 409,
+			data: {
+				success: false,
+				data: null,
+				error: {
+					code: "QB_DIVERGENCE_CHANGED",
+					message: "QuickBooks problems on this invoice changed. Reload and check again.",
+				},
+			},
+		} as never;
+		reconcileMutation.mutateAsync.mockRejectedValueOnce(conflict);
+		const user = userEvent.setup();
+		renderPage();
+		await user.click(screen.getByRole("button", { name: "Mark reconciled" }));
+		await user.click(screen.getByRole("button", { name: "Mark as matching" }));
+		const dialog = screen.getByRole("dialog");
+		expect(
+			within(dialog).getByText(
+				"QuickBooks problems on this invoice changed. Reload and check again."
+			)
+		).toBeInTheDocument();
 	});
 
 	it("Mark reconciled is absent without edit_invoices", () => {

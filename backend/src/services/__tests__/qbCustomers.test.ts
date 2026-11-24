@@ -74,12 +74,14 @@ vi.mock("../quickbooksService.js", () => ({
 vi.mock("../qb/qbInvoices.js", () => ({ pushInvoice: vi.fn() }));
 vi.mock("../invoiceService.js", () => ({ syncInvoicePaymentTotals: vi.fn() }));
 vi.mock("../qb/qbSyncLog.js", () => syncLog);
+vi.mock("../appLogger.js", () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureQBCustomerForClient } from "../qb/qbCustomers.js";
 import { pushPaymentToQB } from "../qb/qbPayments.js";
 import { qbFetch } from "../quickbooksService.js";
 import { QbHttpError } from "../qb/qbHttpError.js";
+import { log } from "../appLogger.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -185,6 +187,23 @@ describe("ensureQBCustomerForClient", () => {
 				external_id: "qb-55",
 			},
 		]);
+	});
+
+	it("logs customer_adopted_by_name when it adopts a same-named QuickBooks customer", async () => {
+		qbCustomers.set("John Smith", "qb-55");
+
+		await ensureQBCustomerForClient("org1", FIRST, "realm1");
+
+		expect(log.info).toHaveBeenCalledWith(
+			{ orgId: "org1", clientId: FIRST.id, qbCustomerId: "qb-55" },
+			"customer_adopted_by_name",
+		);
+	});
+
+	it("does not log an adoption for a customer it created", async () => {
+		await ensureQBCustomerForClient("org1", FIRST, "realm1");
+
+		expect(log.info).not.toHaveBeenCalledWith(expect.anything(), "customer_adopted_by_name");
 	});
 
 	it('creates "John Smith (1a2b3c4d)" when "John Smith" is already mapped to another client', async () => {

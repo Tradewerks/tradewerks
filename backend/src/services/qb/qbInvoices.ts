@@ -16,6 +16,7 @@ import {
 } from "./qbTaxableItem.js";
 import { isCreditAdjustment, pushCreditMemo } from "./qbCreditMemos.js";
 import { notifyQbProblem } from "./qbNotify.js";
+import { flagRefundsMissingFromQb, markQbDiverged } from "./qbDivergence.js";
 import {
 	buildInvoicePayload,
 	classifyTaxReadback,
@@ -591,6 +592,11 @@ async function doPushInvoice(
 		},
 	});
 	if (readback.mismatch) logTaxMismatch(invoiceId, orgId, invoice.tax_amount, readback.qbTaxAmount);
+	// Only on arrival: a refund recorded while the invoice was already here was
+	// flagged then, and may since have been reconciled.
+	if (!(invoice.qb_invoice_id && invoice.account_id === accountId)) {
+		await flagRefundsMissingFromQb(invoiceId, orgId);
+	}
 	return {
 		// Unlike the readback, a missing TotalTax is not 0 here: an adopter would bill $0 tax.
 		qbTaxCents: qbTotalTaxCents(qbTotalTax),
@@ -667,14 +673,23 @@ export async function mirrorInvoiceVoidToQuickBooks(
 ): Promise<void> {
 	// Never synced, so there is nothing in QuickBooks to void.
 	if (!qbInvoiceId && !qbCreditMemo) return;
-	if (!(await isModuleOn(orgId, "quickbooks"))) return;
 	try {
-		if (!(await isQBConnected(orgId))) return;
+		const reachable =
+			(await isModuleOn(orgId, "quickbooks")) && (await isQBConnected(orgId));
+		if (!reachable) {
+			// markQbDiverged ignores an id from another QuickBooks company.
+			if (!qbCreditMemo) await markQbDiverged(invoiceId, orgId, "void_not_in_qb");
+			return;
+		}
 		if (qbCreditMemo) await deleteQBCreditMemo(orgId, invoiceId, qbCreditMemo);
 		else await voidQBInvoice(orgId, qbInvoiceId as string);
 	} catch (err) {
 		log.error({ err, invoiceId, orgId }, "QuickBooks void failed");
-		await markQbSyncFailed(invoiceId, orgId, "void_failed");
+		// A void is never pushed by Retry sync and the unsynced list hides void
+		// invoices, so only a divergence reaches a person. A credit memo has no
+		// qb_invoice_id to diverge on and keeps the sync-failed mark.
+		if (qbCreditMemo) await markQbSyncFailed(invoiceId, orgId, "void_failed");
+		else await markQbDiverged(invoiceId, orgId, "void_not_in_qb");
 	}
 }
 

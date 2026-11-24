@@ -23,15 +23,21 @@ vi.mock("../quickbooksService.js", () => ({ qbFetch: vi.fn(), getOrgRealmId: vi.
 vi.mock("../qb/qbInvoices.js", () => ({ pushInvoice: vi.fn() }));
 vi.mock("../invoiceService.js", () => ({ syncInvoicePaymentTotals: vi.fn() }));
 vi.mock("../qb/qbSyncLog.js", () => syncLog);
+vi.mock("../qb/qbDivergence.js", () => ({ markQbDiverged: vi.fn(async () => true) }));
+vi.mock("../appLogger.js", () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	parsePaymentPrivateNote,
 	paymentPrivateNote,
 	pushPaymentToQB,
+	deleteQBPayment,
 } from "../qb/qbPayments.js";
 import { getOrgRealmId, qbFetch } from "../quickbooksService.js";
 import { QbHttpError } from "../qb/qbHttpError.js";
+import { Prisma } from "../../../generated/prisma/client.js";
+import { markQbDiverged } from "../qb/qbDivergence.js";
+import { log } from "../appLogger.js";
 
 const mockFn = (f: unknown) => f as ReturnType<typeof vi.fn>;
 
@@ -202,5 +208,73 @@ describe("payment PrivateNote helpers", () => {
 
 	it("parsePaymentPrivateNote finds the marker with text before it", () => {
 		expect(parsePaymentPrivateNote(`Check #1042 hvac:payment:${uuid}`)).toBe(uuid);
+	});
+});
+
+describe("pushPaymentToQB payment deleted during the push", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockFn(getOrgRealmId).mockResolvedValue("realm1");
+		sdb.invoice_payment.findFirst.mockResolvedValue(paymentRow("cust-1"));
+		mockFn(qbFetch).mockResolvedValue({ Payment: { Id: "qb-9" } });
+	});
+
+	// The POST landed in QuickBooks but the local row is gone: an orphan there,
+	// not a push failure a Retry could fix.
+	it("a payment deleted while its push was in flight flags qb_payment_delete_failed, not a push failure", async () => {
+		sdb.invoice_payment.update.mockRejectedValueOnce(
+			new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+				code: "P2025",
+				clientVersion: "test",
+			}),
+		);
+
+		await expect(pushPaymentToQB("pay1", "org1")).resolves.toBeUndefined();
+
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "qb_payment_delete_failed");
+		expect(syncLog.logExternalSync).toHaveBeenCalledWith(
+			expect.objectContaining({ action: "push_orphaned", external_id: "qb-9" }),
+		);
+	});
+
+	it("any other failure storing the QuickBooks id still rejects", async () => {
+		sdb.invoice_payment.update.mockRejectedValueOnce(new Error("pool exhausted"));
+
+		await expect(pushPaymentToQB("pay1", "org1")).rejects.toThrow("pool exhausted");
+		expect(markQbDiverged).not.toHaveBeenCalled();
+	});
+});
+
+describe("deleteQBPayment", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	const fault = (code: string) =>
+		new QbHttpError(
+			"GET",
+			"/payment/qb-9",
+			400,
+			JSON.stringify({ Fault: { Error: [{ code, Message: "Object Not Found" }] } }),
+		);
+
+	it("treats QuickBooks fault 610 as already deleted and logs it", async () => {
+		mockFn(qbFetch).mockRejectedValueOnce(fault("610"));
+
+		await expect(deleteQBPayment("qb-9", "org1")).resolves.toBeUndefined();
+		expect(syncLog.logExternalSync).toHaveBeenCalledWith(
+			expect.objectContaining({ action: "delete_already_gone", external_id: "qb-9" }),
+		);
+		expect(log.info).toHaveBeenCalled();
+	});
+
+	it("rethrows a not-found message that is not QuickBooks fault 610", async () => {
+		mockFn(qbFetch).mockRejectedValueOnce(new Error("Route not found"));
+
+		await expect(deleteQBPayment("qb-9", "org1")).rejects.toThrow("Route not found");
+	});
+
+	it("rethrows another QuickBooks fault", async () => {
+		mockFn(qbFetch).mockRejectedValueOnce(fault("6000"));
+
+		await expect(deleteQBPayment("qb-9", "org1")).rejects.toThrow("6000");
 	});
 });

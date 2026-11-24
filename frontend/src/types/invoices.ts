@@ -245,10 +245,25 @@ export interface InvoiceVisit {
 // MAIN INVOICE TYPE
 // ============================================================================
 
-export type QbDivergenceReason =
-	| "refund_not_in_qb"
-	| "qb_payment_delete_failed"
-	| "qb_payment_overapplied";
+export const QbDivergenceReasonValues = [
+	"refund_not_in_qb",
+	"qb_payment_delete_failed",
+	"qb_payment_overapplied",
+	"qb_payment_duplicate",
+	"qb_payment_on_void",
+	"refund_exceeds_payments",
+	"void_not_in_qb",
+] as const;
+export type QbDivergenceReason = (typeof QbDivergenceReasonValues)[number];
+
+/** qb_diverged_reason holds every open reason, comma-joined in arrival order. */
+export function parseQbDivergenceReasons(stored: string | null | undefined): QbDivergenceReason[] {
+	if (!stored) return [];
+	const known = new Set<string>(QbDivergenceReasonValues);
+	return stored
+		.split(",")
+		.filter((r): r is QbDivergenceReason => known.has(r));
+}
 
 export interface Invoice extends PricingBreakdown, TaxProvenance {
 	id: string;
@@ -300,7 +315,8 @@ export interface Invoice extends PricingBreakdown, TaxProvenance {
 	qb_invoice_id?: string | null;
 	qb_credit_memo_id?: string | null;
 	qb_diverged_at?: string | null;
-	qb_diverged_reason?: QbDivergenceReason | null;
+	/** Comma-joined QbDivergenceReason values; read through parseQbDivergenceReasons. */
+	qb_diverged_reason?: string | null;
 	account_id?: string | null;
 
 	// Relations

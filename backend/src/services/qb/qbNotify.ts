@@ -36,6 +36,22 @@ const COPY: Record<QbProblemKind, (n: string) => { title: string; body: string }
         title: `Invoice ${n}: QuickBooks payment larger than the balance`,
         body: "Check the payment in QuickBooks, then mark the invoice reconciled.",
     }),
+    qb_payment_duplicate: (n) => ({
+        title: `Invoice ${n}: payment recorded twice in QuickBooks`,
+        body: "Delete the extra payment in QuickBooks, then mark the invoice reconciled.",
+    }),
+    qb_payment_on_void: (n) => ({
+        title: `Invoice ${n}: QuickBooks payment on a void invoice`,
+        body: "Move or refund the payment in QuickBooks, then mark the invoice reconciled.",
+    }),
+    refund_exceeds_payments: (n) => ({
+        title: `Invoice ${n}: refunds now larger than payments`,
+        body: "A payment was changed in QuickBooks. Check it, then mark the invoice reconciled.",
+    }),
+    void_not_in_qb: (n) => ({
+        title: `Invoice ${n}: void not in QuickBooks`,
+        body: "Void the invoice in QuickBooks, then mark the invoice reconciled.",
+    }),
 };
 
 // Both run from QuickBooks failure paths: a notification that cannot be sent

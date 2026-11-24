@@ -1,4 +1,4 @@
-type Inv = { id: string; qb_invoice_id: string; total: number };
+type Inv = { id: string; qb_invoice_id: string; total: number; status?: string };
 type Row = {
 	id: string;
 	invoice_id: string;
@@ -42,9 +42,11 @@ const { sdb, db } = vi.hoisted(() => {
 		},
 		invoice: {
 			findMany: vi.fn(async ({ where }: { where: Where }) =>
-				db.invoices.filter(
-					(i) => inList(where.qb_invoice_id, i.qb_invoice_id) && inList(where.id, i.id),
-				),
+				db.invoices
+					.filter(
+						(i) => inList(where.qb_invoice_id, i.qb_invoice_id) && inList(where.id, i.id),
+					)
+					.map((i) => ({ status: "Sent", ...i })),
 			),
 		},
 		$queryRaw: vi.fn(async () => []),
@@ -63,8 +65,10 @@ vi.mock("../invoiceService.js", async (importActual) => {
 });
 vi.mock("../qb/qbSyncLog.js", () => ({ logExternalSync: vi.fn() }));
 vi.mock("../qb/qbDivergence.js", () => ({ markQbDiverged: vi.fn(async () => true) }));
+vi.mock("../appLogger.js", () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { log as appLog } from "../appLogger.js";
 import { handleInboundPaymentEvent } from "../qb/qbPayments.js";
 import { qbFetch } from "../quickbooksService.js";
 import { logExternalSync } from "../qb/qbSyncLog.js";
@@ -393,7 +397,9 @@ describe("handleInboundPaymentEvent own-push echo", () => {
 		);
 	});
 
-	it("Create skips an echo whose local payment is already linked", async () => {
+	// The marker names a row already linked to another QuickBooks payment in
+	// this company: QuickBooks holds the same payment twice.
+	it("an echo whose local payment is linked to a different QuickBooks payment flags qb_payment_duplicate", async () => {
 		db.rows = [
 			{ id: localId, invoice_id: "inv1", amount: 25, qb_payment_id: "p-19", account_id: "realm1" },
 		];
@@ -403,12 +409,33 @@ describe("handleInboundPaymentEvent own-push echo", () => {
 
 		expect(sdb.invoice_payment.create).not.toHaveBeenCalled();
 		expect(sdb.invoice_payment.update).not.toHaveBeenCalled();
+		expect(appLog.error).toHaveBeenCalledWith(
+			expect.objectContaining({ qbPaymentId: "p-20", linkedQbPaymentId: "p-19" }),
+			expect.any(String),
+		);
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "qb_payment_duplicate");
+		expect(lockedInvoiceIds()).toEqual(["inv1"]);
+		const committed = Math.max(...sdb.$transaction.mock.invocationCallOrder);
+		expect(mockFn(markQbDiverged).mock.invocationCallOrder[0]).toBeGreaterThan(committed);
+	});
+
+	it("an echo whose local payment is linked in a previous QuickBooks company is a plain echo skip", async () => {
+		db.rows = [
+			{ id: localId, invoice_id: "inv1", amount: 25, qb_payment_id: "p-19", account_id: "realm-old" },
+		];
+		qbPayment("p-20", 25, [invLine("158", 25)], `hvac:payment:${localId}`);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-20", "Create");
+
+		expect(sdb.invoice_payment.update).not.toHaveBeenCalled();
+		expect(markQbDiverged).not.toHaveBeenCalled();
 		expect(logExternalSync).toHaveBeenCalledWith(
 			expect.objectContaining({ action: "webhook_echo_skipped" }),
 		);
 	});
 
-	it("Create skips an echo whose local payment no longer exists", async () => {
+	// Deleted here while its push was in flight: the QuickBooks payment is an orphan.
+	it("an echo whose local payment no longer exists flags its invoice qb_payment_delete_failed", async () => {
 		qbPayment("p-21", 25, [invLine("158", 25)], `hvac:payment:${localId}`);
 
 		await handleInboundPaymentEvent("org1", "realm1", "p-21", "Create");
@@ -420,6 +447,142 @@ describe("handleInboundPaymentEvent own-push echo", () => {
 				action: "webhook_echo_skipped",
 				payload: expect.objectContaining({ paymentId: localId }),
 			}),
+		);
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "qb_payment_delete_failed");
+	});
+});
+
+describe("handleInboundPaymentEvent void and draft invoices", () => {
+	beforeEach(resetFixtures);
+
+	it("Create on a Void invoice writes no row and flags qb_payment_on_void", async () => {
+		db.invoices = [{ id: "inv1", qb_invoice_id: "158", total: 1000, status: "Void" }];
+		qbPayment("p-40", 25, [invLine("158", 25)]);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-40", "Create");
+
+		expect(sdb.invoice_payment.create).not.toHaveBeenCalled();
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "qb_payment_on_void");
+	});
+
+	it("Create on a Void invoice still records the cash on a live invoice beside it", async () => {
+		db.invoices = [
+			{ id: "inv1", qb_invoice_id: "158", total: 1000, status: "Void" },
+			{ id: "inv2", qb_invoice_id: "159", total: 1000 },
+		];
+		qbPayment("p-41", 50, [invLine("158", 25), invLine("159", 25)]);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-41", "Create");
+
+		expect(sdb.invoice_payment.create).toHaveBeenCalledTimes(1);
+		expect(sdb.invoice_payment.create).toHaveBeenCalledWith({
+			data: expect.objectContaining({ invoice_id: "inv2", amount: 25 }),
+		});
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "qb_payment_on_void");
+	});
+
+	it("Update keeps the existing row on a Void invoice rather than deleting it", async () => {
+		db.invoices = [{ id: "inv1", qb_invoice_id: "158", total: 1000, status: "Void" }];
+		db.rows = [
+			{ id: "r1", invoice_id: "inv1", amount: 25, qb_payment_id: "p-42", account_id: "realm1" },
+		];
+		qbPayment("p-42", 30, [invLine("158", 30)]);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-42", "Update");
+
+		expect(sdb.invoice_payment.update).not.toHaveBeenCalled();
+		expect(sdb.invoice_payment.deleteMany).not.toHaveBeenCalled();
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "qb_payment_on_void");
+	});
+
+	it("Create on a Draft invoice is skipped and logged", async () => {
+		db.invoices = [{ id: "inv1", qb_invoice_id: "158", total: 1000, status: "Draft" }];
+		qbPayment("p-43", 25, [invLine("158", 25)]);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-43", "Create");
+
+		expect(sdb.invoice_payment.create).not.toHaveBeenCalled();
+		expect(markQbDiverged).not.toHaveBeenCalled();
+		expect(logExternalSync).toHaveBeenCalledWith(
+			expect.objectContaining({
+				action: "webhook_skipped_no_invoice",
+				payload: expect.objectContaining({ qbInvoiceId: "158", message: "Invoice is a draft" }),
+			}),
+		);
+	});
+});
+
+describe("handleInboundPaymentEvent refunds left uncovered", () => {
+	beforeEach(resetFixtures);
+
+	it("Delete of a payment a refund drew on flags refund_exceeds_payments after commit", async () => {
+		db.rows = [
+			{ id: "r1", invoice_id: "inv1", amount: 50, qb_payment_id: "p-30", account_id: "realm1" },
+			{ id: "ref1", invoice_id: "inv1", amount: -40, qb_payment_id: null, account_id: "" },
+		];
+		sdb.invoice_payment.deleteMany.mockImplementationOnce(
+			async ({ where }: { where: { id: { in: string[] } } }) => {
+				db.rows = db.rows.filter((r) => !where.id.in.includes(r.id));
+				return { count: 1 };
+			},
+		);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-30", "Delete");
+
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "refund_exceeds_payments");
+		expect(appLog.warn).toHaveBeenCalledWith(
+			expect.objectContaining({ invoiceId: "inv1", paidCents: -4000 }),
+			expect.any(String),
+		);
+		const committed = Math.max(...sdb.$transaction.mock.invocationCallOrder);
+		expect(mockFn(markQbDiverged).mock.invocationCallOrder[0]).toBeGreaterThan(committed);
+	});
+
+	it("Update that shrinks a payment below its refunds flags refund_exceeds_payments", async () => {
+		db.rows = [
+			{ id: "r1", invoice_id: "inv1", amount: 100, qb_payment_id: "p-31", account_id: "realm1" },
+			{ id: "ref1", invoice_id: "inv1", amount: -80, qb_payment_id: null, account_id: "" },
+		];
+		sdb.invoice_payment.update.mockImplementationOnce(
+			async ({ where, data }: { where: { id: string }; data: { amount: number } }) => {
+				const row = db.rows.find((r) => r.id === where.id)!;
+				row.amount = data.amount;
+				return row;
+			},
+		);
+		qbPayment("p-31", 30, [invLine("158", 30)]);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-31", "Update");
+
+		expect(markQbDiverged).toHaveBeenCalledWith("inv1", "org1", "refund_exceeds_payments");
+	});
+
+	it("Delete that leaves the paid total at zero or more flags nothing", async () => {
+		db.rows = [
+			{ id: "r1", invoice_id: "inv1", amount: 50, qb_payment_id: "p-32", account_id: "realm1" },
+		];
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-32", "Delete");
+
+		expect(markQbDiverged).not.toHaveBeenCalled();
+	});
+});
+
+describe("handleInboundPaymentEvent failure", () => {
+	beforeEach(resetFixtures);
+
+	it("a failed webhook is logged to the app log, not only the sync log", async () => {
+		const boom = new Error("QuickBooks 503");
+		mockFn(qbFetch).mockRejectedValueOnce(boom);
+
+		await handleInboundPaymentEvent("org1", "realm1", "p-50", "Create");
+
+		expect(appLog.error).toHaveBeenCalledWith(
+			{ err: boom, qbPaymentId: "p-50", orgId: "org1" },
+			expect.any(String),
+		);
+		expect(logExternalSync).toHaveBeenCalledWith(
+			expect.objectContaining({ action: "webhook_failed" }),
 		);
 	});
 });

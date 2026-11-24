@@ -43,8 +43,12 @@ export const disconnectQB = async (): Promise<void> => {
     }
 };
 
-export const markQBInvoiceReconciled = async (invoiceId: string): Promise<void> => {
-    const response = await api.post<ApiResponse<{ reconciled: boolean }>>(`/integrations/quickbooks/invoices/${invoiceId}/reconciled`);
+/** divergedAt is the qb_diverged_at the page showed; the server refuses if it has moved since. */
+export const markQBInvoiceReconciled = async (invoiceId: string, divergedAt: string): Promise<void> => {
+    const response = await api.post<ApiResponse<{ reconciled: boolean }>>(
+        `/integrations/quickbooks/invoices/${invoiceId}/reconciled`,
+        { diverged_at: divergedAt },
+    );
     if (!response.data.success) {
         throw new Error(response.data.error?.message || "Failed to mark invoice reconciled");
     }

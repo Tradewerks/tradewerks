@@ -47,6 +47,11 @@ const COLUMN_SORT_KEY: Record<string, string> = {
 	dueDate: "date",
 };
 
+const qbMarkerLabel = (diverged: boolean) =>
+	diverged
+		? "QuickBooks doesn't match — open the invoice"
+		: "Not in QuickBooks — retry from the invoice";
+
 // A diverged Void invoice still needs a person, so there is deliberately no status exclusion.
 function qbNeedsAttention(
 	inv: Invoice,
@@ -327,7 +332,7 @@ export default function InvoicesPage() {
 		);
 	}, [invoices]);
 
-	const hasActiveFilters = taxMismatchOnly || attentionOnly ||clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
+	const hasActiveFilters = taxMismatchOnly || attentionOnly || clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
 
 	return (
 		<div className="text-text-primary">
@@ -599,14 +604,13 @@ export default function InvoicesPage() {
 										</div>
 										{(row._qbFailed === true || row._qbDiverged === true) && (
 											<span
-												title={
-													row._qbDiverged === true
-														? "QuickBooks doesn't match — open the invoice"
-														: "Not in QuickBooks — retry from the invoice"
-												}
+												title={qbMarkerLabel(row._qbDiverged === true)}
 												className="flex-shrink-0 text-warning-text"
 											>
-												<CloudOff size={14} aria-hidden="true" />
+												<CloudOff
+													size={14}
+													aria-label={qbMarkerLabel(row._qbDiverged === true)}
+												/>
 											</span>
 										)}
 										{row._qbTaxMismatch === true && (

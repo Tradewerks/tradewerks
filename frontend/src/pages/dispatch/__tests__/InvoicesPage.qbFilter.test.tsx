@@ -86,6 +86,19 @@ describe("InvoicesPage — QuickBooks filter", () => {
 		).toBeInTheDocument();
 	});
 
+	it("the QuickBooks marker is named for screen readers, like the tax marker", () => {
+		setAll();
+		renderPage();
+		const failed = screen.getByText("F-1").closest("tr") as HTMLElement;
+		const diverged = screen.getByText("D-1").closest("tr") as HTMLElement;
+		expect(
+			within(failed).getByLabelText("Not in QuickBooks — retry from the invoice")
+		).toBeInTheDocument();
+		expect(
+			within(diverged).getByLabelText("QuickBooks doesn't match — open the invoice")
+		).toBeInTheDocument();
+	});
+
 	it("existing ?qb=tax_mismatch links still filter to tax mismatches", () => {
 		setAll();
 		renderPage("/dispatch/invoices?qb=tax_mismatch");

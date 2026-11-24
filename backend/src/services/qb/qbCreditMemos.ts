@@ -76,7 +76,12 @@ async function applyCreditToOriginal(
 		let original = await readOriginal();
 		if (!original) return;
 		if (!inRealm(original)) {
-			await pushInvoice(original.id, orgId).catch(() => {});
+			await pushInvoice(original.id, orgId).catch((err: unknown) =>
+				log.error(
+					{ err, invoiceId: adjustment.adjusts_invoice_id, orgId },
+					"Could not push the original invoice before applying a QuickBooks credit",
+				),
+			);
 			original = await readOriginal();
 		}
 		if (!original || !inRealm(original)) {

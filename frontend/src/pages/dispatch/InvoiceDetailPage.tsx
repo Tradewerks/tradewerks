@@ -66,6 +66,7 @@ import {
 	type InvoiceStatus,
 	type PaymentMethod,
 	type QbDivergenceReason,
+	parseQbDivergenceReasons,
 	isOverdue,
 	isEditable,
 	isDeletable,
@@ -130,6 +131,22 @@ const QB_DIVERGENCE_COPY: Record<QbDivergenceReason, { title: string; body: stri
 	qb_payment_overapplied: {
 		title: "QuickBooks payment larger than the balance",
 		body: "Check the payment in QuickBooks, then mark the invoice reconciled.",
+	},
+	qb_payment_duplicate: {
+		title: "Payment recorded twice in QuickBooks",
+		body: "Delete the extra payment in QuickBooks, then mark the invoice reconciled.",
+	},
+	qb_payment_on_void: {
+		title: "QuickBooks payment on a void invoice",
+		body: "Move or refund the payment in QuickBooks, then mark the invoice reconciled.",
+	},
+	refund_exceeds_payments: {
+		title: "Refunds now larger than payments",
+		body: "A payment was changed in QuickBooks. Check it, then mark the invoice reconciled.",
+	},
+	void_not_in_qb: {
+		title: "Void not in QuickBooks",
+		body: "Void the invoice in QuickBooks, then mark the invoice reconciled.",
 	},
 };
 
@@ -231,7 +248,13 @@ export default function InvoiceDetailPage() {
 	const { data: qbStatus } = useQBStatusQuery();
 	const { mutate: syncToQB, isPending: isSyncingQB } = useQBInvoiceSyncMutation();
 	const { mutateAsync: markReconciled, isPending: isReconciling } = useMarkQbReconciledMutation();
-	const [reconcileOpen, setReconcileOpen] = useState(false);
+	// The qb_diverged_at the banner showed when the dialog opened. A 409 refetch
+	// must not swap it for a time whose new reasons the dispatcher never saw.
+	const [reconcileSeenAt, setReconcileSeenAt] = useState<string | null>(null);
+	const closeReconcile = () => {
+		setReconcileSeenAt(null);
+		setReconcileError(null);
+	};
 	const [reconcileError, setReconcileError] = useState<string | null>(null);
 
 	const sendEmailMutation = useQBInvoiceEmailMutation();
@@ -477,10 +500,10 @@ export default function InvoiceDetailPage() {
 	const qbFailed = qbInThisRealm && invoice.qb_sync_status === "failed";
 	const qbTaxMismatch = qbInThisRealm && invoice.qb_sync_status === "tax_mismatch";
 	// Not gated on status: a diverged Void invoice still needs a person.
-	const qbDivergence =
-		qbInThisRealm && invoice.qb_diverged_at && invoice.qb_diverged_reason
-			? QB_DIVERGENCE_COPY[invoice.qb_diverged_reason]
-			: null;
+	const qbDivergedAt = qbInThisRealm ? invoice.qb_diverged_at ?? null : null;
+	const qbDivergences = qbDivergedAt
+		? parseQbDivergenceReasons(invoice.qb_diverged_reason).map((r) => QB_DIVERGENCE_COPY[r])
+		: [];
 	// A credit adjustment lives in QuickBooks as a credit memo, even before it has an id there.
 	const qbIsCreditMemo = !!invoice.adjusts_invoice_id && Number(invoice.total) < 0;
 	const qbRemoteId = qbIsCreditMemo ? invoice.qb_credit_memo_id : invoice.qb_invoice_id;
@@ -1274,21 +1297,26 @@ export default function InvoiceDetailPage() {
 					</div>
 				)}
 
-				{qbDivergence && (
+				{qbDivergences.length > 0 && (
 					<div
 						role="status"
-						className="flex items-center gap-2 rounded-lg border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
+						aria-label="QuickBooks problems"
+						className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
 					>
-						<AlertTriangle size={16} className="flex-shrink-0" />
-						<span className="flex-1">
-							<span className="font-semibold">{qbDivergence.title}.</span> {qbDivergence.body}
-						</span>
+						<AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+						<ul className="flex-1 space-y-1">
+							{qbDivergences.map((d) => (
+								<li key={d.title}>
+									<span className="font-semibold">{d.title}.</span> {d.body}
+								</li>
+							))}
+						</ul>
 						{EDIT_INVOICE && (
 							<button
 								type="button"
 								onClick={() => {
 									setReconcileError(null);
-									setReconcileOpen(true);
+									setReconcileSeenAt(qbDivergedAt);
 								}}
 								className="flex-shrink-0 font-medium underline underline-offset-2 hover:text-text-primary"
 							>
@@ -1943,21 +1971,22 @@ export default function InvoiceDetailPage() {
 			/>
 
 			<ConfirmDialog
-				open={reconcileOpen}
+				open={reconcileSeenAt !== null}
 				title="Mark reconciled"
 				body={`Mark Invoice ${invoice.invoice_number} as matching QuickBooks? Do this after you've fixed it in QuickBooks.`}
 				confirmLabel="Mark as matching"
 				pending={isReconciling}
 				error={reconcileError}
 				onConfirm={async () => {
+					if (!reconcileSeenAt) return;
 					try {
-						await markReconciled(invoice.id);
-						setReconcileOpen(false);
+						await markReconciled({ invoiceId: invoice.id, divergedAt: reconcileSeenAt });
+						closeReconcile();
 					} catch (error) {
 						setReconcileError(errorMessage(error, "Couldn't mark this invoice reconciled."));
 					}
 				}}
-				onCancel={() => setReconcileOpen(false)}
+				onCancel={closeReconcile}
 			/>
 
 			{/* Always mounted so FullPopup's close fade can play — matching

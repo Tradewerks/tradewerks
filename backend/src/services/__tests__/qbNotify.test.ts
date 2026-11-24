@@ -67,6 +67,26 @@ describe("notifyQbProblem", () => {
 			"Invoice INV-1039: QuickBooks payment larger than the balance",
 			"Check the payment in QuickBooks, then mark the invoice reconciled.",
 		],
+		[
+			"qb_payment_duplicate",
+			"Invoice INV-1039: payment recorded twice in QuickBooks",
+			"Delete the extra payment in QuickBooks, then mark the invoice reconciled.",
+		],
+		[
+			"qb_payment_on_void",
+			"Invoice INV-1039: QuickBooks payment on a void invoice",
+			"Move or refund the payment in QuickBooks, then mark the invoice reconciled.",
+		],
+		[
+			"refund_exceeds_payments",
+			"Invoice INV-1039: refunds now larger than payments",
+			"A payment was changed in QuickBooks. Check it, then mark the invoice reconciled.",
+		],
+		[
+			"void_not_in_qb",
+			"Invoice INV-1039: void not in QuickBooks",
+			"Void the invoice in QuickBooks, then mark the invoice reconciled.",
+		],
 	] as const)("writes the %s copy", async (kind, title, body) => {
 		await notifyQbProblem("org1", invoice, kind);
 

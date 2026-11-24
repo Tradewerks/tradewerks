@@ -17,6 +17,7 @@ import { allocateQBPaymentCash } from "./qbPaymentAllocation.js"
 import { markQbDiverged } from "./qbDivergence.js"
 import { countPaymentPushHttpFailures, logExternalSync } from "./qbSyncLog.js"
 import { QbHttpError } from "./qbHttpError.js"
+import { parseQbFault } from "./qbFault.js"
 
 
 /** QuickBooks reference object, e.g. CustomerRef / AccountRef. */
@@ -248,10 +249,28 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
         throw httpError(400, ErrorCodes.VALIDATION_ERROR, "Payment could not be pushed to QuickBooks");
     }
 
-    await sdb.invoice_payment.update({
-        where: { id: paymentId },
-        data: { qb_payment_id: result.Payment.Id, account_id: accountId }
-    });
+    try {
+        await sdb.invoice_payment.update({
+            where: { id: paymentId },
+            data: { qb_payment_id: result.Payment.Id, account_id: accountId }
+        });
+    } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025")) {
+            throw error;
+        }
+        // Deleted here while the POST was in flight: QuickBooks now holds a
+        // payment with nothing behind it, which no Retry can remove.
+        await logExternalSync({
+            provider: "quickbooks",
+            external_id: result.Payment.Id,
+            entity_type: "payment",
+            action: "push_orphaned",
+            payload: { paymentId },
+            organization_id: organizationId,
+        });
+        await markQbDiverged(payment.invoice.id, organizationId, "qb_payment_delete_failed");
+        return;
+    }
 
     await logExternalSync({
         provider: "quickbooks",
@@ -281,8 +300,21 @@ export async function deleteQBPayment(qbPaymentId: string, organizationId: strin
             organization_id: organizationId,
         });
     } catch (error) {
-        // If QB says the payment is already gone, treat as success
-        if (/not\s*found|ObjectNotFound|object not found/i.test(String(error))) {
+        // Fault 610 (Object Not Found) is QuickBooks saying it is already gone.
+        // Matched on the code alone: a 404 route or an outage must not pass.
+        if (
+            error instanceof QbHttpError &&
+            parseQbFault(error).some((f) => String(f.code) === "610")
+        ) {
+            log.info({ qbPaymentId, organizationId }, "QuickBooks payment already deleted");
+            await logExternalSync({
+                provider: "quickbooks",
+                external_id: qbPaymentId,
+                entity_type: "payment",
+                action: "delete_already_gone",
+                payload: { qbPaymentId },
+                organization_id: organizationId,
+            });
             return;
         }
         throw error; // real failure — let the caller log delete_failed
@@ -316,7 +348,7 @@ export async function handleInboundPaymentEvent(
     operation: string
 ) {
     const sdb = getScopedDb(orgId);
-    const log = (action: string, payload: unknown) =>
+    const record = (action: string, payload: unknown) =>
         logExternalSync({
             provider: "quickbooks",
             external_id: qbPaymentId,
@@ -325,6 +357,16 @@ export async function handleInboundPaymentEvent(
             payload,
             organization_id: orgId,
         });
+    // Run once the write has committed; markQbDiverged never rejects.
+    const flagUncoveredRefunds = async (negative: { invoiceId: string; paidCents: number }[]) => {
+        for (const { invoiceId, paidCents } of negative) {
+            log.warn(
+                { invoiceId, orgId, qbPaymentId, paidCents },
+                "QuickBooks payment change left refunds larger than payments",
+            );
+            await markQbDiverged(invoiceId, orgId, "refund_exceeds_payments");
+        }
+    };
     const ownRowsWhere = { qb_payment_id: qbPaymentId, account_id: accountId };
     try {
         // One QB payment applied to several invoices is one row per invoice.
@@ -335,10 +377,10 @@ export async function handleInboundPaymentEvent(
 
         if (operation === "Delete" || operation === "Void") {
             if (existing.length === 0) {
-                await log("webhook_skipped_not_found", { qbPaymentId });
+                await record("webhook_skipped_not_found", { qbPaymentId });
                 return;
             }
-            await sdb.$transaction(async (tx) => {
+            const negative = await sdb.$transaction(async (tx) => {
                 const txc = tx as Prisma.TransactionClient;
                 const locked = await lockInvoicesInOrder(
                     txc,
@@ -365,66 +407,97 @@ export async function handleInboundPaymentEvent(
                 for (const invoiceId of locked) {
                     await syncInvoicePaymentTotals(invoiceId, txc);
                 }
+                return negativePaidInvoices(txc, locked);
             });
-            await log("webhook_deleted", { qbPaymentId });
+            await record("webhook_deleted", { qbPaymentId });
+            await flagUncoveredRefunds(negative);
             return;
         }
 
         if (existing.length > 0 && operation === "Create") {
-            await log("webhook_echo_skipped", { qbPaymentId });
+            await record("webhook_echo_skipped", { qbPaymentId });
             return;
         }
 
         const qb = await qbFetch(orgId, "GET", `/payment/${qbPaymentId}`) as QBPaymentResponse;
         const payment = qb.Payment;
 
+        const lines = payment.Line ?? [];
+        const qbInvoiceIds = [
+            ...new Set(lines.map(invoiceTxnId).filter((id): id is string => !!id)),
+        ];
+        const lookupInvoices = () =>
+            qbInvoiceIds.length
+                ? sdb.invoice.findMany({
+                      where: { qb_invoice_id: { in: qbInvoiceIds }, account_id: accountId },
+                      select: { id: true, qb_invoice_id: true, status: true },
+                  })
+                : Promise.resolve([]);
+
         if (existing.length === 0) {
             const ownPaymentId = parsePaymentPrivateNote(payment.PrivateNote);
             if (ownPaymentId) {
-                await linkOwnPushedPayment(ownPaymentId);
+                await linkOwnPushedPayment(ownPaymentId, lookupInvoices);
                 return;
             }
 
             // The payment we post to apply a credit is always $0; a mixed cash + credit payment has
             // TotalAmt > 0 and must still be recorded.
             if (payment.TotalAmt === 0) {
-                await log("webhook_skipped_credit_application", {
+                await record("webhook_skipped_credit_application", {
                     message: "Payment applies a credit memo",
                 });
                 return;
             }
         }
 
-        const lines = payment.Line ?? [];
-        const qbInvoiceIds = [
-            ...new Set(lines.map(invoiceTxnId).filter((id): id is string => !!id)),
-        ];
         if (existing.length === 0 && qbInvoiceIds.length === 0) {
-            await log("webhook_skipped_no_invoice", {
+            await record("webhook_skipped_no_invoice", {
                 message: "No linked invoice found",
             });
             return;
         }
 
-        const invoices = qbInvoiceIds.length
-            ? await sdb.invoice.findMany({
-                  where: { qb_invoice_id: { in: qbInvoiceIds }, account_id: accountId },
-                  select: { id: true, qb_invoice_id: true },
-              })
-            : [];
+        const invoices = await lookupInvoices();
         const invoiceIdByQbId = new Map<string, string>();
+        const voidInvoiceIds = new Set<string>();
         for (const inv of invoices) {
-            if (inv.qb_invoice_id) invoiceIdByQbId.set(inv.qb_invoice_id, inv.id);
+            if (!inv.qb_invoice_id) continue;
+            // QuickBooks applied cash to an invoice void here: record nothing
+            // on it, and have a person move the payment in QuickBooks.
+            if (inv.status === "Void") {
+                voidInvoiceIds.add(inv.id);
+                continue;
+            }
+            if (inv.status === "Draft") {
+                await record("webhook_skipped_no_invoice", {
+                    message: "Invoice is a draft",
+                    qbInvoiceId: inv.qb_invoice_id,
+                });
+                continue;
+            }
+            invoiceIdByQbId.set(inv.qb_invoice_id, inv.id);
         }
+        const knownQbInvoiceIds = new Set(
+            invoices.map((i) => i.qb_invoice_id).filter((id): id is string => !!id),
+        );
         for (const qbInvoiceId of qbInvoiceIds) {
-            if (!invoiceIdByQbId.has(qbInvoiceId)) {
-                await log("webhook_skipped_no_invoice", {
+            if (!knownQbInvoiceIds.has(qbInvoiceId)) {
+                await record("webhook_skipped_no_invoice", {
                     message: "Invoice not found",
                     qbInvoiceId,
                 });
             }
         }
-        if (existing.length === 0 && invoiceIdByQbId.size === 0) return;
+        const flagVoidInvoices = async () => {
+            for (const invoiceId of voidInvoiceIds) {
+                await markQbDiverged(invoiceId, orgId, "qb_payment_on_void");
+            }
+        };
+        if (existing.length === 0 && invoiceIdByQbId.size === 0) {
+            await flagVoidInvoices();
+            return;
+        }
 
         const result = await sdb.$transaction(async (tx) => {
             const txc = tx as Prisma.TransactionClient;
@@ -474,7 +547,10 @@ export async function handleInboundPaymentEvent(
                 });
 
             const paidAt = new Date(payment.TxnDate);
-            const keptRowIds = new Set<string>();
+            // Rows already on a void invoice are left as they are.
+            const keptRowIds = new Set<string>(
+                ownRows.filter((r) => voidInvoiceIds.has(r.invoice_id)).map((r) => r.id),
+            );
             for (const { qbInvoiceId, cents } of allocations) {
                 const invoiceId = invoiceIdByQbId.get(qbInvoiceId)!;
                 const amount = centsToDollars(cents);
@@ -515,78 +591,122 @@ export async function handleInboundPaymentEvent(
                 overappliedInvoiceIds: overappliedQbInvoiceIds
                     .map((id) => invoiceIdByQbId.get(id))
                     .filter((id): id is string => !!id),
+                negative: await negativePaidInvoices(txc, locked),
             };
         });
 
+        await flagVoidInvoices();
         if (!result) {
-            await log("webhook_echo_skipped", { qbPaymentId });
+            await record("webhook_echo_skipped", { qbPaymentId });
             return;
         }
         if (result.unplacedCents > 0) {
-            await log("webhook_overapplied", {
+            await record("webhook_overapplied", {
                 qbPaymentId,
                 unplacedCents: result.unplacedCents,
             });
             for (const invoiceId of result.overappliedInvoiceIds) {
-                await markQbDiverged(
-                    invoiceId,
-                    orgId,
-                    "qb_payment_overapplied",
-                ).catch((e) =>
-                    log("diverge_flag_failed", {
-                        invoiceId,
-                        message: String(e),
-                    }),
-                );
+                await markQbDiverged(invoiceId, orgId, "qb_payment_overapplied");
             }
         }
+        await flagUncoveredRefunds(result.negative);
         if (existing.length > 0) {
-            await log("webhook_updated", { qbPaymentId });
+            await record("webhook_updated", { qbPaymentId });
         } else if (result.rowsWritten > 0) {
-            await log("webhook_created", { qbPaymentId });
+            await record("webhook_created", { qbPaymentId });
         }
     } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-            await log("webhook_duplicate_ignored", { message: "Duplicate entry found" });
+            await record("webhook_duplicate_ignored", { message: "Duplicate entry found" });
             return;
         }
-        await log("webhook_failed", { message: String(error) });
+        // Intuit already has its 200 and will not redeliver; this is the trace.
+        log.error({ err: error, qbPaymentId, orgId }, "QuickBooks payment webhook failed");
+        await record("webhook_failed", { message: String(error) });
     }
 
     // Our own push echoed back before pushPaymentToQB stored the QB id: link
     // the local row instead of inserting a duplicate. A pushed payment is
     // always single-invoice.
-    async function linkOwnPushedPayment(paymentId: string) {
+    async function linkOwnPushedPayment(
+        paymentId: string,
+        lookupInvoices: () => Promise<{ id: string }[]>,
+    ) {
         const own = await sdb.invoice_payment.findFirst({
             where: { id: paymentId },
             select: { id: true, invoice_id: true },
         });
         if (!own) {
-            // Deleted locally while the push was in flight; don't resurrect it.
-            await log("webhook_echo_skipped", {
+            // Deleted locally while the push was in flight; don't resurrect
+            // it, but the payment now in QuickBooks has nothing behind it.
+            await record("webhook_echo_skipped", {
                 qbPaymentId,
                 paymentId,
                 message: "Local payment not found",
             });
+            for (const invoice of await lookupInvoices()) {
+                await markQbDiverged(invoice.id, orgId, "qb_payment_delete_failed");
+            }
             return;
         }
-        const linked = await sdb.$transaction(async (tx) => {
+        const outcome = await sdb.$transaction(async (tx) => {
             const txc = tx as Prisma.TransactionClient;
             await lockInvoiceRow(txc, own.invoice_id, orgId);
-            const unlinked = await txc.invoice_payment.findFirst({
-                where: { id: paymentId, qb_payment_id: null },
-                select: { id: true },
-            });
-            if (!unlinked) return false;
-            await txc.invoice_payment.update({
+            const row = await txc.invoice_payment.findFirst({
                 where: { id: paymentId },
-                data: { qb_payment_id: qbPaymentId, account_id: accountId },
+                select: { id: true, qb_payment_id: true, account_id: true },
             });
-            return true;
+            if (!row) return { kind: "echo" as const };
+            if (row.qb_payment_id === null) {
+                await txc.invoice_payment.update({
+                    where: { id: paymentId },
+                    data: { qb_payment_id: qbPaymentId, account_id: accountId },
+                });
+                return { kind: "linked" as const };
+            }
+            // Linked in this company to another QuickBooks payment: the same
+            // local payment reached QuickBooks twice. A link in a previous
+            // company is the re-push in flight, which links it itself.
+            if (row.account_id === accountId && row.qb_payment_id !== qbPaymentId) {
+                return { kind: "duplicate" as const, linkedQbPaymentId: row.qb_payment_id };
+            }
+            return { kind: "echo" as const };
         });
-        await log(linked ? "webhook_linked_own_push" : "webhook_echo_skipped", {
+        if (outcome.kind === "duplicate") {
+            log.error(
+                {
+                    orgId,
+                    paymentId,
+                    invoiceId: own.invoice_id,
+                    qbPaymentId,
+                    linkedQbPaymentId: outcome.linkedQbPaymentId,
+                },
+                "QuickBooks holds a payment twice: the local payment is already linked to another",
+            );
+            await record("webhook_duplicate_payment", {
+                qbPaymentId,
+                paymentId,
+                linkedQbPaymentId: outcome.linkedQbPaymentId,
+            });
+            await markQbDiverged(own.invoice_id, orgId, "qb_payment_duplicate");
+            return;
+        }
+        await record(outcome.kind === "linked" ? "webhook_linked_own_push" : "webhook_echo_skipped", {
             qbPaymentId,
             paymentId,
         });
     }
+}
+
+// Read under the webhook's locks, after its totals are resynced.
+async function negativePaidInvoices(
+    tx: Prisma.TransactionClient,
+    invoiceIds: Iterable<string>,
+): Promise<{ invoiceId: string; paidCents: number }[]> {
+    const negative: { invoiceId: string; paidCents: number }[] = [];
+    for (const invoiceId of invoiceIds) {
+        const paidCents = await invoicePaidTotalCents(invoiceId, tx);
+        if (paidCents < 0) negative.push({ invoiceId, paidCents });
+    }
+    return negative;
 }

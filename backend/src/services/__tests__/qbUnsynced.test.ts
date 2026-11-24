@@ -49,7 +49,9 @@ describe("listUnsynced stale company", () => {
 
 		const rows = await listUnsynced("org1");
 
-		expect(mockFn(sdb.invoice.findMany).mock.calls[0][0].where.OR).toContainEqual(staleBranch);
+		expect(mockFn(sdb.invoice.findMany).mock.calls[0][0].where.OR[0].AND[0].OR).toContainEqual(
+			staleBranch,
+		);
 		expect(mockFn(sdb.field_purchase.findMany).mock.calls[0][0].where.OR).toContainEqual(staleBranch);
 		// purchase keeps its own status OR alongside the stale one
 		const pWhere = mockFn(sdb.purchase.findMany).mock.calls[0][0].where;
@@ -108,6 +110,41 @@ describe("listUnsynced diverged invoices", () => {
 			account_id: "realm2",
 		});
 		expect(rows).toEqual([expect.objectContaining({ id: "i2", status: "diverged" })]);
+	});
+
+	// A void that never reached QuickBooks is a divergence; Retry cannot push a
+	// void, so only the stale/unsynced branch leaves Void invoices out.
+	it("lists a diverged Void invoice but still hides a stale or unsynced Void one", async () => {
+		await listUnsynced("org1");
+
+		const where = mockFn(sdb.invoice.findMany).mock.calls[0][0].where;
+		expect(where.status).toBeUndefined();
+		expect(where.OR).toContainEqual({
+			AND: [{ OR: expect.arrayContaining([staleBranch]) }, { status: { not: "Void" } }],
+		});
+		expect(where.OR).toContainEqual({
+			qb_diverged_at: { not: null },
+			account_id: "realm2",
+		});
+	});
+
+	it("syncUnsynced never pushes a diverged Void invoice, even one marked failed earlier", async () => {
+		mockFn(sdb.invoice.findMany).mockResolvedValueOnce([
+			{
+				id: "i3",
+				invoice_number: "INV-3",
+				status: "Void",
+				qb_sync_status: "failed",
+				account_id: "realm2",
+				qb_diverged_at: new Date(),
+				updated_at: new Date(),
+			},
+		]);
+
+		const result = await syncUnsynced("org1");
+
+		expect(pushInvoice).not.toHaveBeenCalled();
+		expect(result).toEqual({ synced: 0, failed: [] });
 	});
 
 	it("syncUnsynced does not re-push a diverged invoice", async () => {

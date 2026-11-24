@@ -28,8 +28,11 @@ vi.mock("../qb/qbQuery.js", () => ({ qbQueryAll: vi.fn() }));
 vi.mock("../appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
+vi.mock("../qb/qbNotify.js", () => ({ notifyQbProblem: vi.fn(async () => undefined) }));
 
 import { isQBConnected, qbFetch } from "../quickbooksService.js";
+import { isModuleOn } from "../entitlementService.js";
+import { notifyQbProblem } from "../qb/qbNotify.js";
 import { log } from "../appLogger.js";
 import {
 	mirrorInvoiceVoidToQuickBooks,
@@ -50,12 +53,58 @@ describe("mirrorInvoiceVoidToQuickBooks", () => {
 		expect(qbFetch).not.toHaveBeenCalled();
 	});
 
-	it("does nothing while the organization is disconnected", async () => {
+	const syncedInvoice = {
+		qb_invoice_id: "qb-77",
+		account_id: "realm1",
+		invoice_number: "INV-1039",
+		qb_diverged_at: null,
+		qb_diverged_reason: null,
+	};
+
+	it("a void while QuickBooks is disconnected flags void_not_in_qb", async () => {
 		mockFn(isQBConnected).mockResolvedValueOnce(false);
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce(syncedInvoice);
 
 		await mirrorInvoiceVoidToQuickBooks("org1", "inv1", "qb-77");
 
 		expect(qbFetch).not.toHaveBeenCalled();
+		expect(sdb.invoice.updateMany).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ qb_diverged_reason: "void_not_in_qb" }),
+			}),
+		);
+		expect(notifyQbProblem).toHaveBeenCalledWith(
+			"org1",
+			{ id: "inv1", invoice_number: "INV-1039" },
+			"void_not_in_qb",
+		);
+	});
+
+	it("a void while the QuickBooks module is off flags void_not_in_qb", async () => {
+		mockFn(isModuleOn).mockResolvedValueOnce(false);
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce(syncedInvoice);
+
+		await mirrorInvoiceVoidToQuickBooks("org1", "inv1", "qb-77");
+
+		expect(qbFetch).not.toHaveBeenCalled();
+		expect(notifyQbProblem).toHaveBeenCalledWith(
+			"org1",
+			{ id: "inv1", invoice_number: "INV-1039" },
+			"void_not_in_qb",
+		);
+	});
+
+	it("a module check that rejects is logged, not left as an unhandled rejection", async () => {
+		mockFn(isModuleOn).mockRejectedValueOnce(new Error("entitlements down"));
+
+		await expect(
+			mirrorInvoiceVoidToQuickBooks("org1", "inv1", "qb-77"),
+		).resolves.toBeUndefined();
+
+		expect(log.error).toHaveBeenCalledWith(
+			expect.objectContaining({ invoiceId: "inv1", orgId: "org1" }),
+			"QuickBooks void failed",
+		);
 	});
 
 	it("voids the QuickBooks copy when connected", async () => {
@@ -73,8 +122,11 @@ describe("mirrorInvoiceVoidToQuickBooks", () => {
 
 	// DW-55: the old catch swallowed the failure and then swallowed the attempt
 	// to record it, leaving QuickBooks with a live invoice and no trace at all.
-	it("logs and marks the invoice failed instead of swallowing the error", async () => {
+	// Retry sync cannot push a void, and the unsynced list hides void invoices,
+	// so a failed void is a divergence, not a sync failure.
+	it("logs and flags void_not_in_qb instead of swallowing the error", async () => {
 		mockFn(qbFetch).mockRejectedValueOnce(new Error("token expired"));
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce(syncedInvoice);
 
 		await expect(
 			mirrorInvoiceVoidToQuickBooks("org1", "inv1", "qb-77"),
@@ -84,14 +136,19 @@ describe("mirrorInvoiceVoidToQuickBooks", () => {
 			expect.objectContaining({ invoiceId: "inv1", orgId: "org1" }),
 			"QuickBooks void failed",
 		);
-		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
-			where: { id: "inv1", qb_sync_status: { not: "failed" } },
-			data: { qb_sync_status: "failed" },
-		});
+		expect(sdb.invoice.updateMany).not.toHaveBeenCalledWith(
+			expect.objectContaining({ data: { qb_sync_status: "failed" } }),
+		);
+		expect(notifyQbProblem).toHaveBeenCalledWith(
+			"org1",
+			{ id: "inv1", invoice_number: "INV-1039" },
+			"void_not_in_qb",
+		);
 	});
 
 	it("logs when even the failure mark cannot be written", async () => {
 		mockFn(qbFetch).mockRejectedValueOnce(new Error("token expired"));
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce(syncedInvoice);
 		mockFn(sdb.invoice.updateMany).mockRejectedValueOnce(new Error("pool exhausted"));
 
 		await mirrorInvoiceVoidToQuickBooks("org1", "inv1", "qb-77");

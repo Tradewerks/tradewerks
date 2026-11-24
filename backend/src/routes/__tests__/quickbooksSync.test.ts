@@ -34,7 +34,13 @@ vi.mock("../../services/quickbooksService.js", async (importActual) => ({
 	getOrgRealmId: vi.fn(async () => "realm1"),
 }));
 
+vi.mock("../../services/qb/qbDivergence.js", async (importActual) => ({
+	...(await importActual<typeof import("../../services/qb/qbDivergence.js")>()),
+	clearQbDivergence: vi.fn(),
+}));
+
 import quickbooksRouter from "../quickbooks.js";
+import { clearQbDivergence } from "../../services/qb/qbDivergence.js";
 import { callRoute } from "./harness.js";
 import { db } from "../../db.js";
 import { pushInvoice, sendQbInvoiceEmail } from "../../services/qb/qbInvoices.js";
@@ -173,5 +179,47 @@ describe("POST /quickbooks/invoices/:id/email", () => {
 		expect(status).toBe(400);
 		expect(body.error.code).toBe("VALIDATION_ERROR");
 		expect(sendQbInvoiceEmail).not.toHaveBeenCalled();
+	});
+});
+
+describe("POST /quickbooks/invoices/:id/reconciled", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	const reconcile = (body: unknown) =>
+		callRoute(quickbooksRouter, "post", "/invoices/:id/reconciled", {
+			params: { id: "inv1" },
+			body,
+		});
+
+	it("clears only the problems the page showed, by their time", async () => {
+		vi.mocked(clearQbDivergence).mockResolvedValueOnce({ err: "" });
+
+		const { status, body } = await reconcile({ diverged_at: "2026-11-20T10:00:00.000Z" });
+
+		expect(status).toBe(200);
+		expect(body.data).toEqual({ reconciled: true });
+		expect(vi.mocked(clearQbDivergence).mock.calls[0][3]).toEqual(
+			new Date("2026-11-20T10:00:00.000Z"),
+		);
+	});
+
+	it("answers 409 QB_DIVERGENCE_CHANGED when a problem was added after the page loaded", async () => {
+		vi.mocked(clearQbDivergence).mockResolvedValueOnce({ err: "", changed: true });
+
+		const { status, body } = await reconcile({ diverged_at: "2026-11-20T10:00:00.000Z" });
+
+		expect(status).toBe(409);
+		expect(body.error).toEqual({
+			code: "QB_DIVERGENCE_CHANGED",
+			message: "QuickBooks problems on this invoice changed. Reload and check again.",
+		});
+	});
+
+	it("refuses a request without the time the page showed", async () => {
+		const { status, body } = await reconcile({});
+
+		expect(status).toBe(400);
+		expect(body.error.code).toBe("VALIDATION_ERROR");
+		expect(clearQbDivergence).not.toHaveBeenCalled();
 	});
 });

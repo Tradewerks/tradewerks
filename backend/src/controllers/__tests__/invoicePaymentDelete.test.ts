@@ -59,7 +59,18 @@ vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock("../../services/entitlementService.js", () => ({
+	isModuleOn: vi.fn(async () => true),
+	getEntitlements: vi.fn(),
+}));
+
+vi.mock("../../services/qb/qbNotify.js", () => ({
+	notifyQbProblem: vi.fn(async () => undefined),
+}));
+
 import { db } from "../../db.js";
+import { isModuleOn } from "../../services/entitlementService.js";
+import { logActivity } from "../../services/logger.js";
 import { deleteInvoicePayment } from "../invoicesController.js";
 import { getOrgRealmId, isQBConnected } from "../../services/quickbooksService.js";
 import { deleteQBPayment } from "../../services/qb/qbPayments.js";
@@ -303,10 +314,72 @@ describe("deleteInvoicePayment", () => {
 					err: boom,
 					invoiceId: "inv1",
 					organizationId: "org1",
-					qbPaymentId: "qb-9",
+					reason: "qb_payment_delete_failed",
 				}),
-				"Could not record the failed QuickBooks payment delete",
+				"Could not record a QuickBooks divergence",
 			),
+		);
+	});
+
+	const syncedPayment = () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(
+			anInvoice({ amount_paid: 100, qb_invoice_id: "158", account_id: "realm1" }),
+		);
+		mockFn(db.invoice_payment.findFirst).mockResolvedValue({
+			...aPayment(100),
+			qb_payment_id: "qb-9",
+			account_id: "realm1",
+		});
+		paidSum(100);
+		mockFn(db.invoice_payment.count).mockResolvedValue(0);
+		mockFn(getOrgRealmId).mockResolvedValue("realm1");
+	};
+	const flaggedDeleteFailed = () =>
+		expect(db.invoice.updateMany).toHaveBeenCalledWith(
+			expect.objectContaining({
+				data: expect.objectContaining({ qb_diverged_reason: "qb_payment_delete_failed" }),
+			}),
+		);
+
+	it("a synced payment deleted while QuickBooks is disconnected flags qb_payment_delete_failed", async () => {
+		syncedPayment();
+		mockFn(isQBConnected).mockResolvedValue(false);
+
+		const result = await deleteInvoicePayment("inv1", "pay1", "org1", { dispatcherId: "d1" });
+
+		expect(result.err).toBe("");
+		await vi.waitFor(flaggedDeleteFailed);
+		expect(deleteQBPayment).not.toHaveBeenCalled();
+	});
+
+	it("a synced payment deleted while the QuickBooks module is off flags qb_payment_delete_failed", async () => {
+		syncedPayment();
+		mockFn(isQBConnected).mockResolvedValue(true);
+		mockFn(isModuleOn).mockResolvedValueOnce(false);
+
+		const result = await deleteInvoicePayment("inv1", "pay1", "org1", { dispatcherId: "d1" });
+
+		expect(result.err).toBe("");
+		await vi.waitFor(flaggedDeleteFailed);
+		expect(deleteQBPayment).not.toHaveBeenCalled();
+	});
+
+	it("a failure after the delete commits is logged and the delete still succeeds", async () => {
+		syncedPayment();
+		mockFn(getOrgRealmId).mockRejectedValue(new Error("pool exhausted"));
+		mockFn(logActivity).mockRejectedValueOnce(new Error("log table locked"));
+
+		const result = await deleteInvoicePayment("inv1", "pay1", "org1", { dispatcherId: "d1" });
+
+		expect(result).toEqual({ err: "", item: { id: "pay1" } });
+		expect(db.invoice_payment.delete).toHaveBeenCalledWith({ where: { id: "pay1" } });
+		expect(log.error).toHaveBeenCalledWith(
+			expect.objectContaining({ invoiceId: "inv1", paymentId: "pay1" }),
+			"Payment deleted, but recording it in the activity log failed",
+		);
+		expect(log.error).toHaveBeenCalledWith(
+			expect.objectContaining({ invoiceId: "inv1", paymentId: "pay1" }),
+			"Payment deleted, but mirroring the delete to QuickBooks failed",
 		);
 	});
 });

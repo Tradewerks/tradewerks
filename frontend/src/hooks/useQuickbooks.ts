@@ -421,10 +421,15 @@ export const useQBInvoiceSyncMutation = () => {
 export const useMarkQbReconciledMutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: (invoiceId: string) => markQBInvoiceReconciled(invoiceId),
+        mutationFn: ({ invoiceId, divergedAt }: { invoiceId: string; divergedAt: string }) =>
+            markQBInvoiceReconciled(invoiceId, divergedAt),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["invoices"] });
             queryClient.invalidateQueries({ queryKey: ["qbUnsynced"] });
+        },
+        // A refusal means the problems changed: refetch so the banner shows them.
+        onError: () => {
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
         },
     });
 };

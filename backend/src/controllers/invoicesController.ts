@@ -52,6 +52,7 @@ import {
 import { logExternalSync } from "../services/qb/qbSyncLog.js";
 import { pushPaymentDetached, deleteQBPayment } from "../services/qb/qbPayments.js"
 import { markQbDiverged } from "../services/qb/qbDivergence.js";
+import { isModuleOn } from "../services/entitlementService.js";
 import { notifyDispatchers } from "./notificationsController.js";
 import { dropClientTaxTotals, getEffectiveTaxMode } from "../services/tax/taxMode.js";
 import { qbAstTaxCents } from "../services/tax/snapshot.js";
@@ -956,7 +957,9 @@ export const insertInvoicePayment = async (
 			title: `Payment on Invoice ${outcome.invoiceNumber}`,
 			body: `${formatCurrency(parsed.amount)} recorded${parsed.method ? ` by ${parsed.method}` : ""}.`,
 			actionUrl: `/dispatch/invoices/${invoiceId}`,
-		}, organizationId, context?.dispatcherId).catch(() => {});
+		}, organizationId, context?.dispatcherId).catch((err: unknown) =>
+			log.error({ err, invoiceId, organizationId }, "Could not notify dispatchers of a payment"),
+		);
 
 		pushPaymentDetached(created.id, invoiceId, organizationId);
 
@@ -1038,57 +1041,42 @@ export const deleteInvoicePayment = async (
 		}
 		const existing = outcome.payment;
 
-		await logActivity({
-			event_type: "invoice_payment.deleted",
-			action: "deleted",
-			entity_type: "invoice_payment",
-			entity_id: paymentId,
-			organization_id: organizationId,
-			actor_type: context?.dispatcherId
-				? "dispatcher"
-				: context?.techId
-					? "technician"
-					: "system",
-			actor_id: context?.dispatcherId ?? context?.techId,
-			changes: {
-				invoice_id: { old: invoiceId, new: null },
-				amount: { old: existing.amount, new: null },
-				...parentBreadcrumb("invoice", invoiceId),
-			},
-			ip_address: context?.ipAddress,
-			user_agent: context?.userAgent,
-		});
-
-		// Mirror to QB only if this payment was actually synced
-		// Skip if the payment belongs to a different QB account
-		const qbPaymentId = existing.qb_payment_id;
-		const currentRealmId = await getOrgRealmId(organizationId);
-		if (qbPaymentId && existing.account_id === currentRealmId) {
-			isQBConnected(organizationId)
-			.then((connected) => (connected ? deleteQBPayment(qbPaymentId, organizationId) : null))
-			// The payment is gone here but still in QuickBooks; a re-push
-			// cannot remove it, so the invoice is flagged for a person.
-			.catch(async (e) => {
-				const results = await Promise.allSettled([
-					logExternalSync({
-						provider: "quickbooks",
-						external_id: qbPaymentId,
-						entity_type: "payment",
-						action: "delete_failed",
-						payload: { message: String(e) },
-						organization_id: organizationId
-					}),
-					markQbDiverged(invoiceId, organizationId, "qb_payment_delete_failed"),
-				]);
-				for (const r of results) {
-					if (r.status === "rejected") {
-						log.error(
-							{ err: r.reason, invoiceId, organizationId, qbPaymentId },
-							"Could not record the failed QuickBooks payment delete",
-						);
-					}
-				}
+		// The delete is committed: nothing below may turn it into an error.
+		try {
+			await logActivity({
+				event_type: "invoice_payment.deleted",
+				action: "deleted",
+				entity_type: "invoice_payment",
+				entity_id: paymentId,
+				organization_id: organizationId,
+				actor_type: context?.dispatcherId
+					? "dispatcher"
+					: context?.techId
+						? "technician"
+						: "system",
+				actor_id: context?.dispatcherId ?? context?.techId,
+				changes: {
+					invoice_id: { old: invoiceId, new: null },
+					amount: { old: existing.amount, new: null },
+					...parentBreadcrumb("invoice", invoiceId),
+				},
+				ip_address: context?.ipAddress,
+				user_agent: context?.userAgent,
 			});
+		} catch (err) {
+			log.error(
+				{ err, invoiceId, paymentId, organizationId },
+				"Payment deleted, but recording it in the activity log failed",
+			);
+		}
+
+		try {
+			await mirrorPaymentDeleteToQuickBooks(invoiceId, existing, organizationId);
+		} catch (err) {
+			log.error(
+				{ err, invoiceId, paymentId, organizationId },
+				"Payment deleted, but mirroring the delete to QuickBooks failed",
+			);
 		}
 
 		return { err: "", item: { id: paymentId } };
@@ -1097,6 +1085,37 @@ export const deleteInvoicePayment = async (
 		throw e;
 	}
 };
+
+// The payment is gone here but still in QuickBooks whenever this cannot delete
+// it there; a re-push cannot remove it, so the invoice is flagged for a person.
+async function mirrorPaymentDeleteToQuickBooks(
+	invoiceId: string,
+	payment: { qb_payment_id: string | null; account_id: string | null },
+	organizationId: string,
+): Promise<void> {
+	const qbPaymentId = payment.qb_payment_id;
+	// Only a payment synced to the connected company exists there to delete.
+	if (!qbPaymentId) return;
+	if (payment.account_id !== (await getOrgRealmId(organizationId))) return;
+
+	const reachable =
+		(await isModuleOn(organizationId, "quickbooks")) && (await isQBConnected(organizationId));
+	if (!reachable) {
+		await markQbDiverged(invoiceId, organizationId, "qb_payment_delete_failed");
+		return;
+	}
+	deleteQBPayment(qbPaymentId, organizationId).catch(async (e) => {
+		await logExternalSync({
+			provider: "quickbooks",
+			external_id: qbPaymentId,
+			entity_type: "payment",
+			action: "delete_failed",
+			payload: { message: String(e) },
+			organization_id: organizationId,
+		});
+		await markQbDiverged(invoiceId, organizationId, "qb_payment_delete_failed");
+	});
+}
 
 /**
  * Records a refund as a negative invoice_payment row — same table, same

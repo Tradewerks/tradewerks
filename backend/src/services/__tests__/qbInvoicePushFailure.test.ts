@@ -93,22 +93,27 @@ describe("QuickBooks push failure notifications", () => {
 		expect(notifyDispatchers).not.toHaveBeenCalled();
 	});
 
-	it("a failed void mirror notifies with void_failed copy", async () => {
+	it("a failed void mirror notifies with void_not_in_qb copy", async () => {
 		mockFn(qbFetch).mockRejectedValueOnce(new Error("token expired"));
-		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce({ invoice_number: "INV-1039" });
+		mockFn(sdb.invoice.findFirst).mockResolvedValueOnce({
+			qb_invoice_id: "qb-77",
+			account_id: "realm1",
+			invoice_number: "INV-1039",
+			qb_diverged_at: null,
+			qb_diverged_reason: null,
+		});
 
 		await mirrorInvoiceVoidToQuickBooks("org1", "inv1", "qb-77");
 
-		expect(sdb.invoice.updateMany).toHaveBeenCalledWith({
-			where: { id: "inv1", qb_sync_status: { not: "failed" } },
-			data: { qb_sync_status: "failed" },
-		});
+		expect(sdb.invoice.updateMany).not.toHaveBeenCalledWith(
+			expect.objectContaining({ data: { qb_sync_status: "failed" } }),
+		);
 		expect(notifyDispatchers).toHaveBeenCalledTimes(1);
 		expect(notifyDispatchers).toHaveBeenCalledWith(
 			{
 				type: "qb_sync_failed",
-				title: "Invoice INV-1039 is void here but still open in QuickBooks",
-				body: "Void the invoice in QuickBooks.",
+				title: "Invoice INV-1039: void not in QuickBooks",
+				body: "Void the invoice in QuickBooks, then mark the invoice reconciled.",
 				actionUrl: "/dispatch/invoices/inv1",
 			},
 			"org1",

@@ -4,6 +4,7 @@ import { db } from "../../db.js";
 import { ErrorCodes, httpError } from "../../types/responses.js";
 import { getOrgRealmId } from "../quickbooksService.js";
 import { QbHttpError } from "./qbHttpError.js";
+import { log } from "../appLogger.js";
 
 export interface CustomerResponse {
   Customer: Customer;
@@ -146,6 +147,7 @@ async function claimByDisplayName(
     displayName: string,
 ): Promise<string | null> {
     let qbId = await findQBCustomerByDisplayName(orgId, displayName);
+    let adopted = qbId !== null;
     if (qbId === null) {
         try {
             qbId = await createQBCustomer(orgId, displayName);
@@ -156,6 +158,7 @@ async function claimByDisplayName(
             // the query cannot see it, so move on to the next name.
             qbId = await findQBCustomerByDisplayName(orgId, displayName);
             if (qbId === null) return null;
+            adopted = true;
         }
     }
 
@@ -178,6 +181,10 @@ async function claimByDisplayName(
                 external_id: qbId,
             },
         });
+        // A same-named customer may be a different person; leave a trail.
+        if (adopted) {
+            log.info({ orgId, clientId: client.id, qbCustomerId: qbId }, "customer_adopted_by_name");
+        }
         return qbId;
     } catch (error) {
         if (!isUniqueViolation(error)) throw error;
