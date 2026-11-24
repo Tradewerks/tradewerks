@@ -76,7 +76,8 @@ export default function QuotesPage() {
 	const queryParams = new URLSearchParams(location.search);
 	const clientFilter = queryParams.get("client");
 	const requestFilter = queryParams.get("request");
-	const statusFilter = queryParams.getAll("status");
+	// Dashboard links use the comma form (status=Sent,Viewed); the chips write repeated params.
+	const statusFilter = queryParams.getAll("status").flatMap((v) => v.split(",")).filter(Boolean);
 	const statusKey = statusFilter.join(",");
 	const priorityFilter = queryParams.getAll("priority");
 	const priorityKey = priorityFilter.join(",");

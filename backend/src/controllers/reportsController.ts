@@ -24,6 +24,7 @@ import {
 	type DefaultOrder,
 } from "../lib/reports/pushdown.js";
 import type { PaginateParams } from "../lib/reports/filterEngine.js";
+import { utcDayRange } from "../lib/dayRange.js";
 import { round2 } from "../lib/reports/numbers.js";
 import { getOrgRealmId } from "../services/quickbooksService.js";
 import { log } from "../services/appLogger.js";
@@ -5166,3 +5167,145 @@ export const getPageSummary = async (orgId: string, page:string, startDate?: str
 
 	return { page, stats, breakdown, breakdownLabel };
 }
+
+// ============================================================================
+// DASHBOARD TODAY
+// ============================================================================
+
+export interface DashboardToday {
+	requests_new: number | null;
+	requests_reviewing: number | null;
+	quotes_pending_approval: number | null;
+	quotes_approved: number | null;
+	jobs_unscheduled: number | null;
+	recurring_active: number | null;
+	recurring_paused: number | null;
+	visits_today: number | null;
+	visits_unassigned_today: number | null;
+	visits_late_now: number | null;
+	visits_in_progress: number | null;
+	visits_completed_today: number | null;
+	techs: { tech_id: string; on_job: boolean; next_visit_at: string | null }[] | null;
+	as_of: string;
+}
+
+// Which tile groups the caller may read. A group that is off is not queried and
+// comes back null, so the page can show a dash instead of a fake zero.
+export interface DashboardTodayAccess {
+	requests: boolean;
+	quotes: boolean;
+	jobs: boolean;
+	recurring: boolean;
+	visits: boolean;
+}
+
+const ALL_ACCESS: DashboardTodayAccess = {
+	requests: true,
+	quotes: true,
+	jobs: true,
+	recurring: true,
+	visits: true,
+};
+
+// Counts only: the dashboard must not read org-sized lists. "Today" is the org's
+// local day, so the boundaries come from its timezone rather than the server's.
+export const getDashboardToday = async (
+	orgId: string,
+	tz: string,
+	now: Date,
+	access: DashboardTodayAccess = ALL_ACCESS,
+): Promise<DashboardToday> => {
+	const sdb = getScopedDb(orgId);
+	const { start, end } = utcDayRange(now, 1, tz);
+	const today = { gte: start, lt: end };
+	const notCancelled = { not: "Cancelled" as const };
+	const when = <T>(allowed: boolean, run: () => Promise<T>): Promise<T | null> =>
+		allowed ? run() : Promise.resolve(null);
+
+	const [
+		requestsNew,
+		requestsReviewing,
+		quotesPending,
+		quotesApproved,
+		jobsUnscheduled,
+		plansActive,
+		plansPaused,
+		visitsToday,
+		visitsUnassigned,
+		visitsLate,
+		visitsInProgress,
+		visitsCompletedToday,
+		techRows,
+	] = await Promise.all([
+		when(access.requests, () => sdb.request.count({ where: { status: "New" } })),
+		when(access.requests, () => sdb.request.count({ where: { status: "Reviewing" } })),
+		when(access.quotes, () =>
+			sdb.quote.count({ where: { status: { in: ["Sent", "Viewed"] } } }),
+		),
+		when(access.quotes, () => sdb.quote.count({ where: { status: "Approved" } })),
+		when(access.jobs, () => sdb.job.count({ where: { status: "Unscheduled" } })),
+		when(access.recurring, () => sdb.recurring_plan.count({ where: { status: "Active" } })),
+		when(access.recurring, () => sdb.recurring_plan.count({ where: { status: "Paused" } })),
+		when(access.visits, () =>
+			sdb.job_visit.count({ where: { scheduled_start_at: today, status: notCancelled } }),
+		),
+		when(access.visits, () =>
+			sdb.job_visit.count({
+				where: {
+					scheduled_start_at: today,
+					status: notCancelled,
+					visit_techs: { none: {} },
+				},
+			}),
+		),
+		// now is inside today's window, so it is also the upper bound.
+		when(access.visits, () =>
+			sdb.job_visit.count({
+				where: { status: "Scheduled", scheduled_start_at: { gte: start, lt: now } },
+			}),
+		),
+		when(access.visits, () => sdb.job_visit.count({ where: { status: "InProgress" } })),
+		when(access.visits, () =>
+			sdb.job_visit.count({ where: { status: "Completed", actual_end_at: today } }),
+		),
+		// Per-tech "on a job" / next stop for the roster: aggregated in SQL, so it
+		// is one row per technician however many visits exist.
+		when(access.visits, () =>
+			sdb.$queryRaw<{ tech_id: string; on_job: boolean; next_at: Date | null }[]>`
+			SELECT jvt.tech_id,
+				bool_or(v.status::text IN ('InProgress', 'Driving', 'OnSite', 'Paused')) AS on_job,
+				MIN(v.scheduled_start_at) FILTER (
+					WHERE v.status::text = 'Scheduled' AND v.scheduled_start_at > ${now}
+				) AS next_at
+			FROM job_visit_technician jvt
+			JOIN job_visit v ON v.id = jvt.visit_id
+			JOIN job j ON j.id = v.job_id
+			WHERE j.organization_id = ${orgId}
+				AND v.status::text IN ('Scheduled', 'InProgress', 'Driving', 'OnSite', 'Paused')
+			GROUP BY jvt.tech_id
+		`,
+		),
+	]);
+
+	return {
+		requests_new: requestsNew,
+		requests_reviewing: requestsReviewing,
+		quotes_pending_approval: quotesPending,
+		quotes_approved: quotesApproved,
+		jobs_unscheduled: jobsUnscheduled,
+		recurring_active: plansActive,
+		recurring_paused: plansPaused,
+		visits_today: visitsToday,
+		visits_unassigned_today: visitsUnassigned,
+		visits_late_now: visitsLate,
+		visits_in_progress: visitsInProgress,
+		visits_completed_today: visitsCompletedToday,
+		techs:
+			techRows?.map((r) => ({
+				tech_id: r.tech_id,
+				on_job: r.on_job,
+				next_visit_at: r.next_at ? new Date(r.next_at).toISOString() : null,
+			})) ?? null,
+		as_of: now.toISOString(),
+	};
+};

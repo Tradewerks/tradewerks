@@ -925,3 +925,20 @@ export interface PageSnapshotResponse {
 	page: string;
 	stats: PageSummaryResponse["stats"];
 }
+
+export interface DashboardTodayResponse {
+	requests_new: number | null;
+	requests_reviewing: number | null;
+	quotes_pending_approval: number | null;
+	quotes_approved: number | null;
+	jobs_unscheduled: number | null;
+	recurring_active: number | null;
+	recurring_paused: number | null;
+	visits_today: number | null;
+	visits_unassigned_today: number | null;
+	visits_late_now: number | null;
+	visits_in_progress: number | null;
+	visits_completed_today: number | null;
+	techs: { tech_id: string; on_job: boolean; next_visit_at: string | null }[] | null;
+	as_of: string;
+}

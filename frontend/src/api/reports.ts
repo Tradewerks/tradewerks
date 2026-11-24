@@ -15,6 +15,7 @@ import type {
 	JobBacklogResponse,
 	TechScorecardVisitRow,
 	PageSnapshotResponse,
+	DashboardTodayResponse,
 	PageSummaryResponse,
 	Paginated,
 	ReportFetchParams,
@@ -450,4 +451,10 @@ export const exportReportServer = async ({
 		{ responseType: "blob" },
 	);
 	triggerDownload(response.data as Blob, filename);
+};
+
+export const getDashboardToday = async (): Promise<DashboardTodayResponse> => {
+	const response = await api.get<ApiResponse<DashboardTodayResponse>>("/reports/dashboard-today");
+	if (!response.data.data) throw new Error("Failed to fetch dashboard counts");
+	return response.data.data;
 };

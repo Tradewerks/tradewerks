@@ -21,13 +21,10 @@ import Card from "../../components/ui/Card";
 import WeekStrip from "../../components/ui/schedule/WeekStrip";
 import { useAuthStore } from "../../auth/authStore";
 import { FALLBACK_TIMEZONE } from "../../util/util";
-import { useAllJobsQuery, useBoardQuery } from "../../hooks/useJobs";
+import { useBoardQuery } from "../../hooks/useJobs";
+import { useDashboardTodayQuery } from "../../hooks/useReports";
 import { boardToOccurrences } from "../../components/ui/schedule/dashboardCalendarUtils";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
-import { useAllRequestsQuery } from "../../hooks/useRequests";
-import { useAllQuotesQuery } from "../../hooks/useQuotes";
-import { useAllRecurringPlansQuery } from "../../hooks/useRecurringPlans";
-import type { JobVisit } from "../../types/jobs";
 import type { TechnicianStatus } from "../../types/technicians";
 import CreateRecurringPlan from "../../components/recurringPlans/CreateRecurringPlan";
 import LowStockWidget from "../../components/widgets/LowStockWidget";
@@ -111,10 +108,9 @@ export default function DashboardPage() {
 
 	const updateDispatcher = useUpdateDispatcherMutation();
 
-	const { data: jobs = [] } = useAllJobsQuery();
-	const { data: requests = [] } = useAllRequestsQuery();
-	const { data: quotes = [] } = useAllQuotesQuery();
-	const { data: recurringPlans = [] } = useAllRecurringPlansQuery();
+	// Every tile count is a SQL count on the server; no org-sized list loads here.
+	const { data: today, error: todayError } = useDashboardTodayQuery();
+	// null means the caller may not read that count (or it has not loaded): shown as a dash, never as 0.
 
 	// The schedule widget reads only the span its strip is showing.
 	const [stripRange, setStripRange] = useState<{ from: Date; to: Date } | null>(null);
@@ -160,69 +156,40 @@ export default function DashboardPage() {
 		online: allTechnicians.filter((t) => t.status !== "Offline").length,
 	}), [allTechnicians]);
 
-	const pipelineCounts = useMemo(
-		() => ({
-			newRequests: requests.filter((r) => r.status === "New").length,
-			reviewing: requests.filter((r) => r.status === "Reviewing").length,
-			pendingApproval: quotes.filter(
-				(q) => q.status === "Sent" || q.status === "Viewed"
-			).length,
-			approved: quotes.filter((q) => q.status === "Approved").length,
-			unscheduled: jobs.filter((j) => j.status === "Unscheduled").length,
-			inProgress: jobs
-				.flatMap((j) => j.visits || [])
-				.filter((v) => v.status === "InProgress").length,
-			completedToday: jobs
-				.flatMap((j) => j.visits || [])
-				.filter(
-					(v) =>
-						v.status === "Completed" &&
-						new Date(v.actual_end_at || "").toLocaleDateString("en-CA", { timeZone: tz }) ===
-							new Date().toLocaleDateString("en-CA", { timeZone: tz })
-				).length,
-		}),
-		[requests, quotes, jobs, tz]
-	);
+	const pipelineCounts = {
+		newRequests: today?.requests_new ?? null,
+		reviewing: today?.requests_reviewing ?? null,
+		pendingApproval: today?.quotes_pending_approval ?? null,
+		approved: today?.quotes_approved ?? null,
+		unscheduled: today?.jobs_unscheduled ?? null,
+		inProgress: today?.visits_in_progress ?? null,
+		completedToday: today?.visits_completed_today ?? null,
+		unassignedToday: today?.visits_unassigned_today ?? null,
+		lateNow: today?.visits_late_now ?? null,
+	};
+	const show = (n: number | null) => (n === null ? "—" : n);
 
 	const activeTechnicians = useMemo(() => {
+		const byTech = new Map((today?.techs ?? []).map((t) => [t.tech_id, t]));
 		return allTechnicians
 			.filter((t) => t.status !== "Offline")
 			.map((tech) => {
-				const allVisits = jobs.flatMap((j) => j.visits || []);
-				const activeVisits = allVisits.filter(
-					(v) =>
-						["InProgress", "Driving", "OnSite", "Paused"].includes(v.status) &&
-						v.visit_techs?.some((vt) => vt.tech_id === tech.id)
-				) as JobVisit[];
-
-				const upcomingVisits = allVisits
-					.filter(
-						(v) =>
-							v.status === "Scheduled" &&
-							v.visit_techs?.some((vt) => vt.tech_id === tech.id) &&
-							new Date(v.scheduled_start_at) > new Date()
-					)
-					.sort(
-						(a, b) =>
-							new Date(a.scheduled_start_at).getTime() -
-							new Date(b.scheduled_start_at).getTime()
-					) as JobVisit[];
-
+				const row = byTech.get(tech.id);
 				return {
 					...tech,
-					currentVisit: activeVisits[0] || null,
-					nextVisit: upcomingVisits[0] || null,
+					onJob: !!row?.on_job,
+					nextVisitAt: row?.next_visit_at ?? null,
 				};
 			})
 			// Techs on a live visit first. Takes both operands — the previous
 			// comparator ignored `b`, which is not a valid comparator and left
 			// the order up to the engine's sort implementation.
-			.sort((a, b) => Number(!!b.currentVisit) - Number(!!a.currentVisit));
-	}, [allTechnicians, jobs]);
+			.sort((a, b) => Number(b.onJob) - Number(a.onJob));
+	}, [allTechnicians, today]);
 
 
-	const formatNextVisit = (visit: JobVisit): string => {
-		const d = new Date(visit.scheduled_start_at);
+	const formatNextVisit = (startAt: string): string => {
+		const d = new Date(startAt);
 		const isToday =
 			d.toLocaleDateString("en-CA", { timeZone: tz }) ===
 			new Date().toLocaleDateString("en-CA", { timeZone: tz });
@@ -256,7 +223,7 @@ export default function DashboardPage() {
 			count: pipelineCounts.pendingApproval,
 			topBorder: "border-reviewing",
 			text: "text-reviewing-text",
-			path: "/dispatch/quotes?status=Sent",
+			path: "/dispatch/quotes?status=Sent,Viewed",
 		},
 		{
 			label: "Approved Quotes",
@@ -272,10 +239,24 @@ export default function DashboardPage() {
 			text: "text-orange-text",
 			path: "/dispatch/jobs?status=Unscheduled",
 		},
-	], [pipelineCounts]);
+		{
+			label: "Unassigned today",
+			count: pipelineCounts.unassignedToday,
+			topBorder: "border-error",
+			text: "text-error-text",
+			path: "/dispatch/schedule?date=today&unassigned=1",
+		},
+		{
+			label: "Late now",
+			count: pipelineCounts.lateNow,
+			topBorder: "border-warning",
+			text: "text-warning-text",
+			path: "/dispatch/schedule?date=today&late=1",
+		},
+	], [pipelineCounts.newRequests, pipelineCounts.reviewing, pipelineCounts.pendingApproval, pipelineCounts.approved, pipelineCounts.unscheduled, pipelineCounts.unassignedToday, pipelineCounts.lateNow]);
 
-	const activePlansCount = recurringPlans.filter((p) => p.status === "Active").length;
-	const pausedPlansCount = recurringPlans.filter((p) => p.status === "Paused").length;
+	const activePlansCount = today?.recurring_active ?? null;
+	const pausedPlansCount = today?.recurring_paused ?? null;
 
 	const { containerRef, width: rawContainerWidth } = useContainerWidth();
 	
@@ -349,16 +330,19 @@ export default function DashboardPage() {
 					)}
 				</Card>;
 			case "pipeline": return <Card title="Operations Pipeline" className="h-full">
-							{/* 2-col stat grid for first 4 items */}
+							{todayError && (
+								<p className="mb-3 text-xs text-error-text">Failed to load counts</p>
+							)}
+							{/* 2-col stat grid: the four pipeline stages, then today's schedule alerts */}
 							<div className="grid grid-cols-2 gap-x-5 gap-y-4">
-								{pipelineItems.slice(0, 4).map((item) => (
+								{pipelineItems.slice(0, 4).concat(pipelineItems.slice(5)).map((item) => (
 									<div
 										key={item.label}
 										onClick={() => navigate(item.path)}
 										className={`cursor-pointer group border-t-2 ${item.topBorder} pt-2.5`}
 									>
 										<div className={`text-2xl font-bold tabular-nums ${item.text} group-hover:opacity-75 transition-opacity`}>
-											{item.count}
+											{show(item.count)}
 										</div>
 										<div className="text-[10px] uppercase tracking-wider text-text-muted mt-1 leading-tight">
 											{item.label}
@@ -373,7 +357,7 @@ export default function DashboardPage() {
 								className={`cursor-pointer group border-t-2 ${pipelineItems[4].topBorder} pt-2.5 mt-4 flex items-baseline gap-3`}
 							>
 								<div className={`text-2xl font-bold tabular-nums ${pipelineItems[4].text} group-hover:opacity-75 transition-opacity`}>
-									{pipelineItems[4].count}
+									{show(pipelineItems[4].count)}
 								</div>
 								<div className="text-[10px] uppercase tracking-wider text-text-muted">
 									{pipelineItems[4].label}
@@ -394,11 +378,11 @@ export default function DashboardPage() {
 									</span>
 									<div className="flex items-center gap-2">
 										<span className="text-xs text-text-muted">
-											<span className="font-semibold text-text-secondary">{activePlansCount}</span> active
+											<span className="font-semibold text-text-secondary">{show(activePlansCount)}</span> active
 										</span>
 										<span className="w-px h-3 bg-border" />
 										<span className="text-xs text-text-muted">
-											<span className="font-semibold text-text-secondary">{pausedPlansCount}</span> paused
+											<span className="font-semibold text-text-secondary">{show(pausedPlansCount)}</span> paused
 										</span>
 										<ChevronRight size={12} className="text-text-faint group-hover:text-text-tertiary transition-colors" />
 									</div>
@@ -467,7 +451,7 @@ export default function DashboardPage() {
 											    being slightly rectangular even once the border was visible. */}
 											<div className={`relative w-9 h-9 rounded-lg bg-avatar-bg flex items-center justify-center pt-[3px] text-avatar-fg font-semibold text-sm border-b-[3px] ${getStatusBorderClass(tech.status)}`}>
 												{tech.name.charAt(0).toUpperCase()}
-												{tech.currentVisit && (
+												{tech.onJob && (
 													<span className="absolute -top-1 -right-1 w-2 h-2 bg-warning rounded-full border border-base" />
 												)}
 											</div>
@@ -476,10 +460,10 @@ export default function DashboardPage() {
 													{tech.name.split(" ")[0]}
 												</div>
 												<div className="text-[9px] leading-tight truncate">
-													{tech.currentVisit ? (
+													{tech.onJob ? (
 														<span className="text-warning-text">On Job</span>
-													) : tech.nextVisit ? (
-														<span className="text-text-muted">{formatNextVisit(tech.nextVisit)}</span>
+													) : tech.nextVisitAt ? (
+														<span className="text-text-muted">{formatNextVisit(tech.nextVisitAt)}</span>
 													) : (
 														<span className="invisible">·</span>
 													)}
@@ -541,17 +525,17 @@ export default function DashboardPage() {
 							</span>
 							<span className="w-px h-3 bg-border" />
 							<span className="text-xs text-text-muted">
-								<span className="text-warning-text font-medium">{pipelineCounts.inProgress}</span>
+								<span className="text-warning-text font-medium">{show(pipelineCounts.inProgress)}</span>
 								{" "}in progress
 							</span>
 							<span className="w-px h-3 bg-border" />
 							<span className="text-xs text-text-muted">
-								<span className="text-orange-text font-medium">{pipelineCounts.unscheduled}</span>
+								<span className="text-orange-text font-medium">{show(pipelineCounts.unscheduled)}</span>
 								{" "}unscheduled
 							</span>
 							<span className="w-px h-3 bg-border" />
 							<span className="text-xs text-text-muted">
-								<span className="text-success-text font-medium">{pipelineCounts.completedToday}</span>
+								<span className="text-success-text font-medium">{show(pipelineCounts.completedToday)}</span>
 								{" "}done today
 							</span>
 						</div>

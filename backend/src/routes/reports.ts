@@ -26,16 +26,21 @@ import { getAgedReceivables,
     getUnscheduledRevenue,
 	getPageSummary,
 	getPageSnapshot,
+	getDashboardToday,
 	PAGES,
 	BREAKDOWNS,
 } from '../controllers/reportsController.js';
-import { requirePermission } from '../lib/requirePermissions.js';
+import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
+import { assignedOnly } from '../lib/assignedScope.js';
+import { getEntitlements } from "../services/entitlementService.js";
+import { isAccessAllowed } from "../lib/entitlements/resolve.js";
 import { rowsToXlsxBuffer } from '../lib/excel/reportExcel.js';
 import { exportReportSchema, exportServerSchema } from '../lib/validate/reportExport.js';
 import { parsePaginateQuery } from "../lib/validate/reportQuery.js";
 import { filterRows, slicePage, type ReportRow } from "../lib/reports/filterEngine.js";
 import { getReportDefinition, type ReportQuery } from "../lib/reports/reportRegistry.js";
 import * as savedReports from "../controllers/savedReportsController.js";
+import { db } from "../db.js";
 import { getUserContext } from "../lib/context.js";
 
 const router = Router();
@@ -119,6 +124,47 @@ const sendControllerError = (
 			: { status: 400, code: defaultCode };
 	return res.status(status).json(createErrorResponse(code, err));
 };
+
+// Open to any dispatcher who can read at least one tile group; each group is then
+// gated on its own list permission (and module) so a missing right yields null,
+// never a zero. Same any-of idiom as requireAnyPermission elsewhere.
+const modulePermits = async (orgId: string, key: string) =>
+	isAccessAllowed((await getEntitlements(orgId)).modules[key] ?? "not_in_plan", "read");
+
+router.get(
+	"/dashboard-today",
+	requireAnyPermission(
+		"view_reports",
+		"view_jobs",
+		"view_requests",
+		"view_quotes",
+		"view_recurring_plans",
+		"view_visits",
+	),
+	async (req, res, next) => {
+		try {
+			const orgId = req.user!.organization_id as string;
+			const can = (p: string) => hasPermission(req, p);
+			const [org, quotesOn, recurringOn] = await Promise.all([
+				db.organization.findFirst({ where: { id: orgId }, select: { timezone: true } }),
+				modulePermits(orgId, "quotes"),
+				modulePermits(orgId, "recurring_plans"),
+			]);
+			const result = await getDashboardToday(orgId, org?.timezone ?? "UTC", new Date(), {
+				requests: can("view_requests"),
+				quotes: can("view_quotes") && quotesOn,
+				jobs: can("view_jobs"),
+				recurring: can("view_recurring_plans") && recurringOn,
+				// Org-wide visit counts and every tech's status: not for a caller
+				// who may only see their own visits.
+				visits: !assignedOnly(req) && (can("view_jobs") || can("view_visits")),
+			});
+			res.json(createSuccessResponse(result));
+		} catch (err) {
+			next(err);
+		}
+	},
+);
 
 router.get("/overview", requirePermission("view_reports"), async (req, res, next) => {
 	try {

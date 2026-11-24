@@ -18,6 +18,7 @@ import type {
 	ReportFetchParams,
 	PageSnapshotResponse,
 	PageSummaryResponse,
+	DashboardTodayResponse,
 } from "../types/reports";
 import * as reportsApi from "../api/reports";
 
@@ -264,4 +265,11 @@ export const usePageSnapshotQuery = (
 		queryFn: () => reportsApi.getPageSnapshot(page),
 		enabled,
 		staleTime: 60_000,
+	});
+
+export const useDashboardTodayQuery = (): UseQueryResult<DashboardTodayResponse, Error> =>
+	useQuery({
+		queryKey: ["reports", "dashboard-today"],
+		queryFn: reportsApi.getDashboardToday,
+		refetchInterval: 60_000,
 	});
