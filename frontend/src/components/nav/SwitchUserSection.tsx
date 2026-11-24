@@ -20,7 +20,7 @@ export default function SwitchUserSection() {
 	const [switching, setSwitching] = useState(false);
 	const navigate = useNavigate();
 	const otherAccounts = accounts.filter((a) => a.userId !== user?.userId);
-	const { t, i18n } = useTranslation();
+	const { t } = useTranslation();
 
 	const switchTo = (account: RememberedAccount) => {
 		setSwitching(true);

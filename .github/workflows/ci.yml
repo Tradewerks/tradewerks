@@ -16,6 +16,9 @@ jobs:
     # prisma.config.ts resolves DATABASE_URL at load, so even `prisma generate` needs one
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shadow
+      # tsc peaks ~3.1GB on src (10.5M instantiations); Node 20's default heap
+      # on the runner is ~2GB, so typecheck died with "heap out of memory".
+      NODE_OPTIONS: --max-old-space-size=6144
     defaults:
       run:
         working-directory: backend
