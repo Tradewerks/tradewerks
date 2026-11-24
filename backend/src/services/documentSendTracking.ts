@@ -8,7 +8,7 @@ import { log } from "./appLogger.js";
  */
 export async function recordDocumentSend(input: {
 	orgId: string;
-	event: "quote_sent" | "invoice_sent";
+	event: "quote_sent" | "invoice_sent" | "invoice_resent";
 	entityId: string;
 	clientId: string | null | undefined;
 	recipient: string;

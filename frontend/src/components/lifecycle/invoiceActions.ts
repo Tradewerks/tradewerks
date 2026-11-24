@@ -61,15 +61,28 @@ function voidReason(ctx: InvoiceActionContext): ActionGate {
 	return ctx.voidRefusal;
 }
 
+// Mirrors RESENDABLE_INVOICE_STATUSES in backend/src/lib/statusTransitions.ts.
+const RESENDABLE_INVOICE_STATUSES = [
+	"Sent",
+	"Viewed",
+	"PartiallyPaid",
+	"Paid",
+	"Disputed",
+] as const;
+
 export function invoiceActions(ctx: InvoiceActionContext): LifecycleAction[] {
 	const dead = ctx.status === "Void";
+	const resendable = (RESENDABLE_INVOICE_STATUSES as readonly string[]).includes(
+		ctx.status
+	);
 
 	return [
 		// Two delivery doors, not two steps: the system emails the invoice, or
 		// the business issues it and delivers the PDF itself. Both open from Draft.
+		// Once delivered, the same door becomes Resend: another copy, no status change.
 		build(
 			"send",
-			"Email to Client",
+			resendable ? "Resend" : "Email to Client",
 			"primary",
 			// canSend, not canEdit: the server gates this route on send_invoices,
 			// which a billing clerk can hold without the rights to restate the
@@ -78,9 +91,7 @@ export function invoiceActions(ctx: InvoiceActionContext): LifecycleAction[] {
 				? NO_PERMISSION
 				: dead
 					? notApplicable("A void invoice can't be sent.")
-					: !["Draft", "Issued"].includes(ctx.status)
-						? notApplicable("This invoice has already been sent.")
-						: null,
+					: null,
 			ctx.handlers.send
 		),
 		{
@@ -109,10 +120,10 @@ export function invoiceActions(ctx: InvoiceActionContext): LifecycleAction[] {
 					? notApplicable("A void invoice can't take a payment.")
 					: ctx.status === "Paid"
 						? notApplicable("This invoice is paid in full.")
-						: !["Sent", "Viewed", "PartiallyPaid", "Disputed"].includes(
+						: !["Issued", "Sent", "Viewed", "PartiallyPaid", "Disputed"].includes(
 									ctx.status
 							  )
-							? "Send the invoice before recording a payment."
+							? "Create or send the invoice before recording a payment."
 							: null,
 			ctx.handlers.recordPayment
 		),

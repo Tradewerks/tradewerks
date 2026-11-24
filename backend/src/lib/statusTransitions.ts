@@ -153,9 +153,35 @@ export function isInvoiceFinalizingTransition(
 	return from === "Draft" && (to === "Issued" || to === "Sent");
 }
 
+/**
+ * Statuses where POST /invoices/:id/send emails another copy and writes nothing:
+ * the invoice was already delivered, so there is no finalize, no QB push and no
+ * second dunning enrollment. Draft/Issued take the first-send path; Void refuses.
+ */
+export const RESENDABLE_INVOICE_STATUSES = [
+	"Sent",
+	"Viewed",
+	"PartiallyPaid",
+	"Paid",
+	"Disputed",
+] as const;
+
 /** Same rule for quotes: leaving Draft through either door locks the quote's tax basis. */
 export function isQuoteFinalizingTransition(from: string, to: string | undefined): boolean {
 	return from === "Draft" && (to === "Issued" || to === "Sent");
+}
+
+/**
+ * The delivery state an invoice's timestamps record. A paid invoice that
+ * loses every payment returns here rather than to a literal "Sent", so a
+ * hand-delivered invoice never claims the system emailed it.
+ */
+export function invoiceDeliveryStatus(invoice: {
+	sent_at: Date | null;
+	viewed_at: Date | null;
+}): "Issued" | "Sent" | "Viewed" {
+	if (!invoice.sent_at) return "Issued";
+	return invoice.viewed_at ? "Viewed" : "Sent";
 }
 
 export function assertValidInvoiceTransition(from: string, to: string): void {

@@ -3,6 +3,7 @@ import { getScopedDb } from "../../lib/context.js";
 import { isModuleOn } from "../entitlementService.js";
 import { getOrgRealmId, isQBConnected } from "../quickbooksService.js";
 import { log } from "../appLogger.js";
+import { lockInvoiceRow } from "../invoiceService.js";
 import { readTaxSnapshot } from "../tax/snapshot.js";
 import { getQBTaxPrefs } from "./qbTax.js";
 import { invoiceForQBInclude, pushInvoice } from "./qbInvoices.js";
@@ -62,8 +63,7 @@ async function markUnavailable(invoiceId: string, orgId: string, err: unknown): 
 		await sdb.$transaction(async (tx) => {
 			// An adoption committing as the deadline fires would otherwise be overwritten with the
 			// snapshot read here before it, leaving QuickBooks' totals beside our estimate's snapshot.
-			await (tx as unknown as Prisma.TransactionClient)
-				.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND organization_id = ${orgId} FOR UPDATE`;
+			await lockInvoiceRow(tx as unknown as Prisma.TransactionClient, invoiceId, orgId);
 			const inv = await tx.invoice.findFirst({
 				where: { id: invoiceId, organization_id: orgId },
 				select: { tax_snapshot: true, tax_needs_review: true },
@@ -178,7 +178,7 @@ async function confirmWithQuickBooks(
 			const txc = tx as unknown as Prisma.TransactionClient;
 			// Without the lock, an edit committing between the fingerprint read and the write
 			// would be overwritten with the old estimate's totals. Raw SQL bypasses getScopedDb.
-			await txc.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND organization_id = ${orgId} FOR UPDATE`;
+			await lockInvoiceRow(txc, invoiceId, orgId);
 			// Re-checked under the lock: the deadline may have passed while waiting for it.
 			if (abandon.cancelled) return "skipped" as const;
 			const inv = await tx.invoice.findFirst({

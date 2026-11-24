@@ -81,9 +81,11 @@ const mockUpdateInvoice = vi.mocked(updateInvoice);
 const mockSendInvoiceEmail = vi.mocked(sendInvoiceEmail);
 const mockQbTaxFinalizeRefusal = vi.mocked(qbTaxFinalizeRefusal);
 import { logActivity } from "../../services/logger.js";
+import { onInvoiceSent } from "../../services/followupTriggers.js";
 import { getScopedDb } from "../../lib/context.js";
 const mockGetScopedDb = vi.mocked(getScopedDb);
 const mockLogActivity = vi.mocked(logActivity);
+const mockOnInvoiceSent = vi.mocked(onInvoiceSent);
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -163,9 +165,7 @@ describe("POST /invoices/:id/send transition guard", () => {
 		expect(res.body.error.message).toMatch(/^The invoice was created, but the email was not sent/);
 	});
 
-	// Wider than Draft: a dispatcher re-sending a copy of an invoice that has
-	// taken money is an ordinary action, and it failed the same way.
-	it.each(["PartiallyPaid", "Paid", "Void"])(
+	it.each(["Void"])(
 		"does not email the client from %s",
 		async (status) => {
 			mockGetInvoiceById.mockResolvedValue({
@@ -200,7 +200,6 @@ describe("POST /invoices/:id/send transition guard", () => {
 		expect(res.body.success).toBe(true);
 	});
 
-	// Re-sending is a self-transition, which the table treats as a no-op.
 	it("allows a re-send of an already Sent invoice", async () => {
 		mockGetInvoiceById.mockResolvedValue({
 			id: "i1",
@@ -223,6 +222,80 @@ describe("POST /invoices/:id/send transition guard", () => {
 
 		expect(mockSendInvoiceEmail).not.toHaveBeenCalled();
 		expect(res.status).toBe(404);
+	});
+});
+
+describe("POST /invoices/:id/send re-send of a delivered invoice", () => {
+	it("re-sends a PartiallyPaid invoice: emails, records the send, writes no status", async () => {
+		const invoice = { id: "i1", status: "PartiallyPaid" };
+		mockGetInvoiceById.mockResolvedValue(invoice as never);
+
+		const res = await send();
+
+		expect(mockSendInvoiceEmail).toHaveBeenCalledWith(
+			"i1",
+			"client@example.com",
+			"org-1",
+		);
+		expect(mockUpdateInvoice).not.toHaveBeenCalled();
+		expect(mockOnInvoiceSent).not.toHaveBeenCalled();
+		expect(res.status).toBe(200);
+		expect(res.body.data).toEqual(invoice);
+	});
+
+	it("re-send of a Viewed invoice does not run the QB tax finalize check", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Viewed" } as never);
+
+		await send();
+
+		expect(mockQbTaxFinalizeRefusal).not.toHaveBeenCalled();
+		expect(mockSendInvoiceEmail).toHaveBeenCalled();
+		expect(mockUpdateInvoice).not.toHaveBeenCalled();
+	});
+
+	it.each(["Sent", "Paid", "Disputed"])("re-sends a %s invoice without a status write", async (status) => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status } as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(mockSendInvoiceEmail).toHaveBeenCalled();
+		expect(mockUpdateInvoice).not.toHaveBeenCalled();
+		expect(mockOnInvoiceSent).not.toHaveBeenCalled();
+	});
+
+	it("refuses to send a Void invoice with 422", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Void" } as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(422);
+		expect(mockSendInvoiceEmail).not.toHaveBeenCalled();
+	});
+
+	it("first send of an Issued invoice still moves it to Sent", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Issued" } as never);
+		mockUpdateInvoice.mockResolvedValue({ err: "", item: { id: "i1" } } as never);
+
+		await send();
+
+		expect(mockUpdateInvoice).toHaveBeenCalledTimes(1);
+		expect(mockUpdateInvoice.mock.calls[0][0].body).toEqual({ status: "Sent" });
+		expect(mockOnInvoiceSent).toHaveBeenCalledWith("i1", "org-1");
+	});
+
+	it('a failed re-send says "Email could not be sent." without the finalize prefix and logs invoice.send_failed', async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Paid" } as never);
+		mockSendInvoiceEmail.mockRejectedValueOnce(new Error("boom"));
+
+		const res = await send();
+
+		expect(res.status).toBe(502);
+		expect(res.body.error.message).toBe("Email could not be sent.");
+		expect(mockLogActivity).toHaveBeenCalledWith(
+			expect.objectContaining({ event_type: "invoice.send_failed" }),
+		);
+		expect(mockUpdateInvoice).not.toHaveBeenCalled();
 	});
 });
 
@@ -431,7 +504,8 @@ describe("POST /invoices/:id/send QuickBooks AST gate", () => {
 		expect(mockUpdateInvoice.mock.calls[0][3]).toEqual({ qbTaxConfirmed: true });
 	});
 
-	it.each(["Sent", "Issued"])("does not confirm when re-sending a %s invoice", async (status) => {
+	it("does not confirm when sending an Issued invoice", async () => {
+		const status = "Issued";
 		mockGetInvoiceById.mockResolvedValue({ id: "i1", status } as never);
 
 		const res = await send();

@@ -5,6 +5,7 @@ import {
 	validateDiscountRange,
 } from "./shared.js";
 import { qb_sync_status } from "../../../generated/prisma/enums.js";
+import { moneyAmount } from "../money.js";
 
 // ============================================================================
 // ENUMS
@@ -169,7 +170,7 @@ export const updateInvoiceSchema = z
 
 export const createInvoicePaymentSchema = z
 	.object({
-		amount: z.number().positive("Payment amount must be positive"),
+		amount: moneyAmount("Payment amount must be positive"),
 		paid_at: z.coerce.date().optional(),
 		method: z
 			.enum(["cash", "check", "card", "bank_transfer", "other"])
@@ -287,7 +288,7 @@ export type AdjustmentLineInput = z.infer<typeof adjustmentLineSchema>;
  * because both write the same invoice_payment.method column.
  */
 export const createRefundSchema = z.object({
-	amount: z.number().positive("Refund amount must be greater than zero"),
+	amount: moneyAmount("Refund amount must be greater than zero"),
 	reason: z.string().trim().min(1, "A reason is required").max(2000),
 	method: z
 		.enum(["cash", "check", "card", "bank_transfer", "other"])

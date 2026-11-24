@@ -17,14 +17,20 @@ vi.mock("../../services/quickbooksService.js", () => ({
 vi.mock("../../services/qb/qbInvoices.js", () => ({ pushInvoiceDetached: vi.fn(), voidQBInvoice: vi.fn() }));
 vi.mock("../../services/qb/qbPayments.js", () => ({ pushPaymentToQB: vi.fn(), deleteQBPayment: vi.fn() }));
 vi.mock("../../services/qb/qbSyncLog.js", () => ({ logExternalSync: vi.fn() }));
-vi.mock("../../services/invoiceService.js", () => ({
-	createInvoiceRecord: vi.fn(),
-	syncBilledAmounts: vi.fn(),
-	syncInvoicePaymentTotals: vi.fn(async () => undefined),
-	recomputeInvoiceTotals: vi.fn(),
-	lockInvoiceTaxSnapshot: vi.fn(),
-	invoiceInclude: {},
-}));
+vi.mock("../../services/invoiceService.js", async (importActual) => {
+	const actual = await importActual<typeof import("../../services/invoiceService.js")>();
+	return {
+		lockInvoiceRow: actual.lockInvoiceRow,
+		// The $50 payment the delete test removes is the only row.
+		invoicePaidTotalCents: vi.fn().mockResolvedValue(5000),
+		createInvoiceRecord: vi.fn(),
+		syncBilledAmounts: vi.fn(),
+		syncInvoicePaymentTotals: vi.fn(async () => undefined),
+		recomputeInvoiceTotals: vi.fn(),
+		lockInvoiceTaxSnapshot: vi.fn(),
+		invoiceInclude: {},
+	};
+});
 vi.mock("../../lib/recomputeDocumentTotals.js", () => ({
 	recomputeDocumentTotals: vi.fn(async () => undefined),
 	lockDocumentTaxSnapshot: vi.fn(),

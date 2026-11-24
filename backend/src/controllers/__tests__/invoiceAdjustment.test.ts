@@ -63,11 +63,16 @@ vi.mock("../../lib/context.js", () => ({
 // The real recompute needs tax groups, the client row and the persisted lines;
 // it is covered by the tax engine's own suite. What matters here is that the
 // adjustment is taxed at all rather than shipping a hardcoded zero.
-vi.mock("../../services/invoiceService.js", () => ({
-	syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
-	syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
-	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../services/invoiceService.js", async (importActual) => {
+	const actual = await importActual<typeof import("../../services/invoiceService.js")>();
+	return {
+		// The real lock, so assertions on the org-scoped $queryRaw still hold.
+		lockInvoiceRow: actual.lockInvoiceRow,
+		syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
+		syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
+		lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue(undefined),
+	};
+});
 
 vi.mock("../../services/logger.js", () => ({
 	logActivity: vi.fn().mockResolvedValue(undefined),

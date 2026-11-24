@@ -14,6 +14,8 @@ interface SendDocumentModalProps {
 	/** Pre-filled recipient email from the client's primary contact. */
 	contactEmail?: string | null;
 	contactName?: string | null;
+	/** Extra line under the document summary, e.g. what a re-send will not change. */
+	notice?: string;
 }
 
 export default function SendDocumentModal({
@@ -25,6 +27,7 @@ export default function SendDocumentModal({
 	clientName,
 	contactEmail,
 	contactName,
+	notice,
 }: SendDocumentModalProps) {
 	const [email, setEmail] = useState(contactEmail ?? "");
 	const [isSending, setIsSending] = useState(false);
@@ -92,6 +95,8 @@ export default function SendDocumentModal({
 						</p>
 					</div>
 				</div>
+
+				{notice && <p className="text-sm text-text-secondary">{notice}</p>}
 
 				{/* Recipient */}
 				<div>

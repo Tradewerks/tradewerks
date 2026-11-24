@@ -26,6 +26,7 @@ import {
     assertValidInvoiceTransition,
     InvalidTransitionError,
     isInvoiceFinalizingTransition,
+    RESENDABLE_INVOICE_STATUSES,
 } from '../lib/statusTransitions.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 import {
@@ -112,7 +113,7 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
 
         // Guard BEFORE the email, exactly as POST /quotes/:id/send does. The
         // status update below would reject an illegal move — INVOICE_TRANSITIONS
-        // has no edge to Sent from Viewed, PartiallyPaid, Paid or Void — but by
+        // has no edge to Sent from Void — but by
         // then the client already has it in their inbox and the invoice is left
         // sitting in its old status.
         const existing = await invoicesController.getInvoiceById(id, orgId);
@@ -121,20 +122,25 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
                 .status(404)
                 .json(createErrorResponse(ErrorCodes.NOT_FOUND, "Invoice not found"));
         }
-        try {
-            assertValidInvoiceTransition(existing.status, "Sent");
-        } catch (e) {
-            if (e instanceof InvalidTransitionError) {
-                return res
-                    .status(422)
-                    .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, e.message));
+        const context = getUserContext(req);
+        const resend = (RESENDABLE_INVOICE_STATUSES as readonly string[]).includes(
+            existing.status,
+        );
+        if (!resend) {
+            try {
+                assertValidInvoiceTransition(existing.status, "Sent");
+            } catch (e) {
+                if (e instanceof InvalidTransitionError) {
+                    return res
+                        .status(422)
+                        .json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, e.message));
+                }
+                throw e;
             }
-            throw e;
         }
 
         // A re-send of an already finalized invoice is not a finalize and must not re-push.
         const finalizing = isInvoiceFinalizingTransition(existing.status, "Sent");
-        const context = getUserContext(req);
         if (finalizing) {
             const refusal = await invoicesController.qbTaxFinalizeRefusal(id, orgId);
             if (refusal) return res.status(409).json(taxRefusalResponse(refusal));
@@ -160,7 +166,7 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
             const sent = await sendInvoiceEmail(id, recipientEmail, orgId);
             await recordDocumentSend({
                 orgId,
-                event: 'invoice_sent',
+                event: resend ? 'invoice_resent' : 'invoice_sent',
                 entityId: id,
                 clientId: existing.client_id,
                 recipient: recipientEmail,
@@ -206,6 +212,8 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
                     ),
                 );
         }
+        // Already delivered: the copy is out and recorded; the status stays.
+        if (resend) return res.json(createSuccessResponse(existing));
         const result = await invoicesController.updateInvoice(
             { params: { id }, body: { status: "Sent" } } as any,
             orgId,

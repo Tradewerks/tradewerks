@@ -8,6 +8,7 @@ import { copyDocumentNotes, pick, REVISION_LINE_FIELDS } from "./documentNotes.j
 import { reviseQuote } from "./quoteRevision.js";
 import {
 	invoicePaidTotal,
+	lockInvoiceRow,
 	syncBilledAmounts,
 	syncInvoicePaymentTotals,
 } from "./invoiceService.js";
@@ -16,6 +17,7 @@ import {
 	assertValidInvoiceTransition,
 	assertValidQuoteTransition,
 	DocumentRuleError,
+	invoiceDeliveryStatus,
 } from "../lib/statusTransitions.js";
 import {
 	invoiceAdapter,
@@ -611,7 +613,7 @@ export async function resolveDispute(
 		// against stale rows. organization_id is in the predicate because raw
 		// SQL bypasses getScopedDb.
 		if (kind === "invoice") {
-			await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${documentId} AND organization_id = ${organizationId} FOR UPDATE`;
+			await lockInvoiceRow(tx, documentId, organizationId);
 		}
 		const doc = await adapter.load(tx, documentId, organizationId);
 		if (!doc) return { err: `${kind} not found` };
@@ -943,8 +945,11 @@ async function reviseInvoice(
  * Issued all restore directly — nothing re-locks, because finalization is keyed
  * on leaving Draft (isInvoiceFinalizingTransition) and issued_at is write-once,
  * so neither an email date nor a hand-delivery date gets overwritten.
- * PartiallyPaid and Paid restore through Sent and are then recomputed from the
- * payment rows by syncInvoicePaymentTotals.
+ * PartiallyPaid and Paid restore through the delivery state the timestamps
+ * record and are then recomputed from the payment rows by
+ * syncInvoicePaymentTotals. Not a literal "Sent": if every payment was removed
+ * during the dispute the sync has nothing to promote, so the restore write is
+ * the final status and a never-sent invoice would otherwise claim it was sent.
  */
 async function restoreInvoiceStatus(
 	tx: Prisma.TransactionClient,
@@ -952,10 +957,17 @@ async function restoreInvoiceStatus(
 	fromStatus: string,
 	statusAtOpen: string,
 ) {
-	const target =
-		statusAtOpen === "PartiallyPaid" || statusAtOpen === "Paid"
-			? "Sent"
-			: statusAtOpen;
+	let target = statusAtOpen;
+	if (statusAtOpen === "PartiallyPaid" || statusAtOpen === "Paid") {
+		const delivery = await tx.invoice.findFirst({
+			where: { id: invoiceId },
+			select: { sent_at: true, viewed_at: true },
+		});
+		target = invoiceDeliveryStatus({
+			sent_at: delivery?.sent_at ?? null,
+			viewed_at: delivery?.viewed_at ?? null,
+		});
+	}
 	// Guarded against the document's real status, never the literal
 	// "Disputed" — asserting against a status the row may no longer hold would
 	// happily write Sent over a Void invoice and un-void it.

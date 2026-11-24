@@ -8,6 +8,8 @@ import {
 	dollarsToCents,
 	centsToDollars,
 } from "./taxEngine.js";
+import { sumCents, toCents } from "../lib/money.js";
+import { invoiceDeliveryStatus } from "../lib/statusTransitions.js";
 import {
 	type DocumentLineItemRaw,
 	resolveLineItemTaxInputs,
@@ -195,7 +197,21 @@ export const invoiceInclude = {
 // EXPORTED HELPERS — used by invoicesController
 // ============================================================================
 
-/** Recalculate amount_paid, balance_due, and status after any payment change. */
+/**
+ * Serialises every write to an invoice's payment rows. organization_id is in
+ * the predicate because raw SQL bypasses getScopedDb: without it a caller in
+ * one org could hold a row lock on another org's invoice for the life of the
+ * transaction.
+ */
+export async function lockInvoiceRow(
+	tx: Prisma.TransactionClient,
+	invoiceId: string,
+	organizationId: string,
+): Promise<void> {
+	await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND organization_id = ${organizationId} FOR UPDATE`;
+}
+
+/** Recalculate amount_paid, balance_due, status and paid_at after any payment change. */
 export async function syncInvoicePaymentTotals(
 	invoiceId: string,
 	tx: Prisma.TransactionClient,
@@ -203,49 +219,71 @@ export async function syncInvoicePaymentTotals(
 	const [invoice, payments] = await Promise.all([
 		tx.invoice.findFirst({
 			where: { id: invoiceId },
-			select: { total: true, status: true, adjusts_invoice_id: true },
+			select: {
+				total: true,
+				status: true,
+				adjusts_invoice_id: true,
+				sent_at: true,
+				viewed_at: true,
+			},
 		}),
 		tx.invoice_payment.findMany({
 			where: { invoice_id: invoiceId },
-			select: { amount: true },
+			select: { amount: true, paid_at: true },
 		}),
 	]);
 
 	if (!invoice) return;
 
-	const total = Number(invoice.total);
-	const amountPaid = payments.reduce((sum, p) => sum + Number(p.amount), 0);
+	const totalCents = toCents(invoice.total);
+	const paidCents = sumCents(payments.map((p) => p.amount));
 	// Same rule as recomputeDocumentTotals: a credit adjustment's balance is
 	// legitimately negative and must survive a payment resync, or the credit
 	// silently disappears from receivables the next time anything touches the
 	// document's payments. Ordinary invoices keep the floor.
-	const rawBalance = total - amountPaid;
-	const balanceDue =
-		invoice.adjusts_invoice_id != null ? rawBalance : Math.max(0, rawBalance);
+	const rawBalanceCents = totalCents - paidCents;
+	const balanceCents =
+		invoice.adjusts_invoice_id != null
+			? rawBalanceCents
+			: Math.max(0, rawBalanceCents);
 
 	// Only auto-transition to PartiallyPaid or Paid.
 	// Disputed and Void are set manually and must not be overwritten here.
-	// Draft/Issued/Sent/Viewed are preserved when payments are removed.
+	// Draft/Issued/Sent/Viewed are preserved when payments are removed; an
+	// invoice that loses every payment returns to the delivery state its
+	// timestamps record, so a never-sent invoice doesn't claim it was sent.
 	let status = invoice.status;
 	if (status !== "Disputed" && status !== "Void") {
-		if (amountPaid <= 0) {
+		if (paidCents <= 0) {
 			if (status === "PartiallyPaid" || status === "Paid") {
-				status = "Sent";
+				status = invoiceDeliveryStatus(invoice);
 			}
-		} else if (amountPaid >= total) {
+		} else if (paidCents >= totalCents) {
 			status = "Paid";
 		} else {
 			status = "PartiallyPaid";
 		}
 	}
 
+	// paid_at is when the money arrived (the latest positive payment's date),
+	// not when this resync ran — a backdated payment or a QuickBooks webhook
+	// replay would otherwise stamp today on the invoice.
+	let paidAt: Date | null = null;
+	if (status === "Paid") {
+		for (const p of payments) {
+			if (toCents(p.amount) > 0 && (!paidAt || p.paid_at > paidAt)) {
+				paidAt = p.paid_at;
+			}
+		}
+	}
+
 	await tx.invoice.update({
 		where: { id: invoiceId },
 		data: {
-			amount_paid: amountPaid,
-			balance_due: balanceDue,
+			amount_paid: centsToDollars(paidCents),
+			balance_due: centsToDollars(balanceCents),
 			status,
-			...(status === "Paid" ? { paid_at: new Date() } : {}),
+			paid_at: paidAt,
 		},
 	});
 }
@@ -257,7 +295,7 @@ export async function syncInvoicePaymentTotals(
  * it stale, so the guards that would strand money on a dead document read this
  * instead of the column (matching the refund guard).
  */
-export async function invoicePaidTotal(
+export async function invoicePaidTotalCents(
 	invoiceId: string,
 	tx: Prisma.TransactionClient,
 ): Promise<number> {
@@ -265,7 +303,14 @@ export async function invoicePaidTotal(
 		where: { invoice_id: invoiceId },
 		_sum: { amount: true },
 	});
-	return Number(agg._sum.amount ?? 0);
+	return toCents(agg._sum.amount);
+}
+
+export async function invoicePaidTotal(
+	invoiceId: string,
+	tx: Prisma.TransactionClient,
+): Promise<number> {
+	return centsToDollars(await invoicePaidTotalCents(invoiceId, tx));
 }
 
 /**

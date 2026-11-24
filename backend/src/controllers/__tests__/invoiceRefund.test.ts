@@ -46,6 +46,7 @@ vi.mock("../../services/appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+import { Prisma } from "../../../generated/prisma/client.js";
 import { db } from "../../db.js";
 import { insertInvoicePayment, recordRefund } from "../invoicesController.js";
 import { createRefundSchema } from "../../lib/validate/invoices.js";
@@ -239,6 +240,40 @@ describe("recordRefund", () => {
 	});
 });
 
+describe("recordRefund in cents", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	it("recordRefund allows refunding exactly 0.30 of 0.10 + 0.20 paid", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue({
+			id: "inv1",
+			status: "Paid",
+			total: new Prisma.Decimal("0.30"),
+			organization_id: "org1",
+			invoice_number: "INV-1039",
+			adjusts_invoice_id: null,
+		});
+		mockFn(db.invoice_payment.aggregate).mockResolvedValue({
+			_sum: { amount: new Prisma.Decimal("0.30") },
+		});
+		mockFn(db.invoice_payment.create).mockResolvedValue({ id: "pay3", amount: -0.3 });
+		mockFn(db.invoice_payment.findMany).mockResolvedValue([
+			{ amount: new Prisma.Decimal("0.10"), paid_at: new Date() },
+			{ amount: new Prisma.Decimal("0.20"), paid_at: new Date() },
+			{ amount: new Prisma.Decimal("-0.30"), paid_at: new Date() },
+		]);
+
+		// A client that summed 0.10 + 0.20 in floats sends 0.30000000000000004;
+		// it is still exactly 30 cents and must not read as more than was paid.
+		const result = await recordRefund("inv1", { amount: 0.1 + 0.2, reason: "refund" }, "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("");
+		const created = mockFn(db.invoice_payment.create).mock.calls[0][0].data;
+		expect(created.amount).toBe(-0.3);
+	});
+});
+
 // Payments stay allowed while a dispute is open (D7). resolveDispute takes this
 // same lock, so a payment racing a Repeal serializes instead of both passing a
 // money check made against stale rows (DW-08).
@@ -285,5 +320,55 @@ describe("insertInvoicePayment", () => {
 			/SELECT id FROM invoice WHERE id = \? AND organization_id = \? FOR UPDATE/,
 		);
 		expect(values).toEqual(["inv1", "org1"]);
+	});
+
+	it("insertInvoicePayment accepts an exact payoff of 2.20 on a 3.30 invoice with 1.10 already paid", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue({
+			id: "inv1",
+			status: "PartiallyPaid",
+			total: new Prisma.Decimal("3.30"),
+			invoice_number: "INV-1039",
+			adjusts_invoice_id: null,
+			sent_at: new Date(),
+			viewed_at: null,
+		});
+		mockFn(db.invoice_payment.aggregate).mockResolvedValue({
+			_sum: { amount: new Prisma.Decimal("1.10") },
+		});
+		mockFn(db.invoice_payment.create).mockResolvedValue({ id: "pay2" });
+		mockFn(db.invoice_payment.findMany).mockResolvedValue([
+			{ amount: new Prisma.Decimal("1.10"), paid_at: new Date() },
+			{ amount: new Prisma.Decimal("2.20"), paid_at: new Date() },
+		]);
+
+		const result = await insertInvoicePayment("inv1", { amount: 2.2 }, "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("");
+		expect(mockFn(db.invoice_payment.create).mock.calls[0][0].data.amount).toBe(2.2);
+		const update = mockFn(db.invoice.update).mock.calls[0][0].data;
+		expect(update.status).toBe("Paid");
+		expect(update.balance_due).toBe(0);
+	});
+
+	it("insertInvoicePayment refuses one cent over the balance", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue({
+			id: "inv1",
+			status: "PartiallyPaid",
+			total: new Prisma.Decimal("3.30"),
+			invoice_number: "INV-1039",
+			adjusts_invoice_id: null,
+		});
+		mockFn(db.invoice_payment.aggregate).mockResolvedValue({
+			_sum: { amount: new Prisma.Decimal("1.10") },
+		});
+
+		const result = await insertInvoicePayment("inv1", { amount: 2.21 }, "org1", {
+			dispatcherId: "d1",
+		});
+
+		expect(result.err).toBe("Payment would exceed invoice total");
+		expect(db.invoice_payment.create).not.toHaveBeenCalled();
 	});
 });

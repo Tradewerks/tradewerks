@@ -36,6 +36,24 @@ const PAYMENT_BLOCK =
 	"This invoice has $120.00 applied. Issue an adjustment instead — voiding would strand the payment.";
 
 describe("invoiceActions", () => {
+	it("offers Record Payment on a Created (Issued) invoice", () => {
+		const action = byId(invoiceActions(ctx({ status: "Issued" })), "recordPayment");
+		expect(action?.disabled).toBe(false);
+	});
+
+	it('still closes Record Payment on a Draft with "Create or send the invoice before recording a payment."', () => {
+		const action = byId(invoiceActions(ctx({ status: "Draft" })), "recordPayment");
+		expect(action?.disabled).toBe(true);
+		expect(action?.disabledReason).toBe(
+			"Create or send the invoice before recording a payment."
+		);
+	});
+
+	it("closes Record Payment on a Paid invoice", () => {
+		const action = byId(invoiceActions(ctx({ status: "Paid" })), "recordPayment");
+		expect(action?.disabled).toBe(true);
+	});
+
 	/**
 	 * The two delivery doors are peers, both open on a Draft: email it through
 	 * the system, or issue it and hand the PDF over yourself. Neither is a step
@@ -128,6 +146,32 @@ describe("invoiceActions", () => {
 				"refund"
 			)?.disabled
 		).toBe(false);
+	});
+
+	it('labels the send action "Resend" once the invoice has been delivered', () => {
+		for (const status of ["Sent", "Viewed", "PartiallyPaid", "Paid", "Disputed"]) {
+			const send = byId(invoiceActions(ctx({ status })), "send");
+			expect(send?.label).toBe("Resend");
+			expect(send?.disabled).toBe(false);
+		}
+		expect(byId(invoiceActions(ctx({ status: "Issued" })), "send")?.label).toBe(
+			"Email to Client"
+		);
+	});
+
+	it("offers Resend on PartiallyPaid and Paid", () => {
+		for (const status of ["PartiallyPaid", "Paid"]) {
+			expect(byId(invoiceActions(ctx({ status, canSend: true })), "send")?.disabled).toBe(
+				false
+			);
+		}
+	});
+
+	it("closes Resend on Void", () => {
+		const send = byId(invoiceActions(ctx({ status: "Void", canSend: true })), "send");
+		expect(send?.disabled).toBe(true);
+		expect(send?.disabledReason).toMatch(/void/i);
+		expect(send?.disabledReason).not.toMatch(/permission/i);
 	});
 
 	it("closes everything on a void invoice without omitting anything", () => {

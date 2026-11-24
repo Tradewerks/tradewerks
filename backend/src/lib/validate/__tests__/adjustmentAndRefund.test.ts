@@ -133,6 +133,45 @@ describe("createRefundSchema", () => {
 			createRefundSchema.safeParse({ amount: 50, reason: "  " }).success,
 		).toBe(false);
 	});
+
+	it("createRefundSchema rejects 0.001 and accepts 0.01", () => {
+		const bad = createRefundSchema.safeParse({
+			amount: 0.001,
+			reason: "x",
+		});
+		expect(bad.success).toBe(false);
+		expect(bad.error?.issues[0]?.message).toBe(
+			"Amounts can have at most two decimal places",
+		);
+		expect(
+			createRefundSchema.safeParse({ amount: 0.01, reason: "x" }).success,
+		).toBe(true);
+	});
+});
+
+describe("createInvoicePaymentSchema decimal places", () => {
+	it("createInvoicePaymentSchema rejects 100.005 with the two-decimal message", () => {
+		const parsed = createInvoicePaymentSchema.safeParse({
+			amount: 100.005,
+		});
+		expect(parsed.success).toBe(false);
+		expect(parsed.error?.issues[0]?.message).toBe(
+			"Amounts can have at most two decimal places",
+		);
+		expect(
+			createInvoicePaymentSchema.safeParse({ amount: 1e-3 }).success,
+		).toBe(false);
+		expect(
+			createInvoicePaymentSchema.safeParse({ amount: 100.01 }).success,
+		).toBe(true);
+	});
+
+	it("keeps the existing positive message", () => {
+		const parsed = createInvoicePaymentSchema.safeParse({ amount: 0 });
+		expect(parsed.error?.issues[0]?.message).toBe(
+			"Payment amount must be positive",
+		);
+	});
 });
 
 /**

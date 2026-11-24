@@ -73,20 +73,26 @@ vi.mock("../../lib/context.js", () => ({
 
 // disputeService now reaches into the invoice money helpers; they own their own
 // tests and a real call here would need the full payment and tax tables.
-vi.mock("../../services/invoiceService.js", () => ({
-	syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
-	syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
-	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
-	// The void / revise guards read paid-to-date from the payment rows now;
-	// override per test to exercise a stale amount_paid column.
-	invoicePaidTotal: vi.fn().mockResolvedValue(0),
-	// invoicesController (imported below for the void guard) pulls these three
-	// from the same module; a named import missing from a mock factory is a
-	// module-load error, not a test failure.
-	createInvoiceRecord: vi.fn().mockResolvedValue(undefined),
-	recomputeInvoiceTotals: vi.fn().mockResolvedValue(undefined),
-	invoiceInclude: {},
-}));
+vi.mock("../../services/invoiceService.js", async (importActual) => {
+	const actual = await importActual<typeof import("../../services/invoiceService.js")>();
+	return {
+		// The real lock, so assertions on the org-scoped $queryRaw still hold.
+		lockInvoiceRow: actual.lockInvoiceRow,
+		invoicePaidTotalCents: vi.fn().mockResolvedValue(0),
+		syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
+		syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
+		lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
+		// The void / revise guards read paid-to-date from the payment rows now;
+		// override per test to exercise a stale amount_paid column.
+		invoicePaidTotal: vi.fn().mockResolvedValue(0),
+		// invoicesController (imported below for the void guard) pulls these three
+		// from the same module; a named import missing from a mock factory is a
+		// module-load error, not a test failure.
+		createInvoiceRecord: vi.fn().mockResolvedValue(undefined),
+		recomputeInvoiceTotals: vi.fn().mockResolvedValue(undefined),
+		invoiceInclude: {},
+	};
+});
 
 // The QuickBooks void runs after commit through one shared helper, which has
 // its own suite.
@@ -788,7 +794,7 @@ describe("invoice Issue Adjustment", () => {
 
 	it("restores a paid original through Sent and recomputes it", async () => {
 		mockFn(db.invoice.findFirst).mockResolvedValue(
-			anInvoice({ status: "Disputed", amount_paid: 500 }),
+			anInvoice({ status: "Disputed", amount_paid: 500, sent_at: new Date() }),
 		);
 		mockFn(db.document_dispute.findFirst).mockResolvedValue(
 			anOpenDispute({ status_at_open: "Paid" }),
@@ -836,6 +842,87 @@ describe("invoice Issue Adjustment", () => {
 			"inv1",
 			expect.anything(),
 		);
+	});
+
+	/**
+	 * Every payment was removed during the dispute, so the sync that follows
+	 * the restore has nothing to promote: the restore write is the final
+	 * status, and a never-sent invoice must not land on Sent.
+	 */
+	it("restores a paid, never-sent original whose payments were all removed to Issued", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(
+			anInvoice({ status: "Disputed", amount_paid: 0, sent_at: null, viewed_at: null }),
+		);
+		mockFn(db.document_dispute.findFirst).mockResolvedValue(
+			anOpenDispute({ status_at_open: "Paid" }),
+		);
+		mockFn(db.document_dispute.updateMany).mockResolvedValue({ count: 1 });
+		mockFn(db.invoice.create).mockResolvedValue({
+			id: "adj1",
+			invoice_number: "INV-1040",
+		});
+
+		await resolveDispute(
+			"invoice",
+			"inv1",
+			"disp1",
+			{
+				resolution: "IssueAdjustment",
+				adjustment_lines: [
+					{ name: "Credit", quantity: -1, unit_price: 200, total: -200 },
+				],
+			},
+			"org1",
+			CTX,
+			AUTHZ,
+		);
+
+		const restore = mockFn(db.invoice.update).mock.calls.find(
+			(c: [{ where: { id: string }; data: { status?: string } }]) =>
+				c[0].where.id === "inv1",
+		);
+		expect(restore[0].data.status).toBe("Issued");
+		expect(syncInvoicePaymentTotals).toHaveBeenCalledWith("inv1", expect.anything());
+	});
+
+	it("restores a paid, viewed original whose payments were all removed to Viewed", async () => {
+		mockFn(db.invoice.findFirst).mockResolvedValue(
+			anInvoice({
+				status: "Disputed",
+				amount_paid: 0,
+				sent_at: new Date(),
+				viewed_at: new Date(),
+			}),
+		);
+		mockFn(db.document_dispute.findFirst).mockResolvedValue(
+			anOpenDispute({ status_at_open: "PartiallyPaid" }),
+		);
+		mockFn(db.document_dispute.updateMany).mockResolvedValue({ count: 1 });
+		mockFn(db.invoice.create).mockResolvedValue({
+			id: "adj1",
+			invoice_number: "INV-1040",
+		});
+
+		await resolveDispute(
+			"invoice",
+			"inv1",
+			"disp1",
+			{
+				resolution: "IssueAdjustment",
+				adjustment_lines: [
+					{ name: "Credit", quantity: -1, unit_price: 200, total: -200 },
+				],
+			},
+			"org1",
+			CTX,
+			AUTHZ,
+		);
+
+		const restore = mockFn(db.invoice.update).mock.calls.find(
+			(c: [{ where: { id: string }; data: { status?: string } }]) =>
+				c[0].where.id === "inv1",
+		);
+		expect(restore[0].data.status).toBe("Viewed");
 	});
 
 	/**

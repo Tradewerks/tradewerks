@@ -9,7 +9,7 @@ import {
 } from "../lib/inventoryTaxable.js";
 import { findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import { resolveDocumentLineage } from "../lib/documentLineage.js";
-import { formatCurrency } from "../lib/money.js";
+import { centsToDollars, formatCurrency, toCents } from "../lib/money.js";
 import { isQBConnected, getOrgRealmId } from "../services/quickbooksService.js";
 import { mirrorInvoiceVoidToQuickBooks, pushInvoiceDetached } from "../services/qb/qbInvoices.js"
 import { confirmQuickBooksTax } from "../services/qb/qbAstAuthority.js";
@@ -43,6 +43,8 @@ import {
 	createInvoiceRecord,
 	syncBilledAmounts,
 	syncInvoicePaymentTotals,
+	invoicePaidTotalCents,
+	lockInvoiceRow,
 	recomputeInvoiceTotals,
 	lockInvoiceTaxSnapshot,
 	invoiceInclude,
@@ -373,10 +375,11 @@ export const updateInvoice = async (
 		// Before the transaction, because the void write also stamps voided_at
 		// and fires voidQBInvoice — a partially-paid invoice was being voided
 		// in QuickBooks with its payment rows still standing. Same rule the
-		// dispute outcomes enforce, same sentence, one source.
+		// dispute outcomes enforce, same sentence, one source. This read is the
+		// fast refusal only; the transaction re-judges from the rows under lock.
 		if (parsed.status === "Void") {
 			const blocked = voidBlockedByPaymentReason(
-				Number(existing.amount_paid ?? 0),
+				centsToDollars(toCents(existing.amount_paid)),
 			);
 			if (blocked) return { err: blocked };
 			// The rule Repeal enforces too: an adjustment is its own live
@@ -478,6 +481,19 @@ export const updateInvoice = async (
 		}
 
 		const updated = await sdb.$transaction(async (tx) => {
+			// The check above read amount_paid before any lock; a payment
+			// committing since would be stranded on a void invoice. Re-judged
+			// from the rows under the lock the payment paths take.
+			if (parsed.status === "Void") {
+				const txc = tx as unknown as Prisma.TransactionClient;
+				await lockInvoiceRow(txc, id, organizationId);
+				const paidCents = await invoicePaidTotalCents(id, txc);
+				const blocked = voidBlockedByPaymentReason(
+					centsToDollars(paidCents),
+				);
+				if (blocked) throw new DocumentRuleError(blocked);
+			}
+
 			// ── Line item replacement ──────────────────────────────────────
 			if (parsed.line_items !== undefined) {
 				// Guard: cannot modify line items on a finalized (snapshot-locked) invoice
@@ -684,9 +700,11 @@ export const updateInvoice = async (
 						voided_at: new Date(),
 					}),
 					...(keepClientTotals && parsed.total !== undefined && {
-						balance_due: Math.max(
-							0,
-							parsed.total - Number(existing.amount_paid),
+						balance_due: centsToDollars(
+							Math.max(
+								0,
+								toCents(parsed.total) - toCents(existing.amount_paid),
+							),
 						),
 					}),
 					...(parsed.qb_sync_status !== undefined
@@ -855,11 +873,10 @@ export const insertInvoicePayment = async (
 		// allowed while a dispute is open, so a payment racing a Repeal on
 		// the same invoice is ordinary use: resolveDispute takes the same lock,
 		// and whichever commits second reads the other's write instead of both
-		// passing a money check made against stale rows. organization_id is in
-		// the predicate because raw SQL bypasses getScopedDb.
+		// passing a money check made against stale rows.
 		const outcome = await sdb.$transaction(async (tx) => {
 			const txc = tx as unknown as Prisma.TransactionClient;
-			await txc.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND organization_id = ${organizationId} FOR UPDATE`;
+			await lockInvoiceRow(txc, invoiceId, organizationId);
 
 			const invoice = await tx.invoice.findFirst({
 				where: { id: invoiceId },
@@ -886,19 +903,16 @@ export const insertInvoicePayment = async (
 				};
 			}
 
-			const existingPaymentsAgg = await tx.invoice_payment.aggregate({
-				where: { invoice_id: invoiceId },
-				_sum: { amount: true },
-			});
-			const alreadyPaid = Number(existingPaymentsAgg._sum.amount ?? 0);
-			if (alreadyPaid + parsed.amount > Number(invoice.total)) {
+			const amountCents = toCents(parsed.amount);
+			const alreadyPaidCents = await invoicePaidTotalCents(invoiceId, txc);
+			if (alreadyPaidCents + amountCents > toCents(invoice.total)) {
 				return { err: "Payment would exceed invoice total" };
 			}
 
 			const payment = await tx.invoice_payment.create({
 				data: {
 					invoice_id: invoiceId,
-					amount: parsed.amount,
+					amount: centsToDollars(amountCents),
 					paid_at: parsed.paid_at ?? new Date(),
 					method: parsed.method ?? null,
 					note: parsed.note ?? null,
@@ -974,25 +988,42 @@ export const deleteInvoicePayment = async (
 ) => {
 	try {
 		const sdb = getScopedDb(organizationId);
-		const existing = await sdb.invoice_payment.findFirst({
-			where: { id: paymentId, invoice_id: invoiceId },
-		});
-		if (!existing) return { err: "Payment not found" };
+		// Under the same lock insertInvoicePayment and recordRefund take, so a
+		// delete racing a refund cannot both pass a check made against stale
+		// rows and leave the invoice with more refunded than paid.
+		const outcome = await sdb.$transaction(async (tx) => {
+			const txc = tx as unknown as Prisma.TransactionClient;
+			await lockInvoiceRow(txc, invoiceId, organizationId);
 
-		const invoice = await sdb.invoice.findFirst({
-			where: { id: invoiceId },
-		});
-		if (!invoice) {
-			return {err: "Invoice not found"};
-		}
-		if (invoice.status === "Void") {
-			return { err: "Cannot modify payments on a void invoice" };
-		}
+			const invoice = await tx.invoice.findFirst({
+				where: { id: invoiceId },
+			});
+			if (!invoice) return { err: "Invoice not found" };
+			if (invoice.status === "Void") {
+				return { err: "Cannot modify payments on a void invoice" };
+			}
 
-		await sdb.$transaction(async (tx) => {
+			const payment = await tx.invoice_payment.findFirst({
+				where: { id: paymentId, invoice_id: invoiceId },
+			});
+			if (!payment) return { err: "Payment not found" };
+
+			// A refund row is negative, so deleting one only raises the total;
+			// deleting a positive payment a refund was drawn against would
+			// leave a net-negative paid total with no money behind the refund.
+			const paidCents = await invoicePaidTotalCents(invoiceId, txc);
+			if (paidCents - toCents(payment.amount) < 0) {
+				return {
+					err: "This payment has refunds recorded against it. Delete the refund first.",
+				};
+			}
+
 			await tx.invoice_payment.delete({ where: { id: paymentId } });
-			await syncInvoicePaymentTotals(invoiceId, tx as unknown as Prisma.TransactionClient);
+			await syncInvoicePaymentTotals(invoiceId, txc);
+			return { err: "", payment };
 		});
+		if (!outcome.payment) return { err: outcome.err };
+		const existing = outcome.payment;
 
 		await logActivity({
 			event_type: "invoice_payment.deleted",
@@ -1064,11 +1095,7 @@ export const recordRefund = async (
 		// Lock the invoice before reading it: two near-simultaneous refunds
 		// (double-click, client retry) must not both read the same
 		// pre-refund paid total and both pass the ceiling check below.
-		// organization_id is in the predicate because getScopedDb's extension
-		// cannot reach raw SQL: without it a caller in one org can take a row
-		// lock on another org's invoice for the life of this transaction, even
-		// though the scoped findFirst below then correctly refuses to read it.
-		await txc.$queryRaw`SELECT id FROM invoice WHERE id = ${invoiceId} AND organization_id = ${organizationId} FOR UPDATE`;
+		await lockInvoiceRow(txc, invoiceId, organizationId);
 
 		const invoice = await tx.invoice.findFirst({ where: { id: invoiceId } });
 		if (!invoice) return { err: "Invoice not found" };
@@ -1077,21 +1104,18 @@ export const recordRefund = async (
 		// Derived from the payment rows rather than the cached amount_paid
 		// column: under the lock this is authoritative, where the cached
 		// column is a denormalisation that can drift.
-		const paidAgg = await tx.invoice_payment.aggregate({
-			where: { invoice_id: invoiceId },
-			_sum: { amount: true },
-		});
-		const paid = Number(paidAgg._sum.amount ?? 0);
-		if (input.amount > paid) {
+		const paidCents = await invoicePaidTotalCents(invoiceId, txc);
+		const refundCents = toCents(input.amount);
+		if (refundCents > paidCents) {
 			return {
-				err: `Cannot refund ${input.amount.toFixed(2)} — only ${paid.toFixed(2)} has been paid on this invoice.`,
+				err: `Cannot refund ${centsToDollars(refundCents).toFixed(2)} — only ${centsToDollars(paidCents).toFixed(2)} has been paid on this invoice.`,
 			};
 		}
 
 		const refund = await tx.invoice_payment.create({
 			data: {
 				invoice_id: invoiceId,
-				amount: -input.amount,
+				amount: centsToDollars(-refundCents),
 				note: input.reason,
 				method: input.method ?? null,
 				recorded_by_dispatcher_id: context.dispatcherId ?? null,
@@ -1112,7 +1136,10 @@ export const recordRefund = async (
 			actor_id: context.dispatcherId,
 			reason: input.reason,
 			changes: {
-				amount_paid: { old: paid, new: paid - input.amount },
+				amount_paid: {
+					old: centsToDollars(paidCents),
+					new: centsToDollars(paidCents - refundCents),
+				},
 				_invoice_number: { old: null, new: invoice.invoice_number },
 			},
 			ip_address: context.ipAddress,

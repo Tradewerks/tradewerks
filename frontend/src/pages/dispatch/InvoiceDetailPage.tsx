@@ -1422,7 +1422,7 @@ export default function InvoiceDetailPage() {
 													f
 												) => ({
 													...f,
-													amount: balanceDue,
+													amount: Number(balanceDue.toFixed(2)),
 												})
 											)
 										}
@@ -1884,6 +1884,11 @@ export default function InvoiceDetailPage() {
 				clientName={invoice.client?.name ?? ""}
 				contactEmail={invoice.client?.contacts?.[0]?.contact?.email}
 				contactName={invoice.client?.contacts?.[0]?.contact?.name}
+				notice={
+					["Sent", "Viewed", "PartiallyPaid", "Paid", "Disputed"].includes(invoice.status)
+						? "Email another copy of this invoice to the client? Its status will not change."
+						: undefined
+				}
 			/>
 
 			{/* Always mounted so FullPopup's close fade can play — matching

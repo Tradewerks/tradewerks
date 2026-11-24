@@ -46,15 +46,20 @@ vi.mock("../../lib/context.js", () => ({
 	getUserContext: vi.fn(() => ({ dispatcherId: "d1" })),
 }));
 
-vi.mock("../../services/invoiceService.js", () => ({
-	syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
-	syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
-	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
-	invoicePaidTotal: vi.fn().mockResolvedValue(0),
-	createInvoiceRecord: vi.fn().mockResolvedValue(undefined),
-	recomputeInvoiceTotals: vi.fn().mockResolvedValue(undefined),
-	invoiceInclude: {},
-}));
+vi.mock("../../services/invoiceService.js", async (importActual) => {
+	const actual = await importActual<typeof import("../../services/invoiceService.js")>();
+	return {
+		lockInvoiceRow: actual.lockInvoiceRow,
+		invoicePaidTotalCents: vi.fn().mockResolvedValue(0),
+		syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
+		syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
+		lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
+		invoicePaidTotal: vi.fn().mockResolvedValue(0),
+		createInvoiceRecord: vi.fn().mockResolvedValue(undefined),
+		recomputeInvoiceTotals: vi.fn().mockResolvedValue(undefined),
+		invoiceInclude: {},
+	};
+});
 
 vi.mock("../../services/logger.js", () => ({
 	logActivity: vi.fn().mockResolvedValue(undefined),

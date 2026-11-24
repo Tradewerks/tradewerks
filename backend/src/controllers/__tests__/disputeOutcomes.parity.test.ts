@@ -39,12 +39,17 @@ vi.mock("../../lib/context.js", () => ({
 	getUserContext: vi.fn(() => ({ dispatcherId: "d1" })),
 }));
 
-vi.mock("../../services/invoiceService.js", () => ({
-	syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
-	syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
-	lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
-	invoicePaidTotal: vi.fn().mockResolvedValue(0),
-}));
+vi.mock("../../services/invoiceService.js", async (importActual) => {
+	const actual = await importActual<typeof import("../../services/invoiceService.js")>();
+	return {
+		lockInvoiceRow: actual.lockInvoiceRow,
+		invoicePaidTotalCents: vi.fn().mockResolvedValue(0),
+		syncBilledAmounts: vi.fn().mockResolvedValue(undefined),
+		syncInvoicePaymentTotals: vi.fn().mockResolvedValue(undefined),
+		lockInvoiceTaxSnapshot: vi.fn().mockResolvedValue([]),
+		invoicePaidTotal: vi.fn().mockResolvedValue(0),
+	};
+});
 
 vi.mock("../../services/qb/qbInvoices.js", () => ({
 	mirrorInvoiceVoidToQuickBooks: vi.fn().mockResolvedValue(undefined),

@@ -2,6 +2,7 @@ import type { Prisma } from "../../generated/prisma/client.js";
 import { generateInvoiceNumber } from "../db.js";
 import { logActivity } from "./logger.js";
 import {
+	lockInvoiceRow,
 	lockInvoiceTaxSnapshot,
 	syncBilledAmounts,
 } from "./invoiceService.js";
@@ -177,7 +178,7 @@ export async function createAdjustmentInvoice(
 	// Lock the original before reading its adjustment chain: the cumulative
 	// credit ceiling below is only sound if two concurrent adjustments cannot
 	// both read the same pre-credit total and both pass it.
-	await tx.$queryRaw`SELECT id FROM invoice WHERE id = ${doc.id} AND organization_id = ${organizationId} FOR UPDATE`;
+	await lockInvoiceRow(tx, doc.id, organizationId);
 
 	const original = await tx.invoice.findFirst({ where: { id: doc.id } });
 	if (!original) throw new Error("invoice not found");
