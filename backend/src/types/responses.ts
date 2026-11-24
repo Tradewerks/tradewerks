@@ -21,7 +21,9 @@ export interface ResponseMeta {
 	hasMore?: boolean;
 	total?: number;
 	page?: number;
+	// Legacy; the shared list contract (lib/listQuery.ts) sends `limit`.
 	pageSize?: number;
+	limit?: number;
 }
 
 export interface ControllerResult<T = unknown> {

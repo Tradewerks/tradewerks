@@ -18,6 +18,8 @@ export interface ApiResponse<T> {
 		// needs and `count` cannot answer.
 		total?: number;
 		page?: number;
+		// Legacy; paged list endpoints send `limit` instead.
 		pageSize?: number;
+		limit?: number;
 	};
 }
