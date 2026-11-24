@@ -1,11 +1,14 @@
+import { createHash } from "node:crypto";
 import { isModuleOn } from "../entitlementService.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { getScopedDb } from "../../lib/context.js";
 import { qbFetch, getOrgRealmId } from "../quickbooksService.js";
 import { httpError, ErrorCodes } from "../../types/responses.js";
 import { pushInvoice } from "./qbInvoices.js"
+import { ensureQBCustomerForClient } from "./qbCustomers.js"
 import { syncInvoicePaymentTotals } from "../invoiceService.js"
-import { logExternalSync } from "./qbSyncLog.js"
+import { countPaymentPushHttpFailures, logExternalSync } from "./qbSyncLog.js"
+import { QbHttpError } from "./qbHttpError.js"
 
 
 /** QuickBooks reference object, e.g. CustomerRef / AccountRef. */
@@ -45,12 +48,58 @@ export interface QBPayment {
     ProjectRef?: QBRef;
     Line: QBPaymentLine[];
     MetaData: QBMetaData;
+    PrivateNote?: string;
 }
 
 /** Response wrapper returned by GET/POST on the QB Payment entity. */
 export interface QBPaymentResponse {
     Payment: QBPayment;
     time: string;
+}
+
+const PAYMENT_NOTE_PREFIX = "hvac:payment:";
+
+/** Marker stamped on every payment we push, so the webhook echo can be linked back to our row. */
+export function paymentPrivateNote(paymentId: string): string {
+    return PAYMENT_NOTE_PREFIX + paymentId;
+}
+
+// Anywhere in the note: users edit the QB memo around the marker.
+const PAYMENT_NOTE_RE = /hvac:payment:([0-9a-fA-F-]{36})/;
+
+export function parsePaymentPrivateNote(note?: string): string | null {
+    return note?.match(PAYMENT_NOTE_RE)?.[1] ?? null;
+}
+
+function stableStringify(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+    if (value && typeof value === "object") {
+        const entries = Object.keys(value as Record<string, unknown>)
+            .sort()
+            .filter((k) => (value as Record<string, unknown>)[k] !== undefined)
+            .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+        return `{${entries.join(",")}}`;
+    }
+    return JSON.stringify(value);
+}
+
+// Same payment + same payload reuses the id, so a crash/timeout retry gets QB's cached result
+// instead of a second payment. QB also caches an error under the id, so a changed payload or a prior
+// definitive rejection (fixable on the QB side: inactive customer, closed period) must yield a fresh
+// id. Ambiguous failures (5xx, 401, 408, 429) keep the id: the edge can fail after QB committed the
+// POST, and a fresh id would then create a second payment.
+// paymentId is a uuid (36) + "pay-" + "-" + 8 = 49, inside QB's 50-char limit.
+function paymentRequestId(paymentId: string, payload: unknown, rejections: number): string {
+    const digest = createHash("sha1")
+        .update(`${stableStringify(payload)}:${rejections}`)
+        .digest("hex");
+    return `pay-${paymentId}-${digest.slice(0, 8)}`;
+}
+
+function isDefinitiveRejection(error: unknown): error is QbHttpError {
+    if (!(error instanceof QbHttpError)) return false;
+    const { status } = error;
+    return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
 }
 
 const inFlightPushes = new Map<string, Promise<void>>();
@@ -113,18 +162,23 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
         payment = updatedPayment;
     }
 
-    const mapping = payment.invoice.client.client_external_mapping.find(m => m.provider === "quickbooks");
-    const qbCustomerId = mapping?.external_id;
-    if (!qbCustomerId) {
-        throw httpError(400, ErrorCodes.VALIDATION_ERROR, "Customer not found in QuickBooks");
-    }
+    const { client } = payment.invoice;
+    const mapping = client.client_external_mapping.find(m => m.provider === "quickbooks");
+    const qbCustomerId =
+        mapping?.external_id ??
+        (await ensureQBCustomerForClient(
+            organizationId,
+            { id: client.id, name: client.name },
+            accountId,
+        ));
 
-    const result = await qbFetch(organizationId, "POST", "/payment", {
+    const payload = {
         CustomerRef: {
             value: qbCustomerId
         },
         TotalAmt: Number(payment.amount),
         TxnDate: payment.paid_at.toISOString().split("T")[0],
+        PrivateNote: paymentPrivateNote(paymentId),
         Line: [{
             Amount: Number(payment.amount),
             LinkedTxn: [{
@@ -132,7 +186,27 @@ async function doPushPaymentToQB(paymentId: string, organizationId: string) {
                 TxnType: "Invoice"
             }]
         }]
-    }) as QBPaymentResponse;
+    };
+    const rejections = await countPaymentPushHttpFailures(paymentId, organizationId);
+    const requestId = paymentRequestId(paymentId, payload, rejections);
+    let result: QBPaymentResponse;
+    try {
+        result = await qbFetch(organizationId, "POST", "/payment", payload, {
+            requestId,
+        }) as QBPaymentResponse;
+    } catch (error) {
+        if (isDefinitiveRejection(error)) {
+            await logExternalSync({
+                provider: "quickbooks",
+                external_id: paymentId,
+                entity_type: "payment",
+                action: "push_http_failed",
+                payload: { status: error.status, requestId, message: error.message },
+                organization_id: organizationId,
+            });
+        }
+        throw error;
+    }
 
     if (!result) {
         throw httpError(400, ErrorCodes.VALIDATION_ERROR, "Payment could not be pushed to QuickBooks");

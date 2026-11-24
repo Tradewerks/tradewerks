@@ -5,6 +5,7 @@ import { httpError, ErrorCodes } from "../types/responses.js";
 import { isDifferentCompany, notifyTaxCodeNeeds } from "./qb/qbConnectTaxGuard.js";
 import { signQbOAuthState, verifyQbOAuthState } from "./qb/qbOAuthState.js";
 import { log } from "./appLogger.js";
+import { QbHttpError } from "./qb/qbHttpError.js";
 
 // ============================================================================
 // QUICKBOOKS TEMPORARILY DISABLED — integration not ready for production.
@@ -230,10 +231,16 @@ export async function qbFetch(
 	method: string,
 	path: string,
 	body?: unknown,
+	opts?: { requestId?: string },
 ): Promise<unknown> {
 	const { accessToken, realmId } = await getValidToken(orgId);
 	const sep = path.includes("?") ? "&" : "?";
-	const url = `${QB_BASE}/v3/company/${realmId}${path}${sep}minorversion=75`;
+	let url = `${QB_BASE}/v3/company/${realmId}${path}${sep}minorversion=75`;
+	// QB caches the response per requestid, so a retried write returns the first result instead of
+	// creating a duplicate. Reads are already idempotent.
+	if (opts?.requestId && method.toUpperCase() !== "GET") {
+		url += `&requestid=${encodeURIComponent(opts.requestId)}`;
+	}
 
 	const res = await fetch(url, {
 		method,
@@ -247,7 +254,7 @@ export async function qbFetch(
 
 	if (!res.ok) {
 		const text = await res.text();
-		throw new Error(`QB ${method} ${path} → ${res.status}: ${text}`);
+		throw new QbHttpError(method, path, res.status, text);
 	}
 
 	return res.json();

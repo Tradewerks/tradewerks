@@ -21,6 +21,12 @@ vi.mock("../quickbooksService.js", () => ({
 vi.mock("../qb/qbInvoices.js", () => ({ pushInvoice: vi.fn() }));
 vi.mock("../qb/qbPurchases.js", () => ({ pushPurchase: vi.fn(), pushFieldPurchase: vi.fn() }));
 vi.mock("../qb/qbSyncLog.js", () => ({ logExternalSync: vi.fn() }));
+// The client has no QB mapping, so the push reaches the resolver; stopping there ends the test.
+vi.mock("../qb/qbCustomers.js", () => ({
+	ensureQBCustomerForClient: vi.fn(async () => {
+		throw new Error("customer resolution reached");
+	}),
+}));
 
 import { listUnsynced } from "../qb/qbUnsynced.js";
 import { pushPaymentToQB } from "../qb/qbPayments.js";
@@ -66,11 +72,11 @@ describe("pushPaymentToQB stale company", () => {
 			account_id: "realm1",
 			amount: 10,
 			paid_at: new Date(),
-			invoice: { id: "inv1", qb_invoice_id: null, account_id: "", client: { client_external_mapping: [] } },
+			invoice: { id: "inv1", qb_invoice_id: null, account_id: "", client: { id: "c1", name: "Acme", client_external_mapping: [] } },
 		};
 		mockFn(sdb.invoice_payment.findFirst).mockResolvedValueOnce(payment).mockResolvedValueOnce(payment);
 
-		await expect(pushPaymentToQB("p1", "org1")).rejects.toThrow("Customer not found in QuickBooks");
+		await expect(pushPaymentToQB("p1", "org1")).rejects.toThrow("customer resolution reached");
 
 		expect(pushInvoice).toHaveBeenCalledWith("inv1", "org1");
 		// re-fetch is by id only: a never-pushed payment has no account_id yet

@@ -13,7 +13,7 @@ vi.mock("../quickbooksService.js", () => ({
 vi.mock("../qb/qbQuery.js", () => ({ qbQueryAll: vi.fn(), getAccountId: vi.fn(async () => "acct") }));
 vi.mock("../qb/qbVendors.js", () => ({ pushVendor: vi.fn(async () => "vendor1") }));
 vi.mock("../qb/qbItems.js", () => ({ pushItem: vi.fn(async () => "item1") }));
-vi.mock("../qb/qbCustomers.js", () => ({ findOrCreateQBCustomer: vi.fn() }));
+vi.mock("../qb/qbCustomers.js", () => ({ ensureQBCustomerForClient: vi.fn() }));
 
 import { qbFetch } from "../quickbooksService.js";
 import { pushPurchase } from "../qb/qbPurchases.js";

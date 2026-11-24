@@ -20,7 +20,7 @@ vi.mock("../../services/quickbooksService.js", () => ({
 	getOrgRealmId: vi.fn(async () => "realm-now"),
 	isQBConnected: vi.fn(async () => true),
 }));
-vi.mock("../../services/qb/qbCustomers.js", () => ({ findOrCreateQBCustomer: vi.fn() }));
+vi.mock("../../services/qb/qbCustomers.js", () => ({ ensureQBCustomerForClient: vi.fn() }));
 vi.mock("../../services/qb/qbItems.js", () => ({
 	findOrCreateQBItem: vi.fn(async () => "T-9"),
 	QB_ITEM_NAME_MAX: 100,

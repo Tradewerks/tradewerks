@@ -2,7 +2,6 @@ import { getScopedDb } from "../../lib/context.js";
 import { qbFetch, qbFetchBinary, getOrgRealmId } from "../quickbooksService.js";
 import { qbQueryAll, getAccountId } from "./qbQuery.js";
 import { httpError, ErrorCodes } from "../../types/responses.js";
-import { findOrCreateQBCustomer } from "./qbCustomers.js";
 import { pushVendor } from "./qbVendors.js";
 import { pushItem } from "./qbItems.js";
 import type { Prisma } from "../../../generated/prisma/client.js";

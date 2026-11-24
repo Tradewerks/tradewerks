@@ -5,7 +5,7 @@ import { Prisma } from "../../../generated/prisma/client.js";
 import { qbQueryAll } from "./qbQuery.js";
 import { qbFetch, getOrgRealmId, isQBConnected } from "../quickbooksService.js";
 import { log } from "../appLogger.js";
-import { findOrCreateQBCustomer } from "./qbCustomers.js";
+import { ensureQBCustomerForClient } from "./qbCustomers.js";
 import { ErrorCodes, httpError } from "../../types/responses.js";
 import { getQBTaxPrefs } from "./qbTax.js";
 import {
@@ -399,18 +399,13 @@ export async function resolveQBCustomerId(
 	orgId: string,
 	accountId: string,
 ): Promise<string> {
-	const existingQBId = invoice.client.client_external_mapping?.[0]?.external_id ?? null;
-	const customerId = existingQBId ?? (await findOrCreateQBCustomer(orgId, invoice.client.name));
-
-	// Cache the QB customer ID so this client is excluded from the import dropdown
-	if (!existingQBId) {
-		await getScopedDb(orgId).client_external_mapping.upsert({
-			where: { provider_account_id_external_id: { provider: "quickbooks", account_id: accountId, external_id: customerId } },
-			create: { client_id: invoice.client_id, provider: "quickbooks", external_id: customerId, account_id: accountId },
-			update: {},
-		}).catch(() => {});
-	}
-	return customerId;
+	const existingQBId = invoice.client.client_external_mapping?.[0]?.external_id;
+	if (existingQBId) return existingQBId;
+	return ensureQBCustomerForClient(
+		orgId,
+		{ id: invoice.client_id, name: invoice.client.name },
+		accountId,
+	);
 }
 
 /** Non-AST only. Rewrites `lines` to NON when nothing is taxed. */

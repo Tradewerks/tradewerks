@@ -23,7 +23,7 @@ vi.mock("../quickbooksService.js", () => ({
 	getOrgRealmId: vi.fn(async () => "realm1"),
 	isQBConnected: vi.fn(async () => true),
 }));
-vi.mock("../qb/qbCustomers.js", () => ({ findOrCreateQBCustomer: vi.fn() }));
+vi.mock("../qb/qbCustomers.js", () => ({ ensureQBCustomerForClient: vi.fn() }));
 vi.mock("../qb/qbQuery.js", () => ({ qbQueryAll: vi.fn() }));
 vi.mock("../appLogger.js", () => ({
 	log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
