@@ -9,6 +9,7 @@ import { useAuthStore } from "../../../auth/authStore";
 import type { Invoice } from "../../../types/invoices";
 
 const idle = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
+const reconcileMutation = { mutate: vi.fn(), mutateAsync: vi.fn().mockResolvedValue(undefined), isPending: false };
 const syncMutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
 
 vi.mock("../../../hooks/useInvoices", () => ({
@@ -26,6 +27,7 @@ vi.mock("../../../hooks/useQuickbooks", () => ({
 	useQBStatusQuery: () => ({ data: { connected: true, realmId: "realm-1" } }),
 	useQBInvoiceSyncMutation: () => syncMutation,
 	useQBInvoiceEmailMutation: () => idle,
+	useMarkQbReconciledMutation: () => reconcileMutation,
 }));
 vi.mock("../../../hooks/useTaxSettings", () => ({
 	useAcknowledgeTaxReview: () => idle,
@@ -71,6 +73,11 @@ const renderPage = () =>
 			</MemoryRouter>
 		</QueryClientProvider>
 	);
+
+const login = (perms: string[]) =>
+	useAuthStore
+		.getState()
+		.login("dispatcher", "Alex", "d1", "org", "America/Chicago", perms);
 
 beforeEach(() => {
 	useAuthStore
@@ -224,5 +231,40 @@ describe("InvoiceDetailPage — QB_TAX_ZERO", () => {
 		expect(await screen.findAllByText(/QuickBooks charged no tax\. Check/)).toHaveLength(1);
 		expect(screen.getByText(/Copper pipe/)).toBeInTheDocument();
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+});
+
+describe("InvoiceDetailPage — QuickBooks divergence", () => {
+	const diverged = () =>
+		({
+			...base,
+			qb_sync_status: "synced",
+			qb_diverged_at: "2026-11-01T00:00:00.000Z",
+			qb_diverged_reason: "refund_not_in_qb",
+		}) as unknown as Invoice;
+
+	it("a diverged invoice shows the banner for its reason and a Mark reconciled button for edit_invoices", async () => {
+		invoice = diverged();
+		const user = userEvent.setup();
+		renderPage();
+		expect(
+			screen.getByText(/Record the refund in QuickBooks, then mark the invoice reconciled./)
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Mark reconciled" }));
+		expect(
+			screen.getByText(
+				"Mark Invoice INV-1001 as matching QuickBooks? Do this after you've fixed it in QuickBooks."
+			)
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Mark as matching" }));
+		expect(reconcileMutation.mutateAsync).toHaveBeenCalledWith("inv-1");
+	});
+
+	it("Mark reconciled is absent without edit_invoices", () => {
+		login(["view_invoices"]);
+		invoice = diverged();
+		renderPage();
+		expect(screen.getByText(/mark the invoice reconciled/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Mark reconciled" })).toBeNull();
 	});
 });

@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import {
 	Bell, Clock, CheckCheck, Wrench, MailOpen, Settings, ShoppingCart, Receipt, PenLine, KeyRound,
-	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard, ClockAlert, Percent, Unlink, MailX, MessageSquareText, MessageSquareReply, Repeat, FileWarning, CalendarClock,
+	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard, ClockAlert, Percent, Unlink, MailX, MessageSquareText, MessageSquareReply, Repeat, FileWarning, CalendarClock, CloudOff, Link2Off,
 } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useDispatcherNotificationsQuery, useMarkDispatcherNotificationReadMutation, useMarkAllDispatcherNotificationsReadMutation } from "../../hooks/useNotifications";
@@ -54,6 +54,8 @@ function NotificationIcon({ type }: { type: DispatcherNotificationType }): React
         case "subscription_changed": return <CreditCard size={18} className={`${cls} text-text-secondary`} />;
         case "tax_rate_changed": return <Percent size={18} className={`${cls} text-warning-text`} />;
         case "qb_tax_code_needed": return <Unlink size={18} className={`${cls} text-warning-text`} />;
+        case "qb_sync_failed": return <CloudOff size={18} className={`${cls} text-warning-text`} />;
+        case "qb_connection_lost": return <Link2Off size={18} className={`${cls} text-error-text`} />;
         case "trial_ending":
         case "upgrade_request_resolved": return <CreditCard size={18} className={`${cls} text-primary-text`} />;
         case "timesheet_issue_reported": return <ClockAlert size={18} className={`${cls} text-warning-text`} />;

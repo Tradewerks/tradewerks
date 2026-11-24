@@ -43,6 +43,13 @@ export const disconnectQB = async (): Promise<void> => {
     }
 };
 
+export const markQBInvoiceReconciled = async (invoiceId: string): Promise<void> => {
+    const response = await api.post<ApiResponse<{ reconciled: boolean }>>(`/integrations/quickbooks/invoices/${invoiceId}/reconciled`);
+    if (!response.data.success) {
+        throw new Error(response.data.error?.message || "Failed to mark invoice reconciled");
+    }
+};
+
 export const syncInvoiceToQB = async (invoiceId: string): Promise<void> => {
     const response = await api.post<ApiResponse<null>>(`/integrations/quickbooks/invoices/${invoiceId}/sync`);
     if (!response.data.success) {
@@ -285,7 +292,7 @@ export interface QBUnsyncedDoc {
 	type: "invoice" | "purchase" | "field_purchase" | "payment";
 	id: string;
 	label: string;
-	status: "not_synced" | "failed";
+	status: "not_synced" | "failed" | "diverged";
 	updated_at: string;
 }
 export interface QBSyncNowResult {

@@ -15,17 +15,27 @@ export default function QuickBooksUnsyncedCard({ connected }: { connected: boole
 	const sync = useQBSyncNowMutation();
 	if (!connected || (docs.length === 0 && !sync.data)) return null;
 	const failed = sync.data?.failed ?? [];
+	// A diverged document is already in QuickBooks; syncing cannot fix it, a person has to.
+	const syncable = docs.filter((d) => d.status !== "diverged").length;
+	const diverged = docs.length - syncable;
 	return (
 		<ModuleNotice
 			title={
 				<>
-					{docs.length} {docs.length === 1 ? "document" : "documents"} not synced
+					{syncable > 0 || diverged === 0 ? (
+						<>
+							{syncable} {syncable === 1 ? "document" : "documents"} not synced
+							{diverged > 0 && <>, {diverged} to reconcile</>}
+						</>
+					) : (
+						<>{diverged} to reconcile in QuickBooks</>
+					)}
 				</>
 			}
 			action={
 				<button
 					type="button"
-					disabled={sync.isPending || docs.length === 0}
+					disabled={sync.isPending || syncable === 0}
 					onClick={() => sync.mutate()}
 					className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline disabled:opacity-50"
 				>
@@ -62,6 +72,12 @@ export default function QuickBooksUnsyncedCard({ connected }: { connected: boole
 										className="text-xs text-text-secondary"
 									>
 										{KIND[d.type]} {d.label}
+										{d.status === "diverged" && (
+											<span className="text-warning-text">
+												{" "}
+												· doesn't match QuickBooks — reconcile it there
+											</span>
+										)}
 										{d.status === "failed" && (
 											<span className="text-error-text">
 												{" "}

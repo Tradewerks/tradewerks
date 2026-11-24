@@ -1,9 +1,9 @@
 ﻿import AdaptableTable from "../../components/AdaptableTable";
 import { useAllInvoicesQuery } from "../../hooks/useInvoices";
 import { useClientByIdQuery } from "../../hooks/useClients";
-import { InvoiceStatusValues, InvoiceStatusColors, InvoiceStatusLabels, type InvoiceStatus, isOverdue } from "../../types/invoices";
+import { InvoiceStatusValues, InvoiceStatusColors, InvoiceStatusLabels, type InvoiceStatus, type Invoice, isOverdue } from "../../types/invoices";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, MoreVertical, FileText, Upload, AlertCircle } from "lucide-react";
+import { Plus, MoreVertical, FileText, Upload, AlertCircle, CloudOff } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { formatDate, formatCurrency } from "../../util/util";
 import CreateInvoice from "../../components/invoices/CreateInvoice";
@@ -47,6 +47,19 @@ const COLUMN_SORT_KEY: Record<string, string> = {
 	dueDate: "date",
 };
 
+// A diverged Void invoice still needs a person, so there is deliberately no status exclusion.
+function qbNeedsAttention(
+	inv: Invoice,
+	qbStatus: { connected: boolean; realmId?: string } | null | undefined,
+): boolean {
+	return (
+		isCurrentQbRealm(inv.account_id, qbStatus) &&
+		(inv.qb_sync_status === "failed" ||
+			inv.qb_sync_status === "tax_mismatch" ||
+			!!inv.qb_diverged_at)
+	);
+}
+
 export default function InvoicesPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
@@ -72,6 +85,7 @@ export default function InvoicesPage() {
 	const sortParam = queryParams.get("sort");
 	const dirParam = queryParams.get("dir");
 	const taxMismatchOnly = queryParams.get("qb") === "tax_mismatch";
+	const attentionOnly = queryParams.get("qb") === "attention";
 
 	//permissions
 	const CREATE_INVOICE = usePermission("create_invoices");
@@ -111,6 +125,11 @@ export default function InvoicesPage() {
 			(i) =>
 				i.qb_sync_status === "tax_mismatch" && isCurrentQbRealm(i.account_id, qbStatus),
 		).length;
+	}, [invoices, qbStatus]);
+
+	const attentionCount = useMemo(() => {
+		if (!invoices || !qbStatus?.connected) return 0;
+		return invoices.filter((i) => qbNeedsAttention(i, qbStatus)).length;
 	}, [invoices, qbStatus]);
 
 	const display = useMemo(() => {
@@ -160,6 +179,11 @@ export default function InvoicesPage() {
 					_qbTaxMismatch:
 						inv.qb_sync_status === "tax_mismatch" &&
 						isCurrentQbRealm(inv.account_id, qbStatus),
+					_qbDiverged:
+						!!inv.qb_diverged_at && isCurrentQbRealm(inv.account_id, qbStatus),
+					_qbFailed:
+						inv.qb_sync_status === "failed" && isCurrentQbRealm(inv.account_id, qbStatus),
+					_qbAttention: qbNeedsAttention(inv, qbStatus),
 					_issueDate: inv.issue_date
 						? new Date(inv.issue_date)
 						: null,
@@ -168,6 +192,7 @@ export default function InvoicesPage() {
 
 		if (clientFilter) data = data.filter((item) => item._clientId === clientFilter);
 		if (taxMismatchOnly) data = data.filter((item) => item._qbTaxMismatch);
+		if (attentionOnly) data = data.filter((item) => item._qbAttention);
 		if (statusFilter.length > 0) data = data.filter((item) => statusFilter.includes(item._rawStatus));
 		if (dateRange.option !== "all")
 			data = data.filter((item) => matchesDateRange(item._issueDate, dateRange));
@@ -233,7 +258,7 @@ export default function InvoicesPage() {
 			data
 				.sort(comparator)
 		);
-	}, [invoices, searchInput, termsKey, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam, taxMismatchOnly, qbStatus]);
+	}, [invoices, searchInput, termsKey, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam, taxMismatchOnly, attentionOnly, qbStatus]);
 
 	const removeClientFilter = () => {
 		const newParams = new URLSearchParams(location.search);
@@ -257,6 +282,13 @@ export default function InvoicesPage() {
 	const setTaxMismatchOnly = (on: boolean) => {
 		const next = new URLSearchParams(location.search);
 		if (on) next.set("qb", "tax_mismatch");
+		else next.delete("qb");
+		navigate(`/dispatch/invoices${next.toString() ? `?${next.toString()}` : ""}`);
+	};
+
+	const setAttentionOnly = (on: boolean) => {
+		const next = new URLSearchParams(location.search);
+		if (on) next.set("qb", "attention");
 		else next.delete("qb");
 		navigate(`/dispatch/invoices${next.toString() ? `?${next.toString()}` : ""}`);
 	};
@@ -295,7 +327,7 @@ export default function InvoicesPage() {
 		);
 	}, [invoices]);
 
-	const hasActiveFilters = taxMismatchOnly || clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
+	const hasActiveFilters = taxMismatchOnly || attentionOnly ||clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
 
 	return (
 		<div className="text-text-primary">
@@ -423,6 +455,17 @@ export default function InvoicesPage() {
 				</div>
 			)}
 
+			{attentionCount > 0 && !attentionOnly && !taxMismatchOnly && (
+				<button
+					type="button"
+					onClick={() => setAttentionOnly(true)}
+					className="mb-3 inline-flex items-center gap-2 rounded-lg border border-warning-border bg-warning-bg px-3 py-1.5 text-sm font-medium text-warning-text transition-colors hover:text-text-primary"
+				>
+					<CloudOff size={14} className="flex-shrink-0" />
+					QuickBooks: needs attention ({attentionCount})
+				</button>
+			)}
+
 				<PageControls
 				className="mb-3"
 				left={
@@ -467,6 +510,13 @@ export default function InvoicesPage() {
 								label: "QuickBooks tax differs",
 								color: "orange" as const,
 								onRemove: () => setTaxMismatchOnly(false),
+							}
+						: null,
+					attentionOnly
+						? {
+								label: "QuickBooks: needs attention",
+								color: "orange" as const,
+								onRemove: () => setAttentionOnly(false),
 							}
 						: null,
 					clientFilter && filterClient
@@ -547,6 +597,18 @@ export default function InvoicesPage() {
 										>
 											{row.status as string}
 										</div>
+										{(row._qbFailed === true || row._qbDiverged === true) && (
+											<span
+												title={
+													row._qbDiverged === true
+														? "QuickBooks doesn't match — open the invoice"
+														: "Not in QuickBooks — retry from the invoice"
+												}
+												className="flex-shrink-0 text-warning-text"
+											>
+												<CloudOff size={14} aria-hidden="true" />
+											</span>
+										)}
 										{row._qbTaxMismatch === true && (
 											<span title="QuickBooks tax differs" className="flex-shrink-0 text-warning-text">
 												<AlertCircle size={15} aria-label="QuickBooks tax differs" />

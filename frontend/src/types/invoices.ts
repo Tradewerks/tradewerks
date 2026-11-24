@@ -245,6 +245,11 @@ export interface InvoiceVisit {
 // MAIN INVOICE TYPE
 // ============================================================================
 
+export type QbDivergenceReason =
+	| "refund_not_in_qb"
+	| "qb_payment_delete_failed"
+	| "qb_payment_overapplied";
+
 export interface Invoice extends PricingBreakdown, TaxProvenance {
 	id: string;
 	invoice_number: string;
@@ -294,6 +299,8 @@ export interface Invoice extends PricingBreakdown, TaxProvenance {
 	qb_tax_amount?: number | string | null;
 	qb_invoice_id?: string | null;
 	qb_credit_memo_id?: string | null;
+	qb_diverged_at?: string | null;
+	qb_diverged_reason?: QbDivergenceReason | null;
 	account_id?: string | null;
 
 	// Relations

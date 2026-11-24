@@ -3,6 +3,7 @@ import {
     getQBConnectUrl,
     disconnectQB,
     syncInvoiceToQB,
+    markQBInvoiceReconciled,
     sendInvoiceEmailViaQB,
     getQBCustomers,
     getQBMappedCustomers,
@@ -413,6 +414,17 @@ export const useQBInvoiceSyncMutation = () => {
         onError: () => {
             queryClient.invalidateQueries({ queryKey: ["qbStatus"] });
             queryClient.invalidateQueries({ queryKey: ["invoices"] });
+        },
+    });
+};
+
+export const useMarkQbReconciledMutation = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: (invoiceId: string) => markQBInvoiceReconciled(invoiceId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
+            queryClient.invalidateQueries({ queryKey: ["qbUnsynced"] });
         },
     });
 };

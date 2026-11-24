@@ -37,6 +37,7 @@ import type { Dispute, DisputeResolution } from "../../types/disputes";
 import { downloadInvoicePdf, sendInvoice } from "../../api/invoices";
 import SendDocumentModal from "../../components/ui/SendDocumentModal";
 import FullPopup from "../../components/ui/FullPopup";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ReasonField from "../../components/ui/ReasonField";
 import LifecycleBar, {
 	LifecycleActions,
@@ -64,6 +65,7 @@ import {
 	PaymentMethodLabels,
 	type InvoiceStatus,
 	type PaymentMethod,
+	type QbDivergenceReason,
 	isOverdue,
 	isEditable,
 	isDeletable,
@@ -82,6 +84,7 @@ import { isV2Snapshot } from "../../types/tax";
 import {
 	useQBStatusQuery,
 	useQBInvoiceSyncMutation,
+	useMarkQbReconciledMutation,
 	useQBInvoiceEmailMutation,
 } from "../../hooks/useQuickbooks";
 import ChangeHistory from "../../components/activity/ChangeHistory";
@@ -113,6 +116,22 @@ const formatDateTime = (val: string | Date | null | undefined): string => {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const NO_DISPUTES: Dispute[] = [];
+
+// Mirrors the dispatcher notification copy in backend services/qb/qbNotify.ts.
+const QB_DIVERGENCE_COPY: Record<QbDivergenceReason, { title: string; body: string }> = {
+	refund_not_in_qb: {
+		title: "Refund not in QuickBooks",
+		body: "Record the refund in QuickBooks, then mark the invoice reconciled.",
+	},
+	qb_payment_delete_failed: {
+		title: "Payment still in QuickBooks",
+		body: "Delete the payment in QuickBooks, then mark the invoice reconciled.",
+	},
+	qb_payment_overapplied: {
+		title: "QuickBooks payment larger than the balance",
+		body: "Check the payment in QuickBooks, then mark the invoice reconciled.",
+	},
+};
 
 export default function InvoiceDetailPage() {
 	const { invoiceId: invoiceIdParam, id: idParam } = useParams<{
@@ -211,6 +230,9 @@ export default function InvoiceDetailPage() {
 
 	const { data: qbStatus } = useQBStatusQuery();
 	const { mutate: syncToQB, isPending: isSyncingQB } = useQBInvoiceSyncMutation();
+	const { mutateAsync: markReconciled, isPending: isReconciling } = useMarkQbReconciledMutation();
+	const [reconcileOpen, setReconcileOpen] = useState(false);
+	const [reconcileError, setReconcileError] = useState<string | null>(null);
 
 	const sendEmailMutation = useQBInvoiceEmailMutation();
 	const primaryEmail = invoice?.client?.contacts?.find((c) => c.is_primary)?.contact?.email;
@@ -454,6 +476,11 @@ export default function InvoiceDetailPage() {
 	const qbSynced = qbInThisRealm && invoice.qb_sync_status === "synced";
 	const qbFailed = qbInThisRealm && invoice.qb_sync_status === "failed";
 	const qbTaxMismatch = qbInThisRealm && invoice.qb_sync_status === "tax_mismatch";
+	// Not gated on status: a diverged Void invoice still needs a person.
+	const qbDivergence =
+		qbInThisRealm && invoice.qb_diverged_at && invoice.qb_diverged_reason
+			? QB_DIVERGENCE_COPY[invoice.qb_diverged_reason]
+			: null;
 	// A credit adjustment lives in QuickBooks as a credit memo, even before it has an id there.
 	const qbIsCreditMemo = !!invoice.adjusts_invoice_id && Number(invoice.total) < 0;
 	const qbRemoteId = qbIsCreditMemo ? invoice.qb_credit_memo_id : invoice.qb_invoice_id;
@@ -1247,6 +1274,30 @@ export default function InvoiceDetailPage() {
 					</div>
 				)}
 
+				{qbDivergence && (
+					<div
+						role="status"
+						className="flex items-center gap-2 rounded-lg border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
+					>
+						<AlertTriangle size={16} className="flex-shrink-0" />
+						<span className="flex-1">
+							<span className="font-semibold">{qbDivergence.title}.</span> {qbDivergence.body}
+						</span>
+						{EDIT_INVOICE && (
+							<button
+								type="button"
+								onClick={() => {
+									setReconcileError(null);
+									setReconcileOpen(true);
+								}}
+								className="flex-shrink-0 font-medium underline underline-offset-2 hover:text-text-primary"
+							>
+								Mark reconciled
+							</button>
+						)}
+					</div>
+				)}
+
 				{/* The amounts are the whole diagnosis, so they sit in the page
 				    rather than only in the badge's hover title. */}
 				{qbTaxMismatch && (
@@ -1889,6 +1940,24 @@ export default function InvoiceDetailPage() {
 						? "Email another copy of this invoice to the client? Its status will not change."
 						: undefined
 				}
+			/>
+
+			<ConfirmDialog
+				open={reconcileOpen}
+				title="Mark reconciled"
+				body={`Mark Invoice ${invoice.invoice_number} as matching QuickBooks? Do this after you've fixed it in QuickBooks.`}
+				confirmLabel="Mark as matching"
+				pending={isReconciling}
+				error={reconcileError}
+				onConfirm={async () => {
+					try {
+						await markReconciled(invoice.id);
+						setReconcileOpen(false);
+					} catch (error) {
+						setReconcileError(errorMessage(error, "Couldn't mark this invoice reconciled."));
+					}
+				}}
+				onCancel={() => setReconcileOpen(false)}
 			/>
 
 			{/* Always mounted so FullPopup's close fade can play — matching

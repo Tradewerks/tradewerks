@@ -46,6 +46,8 @@ export type DispatcherNotificationType =
 	| "trial_ending"
 	| "tax_rate_changed"
 	| "qb_tax_code_needed"
+	| "qb_sync_failed"
+	| "qb_connection_lost"
 	| "timesheet_issue_reported"
 	| "customer_message_failed"
 	| "sms_registration_update"
@@ -101,6 +103,8 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "customer_sms_reply", group: "Sales & billing", permission: "view_customer_comms", label: "Customer texts", description: "A customer replied to one of your texts" },
 	{ type: "tax_rate_changed", group: "Sales & billing", permission: "manage_taxes", label: "Tax rate changes", description: "A jurisdiction's rate changed on open drafts" },
 	{ type: "qb_tax_code_needed", group: "Sales & billing", permission: "manage_taxes", label: "QuickBooks tax codes", description: "QuickBooks needs a tax code before automatic tax can sync" },
+	{ type: "qb_sync_failed", group: "Sales & billing", permission: "edit_invoices", label: "QuickBooks sync problems", description: "An invoice or payment didn't reach QuickBooks, or QuickBooks no longer matches" },
+	{ type: "qb_connection_lost", group: "Subscription", permission: "manage_organization", label: "QuickBooks disconnected", description: "QuickBooks was disconnected and nothing syncs until you reconnect" },
 	{ type: "usage_limit_warning", group: "Subscription", permission: "manage_organization", label: "Usage limits", description: "A monthly limit is 80% used" },
 	{ type: "subscription_changed", group: "Subscription", permission: "manage_organization", label: "Subscription changes", description: "TradeWerks changed your subscription, modules or limits" },
 	{ type: "upgrade_request_resolved", group: "Subscription", permission: "manage_organization", label: "Subscription requests", description: "TradeWerks approved or declined your request" },
