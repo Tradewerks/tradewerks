@@ -243,6 +243,27 @@ describe("POST /invoices/:id/send re-send of a delivered invoice", () => {
 		expect(res.body.data).toEqual(invoice);
 	});
 
+	// A re-send writes no status, so without this the history has no trace of it.
+	it("a re-send writes an invoice.resent activity naming the recipient", async () => {
+		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "PartiallyPaid" } as never);
+
+		const res = await send();
+
+		expect(res.status).toBe(200);
+		expect(mockLogActivity).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event_type: "invoice.resent",
+				action: "sent",
+				entity_type: "invoice",
+				entity_id: "i1",
+				organization_id: "org-1",
+				actor_type: "dispatcher",
+				actor_id: "disp-1",
+				changes: { recipient_email: { old: null, new: "client@example.com" } },
+			}),
+		);
+	});
+
 	it("re-send of a Viewed invoice does not run the QB tax finalize check", async () => {
 		mockGetInvoiceById.mockResolvedValue({ id: "i1", status: "Viewed" } as never);
 

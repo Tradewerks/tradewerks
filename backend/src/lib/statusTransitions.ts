@@ -68,8 +68,9 @@ const INVOICE_TRANSITIONS: Record<string, readonly string[]> = {
 	// is additive — Issue Adjustment writes a new document and restores this one.
 	Paid:         ["Disputed"],
 	// Restores to whatever the invoice was when the dispute opened. A
-	// PartiallyPaid or Paid original restores through Sent and is then
-	// recomputed by syncInvoicePaymentTotals, which bypasses this guard.
+	// PartiallyPaid or Paid original restores through its delivery status
+	// (invoiceDeliveryStatus: Issued, Sent or Viewed) and is then recomputed
+	// by syncInvoicePaymentTotals, which bypasses this guard.
 	// An Issued original restores directly. Nothing re-locks: finalization is
 	// keyed on leaving Draft (isInvoiceFinalizingTransition), and issued_at is
 	// write-once in updateInvoice.

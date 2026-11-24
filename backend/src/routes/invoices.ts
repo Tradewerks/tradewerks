@@ -213,7 +213,22 @@ router.post("/:id/send", requirePermission("send_invoices"), async (req, res, ne
                 );
         }
         // Already delivered: the copy is out and recorded; the status stays.
-        if (resend) return res.json(createSuccessResponse(existing));
+        if (resend) {
+            // No status write follows, so this is the history's only trace.
+            await logActivity({
+                event_type: "invoice.resent",
+                action: "sent",
+                entity_type: "invoice",
+                entity_id: id,
+                organization_id: orgId,
+                actor_type: "dispatcher",
+                actor_id: context.dispatcherId ?? null,
+                changes: { recipient_email: { old: null, new: recipientEmail } },
+                ip_address: context.ipAddress,
+                user_agent: context.userAgent,
+            });
+            return res.json(createSuccessResponse(existing));
+        }
         const result = await invoicesController.updateInvoice(
             { params: { id }, body: { status: "Sent" } } as any,
             orgId,
