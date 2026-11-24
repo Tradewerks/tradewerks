@@ -28,6 +28,11 @@ const recordKeys = <R extends string>(root: R) => ({
 });
 
 export const qk = {
+	search: {
+		all: ["search"] as const,
+		// Query text and types trail the root so `all` prefix-matches every search.
+		query: (q: string, types?: readonly string[]) => ["search", q, types ?? null] as const,
+	},
 	jobs: recordKeys("jobs"),
 	visits: {
 		all: ["jobVisits"] as const,

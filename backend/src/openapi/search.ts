@@ -16,6 +16,7 @@ const searchType = z.enum([
 	"contact",
 	"project",
 	"inventory_item",
+	"recurring_plan",
 ]);
 
 const searchHit = z

@@ -29,6 +29,7 @@ export const SEARCHABLE_TYPES = [
 	"contact",
 	"project",
 	"inventory_item",
+	"recurring_plan",
 ] as const;
 
 export type SearchEntityType = (typeof SEARCHABLE_TYPES)[number];
@@ -85,6 +86,7 @@ export const SEARCH_TYPE_PERMISSIONS: Record<SearchEntityType, readonly string[]
 	contact: ["view_clients"],
 	project: ["view_projects"],
 	inventory_item: ["view_inventory"],
+	recurring_plan: ["view_recurring_plans"],
 };
 
 /** The subset of types these permissions may search. */
@@ -126,7 +128,7 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 	job: async (db, q, take, assignedTechId) => {
 		const rows = await db.job.findMany({
 			where: {
-				OR: [{ job_number: like(q) }, { name: like(q) }, { description: like(q) }, { address: like(q) }],
+				OR: [{ job_number: like(q) }, { name: like(q) }, { description: like(q) }, { address: like(q) }, { client: { name: like(q) } }],
 				...(assignedTechId ? jobAssignedWhere(assignedTechId) : {}),
 			},
 			select: {
@@ -153,7 +155,7 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 	quote: async (db, q, take) => {
 		const rows = await db.quote.findMany({
 			where: {
-				OR: [{ quote_number: like(q) }, { title: like(q) }, { description: like(q) }, { address: like(q) }],
+				OR: [{ quote_number: like(q) }, { title: like(q) }, { description: like(q) }, { address: like(q) }, { client: { name: like(q) } }],
 			},
 			select: {
 				id: true,
@@ -177,7 +179,9 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 
 	request: async (db, q, take) => {
 		const rows = await db.request.findMany({
-			where: { OR: [{ title: like(q) }, { description: like(q) }, { address: like(q) }] },
+			where: {
+				OR: [{ title: like(q) }, { description: like(q) }, { address: like(q) }, { client: { name: like(q) } }],
+			},
 			select: {
 				id: true,
 				title: true,
@@ -226,7 +230,13 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 		// the parent job (RELATION_SCOPED_MODELS in lib/context.ts).
 		const rows = await db.job_visit.findMany({
 			where: {
-				OR: [{ name: like(q) }, { description: like(q) }, { job: { job_number: like(q) } }],
+				OR: [
+					{ name: like(q) },
+					{ description: like(q) },
+					{ job: { job_number: like(q) } },
+					{ job: { name: like(q) } },
+					{ job: { client: { name: like(q) } } },
+				],
 				...(assignedTechId ? visitAssignedWhere(assignedTechId) : {}),
 			},
 			select: {
@@ -344,6 +354,24 @@ const SEARCHERS: Record<SearchEntityType, Searcher> = {
 			sublabel: join(r.sku, `${Number(r.quantity)} ${r.unit}`, r.location),
 			status: r.is_active ? undefined : "inactive",
 			route: `/dispatch/inventory/items/${r.id}`,
+		}));
+	},
+	recurring_plan: async (db, q, take) => {
+		const rows = await db.recurring_plan.findMany({
+			where: {
+				OR: [{ name: like(q) }, { description: like(q) }, { address: like(q) }, { client: { name: like(q) } }],
+			},
+			select: { id: true, name: true, address: true, status: true, client: { select: { name: true } } },
+			orderBy: { created_at: "desc" },
+			take,
+		});
+		return rows.map((r) => ({
+			id: r.id,
+			type: "recurring_plan" as const,
+			label: r.name,
+			sublabel: join(r.client?.name, r.address),
+			status: r.status,
+			route: `/dispatch/recurring-plans/${r.id}`,
 		}));
 	},
 };

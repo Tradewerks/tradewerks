@@ -62,6 +62,7 @@ describe("allowedSearchTypes", () => {
 			"view_technicians",
 			"view_projects",
 			"view_inventory",
+			"view_recurring_plans",
 		]);
 		expect(all.sort()).toEqual([...SEARCHABLE_TYPES].sort());
 	});

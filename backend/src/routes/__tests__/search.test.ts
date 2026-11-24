@@ -81,7 +81,7 @@ describe("GET /search", () => {
 
 		it("gives an admin every type", async () => {
 			await call({ q: "acme" }, user("admin", []));
-			expect(typesSearched()).toHaveLength(10);
+			expect(typesSearched()).toHaveLength(11);
 		});
 
 		it("returns an empty result rather than a 403 when nothing is visible", async () => {
@@ -97,6 +97,11 @@ describe("GET /search", () => {
 		it("gives a technician with view_assigned_jobs the job and visit types only", async () => {
 			await call({ q: "acme" }, user("technician", ["view_assigned_jobs"]));
 			expect([...(typesSearched() ?? [])].sort()).toEqual(["job", "visit"]);
+		});
+
+		it("never searches recurring plans for a technician with only view_assigned_jobs", async () => {
+			await call({ q: "acme", types: "recurring_plan" }, user("technician", ["view_assigned_jobs"]));
+			expect(searchRecords).not.toHaveBeenCalled();
 		});
 	});
 
