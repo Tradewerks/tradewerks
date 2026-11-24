@@ -52,7 +52,7 @@ export const STAT_DESCRIPTIONS: Record<string, Record<string, string>> = {
 		Active: "Plans currently active.",
 		Paused: "Plans currently paused.",
 		"Ending Soon":
-			"Active or paused plans whose end date is in the next 30 days or has already passed.",
+			"Active, paused or expired plans whose end date is in the next 30 days or has already passed.",
 	},
 };
 

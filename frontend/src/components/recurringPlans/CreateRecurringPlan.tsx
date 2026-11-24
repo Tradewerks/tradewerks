@@ -16,6 +16,8 @@ import {
 	type Priority,
 } from "../../types/common";
 import { useAllClientsQuery } from "../../hooks/useClients";
+import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
+import { useAuthStore } from "../../auth/authStore";
 import {
 	useCreateRecurringPlanMutation,
 	useDebouncedRecurringTaxEstimate,
@@ -88,7 +90,7 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 	const [geoData, setGeoData] = useState<GeocodeResult>();
 	const [isLoading, setIsLoading] = useState(false);
 	const [errors, setErrors] = useState<ZodError | null>(null);
-	const [timezone] = useState<string>("America/Chicago");
+	const [defaultTechnicianId, setDefaultTechnicianId] = useState("");
 
 	const [scheduleState, setScheduleState] = useState<{
 		startDate: Date;
@@ -127,6 +129,8 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 	const [isDirty, setIsDirty] = useState(false);
 
 	const { data: clients } = useAllClientsQuery();
+	const { data: technicians } = useActiveTechniciansQuery();
+	const orgTimezone = useAuthStore((s) => s.user?.orgTimezone);
 	const createMutation = useCreateRecurringPlanMutation();
 	const { data: drafts = [] } = useDraftsByTypeQuery("recurring_plan");
 	const createDraftMutation = useCreateDraftMutation();
@@ -309,6 +313,7 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		setName("");
 		setDescription("");
 		setClientId("");
+		setDefaultTechnicianId("");
 		setPriority("Medium");
 		setGeoData(undefined);
 		setScheduleState({
@@ -676,7 +681,7 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 			ends_at: scheduleState.endDate
 				? scheduleState.endDate.toISOString()
 				: undefined,
-			timezone,
+			default_technician_id: defaultTechnicianId || null,
 			generation_window_days: Number(scheduleState.generationWindow),
 			min_advance_days: Number(scheduleState.minAdvance),
 			billing_mode: billingConfig.billingBasis === "none" ? "none" : billingConfig.billingBasis === "fixed_amount" ? "subscription" : "per_visit",
@@ -743,7 +748,7 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 				goToStep(4 as Step);
 			} else if (
 				errorPaths.some((p) =>
-					["billing_mode", "invoice_timing", "auto_invoice"].includes(
+					["billing_mode", "invoice_timing", "auto_invoice", "invoice_schedule"].includes(
 						String(p)
 					)
 				)
@@ -929,6 +934,13 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 				return (
 					<ScheduleConfiguration
 						mode="create"
+						timezone={orgTimezone}
+						technicians={technicians}
+						defaultTechnicianId={defaultTechnicianId}
+						onDefaultTechnicianChange={(id) => {
+							setDefaultTechnicianId(id);
+							markDirty();
+						}}
 						startDate={scheduleState.startDate}
 						endDate={scheduleState.endDate}
 						generationWindow={scheduleState.generationWindow}
@@ -1083,6 +1095,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		clearLineItemField,
 		billingConfig,
 		markDirty,
+		orgTimezone,
+		technicians,
+		defaultTechnicianId,
 	]);
 
 	// ── Hoisted TimeConstraints — must not remount on state change ───────────

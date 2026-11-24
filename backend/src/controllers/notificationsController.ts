@@ -155,6 +155,9 @@ export const DISPATCHER_NOTIFICATION_PERMISSIONS: Record<DispatcherNotificationT
 	customer_message_failed: "view_customer_comms",
 	sms_registration_update: "view_customer_comms",
 	customer_sms_reply: "view_customer_comms",
+	recurring_invoice_created: "view_invoices",
+	recurring_invoice_failed: "view_invoices",
+	recurring_plan_expiring: "view_recurring_plans",
 };
 
 // Notify every dispatcher in the org who can see this type and hasn't muted it

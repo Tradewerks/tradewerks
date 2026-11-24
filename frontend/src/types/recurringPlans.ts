@@ -15,13 +15,20 @@ import type { JobSummary, VisitReference } from "./jobs";
 // RECURRING PLAN-SPECIFIC TYPES
 // ============================================================================
 
-export const RecurringPlanStatusValues = ["Active", "Paused", "Completed", "Cancelled"] as const;
+export const RecurringPlanStatusValues = [
+	"Active",
+	"Paused",
+	"Expired",
+	"Completed",
+	"Cancelled",
+] as const;
 
 export type RecurringPlanStatus = (typeof RecurringPlanStatusValues)[number];
 
 export const RecurringPlanStatusLabels: Record<RecurringPlanStatus, string> = {
 	Active: "Active",
 	Paused: "Paused",
+	Expired: "Expired",
 	Completed: "Completed",
 	Cancelled: "Cancelled",
 };
@@ -29,6 +36,7 @@ export const RecurringPlanStatusLabels: Record<RecurringPlanStatus, string> = {
 export const RecurringPlanStatusColors: Record<RecurringPlanStatus, string> = {
 	Active: "bg-success/20 text-success-text border-success/30",
 	Paused: "bg-warning/20 text-warning-text border-warning/30",
+	Expired: "bg-neutral/20 text-text-tertiary border-border-strong/30",
 	Completed: "bg-primary/20 text-primary-text border-primary/30",
 	Cancelled: "bg-error/20 text-error-text border-error/30",
 };
@@ -151,6 +159,8 @@ export interface InvoiceSchedule {
 	payment_terms_days?: number | null;
 	auto_send: boolean;
 	memo_template?: string | null;
+	last_failure_message: string | null;
+	last_failure_at: string | null;
 	next_invoice_at?: Date | string | null;
 	last_invoiced_at?: Date | string | null;
 	is_active: boolean;
@@ -296,6 +306,7 @@ export interface RecurringPlan {
 	starts_at: Date | string;
 	ends_at?: Date | string | null;
 	timezone: string;
+	default_technician_id?: string | null;
 	generation_window_days: number;
 	min_advance_days: number;
 	billing_mode: BillingMode;
@@ -313,6 +324,10 @@ export interface RecurringPlan {
 	occurrences?: RecurringOccurrence[];
 	notes?: RecurringPlanNote[];
 	invoice_schedule?: InvoiceSchedule | null;
+
+	// Present only on a response to a line-item save that asked to reprice visits.
+	updated_visits?: number;
+	skipped_visits?: number;
 }
 
 // ============================================================================
@@ -364,7 +379,7 @@ export const CreateRecurringPlanSchema = z
 
 		starts_at: z.string().datetime("Invalid start date"),
 		ends_at: z.string().datetime("Invalid end date").optional().nullable(),
-		timezone: z.string().default("America/Chicago"),
+		default_technician_id: z.string().uuid().nullable().optional(),
 		generation_window_days: z.number().int().min(1).max(365).default(90),
 		min_advance_days: z.number().int().min(1).max(90).default(14),
 
@@ -425,7 +440,7 @@ export const CreateRecurringPlanSchema = z
 
 		invoice_schedule: z.object({
 			billing_basis: z.enum(InvoiceScheduleBillingBasisValues),
-			fixed_amount: z.number().min(0).optional().nullable(),
+			fixed_amount: z.number().positive("Fixed amount must be greater than 0").optional().nullable(),
 			frequency: z.enum(InvoiceScheduleFrequencyValues),
 			day_of_month: z.number().int().min(1).max(31).optional().nullable(),
 			day_of_week: z.enum(WeekdayValues).optional().nullable(),
@@ -472,6 +487,18 @@ export const CreateRecurringPlanSchema = z
 		{
 			message: "Yearly frequency requires by_month",
 			path: ["rule", "by_month"],
+		}
+	)
+	.refine(
+		(data) => {
+			if (data.rule.frequency === "yearly" && !data.rule.by_month_day) {
+				return false;
+			}
+			return true;
+		},
+		{
+			message: "Yearly frequency requires a day of the month",
+			path: ["rule", "by_month_day"],
 		}
 	)
 	.refine(
@@ -559,14 +586,13 @@ export const UpdateRecurringPlanSchema = z
 		priority: z.enum(PriorityValues).optional(),
 		starts_at: z.string().datetime("Invalid start date").optional(),
 		ends_at: z.string().datetime("Invalid end date").optional().nullable(),
-		timezone: z.string().optional(),
+		default_technician_id: z.string().uuid().nullable().optional(),
+		apply_to_scheduled_visits: z.boolean().optional(),
 		generation_window_days: z.number().int().min(1).max(365).optional(),
 		min_advance_days: z.number().int().min(1).max(90).optional(),
 		billing_mode: z.enum(BillingModeValues).optional(),
 		invoice_timing: z.enum(InvoiceTimingValues).optional(),
 		auto_invoice: z.boolean().optional(),
-		status: z.enum(RecurringPlanStatusValues).optional(),
-
 		rule: z
 			.object({
 				frequency: z.enum(RecurringFrequencyValues),
@@ -623,7 +649,7 @@ export const UpdateRecurringPlanSchema = z
 
 		invoice_schedule: z.object({
 			billing_basis: z.enum(InvoiceScheduleBillingBasisValues),
-			fixed_amount: z.number().min(0).optional().nullable(),
+			fixed_amount: z.number().positive("Fixed amount must be greater than 0").optional().nullable(),
 			frequency: z.enum(InvoiceScheduleFrequencyValues),
 			day_of_month: z.number().int().min(1).max(31).optional().nullable(),
 			day_of_week: z.enum(WeekdayValues).optional().nullable(),
@@ -691,6 +717,18 @@ export const UpdateRecurringPlanSchema = z
 	)
 	.refine(
 		(data) => {
+			if (data.rule && data.rule.frequency === "yearly" && !data.rule.by_month_day) {
+				return false;
+			}
+			return true;
+		},
+		{
+			message: "Yearly frequency requires a day of the month",
+			path: ["rule", "by_month_day"],
+		}
+	)
+	.refine(
+		(data) => {
 			if (!data.rule) return true;
 			if (data.rule.arrival_constraint === "at" && !data.rule.arrival_time) {
 				return false;
@@ -753,6 +791,7 @@ export const UpdateRecurringPlanSchema = z
 	);
 
 export const UpdateRecurringPlanLineItemsSchema = z.object({
+	apply_to_scheduled_visits: z.boolean().optional(),
 	line_items: z
 		.array(
 			z.object({

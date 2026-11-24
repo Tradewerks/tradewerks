@@ -323,3 +323,24 @@ export function toLocalInputValue(iso: string | null): string {
 	const d = new Date(iso);
 	return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
+
+/**
+ * 12:00 on `day`'s calendar date (read in the browser's zone, as a date picker
+ * gives it) in `timeZone`. Noon keeps clear of DST switches, so one offset
+ * lookup is exact.
+ */
+export function noonInZone(day: Date, timeZone: string): Date {
+	const guess = Date.UTC(day.getFullYear(), day.getMonth(), day.getDate(), 12);
+	const parts = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		hourCycle: "h23",
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+	}).formatToParts(new Date(guess));
+	const part = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+	const wallAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"));
+	return new Date(guess - (wallAsUtc - guess));
+}

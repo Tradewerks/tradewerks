@@ -16,6 +16,8 @@ import {
 	type Priority,
 } from "../../types/common";
 import { useAllClientsQuery } from "../../hooks/useClients";
+import { useActiveTechniciansQuery, useAllTechniciansQuery } from "../../hooks/useTechnicians";
+import { useToast } from "../ui/useToast";
 import {
 	useUpdateRecurringPlanMutation,
 	useDebouncedRecurringTaxEstimate,
@@ -40,6 +42,7 @@ import {
 } from "../ui/forms/BillingConfiguration";
 import { ScheduleConfiguration } from "../ui/forms/ScheduleConfiguration";
 import { UndoButton, UndoButtonTop } from "../ui/forms/UndoButton";
+import { ruleChanged } from "./ruleChanged";
 
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
@@ -88,6 +91,9 @@ const toNumberOrEmpty = (val: number | null | undefined): number | "" => {
 const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringPlanProps) => {
 	const updateMutation = useUpdateRecurringPlanMutation();
 	const { data: clients } = useAllClientsQuery();
+	const { data: activeTechnicians } = useActiveTechniciansQuery();
+	const { data: allTechnicians } = useAllTechniciansQuery();
+	const toast = useToast();
 
 	const isLoading = updateMutation.isPending;
 
@@ -127,7 +133,15 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 	const [clientId, setClientId] = useState("");
 	const [geoData, setGeoData] = useState<GeocodeResult>();
 	const [errors, setErrors] = useState<ZodError | null>(null);
-	const [timezone] = useState<string>("America/Chicago");
+	const [defaultTechnicianId, setDefaultTechnicianId] = useState("");
+	const [applyToScheduledVisits, setApplyToScheduledVisits] = useState(true);
+	// A deactivated default stays on the plan until changed; show it rather than "Unassigned".
+	const technicians = useMemo(() => {
+		const list = activeTechnicians ?? [];
+		if (!defaultTechnicianId || list.some((t) => t.id === defaultTechnicianId)) return list;
+		const name = allTechnicians?.find((t) => t.id === defaultTechnicianId)?.name;
+		return [...list, { id: defaultTechnicianId, name: `${name ?? "Technician"} (inactive)` }];
+	}, [activeTechnicians, allTechnicians, defaultTechnicianId]);
 	const [timeConstraintsState, setTimeConstraintsState] =
 		useState<TimeConstraintsState | null>(null);
 
@@ -320,6 +334,8 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 			});
 
 			setClientId(plan.client_id);
+			setDefaultTechnicianId(plan.default_technician_id ?? "");
+			setApplyToScheduledVisits(true);
 			const normalizedCoords = normalizeCoords(plan.coords);
 			setGeoData(
 				plan.address
@@ -386,6 +402,40 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 		return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 	};
 
+	const linesChanged = useMemo(() => {
+		const sig = (l: {
+			id?: string;
+			name: string;
+			description?: string | null;
+			quantity: number | string;
+			unit_price: number | string;
+			item_type?: string | null;
+			taxable?: boolean | null;
+			tax_group_id?: string | null;
+			inventory_item_id?: string | null;
+			disposition?: string | null;
+			disposition_vehicle_id?: string | null;
+		}) =>
+			JSON.stringify([
+				l.id ?? null,
+				l.name,
+				l.description || "",
+				Number(l.quantity),
+				Number(l.unit_price),
+				l.item_type || "",
+				l.taxable ?? true,
+				l.tax_group_id ?? null,
+				l.inventory_item_id ?? null,
+				l.disposition ?? null,
+				l.disposition_vehicle_id ?? null,
+			]);
+		const now = activeLineItems
+			.filter((item) => item.name.trim() !== "" && item.quantity > 0)
+			.map((item) => sig({ ...item, id: (item as EditableLineItem).entity_line_item_id }));
+		const before = (plan.line_items ?? []).map((item) => sig(item));
+		return JSON.stringify(now) !== JSON.stringify(before);
+	}, [activeLineItems, plan.line_items]);
+
 	const invokeUpdate = async () => {
 		if (isLoading) return;
 
@@ -445,6 +495,15 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 					: null,
 		};
 
+		// The start and end dates shape the slots too, so moving either resends the
+		// rule; otherwise an unchanged rule would regenerate every planned date.
+		const endDate = getValue("endDate");
+		const scheduleChanged =
+			ruleChanged(preparedRule, plan.rules?.[0]) ||
+			getValue("startDate").getTime() !== new Date(plan.starts_at).getTime() ||
+			(endDate?.getTime() ?? null) !==
+				(plan.ends_at ? new Date(plan.ends_at).getTime() : null);
+
 		const updatedPlan: UpdateRecurringPlanInput = {
 			name: getValue("name").trim(),
 			address: geoData?.address || "",
@@ -455,7 +514,8 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 			ends_at: getValue("endDate")
 				? getValue("endDate")!.toISOString()
 				: undefined,
-			timezone,
+			default_technician_id: defaultTechnicianId || null,
+			...(linesChanged && { apply_to_scheduled_visits: applyToScheduledVisits }),
 			generation_window_days: Number(getValue("generationWindow")),
 			min_advance_days: Number(getValue("minAdvance")),
 			billing_mode: getValue("billingConfig").billingBasis === "none" ? "none" : getValue("billingConfig").billingBasis === "fixed_amount" ? "subscription" : "per_visit",
@@ -469,11 +529,12 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 				day_of_week: ["weekly", "biweekly"].includes(getValue("billingConfig").scheduleFrequency) && getValue("billingConfig").invoiceTrigger === "on_schedule" ? getValue("billingConfig").dayOfWeek : undefined,
 				generate_days_before: getValue("billingConfig").generateDaysBefore,
 				payment_terms_days: getValue("billingConfig").paymentTermsDays,
-				auto_send: false,
+				auto_send: plan.invoice_schedule?.auto_send ?? false,
 				memo_template: getValue("billingConfig").memoTemplate || undefined,
 			} : undefined,
-			rule: preparedRule,
-			line_items: preparedLineItems,
+			...(scheduleChanged && { rule: preparedRule }),
+			// Sending lines re-stamps them onto scheduled visits, wiping per-visit edits.
+			...(linesChanged && { line_items: preparedLineItems }),
 		};
 
 		const parseResult = UpdateRecurringPlanSchema.safeParse(updatedPlan);
@@ -522,7 +583,7 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 			else if (errorPaths.includes("line_items")) goToStep(4 as Step);
 			else if (
 				errorPaths.some((p) =>
-					["billing_mode", "invoice_timing", "auto_invoice"].includes(
+					["billing_mode", "invoice_timing", "auto_invoice", "invoice_schedule"].includes(
 						String(p)
 					)
 				)
@@ -533,10 +594,20 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 
 		setErrors(null);
 		try {
-			await updateMutation.mutateAsync({
+			const saved = await updateMutation.mutateAsync({
 				jobId: plan.job_container?.id || plan.id,
 				updates: updatedPlan,
 			});
+			if (linesChanged && applyToScheduledVisits) {
+				if (saved?.updated_visits)
+					toast.success(
+						`Updated ${saved.updated_visits} scheduled ${saved.updated_visits === 1 ? "visit" : "visits"}`
+					);
+				if (saved?.skipped_visits)
+					toast.warning(
+						`${saved.skipped_visits} ${saved.skipped_visits === 1 ? "visit kept its" : "visits kept their"} old price because parts were already used or ordered`
+					);
+			}
 			setIsModalOpen(false);
 		} catch (error) {
 			console.error("Failed to update recurring plan:", error);
@@ -727,6 +798,10 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 				return (
 					<ScheduleConfiguration
 						mode="edit"
+						timezone={plan.timezone}
+						technicians={technicians}
+						defaultTechnicianId={defaultTechnicianId}
+						onDefaultTechnicianChange={setDefaultTechnicianId}
 						startDate={getValue("startDate")}
 						endDate={getValue("endDate")}
 						generationWindow={getValue("generationWindow")}
@@ -829,6 +904,18 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 						<div className="pt-3">
 							<RecurringTaxEstimate estimate={taxEstimate} />
 						</div>
+						{linesChanged && (
+						<label className="mt-3 flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
+							<input
+								type="checkbox"
+								checked={applyToScheduledVisits}
+								onChange={(e) => setApplyToScheduledVisits(e.target.checked)}
+								disabled={isLoading}
+								className="w-3.5 h-3.5 rounded bg-surface-inset border-border-strong accent-primary flex-shrink-0"
+							/>
+							Also update scheduled visits that haven't started
+						</label>
+						)}
 					</div>
 				);
 
@@ -883,6 +970,10 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 		autoMode,
 		taxEstimate,
 		ErrorDisplay,
+		technicians,
+		defaultTechnicianId,
+		applyToScheduledVisits,
+		linesChanged,
 	]);
 
 	return (

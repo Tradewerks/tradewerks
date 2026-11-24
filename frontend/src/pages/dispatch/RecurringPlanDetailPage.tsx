@@ -11,6 +11,7 @@ import {
 	ChevronRight,
 	Briefcase,
 	ReceiptText,
+	AlertTriangle,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import {
@@ -21,6 +22,8 @@ import {
 	useResumeRecurringPlanMutation,
 	useCancelRecurringPlanMutation,
 	useCompleteRecurringPlanMutation,
+	useRenewRecurringPlanMutation,
+	useSkipOccurrenceMutation,
 	useGenerateOccurrencesMutation,
 	useGenerateVisitFromOccurrenceMutation,
 } from "../../hooks/useRecurringPlans";
@@ -29,6 +32,9 @@ import Card from "../../components/ui/Card";
 import RecurringTaxEstimate from "../../components/recurringPlans/RecurringTaxEstimate";
 import { HEADER_BTN_ICON, HEADER_META } from "../../components/ui/headerActions";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import DatePicker from "../../components/ui/DatePicker";
+import ToggleSwitch from "../../components/ui/ToggleSwitch";
+import ReasonField from "../../components/ui/ReasonField";
 import ClientDetailsCard from "../../components/clients/ClientDetailsCard";
 import RecurringPlanNoteManager from "../../components/recurringPlans/RecurringPlanNoteManager";
 import EditRecurringPlan from "../../components/recurringPlans/EditRecurringPlan";
@@ -72,7 +78,7 @@ import {
 	type VisitStatus,
 } from "../../types/jobs";
 import { PriorityColors } from "../../types/common";
-import { formatCurrency, formatDate } from "../../util/util";
+import { errorMessage, formatCurrency, formatDate, noonInZone } from "../../util/util";
 import { usePermission } from "../../hooks/usePermission";
 import ChangeHistory from "../../components/activity/ChangeHistory";
 
@@ -85,6 +91,18 @@ const PLAN_TABS: readonly DetailTabDef<"overview" | "schedule" | "activity">[] =
 	{ id: "schedule", label: "Schedule" },
 	{ id: "activity", label: "Activity" },
 ];
+
+const CANCEL_PLAN_BODY =
+	"Cancel this plan? Future planned visits are removed, scheduled visits that haven't started are cancelled and the customer is notified, and billing stops.";
+
+// Renew refuses an end date before today in the plan's own timezone.
+function todayInPlanZone(timeZone: string): Date {
+	const [y, m, d] = new Date()
+		.toLocaleDateString("en-CA", { timeZone })
+		.split("-")
+		.map(Number);
+	return new Date(y, m - 1, d);
+}
 
 function ordinalDay(n: number): string {
 	const s = ["th", "st", "nd", "rd"];
@@ -130,6 +148,13 @@ export default function RecurringPlanDetailPage() {
 	const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 	const [daysAhead, setDaysAhead] = useState(30);
 	const [pendingConfirm, setPendingConfirm] = useState<"cancel" | "complete" | null>(null);
+	const [confirmError, setConfirmError] = useState<string | null>(null);
+	const [actionError, setActionError] = useState<string | null>(null);
+	const [renewOpen, setRenewOpen] = useState(false);
+	const [renewDate, setRenewDate] = useState<Date | null>(null);
+	const [renewNoEnd, setRenewNoEnd] = useState(false);
+	const [skipTarget, setSkipTarget] = useState<RecurringOccurrence | null>(null);
+	const [skipReason, setSkipReason] = useState("");
 	const [upcomingPage, setUpcomingPage] = useState(0);
 	const [pastPage, setPastPage] = useState(0);
 
@@ -137,6 +162,8 @@ export default function RecurringPlanDetailPage() {
 	const resumeMutation = useResumeRecurringPlanMutation();
 	const cancelMutation = useCancelRecurringPlanMutation();
 	const completeMutation = useCompleteRecurringPlanMutation();
+	const renewMutation = useRenewRecurringPlanMutation();
+	const skipMutation = useSkipOccurrenceMutation();
 	const generateMutation = useGenerateOccurrencesMutation();
 	const generateVisitMutation = useGenerateVisitFromOccurrenceMutation();
 	const generateInvoiceMutation = useGenerateInvoiceMutation();
@@ -145,16 +172,10 @@ export default function RecurringPlanDetailPage() {
 	const MANAGE_RECURRING_PLANS = usePermission("manage_recurring_plans");
 	const CREATE_INVOICE = usePermission("create_invoices");
 
-	const { upcomingOccurrences, serviceHistory } = useMemo(() => {
-		if (!occurrences || occurrences.length === 0) {
-			return {
-				upcomingOccurrences: [],
-				serviceHistory: [],
-				sortedOccurrences: [],
-			};
-		}
+	const planIsTerminal = plan?.status === "Completed" || plan?.status === "Cancelled";
 
-		const sorted = [...occurrences].sort(
+	const { upcomingOccurrences, serviceHistory, missedOccurrences } = useMemo(() => {
+		const sorted = [...(occurrences ?? [])].sort(
 			(a, b) =>
 				new Date(a.occurrence_start_at).getTime() -
 				new Date(b.occurrence_start_at).getTime()
@@ -163,11 +184,27 @@ export default function RecurringPlanDetailPage() {
 		const now = new Date();
 		const upcoming: RecurringOccurrence[] = [];
 		const history: RecurringOccurrence[] = [];
+		const missed: RecurringOccurrence[] = [];
 
 		for (const occ of sorted) {
 			const occDate = new Date(occ.occurrence_start_at);
+			const elapsed = occDate <= now;
+
+			// Time passed and nothing happened: no visit was made, or the visit
+			// is still sitting on Scheduled. Both need a dispatcher's decision.
+			// A terminal plan has nothing left to act on; its visits belong to history.
+			if (
+				!planIsTerminal &&
+				elapsed &&
+				((occ.status === "planned" && !occ.job_visit_id) ||
+					(occ.status === "generated" && occ.job_visit?.status === "Scheduled"))
+			) {
+				missed.push(occ);
+				continue;
+			}
+
 			const isPast =
-				occDate <= now ||
+				elapsed ||
 				occ.status === "completed" ||
 				occ.status === "skipped" ||
 				occ.status === "cancelled";
@@ -185,9 +222,9 @@ export default function RecurringPlanDetailPage() {
 		return {
 			upcomingOccurrences: upcoming,
 			serviceHistory: history.reverse(),
-			sortedOccurrences: sorted,
+			missedOccurrences: missed,
 		};
-	}, [occurrences]);
+	}, [occurrences, planIsTerminal]);
 
 	const isLoading = planLoading || occurrencesLoading;
 
@@ -246,29 +283,33 @@ export default function RecurringPlanDetailPage() {
 
 	const handlePause = async () => {
 		if (!jobContainerId) return;
+		setActionError(null);
 		try {
 			await pauseMutation.mutateAsync(jobContainerId);
 		} catch (error) {
-			console.error("Failed to pause plan:", error);
+			setActionError(errorMessage(error, "Failed to pause the plan."));
 		}
 	};
 
 	const handleResume = async () => {
 		if (!jobContainerId) return;
+		setActionError(null);
 		try {
 			await resumeMutation.mutateAsync(jobContainerId);
 		} catch (error) {
-			console.error("Failed to resume plan:", error);
+			setActionError(errorMessage(error, "Failed to resume the plan."));
 		}
 	};
 
 	const handleCancel = () => {
 		if (!jobContainerId) return;
+		setConfirmError(null);
 		setPendingConfirm("cancel");
 	};
 
 	const handleComplete = () => {
 		if (!jobContainerId) return;
+		setConfirmError(null);
 		setPendingConfirm("complete");
 	};
 
@@ -282,7 +323,45 @@ export default function RecurringPlanDetailPage() {
 			}
 			setPendingConfirm(null);
 		} catch (error) {
-			console.error(`Failed to ${pendingConfirm} plan:`, error);
+			setConfirmError(errorMessage(error, `Failed to ${pendingConfirm} the plan.`));
+		}
+	};
+
+	const handleRenew = () => {
+		if (!jobContainerId) return;
+		setConfirmError(null);
+		setRenewDate(null);
+		setRenewNoEnd(false);
+		setRenewOpen(true);
+	};
+
+	const confirmRenew = async () => {
+		if (!jobContainerId || !plan) return;
+		try {
+			// Noon in the plan's zone: the server reads the date there.
+			const endsAt =
+				renewNoEnd || !renewDate
+					? null
+					: noonInZone(renewDate, plan.timezone).toISOString();
+			await renewMutation.mutateAsync({ jobId: jobContainerId, ends_at: endsAt });
+			setRenewOpen(false);
+		} catch (error) {
+			setConfirmError(errorMessage(error, "Failed to renew the plan."));
+		}
+	};
+
+	const confirmSkip = async () => {
+		if (!jobContainerId || !skipTarget) return;
+		try {
+			await skipMutation.mutateAsync({
+				occurrenceId: skipTarget.id,
+				jobId: jobContainerId,
+				input: { skip_reason: skipReason.trim() },
+			});
+			setSkipTarget(null);
+			setSkipReason("");
+		} catch (error) {
+			setConfirmError(errorMessage(error, "Failed to skip the occurrence."));
 		}
 	};
 
@@ -301,6 +380,7 @@ export default function RecurringPlanDetailPage() {
 
 	const handleGenerateInvoice = async () => {
 		if (!recurringPlanId) return;
+		setActionError(null);
 		try {
 			const result = await generateInvoiceMutation.mutateAsync({
 				source: "recurring_plan",
@@ -308,12 +388,13 @@ export default function RecurringPlanDetailPage() {
 			});
 			navigate(`/dispatch/invoices/${result.invoice.id}`);
 		} catch (error) {
-			console.error("Failed to generate invoice:", error);
+			setActionError(errorMessage(error, "Failed to generate the invoice."));
 		}
 	};
 
 	const handleGenerateVisit = async (occurrenceId: string) => {
 		if (!jobContainerId) return;
+		setActionError(null);
 		try {
 			const result = await generateVisitMutation.mutateAsync({
 				occurrenceId: occurrenceId,
@@ -321,7 +402,7 @@ export default function RecurringPlanDetailPage() {
 			});
 			navigate(`/dispatch/jobs/${jobContainerId}/visits/${result.visit_id}`);
 		} catch (error) {
-			console.error("Failed to generate visit:", error);
+			setActionError(errorMessage(error, "Failed to create the visit."));
 		}
 	};
 
@@ -340,6 +421,7 @@ export default function RecurringPlanDetailPage() {
 			generate: () => setIsGenerateModalOpen(true),
 			complete: handleComplete,
 			cancel: handleCancel,
+			renew: handleRenew,
 		},
 	});
 
@@ -452,6 +534,10 @@ export default function RecurringPlanDetailPage() {
 		/>
 	) : null;
 
+	const schedule = plan.invoice_schedule;
+	const failure = schedule?.last_failure_message || null;
+	const lastFailureAt = failure ? schedule?.last_failure_at : null;
+
 	const infoFields: DetailField[] = [
 		{ label: "Address", value: plan.address },
 		{ label: "Started", value: formatDate(plan.starts_at) },
@@ -526,6 +612,25 @@ export default function RecurringPlanDetailPage() {
 						</>
 					),
 				},
+				...(failure
+						? [
+								{
+									label: "Last Invoice Failure",
+									value: (
+										<>
+											<span className="text-error-text break-words">
+												{failure}
+											</span>
+											{lastFailureAt && (
+												<span className="mt-0.5 block text-xs text-text-tertiary">
+													{formatDate(lastFailureAt)}
+												</span>
+											)}
+										</>
+									),
+								},
+							]
+					: []),
 				{
 					label: "Payment Terms",
 					value:
@@ -665,6 +770,103 @@ export default function RecurringPlanDetailPage() {
 			)}
 		</Card>
 	);
+
+	// The server only generates visits for an Active plan.
+	const createBlockedReason =
+		plan.status === "Paused"
+			? "Plan is paused"
+			: plan.status === "Expired"
+				? "Plan has expired"
+				: null;
+
+	const missedCard =
+		missedOccurrences.length > 0 ? (
+			<section aria-label="Missed / needs action">
+				<Card
+					title="Missed / needs action"
+					headerAction={<span className={HEADER_META}>{missedOccurrences.length}</span>}
+				>
+					<div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+						{missedOccurrences.map((occurrence) => (
+							<div
+								key={occurrence.id}
+								data-testid="missed-row"
+								className="p-2 bg-surface border border-warning/30 rounded-md"
+							>
+								<p className="text-text-primary text-xs font-medium">
+									{formatDate(occurrence.occurrence_start_at)}
+									{" · "}
+									{new Date(occurrence.occurrence_start_at).toLocaleTimeString(
+										"en-US",
+										{ hour: "numeric", minute: "2-digit" }
+									)}
+								</p>
+								<p className="text-text-tertiary text-xs">
+									{occurrence.status === "planned"
+										? "No visit was created"
+										: "Visit is still Scheduled"}
+								</p>
+								<div className="flex gap-1 mt-2">
+									{occurrence.status === "planned" ? (
+										<>
+											<button
+												type="button"
+												title={
+													!MANAGE_RECURRING_PLANS
+														? "You don't have permission to perform this action"
+														: createBlockedReason ||
+															"Generate visit from this occurrence"
+												}
+												onClick={() => handleGenerateVisit(occurrence.id)}
+												disabled={
+													generateVisitMutation.isPending ||
+													!MANAGE_RECURRING_PLANS ||
+													createBlockedReason !== null
+												}
+												className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-primary-hover hover:enabled:bg-primary-active text-on-primary rounded text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed"
+											>
+												<Plus size={12} />
+												Create visit
+											</button>
+											<button
+												type="button"
+												title={
+													MANAGE_RECURRING_PLANS
+														? "Skip this occurrence"
+														: "You don't have permission to perform this action"
+												}
+												onClick={() => {
+													setConfirmError(null);
+													setSkipReason("");
+													setSkipTarget(occurrence);
+												}}
+												disabled={!MANAGE_RECURRING_PLANS}
+												className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-surface hover:enabled:bg-surface-raised border border-border rounded text-xs font-medium transition-colors duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed"
+											>
+												Skip
+											</button>
+										</>
+									) : (
+										<button
+											type="button"
+											onClick={() =>
+												navigate(
+													`/dispatch/jobs/${jobContainerId}/visits/${occurrence.job_visit_id}`
+												)
+											}
+											className="flex-1 flex items-center justify-center gap-1 px-2 py-1 bg-surface hover:bg-surface-raised border border-border rounded text-xs font-medium transition-colors duration-150 ease-out"
+										>
+											<ExternalLink size={12} />
+											Open visit
+										</button>
+									)}
+								</div>
+							</div>
+						))}
+					</div>
+				</Card>
+			</section>
+		) : null;
 
 	const upcomingOccurrencesCard = (
 		<Card
@@ -987,6 +1189,16 @@ export default function RecurringPlanDetailPage() {
 					menuLabel="Plan actions"
 				/>
 
+				{actionError && (
+					<div
+						role="alert"
+						className="flex items-start gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error-text"
+					>
+						<AlertTriangle size={16} className="mt-0.5 shrink-0" />
+						<span className="break-words">{actionError}</span>
+					</div>
+				)}
+
 				{showBar && (
 					<LifecycleBar
 						variant="state"
@@ -1047,6 +1259,7 @@ export default function RecurringPlanDetailPage() {
 					<h2 className="sr-only">Schedule</h2>
 					{/* Stretched: both cards are h-full, so the shorter one carries
 					    its slack inside its border and the pair ends on one line. */}
+					{missedCard}
 					<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 						{upcomingOccurrencesCard}
 						{serviceHistoryCard}
@@ -1168,7 +1381,7 @@ export default function RecurringPlanDetailPage() {
 				}
 				body={
 					pendingConfirm === "cancel"
-						? "Are you sure you want to cancel this recurring plan? All future planned occurrences will be cancelled."
+						? CANCEL_PLAN_BODY
 						: "Are you sure you want to mark this recurring plan as completed?"
 				}
 				confirmLabel={
@@ -1176,8 +1389,63 @@ export default function RecurringPlanDetailPage() {
 				}
 				tone={pendingConfirm === "cancel" ? "destructive" : "primary"}
 				pending={cancelMutation.isPending || completeMutation.isPending}
+				error={pendingConfirm ? confirmError : null}
 				onConfirm={confirmPendingAction}
 				onCancel={() => setPendingConfirm(null)}
+			/>
+
+			<ConfirmDialog
+				open={renewOpen}
+				title="Renew Plan"
+				body={
+					<div className="space-y-3">
+						<p className="text-sm text-text-tertiary">
+							Reactivate this plan and resume generating visits. Pick a new end
+							date, or keep it running with no end date.
+						</p>
+						<div className="flex items-center justify-between gap-3">
+							<span className="text-sm text-text-secondary">No end date</span>
+							<ToggleSwitch
+								checked={renewNoEnd}
+								onChange={() => setRenewNoEnd((v) => !v)}
+								label="No end date"
+							/>
+						</div>
+						{!renewNoEnd && (
+							<DatePicker
+								value={renewDate}
+								onChange={setRenewDate}
+								position="below"
+								minDate={todayInPlanZone(plan.timezone)}
+							/>
+						)}
+					</div>
+				}
+				confirmLabel="Renew"
+				confirmDisabled={!renewNoEnd && !renewDate}
+				pending={renewMutation.isPending}
+				error={renewOpen ? confirmError : null}
+				onConfirm={confirmRenew}
+				onCancel={() => setRenewOpen(false)}
+			/>
+
+			<ConfirmDialog
+				open={skipTarget !== null}
+				title="Skip Occurrence"
+				body={
+					<ReasonField
+						value={skipReason}
+						onChange={setSkipReason}
+						placeholder="Why is this visit being skipped?"
+						rows={3}
+					/>
+				}
+				confirmLabel="Skip"
+				confirmDisabled={!skipReason.trim()}
+				pending={skipMutation.isPending}
+				error={skipTarget ? confirmError : null}
+				onConfirm={confirmSkip}
+				onCancel={() => setSkipTarget(null)}
 			/>
 		</div>
 	);

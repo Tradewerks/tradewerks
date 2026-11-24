@@ -229,6 +229,8 @@ export default function JobsPage() {
 						scheduleDisplay = "COMPLETED";
 					} else if (plan.status === "Cancelled") {
 						scheduleDisplay = "CANCELLED";
+					} else if (plan.status === "Expired") {
+						scheduleDisplay = "EXPIRED";
 					}
 
 					const templateTotal =

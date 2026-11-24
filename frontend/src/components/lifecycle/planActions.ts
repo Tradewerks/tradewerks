@@ -9,10 +9,10 @@ export interface PlanActionContext {
 	 *  container). Every verb here acts on that container, so none of them can
 	 *  do anything until it exists. */
 	hasJobContainer: boolean;
-	handlers: Record<"pause" | "resume" | "generate" | "complete" | "cancel", () => void>;
+	handlers: Record<PlanVerb, () => void>;
 }
 
-type PlanVerb = "pause" | "resume" | "generate" | "complete" | "cancel";
+type PlanVerb = "pause" | "resume" | "generate" | "complete" | "cancel" | "renew";
 
 /**
  * Which states each verb is reachable from. Mirrors the named operations in
@@ -26,7 +26,8 @@ const PLAN_VERB_FROM: Record<PlanVerb, readonly RecurringPlanStatus[]> = {
 	resume: ["Paused"],
 	generate: ["Active"],
 	complete: ["Active", "Paused"],
-	cancel: ["Active", "Paused"],
+	cancel: ["Active", "Paused", "Expired"],
+	renew: ["Expired"],
 };
 
 const REFUSAL: Record<PlanVerb, (s: RecurringPlanStatus) => string> = {
@@ -35,6 +36,7 @@ const REFUSAL: Record<PlanVerb, (s: RecurringPlanStatus) => string> = {
 	generate: (s) =>
 		`Occurrences are only generated for an active plan — this one is ${s.toLowerCase()}.`,
 	complete: (s) => `This plan is already ${s.toLowerCase()}.`,
+	renew: (s) => `Only an expired plan can be renewed — this one is ${s.toLowerCase()}.`,
 	cancel: (s) => `This plan is already ${s.toLowerCase()}.`,
 };
 
@@ -54,13 +56,17 @@ export function planActions(ctx: PlanActionContext): LifecycleAction[] {
 			id,
 			labelText,
 			intent,
-			!ctx.canManage
-				? NO_PERMISSION
-				: !ctx.hasJobContainer
-					? "This plan hasn't generated its first occurrence yet."
-					: PLAN_VERB_FROM[id].includes(ctx.status)
-						? null
-						: notApplicable(REFUSAL[id](ctx.status)),
+			// State before permission for renew: only an Expired plan offers it, so a
+			// user who can't manage must not see a disabled Renew in every other state.
+			id === "renew" && !PLAN_VERB_FROM.renew.includes(ctx.status)
+				? notApplicable(REFUSAL.renew(ctx.status))
+				: !ctx.canManage
+					? NO_PERMISSION
+					: !ctx.hasJobContainer
+						? "This plan hasn't generated its first occurrence yet."
+						: PLAN_VERB_FROM[id].includes(ctx.status)
+							? null
+							: notApplicable(REFUSAL[id](ctx.status)),
 			ctx.handlers[id]
 		);
 
@@ -70,5 +76,6 @@ export function planActions(ctx: PlanActionContext): LifecycleAction[] {
 		build("generate", "Generate Next Occurrence", "primary"),
 		build("complete", "Complete Plan", "neutral"),
 		build("cancel", "Cancel Plan", "destructive"),
+		build("renew", "Renew Plan", "primary"),
 	];
 }

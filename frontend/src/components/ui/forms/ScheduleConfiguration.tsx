@@ -35,6 +35,12 @@ interface ScheduleConfigurationProps {
 	errors?: ZodError | null;
 	mode?: "create" | "edit";
 
+	/** IANA zone the plan runs in; display only, the server owns it. */
+	timezone?: string;
+	technicians?: { id: string; name: string }[];
+	defaultTechnicianId?: string;
+	onDefaultTechnicianChange?: (id: string) => void;
+
 	originalStartDate?: Date;
 	originalEndDate?: Date | null;
 
@@ -56,6 +62,11 @@ const MONTH_NAMES = [
 	"November",
 	"December",
 ];
+
+const ShortMonthNote = ({ day }: { day: number | "" }) =>
+	day !== "" && day >= 29 ? (
+		<p className="mt-0.5 text-[10px] text-text-muted">Short months use their last day.</p>
+	) : null;
 
 const INPUT =
 	"border border-border px-2.5 h-[34px] w-full rounded bg-base text-text-primary text-sm lg:text-base focus:border-primary focus:outline-none transition-colors min-w-0";
@@ -82,6 +93,10 @@ export const ScheduleConfiguration = ({
 	isLoading = false,
 	errors = null,
 	mode = "create",
+	timezone,
+	technicians,
+	defaultTechnicianId = "",
+	onDefaultTechnicianChange,
 	originalStartDate,
 	originalEndDate,
 	isDirty,
@@ -125,6 +140,11 @@ export const ScheduleConfiguration = ({
 				<h3 className="text-xs lg:text-sm font-semibold mb-2 lg:mb-3 text-text-primary uppercase tracking-wider">
 					Schedule Configuration
 				</h3>
+				{timezone && (
+					<p className="mb-2 lg:mb-3 text-xs text-text-tertiary">
+						Times are in {timezone}
+					</p>
+				)}
 
 				{/* Dates + Windows */}
 				<div className="grid grid-cols-2 gap-2 lg:gap-3 mb-2 lg:mb-3 min-w-0">
@@ -236,6 +256,36 @@ export const ScheduleConfiguration = ({
 						<ErrorDisplay path="min_advance_days" />
 					</div>
 				</div>
+
+				{onDefaultTechnicianChange && (
+					<div className="mb-2 lg:mb-3 min-w-0">
+						<label
+							htmlFor="plan-default-technician"
+							className="block mb-0.5 lg:mb-1 text-[10px] font-medium text-text-tertiary uppercase tracking-wider"
+						>
+							Default Technician
+						</label>
+						<Dropdown
+							id="plan-default-technician"
+							entries={
+								<>
+									<option value="">Unassigned</option>
+									{(technicians ?? []).map((t) => (
+										<option key={t.id} value={t.id}>
+											{t.name}
+										</option>
+									))}
+								</>
+							}
+							value={defaultTechnicianId}
+							onChange={onDefaultTechnicianChange}
+							disabled={isLoading}
+						/>
+						<p className="mt-0.5 text-[10px] text-text-muted">
+							Assigned to each new visit this plan generates.
+						</p>
+					</div>
+				)}
 
 				{/* Recurrence Pattern */}
 				<div className="border-t border-border pt-2 lg:pt-3">
@@ -429,6 +479,7 @@ export const ScheduleConfiguration = ({
 									/>
 								)}
 							</div>
+							<ShortMonthNote day={monthDay} />
 						</div>
 					)}
 
@@ -545,6 +596,7 @@ export const ScheduleConfiguration = ({
 										/>
 									)}
 								</div>
+								<ShortMonthNote day={monthDay} />
 							</div>
 						</div>
 					)}

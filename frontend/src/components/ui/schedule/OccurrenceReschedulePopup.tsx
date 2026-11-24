@@ -45,6 +45,17 @@ interface OccurrenceReschedulePopupProps {
 	isGenerating?: boolean;
 }
 
+// Future visits only inherit a start-time shift; window and finish edits can't apply.
+function Locked({ on, children }: { on: boolean; children: React.ReactNode }) {
+	return on ? (
+		<div inert style={{ opacity: 0.4 }}>
+			{children}
+		</div>
+	) : (
+		<>{children}</>
+	);
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OccurrenceReschedulePopup({
@@ -81,7 +92,26 @@ export default function OccurrenceReschedulePopup({
 		occurrence.finish_constraint
 	);
 	const [finishTime, setFinishTime] = useState(occurrence.finish_time ?? dateToHHMM(origEnd));
-	const [occurrenceScope, setOccurrenceScope] = useState<"this" | "future">("this");
+	const [pickedScope, setOccurrenceScope] = useState<"this" | "future">("this");
+	// A date move can't apply to every future visit; the server refuses it, so
+	// the option is closed rather than left to fail on Save.
+	const dateChanged = oldDateStr !== newDateStr;
+	const occurrenceScope = dateChanged ? "this" : pickedScope;
+	const futureScope = occurrenceScope === "future";
+
+	// Future visits only take a start-time shift, so edits made under "this
+	// occurrence" must not leak into the locked editors or the computed start.
+	function resetEditors() {
+		setArrivalConstraint(occurrence.arrival_constraint);
+		setArrivalTime(occurrence.arrival_time ?? dateToHHMM(origStart));
+		setArrivalWindowStart(occurrence.arrival_window_start ?? dateToHHMM(origStart));
+		setArrivalWindowEnd(
+			occurrence.arrival_window_end ??
+				dateToHHMM(new Date(origStart.getTime() + 60 * 60 * 1000))
+		);
+		setFinishConstraint(occurrence.finish_constraint);
+		setFinishTime(occurrence.finish_time ?? dateToHHMM(origEnd));
+	}
 
 	// ── Same-plan conflict detection ─────────────────────────────────────────
 	const [conflictState, setConflictState] = useState<ConflictState>("ok");
@@ -323,6 +353,7 @@ export default function OccurrenceReschedulePopup({
 											.value as ArrivalConstraint
 									)
 								}
+								disabled={futureScope}
 								style={POPUP_SELECT_STYLE}
 								onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-primary)")}
 								onBlur={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
@@ -357,6 +388,7 @@ export default function OccurrenceReschedulePopup({
 								/>
 							)}
 							{arrivalConstraint === "between" && (
+								<Locked on={futureScope}>
 								<div
 									style={{
 										display: "flex",
@@ -393,8 +425,10 @@ export default function OccurrenceReschedulePopup({
 										</div>
 									</div>
 								</div>
+								</Locked>
 							)}
 							{arrivalConstraint === "by" && (
+								<Locked on={futureScope}>
 								<TimePicker
 									value={hhmmToPickerDate(
 										arrivalWindowEnd
@@ -408,6 +442,7 @@ export default function OccurrenceReschedulePopup({
 									}
 									compact
 								/>
+								</Locked>
 							)}
 							{arrivalConstraint === "anytime" && (
 								<div style={POPUP_MUTED_STYLE}>
@@ -442,6 +477,7 @@ export default function OccurrenceReschedulePopup({
 											.value as FinishConstraint
 									)
 								}
+								disabled={futureScope}
 								style={POPUP_SELECT_STYLE}
 								onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-primary)")}
 								onBlur={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
@@ -459,6 +495,7 @@ export default function OccurrenceReschedulePopup({
 
 							{(finishConstraint === "at" ||
 								finishConstraint === "by") && (
+								<Locked on={futureScope}>
 								<TimePicker
 									value={hhmmToPickerDate(
 										finishTime
@@ -472,6 +509,7 @@ export default function OccurrenceReschedulePopup({
 									}
 									compact
 								/>
+								</Locked>
 							)}
 							{finishConstraint === "when_done" && (
 								<div style={POPUP_MUTED_STYLE}>
@@ -596,12 +634,16 @@ export default function OccurrenceReschedulePopup({
 								(scope) => (
 									<button
 										key={scope}
-										onClick={() =>
-											setOccurrenceScope(
-												scope
-											)
-										}
+										disabled={scope === "future" && dateChanged}
+										onClick={() => {
+											if (scope === "future") resetEditors();
+											setOccurrenceScope(scope);
+										}}
 										style={{
+											opacity:
+												scope === "future" && dateChanged
+													? 0.4
+													: 1,
 											flex: 1,
 											height: 26,
 											fontSize: 11,
@@ -609,7 +651,10 @@ export default function OccurrenceReschedulePopup({
 											padding: "0 8px",
 											borderRadius: 4,
 											border: "1px solid",
-											cursor: "pointer",
+											cursor:
+												scope === "future" && dateChanged
+													? "not-allowed"
+													: "pointer",
 											backgroundColor:
 												occurrenceScope ===
 												scope
@@ -636,6 +681,16 @@ export default function OccurrenceReschedulePopup({
 								)
 							)}
 						</div>
+						{futureScope && (
+							<div style={POPUP_MUTED_STYLE}>
+								Only the start time moves for future visits — edit the plan's schedule to change its window or finish.
+							</div>
+						)}
+						{dateChanged && (
+							<div style={POPUP_MUTED_STYLE}>
+								To move every future visit to another day, edit the plan's schedule.
+							</div>
+						)}
 					</div>
 				</div>
 
@@ -696,7 +751,11 @@ export default function OccurrenceReschedulePopup({
 														computedStart.toISOString(),
 													new_end_at: computedEnd?.toISOString(),
 													scope: occurrenceScope,
-													...payload,
+													// "future" is times-only: the server
+													// refuses constraint fields there.
+													...(occurrenceScope === "future"
+														? {}
+														: payload),
 												}
 											);
 										}

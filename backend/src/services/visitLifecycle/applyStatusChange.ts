@@ -2,6 +2,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import type { UserContext } from "../../lib/context.js";
 import { deductInventoryForVisit } from "../../controllers/inventoryController.js";
 import { parentBreadcrumb } from "../../controllers/logsController.js";
+import { syncOccurrenceForVisit } from "../recurringOccurrenceSync.js";
 import { logActivityInTx } from "./activityLog.js";
 import { deriveJobStatus } from "./deriveJobStatus.js";
 import { recomputeJobActualTotal } from "./jobRollup.js";
@@ -172,6 +173,11 @@ export async function applyStatusChange(
 		actingTechIds,
 		closedTechIds: closed.techIds,
 	});
+
+	// Inside the visit lock and ahead of the job lock: plan -> visit -> occurrence -> job.
+	if (visit.job.recurring_plan_id) {
+		await syncOccurrenceForVisit(visitId, to, tx, from);
+	}
 
 	const jobChange = args.deferJobSync
 		? null

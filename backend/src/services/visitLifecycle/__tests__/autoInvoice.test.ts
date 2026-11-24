@@ -6,6 +6,7 @@ const sdb = {
 	$transaction: vi.fn(),
 };
 const innerTx = {
+	$queryRaw: vi.fn(async (..._args: unknown[]) => [{ status: "Active" }]),
 	invoice_schedule: { updateMany: vi.fn(async () => ({ count: 1 })) },
 	log: {
 		findFirst: vi.fn(),
@@ -61,6 +62,7 @@ const schedule = (over: Record<string, unknown> = {}) => ({
 	frequency: "on_visit_completion",
 	is_active: true,
 	last_invoiced_at: null,
+	recurring_plan: { status: "Active" },
 	...over,
 });
 
@@ -70,6 +72,7 @@ beforeEach(() => {
 	sdb.log.findFirst.mockResolvedValue(null);
 	innerTx.log.findFirst.mockResolvedValue(null);
 	innerTx.invoice_schedule.updateMany.mockResolvedValue({ count: 1 });
+	innerTx.$queryRaw.mockResolvedValue([{ status: "Active" }]);
 	sdb.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) =>
 		fn(innerTx),
 	);
@@ -83,6 +86,52 @@ describe("maybeAutoInvoiceOnCompletion", () => {
 		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
 		expect(buildRecurringPlanInvoicePayload).not.toHaveBeenCalled();
 		expect(createInvoiceRecord).not.toHaveBeenCalled();
+	});
+
+	it("skips when the plan is paused", async () => {
+		sdb.invoice_schedule.findFirst.mockResolvedValue(
+			schedule({ recurring_plan: { status: "Paused" } }),
+		);
+		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
+		expect(buildRecurringPlanInvoicePayload).not.toHaveBeenCalled();
+		expect(createInvoiceRecord).not.toHaveBeenCalled();
+	});
+
+	it("a plan paused after the schedule was read is not billed", async () => {
+		sdb.invoice_schedule.findFirst.mockResolvedValue(schedule());
+		innerTx.$queryRaw.mockResolvedValue([{ status: "Paused" }]);
+		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
+		expect(String(innerTx.$queryRaw.mock.calls[0][0])).toMatch(/FOR SHARE/);
+		expect(createInvoiceRecord).not.toHaveBeenCalled();
+		expect(innerTx.log.create).not.toHaveBeenCalled();
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	it("a schedule switched off after it was read is not billed", async () => {
+		sdb.invoice_schedule.findFirst
+			.mockResolvedValueOnce(schedule())
+			.mockResolvedValueOnce(schedule({ is_active: false }));
+		innerTx.invoice_schedule.updateMany.mockResolvedValueOnce({ count: 0 });
+		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
+		expect(innerTx.invoice_schedule.updateMany).toHaveBeenCalledWith(
+			expect.objectContaining({
+				where: expect.objectContaining({ is_active: true }),
+			}),
+		);
+		expect(innerTx.log.create).not.toHaveBeenCalled();
+		expect(logActivity).not.toHaveBeenCalled();
+	});
+
+	it("creates no invoice when every completed visit is already billed", async () => {
+		sdb.invoice_schedule.findFirst.mockResolvedValue(schedule());
+		vi.mocked(buildRecurringPlanInvoicePayload).mockResolvedValueOnce({
+			payload: { client_id: "c1", line_items: [] },
+			warnings: [],
+			empty: true,
+		} as never);
+		await maybeAutoInvoiceOnCompletion("o1", "v1", "p1");
+		expect(createInvoiceRecord).not.toHaveBeenCalled();
+		expect(logActivity).not.toHaveBeenCalled();
 	});
 
 	it("skips when recurring_plans is off", async () => {
@@ -107,7 +156,7 @@ describe("maybeAutoInvoiceOnCompletion", () => {
 		expect(createInvoiceRecord).toHaveBeenCalledTimes(1);
 		expect(innerTx.invoice_schedule.updateMany).toHaveBeenCalledWith(
 			expect.objectContaining({
-				where: { id: "s1", last_invoiced_at: null },
+				where: { id: "s1", last_invoiced_at: null, is_active: true },
 			}),
 		);
 		expect(innerTx.log.create).toHaveBeenCalledTimes(1);
@@ -146,7 +195,7 @@ describe("maybeAutoInvoiceOnCompletion", () => {
 		expect(innerTx.invoice_schedule.updateMany).toHaveBeenCalledTimes(2);
 		expect(innerTx.invoice_schedule.updateMany).toHaveBeenLastCalledWith(
 			expect.objectContaining({
-				where: { id: "s1", last_invoiced_at: later },
+				where: { id: "s1", last_invoiced_at: later, is_active: true },
 			}),
 		);
 		expect(innerTx.log.create).toHaveBeenCalledTimes(1);

@@ -42,7 +42,7 @@ export const RECORD_STATUSES: Record<RecordType, readonly string[]> = {
 	request: ["New", "Reviewing", "Quoted", "QuoteApproved", "QuoteRejected", "ConvertedToJob", "Cancelled"],
 	invoice: ["Draft", "Issued", "Sent", "Viewed", "PartiallyPaid", "Paid", "Disputed", "Void"],
 	project: ["Planning", "Active", "OnHold", "Completed", "Cancelled"],
-	recurring_plan: ["Active", "Paused", "Completed", "Cancelled"],
+	recurring_plan: ["Active", "Paused", "Expired", "Completed", "Cancelled"],
 	technician: ["Offline", "Available", "Break", "EnRoute", "OnSite", "Working", "Paused", "WrappingUp", "HeadingBack"],
 	inventory_item: [],
 };

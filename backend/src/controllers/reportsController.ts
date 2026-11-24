@@ -3098,7 +3098,7 @@ export const getRecurringRevenueReport = async (
 			FROM recurring_plan p
 			JOIN invoice i ON i.recurring_plan_id = p.id
 			WHERE p.organization_id = ${organizationId}
-			  AND p.status IN ('Cancelled', 'Completed')
+			  AND p.status IN ('Cancelled', 'Completed', 'Expired')
 			  AND i.status NOT IN ('Draft', 'Void')
 			  AND COALESCE(i.issue_date, i.created_at) <= COALESCE(p.ends_at, p.updated_at)
 			  AND COALESCE(i.issue_date, i.created_at) >= COALESCE(p.ends_at, p.updated_at) - ${TRAILING_DAYS} * INTERVAL '1 day'
@@ -3157,7 +3157,7 @@ export const getRecurringRevenueReport = async (
 		d != null && (!df.gte || d >= df.gte) && (!df.lte || d <= df.lte);
 
 	const isChurned = (plan: (typeof plans)[number]): boolean =>
-		plan.status === "Cancelled" || plan.status === "Completed";
+		plan.status === "Cancelled" || plan.status === "Completed" || plan.status === "Expired";
 
 	const monthlyValueOf = (plan: (typeof plans)[number]): number => {
 		const schedule = plan.invoice_schedule;
@@ -3226,7 +3226,11 @@ export const getRecurringRevenueReport = async (
 			billingBasis: plan.invoice_schedule?.billing_basis ?? "none",
 			perPeriodAmount: perPeriodOf(plan),
 			monthlyValue: monthly,
-			nextInvoiceAt: plan.invoice_schedule?.next_invoice_at ?? null,
+			// on_visit_completion keeps next_invoice_at only as a watermark.
+			nextInvoiceAt:
+				plan.invoice_schedule?.frequency === "on_visit_completion"
+					? null
+					: (plan.invoice_schedule?.next_invoice_at ?? null),
 			lastInvoicedAt: plan.invoice_schedule?.last_invoiced_at ?? null,
 			occCompleted: occ.completed,
 			occSkipped: occ.skipped,
@@ -4846,11 +4850,12 @@ export const getPageSnapshot = async (orgId: string, page: string): Promise<Page
 			const [active, paused, endingSoon] = await Promise.all([
 				sdb.recurring_plan.count({ where: { organization_id: orgId, status: "Active" } }),
 				sdb.recurring_plan.count({ where: { organization_id: orgId, status: "Paused" } }),
-				// Overdue (end passed, still live) counts too — it needs attention most.
+				// Overdue (end passed, still live) and expired-not-renewed count
+				// too — they need attention most.
 				sdb.recurring_plan.count({
 					where: {
 						organization_id: orgId,
-						status: { in: ["Active", "Paused"] },
+						status: { in: ["Active", "Paused", "Expired"] },
 						ends_at: { lte: endingSoonBy },
 					},
 				}),

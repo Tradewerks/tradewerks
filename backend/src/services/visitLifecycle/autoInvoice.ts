@@ -5,12 +5,14 @@ import { buildRecurringPlanInvoicePayload } from "../invoiceGenerator.js";
 import { createInvoiceRecord } from "../invoiceService.js";
 import { logActivity } from "../logger.js";
 import { log } from "../appLogger.js";
+import { planBills, type PlanStatus } from "../../lib/recurringPlanState.js";
 import { getSocket } from "../socketService.js";
 import { recordChangedFromLog } from "../recordChanged.js";
 import { redactFeedRow } from "../../controllers/logsController.js";
 
 class AlreadyBilled extends Error {}
 class ScheduleMoved extends Error {}
+class PlanNotBilling extends Error {}
 
 /** The first try plus this many: enough for a burst of same-plan completions. */
 const CAS_RETRIES = 2;
@@ -40,7 +42,7 @@ export async function maybeAutoInvoiceOnCompletion(
 			}
 		}
 	} catch (err) {
-		if (err instanceof AlreadyBilled) return;
+		if (err instanceof AlreadyBilled || err instanceof PlanNotBilling) return;
 		log.error(
 			{ err, plan_id: planId },
 			"on_visit_completion invoice creation failed",
@@ -69,10 +71,12 @@ async function billOnce(
 	const sdb = getScopedDb(orgId);
 	const schedule = await sdb.invoice_schedule.findFirst({
 		where: { recurring_plan_id: planId },
+		include: { recurring_plan: { select: { status: true, timezone: true } } },
 	});
 	if (
 		schedule?.frequency !== "on_visit_completion" ||
-		!schedule.is_active
+		!schedule.is_active ||
+		!planBills(schedule.recurring_plan.status as PlanStatus)
 	)
 		return;
 
@@ -96,26 +100,37 @@ async function billOnce(
 	if (await findMarker(sdb as unknown as Prisma.TransactionClient))
 		return;
 
-	const { payload, warnings } = await buildRecurringPlanInvoicePayload(
+	const { payload, warnings, empty } = await buildRecurringPlanInvoicePayload(
 		planId,
 		sdb,
 		{ last_invoiced_at: schedule.last_invoiced_at },
 	);
+	if (empty) return;
 	if (warnings.length > 0) {
 		payload.internal_notes = `[Auto on completion] Overlap:\n${warnings
 			.map(
 				(w) =>
-					`Visit ${new Date(w.scheduled_start_at).toLocaleDateString()} already billed on: ${w.existing_invoices.map((i) => i.invoice_number).join(", ")}`,
+					`Visit ${new Date(w.scheduled_start_at).toLocaleDateString("en-US", {
+						timeZone: schedule.recurring_plan.timezone,
+					})} already billed on: ${w.existing_invoices.map((i) => i.invoice_number).join(", ")}`,
 			)
 			.join("\n")}`;
 	}
 	const row = await sdb.$transaction(async (innerTx) => {
 		const tx = innerTx as unknown as Prisma.TransactionClient;
+		// The schedule read above is unlocked; a pause or cancel since then
+		// holds the plan row, so its status is re-read under it (plan before
+		// schedule, as every plan writer locks).
+		const [locked] = await tx.$queryRaw<{ status: PlanStatus }[]>`
+			SELECT status::text AS status FROM recurring_plan
+			WHERE id = ${planId} FOR SHARE`;
+		if (!locked || !planBills(locked.status)) throw new PlanNotBilling();
 		const inv = await createInvoiceRecord(payload, orgId, null, tx);
 		const cas = await tx.invoice_schedule.updateMany({
 			where: {
 				id: schedule.id,
 				last_invoiced_at: schedule.last_invoiced_at,
+				is_active: true,
 			},
 			data: { last_invoiced_at: new Date() },
 		});

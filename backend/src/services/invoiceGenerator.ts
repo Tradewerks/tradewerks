@@ -22,7 +22,9 @@ export interface VisitInvoiceResult {
 
 export interface RecurringInvoiceResult {
 	payload: CreateInvoicePayload;
+	/** visit_actuals visits left off because they are already on an invoice. */
 	warnings: OverlapWarning[];
+	empty: boolean;
 }
 
 export async function buildVisitInvoicePayload(
@@ -246,12 +248,13 @@ export async function buildRecurringPlanInvoicePayload(
 
 		const completedVisitIds = completedVisits.map((v) => v.id);
 
-		// Overlap check — same pattern as buildVisitInvoicePayload
+		// A Draft counts as billed: a second draft for the same visit is how
+		// the same work ends up invoiced twice.
 		if (completedVisitIds.length > 0) {
 			const activeInvoiceVisits = await sdb.invoice_visit.findMany({
 				where: {
 					visit_id: { in: completedVisitIds },
-					invoice: { status: { notIn: ["Draft", "Void"] } },
+					invoice: { status: { not: "Void" } },
 				},
 				include: {
 					invoice: {
@@ -285,8 +288,9 @@ export async function buildRecurringPlanInvoicePayload(
 			warnings.push(...warningMap.values());
 		}
 
-		// Build line items from visit actuals
+		const alreadyBilled = new Set(warnings.map((w) => w.visit_id));
 		for (const visit of completedVisits) {
+			if (alreadyBilled.has(visit.id)) continue;
 			for (const li of visit.line_items) {
 				lineItems.push({
 					name: li.name,
@@ -328,5 +332,5 @@ export async function buildRecurringPlanInvoicePayload(
 			: {}),
 	};
 
-	return { payload, warnings };
+	return { payload, warnings, empty: lineItems.length === 0 };
 }

@@ -7,6 +7,8 @@ import {
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
+import { emitActivityHints, logActivityInTx } from "../services/visitLifecycle/activityLog.js";
+import { notifyVisitAssigned } from "../services/visitAssignedNotice.js";
 import { getScopedDb } from "../lib/context.js";
 import {
 	applyInventoryTaxable,
@@ -24,6 +26,8 @@ import {
 import {
 	createRecurringPlanSchema,
 	updateRecurringPlanSchema,
+	renewRecurringPlanSchema,
+	cancelRecurringPlanSchema,
 	updateRecurringPlanLineItemsSchema,
 	updateInvoiceScheduleSchema,
 	type UpdateRecurringPlanLineItemsInput,
@@ -40,84 +44,45 @@ import {
 	VisitGenerationResult,
 } from "../types/common.js";
 import { addDays } from "date-fns";
+import {
+	computeSlots,
+	toSlotRule,
+	type Slot,
+	type SlotRule,
+	visitTimesForRule,
+} from "../lib/recurrence/occurrenceSlots.js";
+import {
+	addLocalDays,
+	localWallTime,
+	toLocalDate,
+	zonedWallTimeToUtc,
+	type LocalDate,
+} from "../lib/recurrence/zonedTime.js";
+import { reconcileLegacySlots } from "../lib/recurrence/reconcileLegacySlots.js";
 import { assertTaxGroupsInOrg } from "../lib/taxHelpers.js";
 import { holdsKeptRate, recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import {
+	billingDateOf,
 	calculateNextInvoiceAt,
-	type ScheduleFrequency,
+	generateDaysBeforeForEdit,
+	nextInvoiceAtForEdit,
+	scheduleAnchor,
 } from "../lib/invoiceSchedule.js";
 import { log } from "../services/appLogger.js";
 import { isClientMessage } from "../types/responses.js";
 import { generateJobNumber } from "../db.js";
-import { assertValidRecurringPlanTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
+import {
+	PlanTransitionError,
+	RECURRING_PLAN_DETAIL_INCLUDE,
+	planBills,
+	planEffects,
+	planInactiveMessage,
+	transitionRecurringPlan,
+	type PlanStatus,
+} from "../lib/recurringPlanState.js";
+import { recordChanged } from "../services/recordChanged.js";
 import { onVisitScheduled } from "../services/followupTriggers.js";
 import { notifyVisitScheduled } from "../services/customerComms/visitEvents.js";
-
-// ─── Timezone-safe date helpers ───────────────────────────────────────────────
-// All occurrence generation works with "YYYY-MM-DD" calendar-date strings in the
-// plan's IANA timezone so that day/weekday/month checks are correct regardless of
-// the server's system timezone (which is always UTC in production).
-
-/** Convert a UTC instant to a "YYYY-MM-DD" calendar-date string in an IANA timezone. */
-function toDateStr(date: Date, timezone: string): string {
-	return date.toLocaleDateString("en-CA", { timeZone: timezone }); // "YYYY-MM-DD"
-}
-
-/** Return the later of two "YYYY-MM-DD" strings (lexicographic = chronological). */
-function laterDate(a: string, b: string): string {
-	return a > b ? a : b;
-}
-
-/** Add N calendar days to a "YYYY-MM-DD" string. */
-function dateStrAddDays(dateStr: string, days: number): string {
-	const [y, m, d] = dateStr.split("-").map(Number);
-	return new Date(Date.UTC(y, m - 1, d + days)).toISOString().split("T")[0];
-}
-
-/** Add N calendar months to a "YYYY-MM-DD" string (end-of-month clamped by JS Date). */
-function dateStrAddMonths(dateStr: string, months: number): string {
-	const [y, m, d] = dateStr.split("-").map(Number);
-	return new Date(Date.UTC(y, m - 1 + months, d)).toISOString().split("T")[0];
-}
-
-/** Add N calendar years to a "YYYY-MM-DD" string. */
-function dateStrAddYears(dateStr: string, years: number): string {
-	const [y, m, d] = dateStr.split("-").map(Number);
-	return new Date(Date.UTC(y + years, m - 1, d)).toISOString().split("T")[0];
-}
-
-/**
- * Convert a local date + time in an IANA timezone to a UTC Date.
- * Uses only the Intl API — no external dependencies required.
- *
- * @param dateStr  "YYYY-MM-DD" calendar date in the given timezone
- * @param hhmm     "HH:MM" local wall-clock time
- * @param timezone IANA timezone string, e.g. "America/Chicago"
- */
-function localToUTC(dateStr: string, hhmm: string, timezone: string): Date {
-	// Treat the desired local time as a UTC instant (initial approximation)
-	const approx = new Date(`${dateStr}T${hhmm}:00Z`);
-	// Ask Intl what local clock the timezone shows for that UTC instant
-	// 'sv' locale produces "YYYY-MM-DD HH:MM:SS" — easy to parse back as UTC
-	const localRepr = approx.toLocaleString("sv", { timeZone: timezone });
-	const localTime = new Date(localRepr.replace(" ", "T") + "Z");
-	// offsetMs = local reading − UTC instant (positive for UTC+, negative for UTC−)
-	const offsetMs = localTime.getTime() - approx.getTime();
-	// Subtract the offset to get the UTC instant that equals the desired local time
-	return new Date(approx.getTime() - offsetMs);
-}
-
-/** Parse "HH:MM" to total minutes from midnight. */
-function parseHHMM(hhmm: string): number {
-	const [h, m] = hhmm.split(":").map(Number);
-	return h * 60 + m;
-}
-
-/** Convert total minutes from midnight to "HH:MM" (clamped to 23:59). */
-function formatHHMM(totalMinutes: number): string {
-	const clamped = Math.max(0, Math.min(totalMinutes, 23 * 60 + 59));
-	return `${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
-}
 
 export interface UserContext {
 	techId?: string;
@@ -134,91 +99,149 @@ type RecurringRuleWithWeekdays = Prisma.recurring_ruleGetPayload<{
 // OCCURRENCE GENERATION LOGIC
 // ============================================================================
 
-async function generateOccurrencesForPlan(
+/** A plan whose stored schedule can't be placed on the calendar (bad wall time or zone). */
+export class InvalidPlanScheduleError extends Error {
+	constructor(planId: string, cause: unknown) {
+		const reason = cause instanceof Error ? cause.message : String(cause);
+		super(
+			`Recurring plan ${planId} can't be scheduled (${reason}). Fix the plan's schedule to resume generation.`,
+		);
+		this.name = "InvalidPlanScheduleError";
+	}
+}
+
+const RULE_TIME_FIELDS = [
+	"arrival_time",
+	"arrival_window_start",
+	"arrival_window_end",
+	"finish_time",
+] as const;
+const HHMM_PARTS = /^(\d{2}):(\d{2})$/;
+
+function wallMinutes(hhmm: string): number {
+	const m = HHMM_PARTS.exec(hhmm)!;
+	return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function planLocalDate(plan: { id: string; timezone: string }, at: Date): LocalDate {
+	try {
+		return toLocalDate(at, plan.timezone);
+	} catch (e) {
+		if (e instanceof RangeError) throw new InvalidPlanScheduleError(plan.id, e);
+		throw e;
+	}
+}
+
+function planSlots(
+	plan: {
+		id: string;
+		starts_at: Date;
+		ends_at: Date | null;
+		timezone: string;
+		rules: RecurringRuleWithWeekdays[];
+	},
+	window: { from: LocalDate; to: LocalDate },
+): Slot[] {
+	try {
+		return computeSlots(
+			toSlotRule(plan.rules[0]),
+			{
+				startsAt: plan.starts_at,
+				endsAt: plan.ends_at,
+				timezone: plan.timezone,
+			},
+			window,
+		);
+	} catch (e) {
+		// Rules saved before HH:MM validation was tightened can hold "25:00";
+		// surface that per plan instead of failing whatever batch called us.
+		if (e instanceof RangeError) throw new InvalidPlanScheduleError(plan.id, e);
+		throw e;
+	}
+}
+
+export async function generateOccurrencesForPlan(
 	planId: string,
-	daysAhead: number,
 	tx: Prisma.TransactionClient,
+	opts: { now?: Date; daysAhead?: number } = {},
 ): Promise<OccurrenceGenerationResult> {
 	const plan = await tx.recurring_plan.findUnique({
 		where: { id: planId },
-		include: {
-			rules: {
-				include: {
-					by_weekday: true,
-				},
-			},
-		},
+		include: { rules: { include: { by_weekday: true } } },
 	});
 
 	if (!plan) {
 		throw new Error("Plan not found");
 	}
 
+	const now = opts.now ?? new Date();
+	const daysAhead = opts.daysAhead ?? plan.generation_window_days;
+	const windowEnd = addDays(now, daysAhead);
+	const result: OccurrenceGenerationResult = {
+		generated: 0,
+		skipped: 0,
+		start_date: now,
+		end_date: plan.ends_at && plan.ends_at < windowEnd ? plan.ends_at : windowEnd,
+	};
+
+	if (!planEffects(plan.status).generates) return result;
+
 	if (plan.rules.length === 0) {
 		throw new Error("Plan has no rules defined");
 	}
 
-	const rule = plan.rules[0]; // Use first rule (we only support one rule per plan for now)
-	const startDate = new Date();
-	const endDate = addDays(startDate, daysAhead);
-	const planEndDate = plan.ends_at ? new Date(plan.ends_at) : null;
-
-	const generationEndDate =
-		planEndDate && planEndDate < endDate ? planEndDate : endDate;
-
-	const dates = calculateOccurrenceDates(
-		rule,
-		new Date(plan.starts_at),
-		startDate,
-		generationEndDate,
-		plan.timezone ?? "UTC",
+	const from = planLocalDate(plan, now);
+	// A slot whose window has closed would be born already missed.
+	const slots = planSlots(plan, { from, to: addLocalDays(from, daysAhead) }).filter(
+		(slot) => slot.end > now,
 	);
+	if (slots.length === 0) return result;
 
-	let generated = 0;
-	let skipped = 0;
-
-	for (const date of dates) {
-		// Check if occurrence already exists
-		const existing = await tx.recurring_occurrence.findFirst({
-			where: {
-				recurring_plan_id: planId,
-				// original_start_at is unique per plan; a rescheduled row still owns its slot
-				OR: [{ original_start_at: date.start }, { occurrence_start_at: date.start }],
+	// A re-timed rule moves every slot off the original_start_at its rows were
+	// born with, so the unique key alone would re-create each day. Every rule
+	// yields at most one slot per local date, and a re-time never changes a
+	// row's slot date: the date of its original_start_at is taken, in any
+	// status. Where a row was moved to doesn't count, so a visit moved onto
+	// another slot's day leaves that slot to be generated.
+	const margin = 86_400_000;
+	const existing = await tx.recurring_occurrence.findMany({
+		where: {
+			recurring_plan_id: planId,
+			original_start_at: {
+				gte: new Date(slots[0].start.getTime() - margin),
+				lte: new Date(slots[slots.length - 1].start.getTime() + margin),
 			},
-		});
+		},
+		select: { original_start_at: true },
+	});
+	const taken = new Set<LocalDate>(
+		existing.map((o) => planLocalDate(plan, o.original_start_at)),
+	);
+	const open = slots.filter((slot) => !taken.has(slot.date));
+	if (open.length === 0) return { ...result, skipped: slots.length };
 
-		if (existing) {
-			skipped++;
-			continue;
-		}
+	const rule = plan.rules[0];
+	// skipDuplicates still covers a concurrent writer inserting the same slot.
+	const { count } = await tx.recurring_occurrence.createMany({
+		data: open.map((slot) => ({
+			recurring_plan_id: planId,
+			original_start_at: slot.start,
+			occurrence_start_at: slot.start,
+			occurrence_end_at: slot.end,
+			slot_verified: true,
+			status: "planned" as const,
+			template_version: 1,
+			arrival_constraint: rule.arrival_constraint,
+			finish_constraint: rule.finish_constraint,
+			arrival_time: rule.arrival_time,
+			arrival_window_start: rule.arrival_window_start,
+			arrival_window_end: rule.arrival_window_end,
+			finish_time: rule.finish_time,
+		})),
+		skipDuplicates: true,
+	});
 
-		// Create occurrence — copy constraint fields from rule
-		await tx.recurring_occurrence.create({
-			data: {
-				recurring_plan_id: planId,
-				occurrence_start_at: date.start,
-				original_start_at: date.start,
-				occurrence_end_at: date.end,
-				status: "planned",
-				template_version: 1, // TODO: Implement versioning
-				arrival_constraint:   rule.arrival_constraint,
-				finish_constraint:    rule.finish_constraint,
-				arrival_time:         rule.arrival_time,
-				arrival_window_start: rule.arrival_window_start,
-				arrival_window_end:   rule.arrival_window_end,
-				finish_time:          rule.finish_time,
-			},
-		});
-
-		generated++;
-	}
-
-	return {
-		generated,
-		skipped,
-		start_date: startDate,
-		end_date: generationEndDate,
-	};
+	return { ...result, generated: count, skipped: slots.length - count };
 }
 
 // Dates the rule would have produced while the org had Recurring Plans switched
@@ -240,128 +263,33 @@ export async function getSkippedDatesForJob(jobId: string, orgId: string): Promi
 	const windows = await getClosedWindows(orgId, "recurring_plans");
 	const planEnd = plan.ends_at ? new Date(plan.ends_at) : null;
 	const candidates: Date[] = [];
-	for (const w of windows) {
-		const end = planEnd && planEnd < w.on ? planEnd : w.on;
-		if (end <= w.off) continue;
-		for (const d of calculateOccurrenceDates(
-			plan.rules[0],
-			new Date(plan.starts_at),
-			w.off,
-			end,
-			plan.timezone ?? "UTC",
-		)) {
-			// The rule works in whole days; keep only starts inside the window itself.
-			if (d.start >= w.off && d.start <= end) candidates.push(d.start);
+	try {
+		for (const w of windows) {
+			const end = planEnd && planEnd < w.on ? planEnd : w.on;
+			if (end <= w.off) continue;
+			const window = {
+				from: planLocalDate(plan, w.off),
+				to: planLocalDate(plan, end),
+			};
+			for (const slot of planSlots(plan, window)) {
+				// Slots are whole local days; keep only starts inside the window itself.
+				if (slot.start >= w.off && slot.start <= end) candidates.push(slot.start);
+			}
 		}
+	} catch (e) {
+		if (!(e instanceof InvalidPlanScheduleError)) throw e;
+		log.warn({ err: e, planId: plan.id }, "Skipped-dates lookup on an unschedulable plan");
+		return [];
 	}
 	if (candidates.length === 0) return [];
 	const existing = await sdb.recurring_occurrence.findMany({
-		where: { recurring_plan_id: plan.id, occurrence_start_at: { in: candidates } },
-		select: { occurrence_start_at: true },
+		where: { recurring_plan_id: plan.id, original_start_at: { in: candidates } },
+		select: { original_start_at: true },
 	});
-	const have = new Set(existing.map((o) => o.occurrence_start_at.getTime()));
+	const have = new Set(existing.map((o) => o.original_start_at.getTime()));
 	return candidates
 		.filter((d) => !have.has(d.getTime()))
 		.sort((a, b) => a.getTime() - b.getTime());
-}
-
-function calculateOccurrenceDates(
-	rule: RecurringRuleWithWeekdays,
-	planStartDate: Date,
-	rangeStart: Date,
-	rangeEnd: Date,
-	timezone: string,
-): Array<{ start: Date; end: Date }> {
-	const dates: Array<{ start: Date; end: Date }> = [];
-
-	// Work with calendar-date strings in the plan's timezone so that day/weekday/
-	// month comparisons are correct independent of the server's system timezone.
-	const startDateStr = laterDate(
-		toDateStr(planStartDate, timezone),
-		toDateStr(rangeStart, timezone),
-	);
-	const endDateStr = toDateStr(rangeEnd, timezone);
-	let currentDateStr = startDateStr;
-
-	// ── Derive visit start time (HH:MM) from arrival constraint ─────────────
-	let startHHMM = "09:00";
-	if (rule.arrival_constraint === "at" && rule.arrival_time) {
-		startHHMM = rule.arrival_time;
-	} else if (rule.arrival_constraint === "between" && rule.arrival_window_start) {
-		startHHMM = rule.arrival_window_start;
-	} else if (rule.arrival_constraint === "by" && rule.arrival_window_end) {
-		// 4 hours before deadline, floor at 9 AM
-		const startM = Math.max(9 * 60, parseHHMM(rule.arrival_window_end) - 240);
-		startHHMM = formatHHMM(startM);
-	}
-
-	// ── Derive duration and end time from finish constraint ──────────────────
-	let durationMinutes = 120; // default 2 hours
-	if (
-		(rule.finish_constraint === "at" || rule.finish_constraint === "by") &&
-		rule.finish_time
-	) {
-		durationMinutes = Math.max(0, parseHHMM(rule.finish_time) - parseHHMM(startHHMM)) || 120;
-	}
-
-	// ── Day-of-week map (JS getUTCDay: 0=Sun…6=Sat) ─────────────────────────
-	const weekdayMap: Record<weekday, number> = {
-		MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6, SU: 0,
-	};
-
-	while (currentDateStr <= endDateStr) {
-		const [year, month, day] = currentDateStr.split("-").map(Number);
-		// Build a UTC-midnight Date just to derive the day of week — no local time involved
-		const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
-
-		let shouldInclude = false;
-		switch (rule.frequency) {
-			case "daily":
-				shouldInclude = true;
-				break;
-			case "weekly":
-				shouldInclude = rule.by_weekday.some((wd) => weekdayMap[wd.weekday] === dow);
-				break;
-			case "monthly":
-				shouldInclude = rule.by_month_day !== null && day === rule.by_month_day;
-				break;
-			case "yearly":
-				shouldInclude =
-					rule.by_month !== null &&
-					rule.by_month_day !== null &&
-					month === rule.by_month &&
-					day === rule.by_month_day;
-				break;
-		}
-
-		if (shouldInclude) {
-			const occurrenceStart = localToUTC(currentDateStr, startHHMM, timezone);
-			const occurrenceEnd   = addMinutes(occurrenceStart, durationMinutes);
-			dates.push({ start: occurrenceStart, end: occurrenceEnd });
-		}
-
-		// Advance to the next candidate calendar date
-		switch (rule.frequency) {
-			case "daily":
-				currentDateStr = dateStrAddDays(currentDateStr, rule.interval);
-				break;
-			case "weekly":
-				currentDateStr = dateStrAddDays(currentDateStr, 1); // check every day, filter by weekday above
-				break;
-			case "monthly":
-				currentDateStr = dateStrAddMonths(currentDateStr, rule.interval);
-				break;
-			case "yearly":
-				currentDateStr = dateStrAddYears(currentDateStr, rule.interval);
-				break;
-		}
-	}
-
-	return dates;
-}
-
-function addMinutes(date: Date, minutes: number): Date {
-	return new Date(date.getTime() + minutes * 60000);
 }
 
 // ============================================================================
@@ -493,6 +421,40 @@ export const getRecurringPlanById = async (planId: string, organizationId: strin
 	});
 };
 
+/** null/undefined clears or leaves the default; anything else must be an active tech of this org. */
+async function assertDefaultTechInOrg(
+	tx: { technician: { findFirst: (args: never) => Promise<unknown> } },
+	organizationId: string,
+	techId: string | null | undefined,
+): Promise<void> {
+	if (!techId) return;
+	const tech = await tx.technician.findFirst({
+		where: {
+			id: techId,
+			organization_id: organizationId,
+			deactivated_at: null,
+			deleted_at: null,
+		},
+		select: { id: true },
+	} as never);
+	if (!tech) {
+		throw new Error("Validation failed: Default technician not found or deactivated");
+	}
+}
+
+/**
+ * Creates the visits now due instead of waiting for the daily sweep, which
+ * only reaches occurrences whose window is still open when it runs.
+ */
+function topUpAfterCommit(planId: string, organizationId: string): void {
+	// Lazy: the scheduler imports this module.
+	void import("../services/recurringPlanScheduler.js")
+		.then(({ topUpPlan }) => topUpPlan(planId, organizationId))
+		.catch((err: unknown) =>
+			log.warn({ err, planId }, "Post-save recurring plan top-up failed"),
+		);
+}
+
 export const insertRecurringPlan = async (
 	req: Request,
 	organizationId: string,
@@ -509,6 +471,16 @@ export const insertRecurringPlan = async (
 			if (!client) {
 				throw new Error("Client not found");
 			}
+
+			const org = await tx.organization.findFirst({
+				where: { id: organizationId },
+				select: { timezone: true },
+			});
+			if (!org) {
+				throw new Error("Organization not found");
+			}
+
+			await assertDefaultTechInOrg(tx, organizationId, parsed.default_technician_id);
 
 			const jobNumber = await generateJobNumber(tx, organizationId);
 
@@ -540,12 +512,13 @@ export const insertRecurringPlan = async (
 					status: "Active",
 					starts_at: new Date(parsed.starts_at),
 					ends_at: parsed.ends_at ? new Date(parsed.ends_at) : null,
-					timezone: parsed.timezone,
+					timezone: org.timezone,
 					generation_window_days: parsed.generation_window_days,
 					min_advance_days: parsed.min_advance_days,
 					billing_mode: parsed.billing_mode,
 					invoice_timing: parsed.invoice_timing,
 					auto_invoice: parsed.auto_invoice,
+					default_technician_id: parsed.default_technician_id ?? null,
 					created_by_dispatcher_id: context?.dispatcherId || null,
 				},
 			});
@@ -629,10 +602,8 @@ export const insertRecurringPlan = async (
 				const nextInvoiceAt =
 					sched.frequency !== "on_visit_completion"
 						? calculateNextInvoiceAt(
-								sched.frequency as ScheduleFrequency,
-								sched.day_of_month ?? null,
-								sched.day_of_week ?? null,
-								sched.generate_days_before ?? 0,
+								scheduleAnchor(sched, plan.timezone),
+								{ from: new Date(), notBefore: plan.starts_at },
 							)
 						: null;
 				await tx.invoice_schedule.create({
@@ -656,7 +627,6 @@ export const insertRecurringPlan = async (
 			// Generate initial occurrences
 			await generateOccurrencesForPlan(
 				plan.id,
-				parsed.generation_window_days,
 				tx as unknown as Prisma.TransactionClient,
 			);
 
@@ -666,12 +636,12 @@ export const insertRecurringPlan = async (
 				data: { last_activity: new Date() },
 			});
 
-			await logActivity({
+			const logRow = await logActivityInTx(tx as unknown as Prisma.TransactionClient, {
 				event_type: "recurring_plan.created",
 				action: "created",
 				entity_type: "recurring_plan",
 				entity_id: plan.id,
-				organization_id: client.organization_id,
+				organization_id: organizationId,
 				actor_type: context?.techId
 					? "technician"
 					: context?.dispatcherId
@@ -693,7 +663,7 @@ export const insertRecurringPlan = async (
 			});
 
 			// Return full plan with all relations
-			return tx.recurring_plan.findUnique({
+			const item = await tx.recurring_plan.findUnique({
 				where: { id: plan.id },
 				include: {
 					client: true,
@@ -713,9 +683,14 @@ export const insertRecurringPlan = async (
 					invoice_schedule: true,
 				},
 			});
+			return { item, logRow };
 		});
 
-		return { err: "", item: created ?? undefined };
+		emitActivityHints(created.logRow);
+		if (created.item && planEffects(created.item.status).createsVisits) {
+			topUpAfterCommit(created.item.id, organizationId);
+		}
+		return { err: "", item: created.item ?? undefined };
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {
@@ -731,6 +706,90 @@ export const insertRecurringPlan = async (
 		throw e;
 	}
 };
+
+/**
+ * Rewrites the plan-sourced lines of generated visits that are still
+ * Scheduled in the future and on no live invoice. Eligibility is decided
+ * under the visit lock because a start or an invoice may have committed
+ * since the plan was read; hand-added lines are never touched.
+ */
+async function propagateTemplateToScheduledVisits(
+	tx: Prisma.TransactionClient,
+	organizationId: string,
+	planId: string,
+): Promise<{ count: number; skipped: number; visits: { id: string; jobId: string }[] }> {
+	const occurrences = await tx.recurring_occurrence.findMany({
+		where: { recurring_plan_id: planId, job_visit_id: { not: null } },
+		select: { job_visit_id: true },
+	});
+	const candidateIds = occurrences.map((o) => o.job_visit_id as string);
+	if (candidateIds.length === 0) return { count: 0, skipped: 0, visits: [] };
+
+	const locked = await tx.$queryRaw<{ id: string; job_id: string; blocked: boolean }[]>`
+		SELECT v.id, v.job_id,
+			-- Consumed, voided or purchase-linked plan lines: the visit keeps its price.
+			EXISTS (
+				SELECT 1 FROM job_visit_line_item li
+				WHERE li.visit_id = v.id AND li.source = 'recurring_plan'
+					AND (li.fulfillment_status::text IN ('used', 'voided')
+						OR EXISTS (SELECT 1 FROM purchase_line pl WHERE pl.visit_line_item_id = li.id)
+						OR EXISTS (SELECT 1 FROM field_purchase_line fl WHERE fl.visit_line_item_id = li.id)
+						OR EXISTS (SELECT 1 FROM stock_movement sm WHERE sm.visit_line_item_id = li.id))
+			) AS blocked
+		FROM job_visit v JOIN job j ON j.id = v.job_id
+		WHERE v.id = ANY(${candidateIds}::text[])
+			AND j.organization_id = ${organizationId}
+			AND v.status = 'Scheduled'
+			AND v.scheduled_start_at > now()
+			AND NOT EXISTS (
+				SELECT 1 FROM invoice_visit iv JOIN invoice i ON i.id = iv.invoice_id
+				WHERE iv.visit_id = v.id AND i.status::text <> 'Void')
+		ORDER BY v.id
+		FOR NO KEY UPDATE OF v`;
+	const open = locked.filter((r) => !r.blocked);
+	const skipped = locked.length - open.length;
+	const visitIds = open.map((r) => r.id);
+	if (visitIds.length === 0) return { count: 0, skipped, visits: [] };
+
+	const template = await tx.recurring_plan_line_item.findMany({
+		where: { recurring_plan_id: planId },
+		orderBy: { sort_order: "asc" },
+	});
+	const planLines = await tx.job_visit_line_item.findMany({
+		where: { visit_id: { in: visitIds }, source: "recurring_plan" },
+		select: { id: true, visit_id: true },
+	});
+
+	for (const visitId of visitIds) {
+		// Visits holding a consumed, voided or purchase-linked plan line were skipped by the lock query.
+		const stale = planLines.filter((l) => l.visit_id === visitId).map((l) => l.id);
+		if (stale.length > 0) {
+			await tx.job_visit_line_item.deleteMany({ where: { id: { in: stale } } });
+		}
+		await tx.job_visit_line_item.createMany({
+			data: template.map((item, idx) => ({
+				visit_id: visitId,
+				name: item.name,
+				description: item.description,
+				quantity: Number(item.quantity),
+				unit_price: Number(item.unit_price),
+				total: Number(item.quantity) * Number(item.unit_price),
+				source: "recurring_plan",
+				item_type: item.item_type,
+				taxable: item.taxable,
+				tax_group_id: item.tax_group_id,
+				sort_order: idx,
+				...plannedLineItemFields(item.inventory_item_id, Number(item.quantity), item),
+			})),
+		});
+		await recomputeVisitTotals(visitId, organizationId, tx);
+	}
+	return {
+		count: visitIds.length,
+		skipped,
+		visits: open.map((r) => ({ id: r.id, jobId: r.job_id })),
+	};
+}
 
 /** Replaces a plan's template lines: missing ids deleted, known ids updated, the rest created. */
 async function syncPlanLineItems(
@@ -849,31 +908,68 @@ export const updateRecurringPlan = async (
 			return { err: "Recurring plan not found" };
 		}
 
-		if (parsed.status !== undefined) {
-			assertValidRecurringPlanTransition(existing.status, parsed.status);
-		}
-
 		const changes = buildChanges(existing, parsed, [
 			"name",
 			"description",
 			"address",
 			"priority",
-			"status",
 			"starts_at",
 			"ends_at",
-			"timezone",
 			"generation_window_days",
 			"min_advance_days",
 			"billing_mode",
 			"invoice_timing",
 			"auto_invoice",
 			"coords",
+			"default_technician_id",
 		] as const);
 
+		const newEndsAt =
+			parsed.ends_at === undefined
+				? undefined
+				: parsed.ends_at
+					? new Date(parsed.ends_at)
+					: null;
+		const endsMoved =
+			newEndsAt !== undefined &&
+			(newEndsAt?.getTime() ?? null) !== (existing.ends_at?.getTime() ?? null);
+		const scheduleMoved =
+			!!(parsed.rule && existing.rules.length > 0) ||
+			endsMoved ||
+			(parsed.generation_window_days !== undefined &&
+				parsed.generation_window_days !== existing.generation_window_days) ||
+			(parsed.min_advance_days !== undefined &&
+				parsed.min_advance_days !== existing.min_advance_days);
+
+		let logRow: Awaited<ReturnType<typeof logActivityInTx>> | null = null;
+		let updatedVisits = 0;
+		let skippedVisits = 0;
+		let repricedVisits: { id: string; jobId: string }[] = [];
 		const updated = await sdb.$transaction(async (tx) => {
+			if (parsed.rule && existing.rules.length > 0) {
+				// Plan row first, as every plan writer takes it. Legacy rows are
+				// matched to the slots of the rule that made them, so before it
+				// is rewritten.
+				await tx.$queryRaw`
+					SELECT id FROM recurring_plan WHERE id = ${existing.id} FOR NO KEY UPDATE`;
+				await reconcileLegacySlots(
+					existing.id,
+					tx as unknown as Prisma.TransactionClient,
+				);
+			}
+			// A tech deactivated since being set stays; only a change is checked.
+			if (
+				parsed.default_technician_id !== undefined &&
+				parsed.default_technician_id !== existing.default_technician_id
+			) {
+				await assertDefaultTechInOrg(tx, organizationId, parsed.default_technician_id);
+			}
 			const plan = await tx.recurring_plan.update({
 				where: { id: existing.id },
 				data: {
+					...(parsed.default_technician_id !== undefined && {
+						default_technician_id: parsed.default_technician_id,
+					}),
 					...(parsed.name !== undefined && { name: parsed.name }),
 					...(parsed.description !== undefined && {
 						description: parsed.description,
@@ -887,20 +983,12 @@ export const updateRecurringPlan = async (
 					...(parsed.priority !== undefined && {
 						priority: parsed.priority,
 					}),
-					...(parsed.status !== undefined && {
-						status: parsed.status,
-					}),
 					...(parsed.starts_at !== undefined && {
 						starts_at: new Date(parsed.starts_at),
 					}),
-					...(parsed.ends_at !== undefined && {
-						ends_at: parsed.ends_at
-							? new Date(parsed.ends_at)
-							: null,
-					}),
-					...(parsed.timezone !== undefined && {
-						timezone: parsed.timezone,
-					}),
+					...(newEndsAt !== undefined && { ends_at: newEndsAt }),
+					// The ending-soon notice belongs to the old date.
+					...(endsMoved && { expiry_notified_at: null }),
 					...(parsed.generation_window_days !== undefined && {
 						generation_window_days: parsed.generation_window_days,
 					}),
@@ -970,11 +1058,10 @@ export const updateRecurringPlan = async (
 					},
 				});
 
-				if (plan.status === "Active" || plan.status === "Paused") {
-					// Regenerate occurrences with new schedule and generation window
+				// A paused plan refills on resume.
+				if (planEffects(plan.status).generates) {
 					await generateOccurrencesForPlan(
 						existing.id,
-						plan.generation_window_days,
 						tx as unknown as Prisma.TransactionClient,
 					);
 				}
@@ -986,9 +1073,22 @@ export const updateRecurringPlan = async (
 					tx as unknown as Prisma.TransactionClient,
 					organizationId,
 					existing.id,
-					existing.line_items,
+					await tx.recurring_plan_line_item.findMany({
+						where: { recurring_plan_id: existing.id },
+						select: { id: true },
+					}),
 					parsed.line_items,
 				);
+				if (parsed.apply_to_scheduled_visits) {
+					const r = await propagateTemplateToScheduledVisits(
+						tx as unknown as Prisma.TransactionClient,
+						organizationId,
+						existing.id,
+					);
+					updatedVisits = r.count;
+					skippedVisits = r.skipped;
+					repricedVisits = r.visits;
+				}
 			}
 
 			// Update job container if relevant fields changed
@@ -1019,67 +1119,96 @@ export const updateRecurringPlan = async (
 				});
 			}
 
-			// Upsert invoice schedule if billing configuration is provided
-			if (parsed.invoice_schedule) {
+			// The edit form sends billing_mode "none" without a schedule.
+			if ((parsed.billing_mode ?? existing.billing_mode) === "none") {
+				await tx.invoice_schedule.updateMany({
+					where: { recurring_plan_id: existing.id },
+					data: { is_active: false },
+				});
+			} else if (parsed.invoice_schedule) {
 				const sched = parsed.invoice_schedule;
-				if (parsed.billing_mode === "none") {
-					// Deactivate schedule if billing is set to none
-					await tx.invoice_schedule.updateMany({
-						where: { recurring_plan_id: existing.id },
-						data: { is_active: false },
+				const existingSchedule = await tx.invoice_schedule.findFirst({
+					where: { recurring_plan_id: existing.id },
+				});
+				const nextInvoiceAt = nextInvoiceAtForEdit(sched, existingSchedule, plan, {
+					now: new Date(),
+					startsMoved: plan.starts_at.getTime() !== existing.starts_at.getTime(),
+				});
+				const generateDaysBefore = generateDaysBeforeForEdit(sched, existingSchedule);
+				await tx.invoice_schedule.upsert({
+					where: { recurring_plan_id: existing.id },
+					create: {
+						recurring_plan_id: existing.id,
+						billing_basis: sched.billing_basis,
+						fixed_amount: sched.fixed_amount ?? null,
+						frequency: sched.frequency,
+						day_of_month: sched.day_of_month ?? null,
+						day_of_week: sched.day_of_week as weekday | null ?? null,
+						generate_days_before: generateDaysBefore,
+						payment_terms_days: sched.payment_terms_days ?? 30,
+						auto_send: sched.auto_send ?? false,
+						memo_template: sched.memo_template ?? null,
+						next_invoice_at: nextInvoiceAt,
+						is_active: true,
+					},
+					update: {
+						billing_basis: sched.billing_basis,
+						fixed_amount: sched.fixed_amount ?? null,
+						frequency: sched.frequency,
+						day_of_month: sched.day_of_month ?? null,
+						day_of_week: sched.day_of_week as weekday | null ?? null,
+						generate_days_before: generateDaysBefore,
+						payment_terms_days: sched.payment_terms_days ?? 30,
+						auto_send: sched.auto_send ?? false,
+						memo_template: sched.memo_template ?? null,
+						next_invoice_at: nextInvoiceAt,
+						is_active: true,
+					},
+				});
+			} else if (
+				(parsed.ends_at !== undefined || existing.billing_mode === "none") &&
+				planBills(plan.status as PlanStatus)
+			) {
+				// The invoice scheduler switches a schedule off once its billing
+				// date passes ends_at, and billing_mode "none" switches it off;
+				// a later end date or billing again switches it back on.
+				const sched = await tx.invoice_schedule.findFirst({
+					where: { recurring_plan_id: existing.id },
+				});
+				if (
+					sched &&
+					!sched.is_active &&
+					sched.frequency === "on_visit_completion" &&
+					existing.billing_mode === "none"
+				) {
+					await tx.invoice_schedule.update({
+						where: { id: sched.id },
+						data: { is_active: true },
 					});
-				} else {
-					// Preserve next_invoice_at when frequency/day anchor unchanged so
-					// editing memo, auto_send, etc. doesn't silently reset the billing date.
-					const existingSchedule = sched.frequency !== "on_visit_completion"
-						? await tx.invoice_schedule.findFirst({ where: { recurring_plan_id: existing.id } })
-						: null;
-					const anchorChanged = !existingSchedule ||
-						existingSchedule.frequency !== sched.frequency ||
-						existingSchedule.day_of_month !== (sched.day_of_month ?? null) ||
-						existingSchedule.day_of_week !== (sched.day_of_week ?? null) ||
-						existingSchedule.generate_days_before !== (sched.generate_days_before ?? 0);
-					const nextInvoiceAt =
-						sched.frequency !== "on_visit_completion"
-							? anchorChanged
-								? calculateNextInvoiceAt(
-										sched.frequency as ScheduleFrequency,
-										sched.day_of_month ?? null,
-										sched.day_of_week ?? null,
-										sched.generate_days_before ?? 0,
-									)
-								: existingSchedule!.next_invoice_at
-							: null;
-					await tx.invoice_schedule.upsert({
-						where: { recurring_plan_id: existing.id },
-						create: {
-							recurring_plan_id: existing.id,
-							billing_basis: sched.billing_basis,
-							fixed_amount: sched.fixed_amount ?? null,
-							frequency: sched.frequency,
-							day_of_month: sched.day_of_month ?? null,
-							day_of_week: sched.day_of_week as weekday | null ?? null,
-							generate_days_before: sched.generate_days_before ?? 0,
-							payment_terms_days: sched.payment_terms_days ?? 30,
-							auto_send: sched.auto_send ?? false,
-							memo_template: sched.memo_template ?? null,
-							next_invoice_at: nextInvoiceAt,
-							is_active: true,
-						},
-						update: {
-							billing_basis: sched.billing_basis,
-							fixed_amount: sched.fixed_amount ?? null,
-							frequency: sched.frequency,
-							day_of_month: sched.day_of_month ?? null,
-							day_of_week: sched.day_of_week as weekday | null ?? null,
-							generate_days_before: sched.generate_days_before ?? 0,
-							payment_terms_days: sched.payment_terms_days ?? 30,
-							auto_send: sched.auto_send ?? false,
-							memo_template: sched.memo_template ?? null,
-							next_invoice_at: nextInvoiceAt,
-							is_active: true,
-						},
+				} else if (
+					sched &&
+					!sched.is_active &&
+					sched.frequency !== "on_visit_completion"
+				) {
+					const next = nextInvoiceAtForEdit(sched, sched, plan, {
+						now: new Date(),
 					});
+					const endsOn =
+						plan.ends_at && toLocalDate(plan.ends_at, plan.timezone);
+					if (
+						next &&
+						(!endsOn ||
+							billingDateOf(
+								next,
+								sched.generate_days_before,
+								plan.timezone,
+							) <= endsOn)
+					) {
+						await tx.invoice_schedule.update({
+							where: { id: sched.id },
+							data: { is_active: true, next_invoice_at: next },
+						});
+					}
 				}
 			}
 
@@ -1088,12 +1217,12 @@ export const updateRecurringPlan = async (
 				parsed.rule ||
 				parsed.line_items
 			) {
-				await logActivity({
+				logRow = await logActivityInTx(tx as unknown as Prisma.TransactionClient, {
 					event_type: "recurring_plan.updated",
 					action: "updated",
 					entity_type: "recurring_plan",
 					entity_id: existing.id,
-					organization_id: existing.organization_id,
+					organization_id: organizationId,
 					actor_type: context?.techId
 						? "technician"
 						: context?.dispatcherId
@@ -1111,6 +1240,9 @@ export const updateRecurringPlan = async (
 								new: parsed.line_items.length,
 							},
 						}),
+						...(updatedVisits > 0 && {
+							visits_repriced: { old: null, new: updatedVisits },
+						}),
 					},
 					ip_address: context?.ipAddress,
 					user_agent: context?.userAgent,
@@ -1120,51 +1252,22 @@ export const updateRecurringPlan = async (
 			// Return full plan with all relations
 			return tx.recurring_plan.findUnique({
 				where: { id: existing.id },
-				include: {
-					client: {
-						include: {
-							contacts: {
-								include: {
-									contact: true,
-								},
-							},
-						},
-					},
-					job_container: {
-						select: {
-							id: true,
-							job_number: true,
-							name: true,
-							status: true,
-							address: true,
-							description: true,
-							tax_rate: true,
-						},
-					},
-					rules: {
-						include: {
-							by_weekday: true,
-						},
-					},
-					line_items: {
-						orderBy: { sort_order: "asc" },
-					},
-					occurrences: {
-						orderBy: { occurrence_start_at: "asc" },
-					},
-					invoice_schedule: true,
-					created_by_dispatcher: {
-						select: {
-							id: true,
-							name: true,
-							email: true,
-						},
-					},
-				},
+				include: RECURRING_PLAN_DETAIL_INCLUDE,
 			});
 		});
 
-		return { err: "", item: updated };
+		if (logRow) emitActivityHints(logRow);
+		for (const v of repricedVisits) recordChanged(organizationId, "visit", v.id, v.jobId);
+		if (scheduleMoved && updated && planEffects(updated.status).createsVisits) {
+			topUpAfterCommit(existing.id, organizationId);
+		}
+		return {
+			err: "",
+			item:
+				updated && parsed.line_items
+					? { ...updated, updated_visits: updatedVisits, skipped_visits: skippedVisits }
+					: updated,
+		};
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {
@@ -1177,7 +1280,6 @@ export const updateRecurringPlan = async (
 		if (e instanceof Error && e.message.startsWith("Validation failed:")) {
 			return { err: e.message };
 		}
-		if (e instanceof InvalidTransitionError) throw e;
 		log.error({ err: e }, "Update recurring plan error");
 		throw e;
 	}
@@ -1208,20 +1310,36 @@ export const updateRecurringPlanLineItems = async (
 		}
 
 		const updated = await sdb.$transaction(async (tx) => {
+			// Plan row first, so a visit generating concurrently (FOR SHARE) reads
+			// the committed template rather than the one being replaced.
+			await (tx as unknown as Prisma.TransactionClient).$queryRaw`
+				SELECT id FROM recurring_plan WHERE id = ${plan.id} FOR NO KEY UPDATE`;
 			await syncPlanLineItems(
 				tx as unknown as Prisma.TransactionClient,
 				organizationId,
 				plan.id,
-				plan.line_items,
+				await tx.recurring_plan_line_item.findMany({
+					where: { recurring_plan_id: plan.id },
+					select: { id: true },
+				}),
 				parsed.line_items,
 			);
+			const propagated = parsed.apply_to_scheduled_visits
+				? await propagateTemplateToScheduledVisits(
+						tx as unknown as Prisma.TransactionClient,
+						organizationId,
+						plan.id,
+					)
+				: { count: 0, skipped: 0, visits: [] };
+			const repricedVisits = propagated.visits;
+			const repriced = propagated.count;
 
-			await logActivity({
+			const logRow = await logActivityInTx(tx as unknown as Prisma.TransactionClient, {
 				event_type: "recurring_plan.template_updated",
 				action: "updated",
 				entity_type: "recurring_plan",
 				entity_id: plan.id,
-				organization_id: plan.organization_id,
+				organization_id: organizationId,
 				actor_type: context?.techId
 					? "technician"
 					: context?.dispatcherId
@@ -1233,12 +1351,15 @@ export const updateRecurringPlanLineItems = async (
 						old: plan.line_items.length,
 						new: parsed.line_items.length,
 					},
+					...(repriced > 0 && {
+						visits_repriced: { old: null, new: repriced },
+					}),
 				},
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
 			});
 
-			return tx.recurring_plan.findUnique({
+			const item = await tx.recurring_plan.findUnique({
 				where: { id: plan.id },
 				include: {
 					line_items: {
@@ -1246,9 +1367,21 @@ export const updateRecurringPlanLineItems = async (
 					},
 				},
 			});
+			return { item, logRow, repriced, skipped: propagated.skipped, repricedVisits };
 		});
 
-		return { err: "", item: updated };
+		emitActivityHints(updated.logRow);
+		for (const v of updated.repricedVisits) {
+			recordChanged(organizationId, "visit", v.id, v.jobId);
+		}
+		return {
+			err: "",
+			item: updated.item && {
+				...updated.item,
+				updated_visits: updated.repriced,
+				skipped_visits: updated.skipped,
+			},
+		};
 	} catch (e) {
 		if (e instanceof ZodError) {
 			return {
@@ -1286,26 +1419,13 @@ export const upsertInvoiceSchedule = async (
 
 		if (!plan) return { err: "Recurring plan not found" };
 
-		// Preserve next_invoice_at when frequency/day anchor unchanged
-		const existingSchedule = parsed.frequency !== "on_visit_completion"
-			? await sdb.invoice_schedule.findFirst({ where: { recurring_plan_id: plan.id } })
-			: null;
-		const anchorChanged = !existingSchedule ||
-			existingSchedule.frequency !== parsed.frequency ||
-			existingSchedule.day_of_month !== (parsed.day_of_month ?? null) ||
-			existingSchedule.day_of_week !== (parsed.day_of_week ?? null) ||
-			existingSchedule.generate_days_before !== (parsed.generate_days_before ?? 0);
-		const nextInvoiceAt =
-			parsed.frequency !== "on_visit_completion"
-				? anchorChanged
-					? calculateNextInvoiceAt(
-							parsed.frequency as ScheduleFrequency,
-							parsed.day_of_month ?? null,
-							parsed.day_of_week ?? null,
-							parsed.generate_days_before ?? 0,
-						)
-					: existingSchedule!.next_invoice_at
-				: null;
+		const existingSchedule = await sdb.invoice_schedule.findFirst({
+			where: { recurring_plan_id: plan.id },
+		});
+		const nextInvoiceAt = nextInvoiceAtForEdit(parsed, existingSchedule, plan, {
+			now: new Date(),
+		});
+		const generateDaysBefore = generateDaysBeforeForEdit(parsed, existingSchedule);
 
 		const schedule = await sdb.invoice_schedule.upsert({
 			where: { recurring_plan_id: plan.id },
@@ -1316,12 +1436,12 @@ export const upsertInvoiceSchedule = async (
 				frequency: parsed.frequency,
 				day_of_month: parsed.day_of_month ?? null,
 				day_of_week: parsed.day_of_week as weekday | null ?? null,
-				generate_days_before: parsed.generate_days_before ?? 0,
+				generate_days_before: generateDaysBefore,
 				payment_terms_days: parsed.payment_terms_days ?? 30,
 				auto_send: parsed.auto_send ?? false,
 				memo_template: parsed.memo_template ?? null,
 				next_invoice_at: nextInvoiceAt,
-				is_active: true,
+				is_active: plan.billing_mode !== "none",
 			},
 			update: {
 				billing_basis: parsed.billing_basis,
@@ -1329,12 +1449,12 @@ export const upsertInvoiceSchedule = async (
 				frequency: parsed.frequency,
 				day_of_month: parsed.day_of_month ?? null,
 				day_of_week: parsed.day_of_week as weekday | null ?? null,
-				generate_days_before: parsed.generate_days_before ?? 0,
+				generate_days_before: generateDaysBefore,
 				payment_terms_days: parsed.payment_terms_days ?? 30,
 				auto_send: parsed.auto_send ?? false,
 				memo_template: parsed.memo_template ?? null,
 				next_invoice_at: nextInvoiceAt,
-				is_active: true,
+				is_active: plan.billing_mode !== "none",
 			},
 		});
 
@@ -1369,104 +1489,56 @@ export const deleteInvoiceSchedule = async (jobId: string, organizationId: strin
 // PLAN LIFECYCLE ACTIONS
 // ============================================================================
 
-export const pauseRecurringPlan = async (
+export const pauseRecurringPlan = (
 	jobId: string,
 	organizationId: string,
 	context?: UserContext,
-) => {
-	return updateRecurringPlan(jobId, { status: "Paused" }, organizationId, context);
-};
+) => transitionRecurringPlan(jobId, "Paused", organizationId, context);
 
-export const resumeRecurringPlan = async (
+export const resumeRecurringPlan = (
 	jobId: string,
 	organizationId: string,
 	context?: UserContext,
+) => transitionRecurringPlan(jobId, "Active", organizationId, context);
+
+export const renewRecurringPlan = async (
+	jobId: string,
+	data: unknown,
+	organizationId: string,
+	context?: UserContext,
 ) => {
-	return updateRecurringPlan(jobId, { status: "Active" }, organizationId, context);
+	const parsed = renewRecurringPlanSchema.safeParse(data);
+	if (!parsed.success) {
+		return {
+			err: `Validation failed: ${parsed.error.issues.map((i) => i.message).join(", ")}`,
+		};
+	}
+	const endsAt = parsed.data.ends_at === null ? null : new Date(parsed.data.ends_at);
+	return transitionRecurringPlan(jobId, "Active", organizationId, context, { endsAt });
 };
 
 export const cancelRecurringPlan = async (
 	jobId: string,
 	organizationId: string,
 	context?: UserContext,
+	data: unknown = {},
 ) => {
-	try {
-		const sdb = getScopedDb(organizationId);
-		const plan = await sdb.recurring_plan.findFirst({
-			where: {
-				job_container: {
-					id: jobId,
-				},
-			},
-		});
-
-		if (!plan) {
-			return { err: "Recurring plan not found" };
-		}
-		if (plan.status === "Cancelled") {
-			return { err: "", item: plan };
-		}
-		assertValidRecurringPlanTransition(plan.status, "Cancelled");
-
-		const updated = await sdb.$transaction(async (tx) => {
-			// Cancel all future planned occurrences
-			await tx.recurring_occurrence.updateMany({
-				where: {
-					recurring_plan_id: plan.id,
-					status: "planned",
-					occurrence_start_at: {
-						gt: new Date(),
-					},
-				},
-				data: {
-					status: "cancelled",
-					skip_reason: "Plan cancelled",
-				},
-			});
-
-			// Update plan status
-			const updatedPlan = await tx.recurring_plan.update({
-				where: { id: plan.id },
-				data: { status: "Cancelled" },
-			});
-
-			await logActivity({
-				event_type: "recurring_plan.cancelled",
-				action: "updated",
-				entity_type: "recurring_plan",
-				entity_id: plan.id,
-				organization_id: plan.organization_id,
-				actor_type: context?.techId
-					? "technician"
-					: context?.dispatcherId
-						? "dispatcher"
-						: "system",
-				actor_id: context?.techId || context?.dispatcherId,
-				changes: {
-					status: { old: plan.status, new: "Cancelled" },
-				},
-				ip_address: context?.ipAddress,
-				user_agent: context?.userAgent,
-			});
-
-			return updatedPlan;
-		});
-
-		return { err: "", item: updated };
-	} catch (e) {
-		if (e instanceof InvalidTransitionError) throw e;
-		log.error({ err: e }, "Cancel recurring plan error");
-		throw e;
+	const parsed = cancelRecurringPlanSchema.safeParse(data ?? {});
+	if (!parsed.success) {
+		return {
+			err: `Validation failed: ${parsed.error.issues.map((i) => i.message).join(", ")}`,
+		};
 	}
+	return transitionRecurringPlan(jobId, "Cancelled", organizationId, context, {
+		reason: parsed.data.reason,
+	});
 };
 
-export const completeRecurringPlan = async (
+export const completeRecurringPlan = (
 	jobId: string,
 	organizationId: string,
 	context?: UserContext,
-) => {
-	return updateRecurringPlan(jobId, { status: "Completed" }, organizationId, context);
-};
+) => transitionRecurringPlan(jobId, "Completed", organizationId, context);
 
 // ============================================================================
 // OCCURRENCE MANAGEMENT
@@ -1525,16 +1597,20 @@ export const generateOccurrences = async (
 			return { err: "Recurring plan not found" };
 		}
 
-		if (plan.status !== "Active") {
-			return { err: "Can only generate occurrences for active plans" };
+		if (!planEffects(plan.status).generates) {
+			return { err: planInactiveMessage(plan.status) };
 		}
 
-		const result = await sdb.$transaction(async (tx) => {
-			return await generateOccurrencesForPlan(
-				plan.id,
-				parsed.days_ahead,
-				tx as unknown as Prisma.TransactionClient,
-			);
+		const result = await sdb.$transaction(async (stx) => {
+			const tx = stx as unknown as Prisma.TransactionClient;
+			// Plan row first, as top-up takes it; unrepaired legacy rows would
+			// leave their true slots looking empty.
+			await tx.$queryRaw`
+				SELECT id FROM recurring_plan WHERE id = ${plan.id} FOR NO KEY UPDATE`;
+			await reconcileLegacySlots(plan.id, tx);
+			return await generateOccurrencesForPlan(plan.id, tx, {
+				daysAhead: parsed.days_ahead,
+			});
 		});
 
 		await logActivity({
@@ -1551,7 +1627,10 @@ export const generateOccurrences = async (
 			actor_id: context?.techId || context?.dispatcherId,
 			changes: {
 				generated_count: { old: null, new: result.generated },
-				days_ahead: { old: null, new: parsed.days_ahead },
+				days_ahead: {
+					old: null,
+					new: parsed.days_ahead ?? plan.generation_window_days,
+				},
 			},
 			ip_address: context?.ipAddress,
 			user_agent: context?.userAgent,
@@ -1639,6 +1718,9 @@ export const skipOccurrence = async (
 	}
 };
 
+/** A reschedule refused once the plan is locked; carries the user-facing reason. */
+class RescheduleRefusal extends Error {}
+
 export const rescheduleOccurrence = async (
 	occurrenceId: string,
 	data: unknown,
@@ -1649,77 +1731,207 @@ export const rescheduleOccurrence = async (
 		const parsed = rescheduleOccurrenceSchema.parse(data);
 
 		const sdb = getScopedDb(organizationId);
-		const occurrence = await sdb.recurring_occurrence.findUnique({
+		const found = await sdb.recurring_occurrence.findUnique({
 			where: { id: occurrenceId },
+			select: { recurring_plan_id: true },
 		});
 
-		if (!occurrence) {
+		if (!found) {
 			return { err: "Occurrence not found" };
 		}
 
-		if (occurrence.status !== "planned") {
-			return { err: "Can only reschedule planned occurrences" };
-		}
-
 		const newStartDate = new Date(parsed.new_start_at);
-		const newEndDate = parsed.new_end_at
-			? new Date(parsed.new_end_at)
-			: occurrence.occurrence_end_at;
+		type TimeField = (typeof RULE_TIME_FIELDS)[number];
 
-		// Build optional constraint update data
-		const constraintData = {
-			...(parsed.arrival_constraint   !== undefined && { arrival_constraint:   parsed.arrival_constraint }),
-			...(parsed.finish_constraint    !== undefined && { finish_constraint:    parsed.finish_constraint }),
-			...(parsed.arrival_time         !== undefined && { arrival_time:         parsed.arrival_time }),
-			...(parsed.arrival_window_start !== undefined && { arrival_window_start: parsed.arrival_window_start }),
-			...(parsed.arrival_window_end   !== undefined && { arrival_window_end:   parsed.arrival_window_end }),
-			...(parsed.finish_time          !== undefined && { finish_time:          parsed.finish_time }),
-		};
-
-		const updated = await sdb.recurring_occurrence.update({
-			where: { id: occurrenceId },
-			data: {
-				occurrence_start_at: newStartDate,
-				occurrence_end_at: newEndDate,
-				...constraintData,
-			},
-		});
-
-		// ── "This & all future" — shift future planned occurrences by the same delta ──
-		if (parsed.scope === "future") {
-			const deltaMs = newStartDate.getTime() - occurrence.occurrence_start_at.getTime();
-			const futureOccurrences = await sdb.recurring_occurrence.findMany({
-				where: {
-					recurring_plan_id: occurrence.recurring_plan_id,
-					occurrence_start_at: { gt: occurrence.occurrence_start_at },
-					status: "planned",
-					id: { not: occurrenceId },
-				},
-				select: { id: true, occurrence_start_at: true, occurrence_end_at: true },
+		// original_start_at is the rule slot's identity (unique per plan); it is
+		// deliberately never written here so generation can't re-create the slot.
+		const { updated, before, newEndDate, keptVisits } = await sdb.$transaction(async (stx) => {
+			const tx = stx as unknown as Prisma.TransactionClient;
+			// Plan row first, as updateRecurringPlan takes it before the rule and
+			// the occurrences; the rule and the row are read only under it.
+			const lockedPlan = await tx.$queryRaw<{ id: string }[]>`
+				SELECT id FROM recurring_plan WHERE id = ${found.recurring_plan_id} FOR NO KEY UPDATE`;
+			if (lockedPlan.length === 0) throw new RescheduleRefusal("Recurring plan not found");
+			const plan = await tx.recurring_plan.findUnique({
+				where: { id: found.recurring_plan_id },
+				include: { rules: { include: { by_weekday: true } } },
 			});
-			if (futureOccurrences.length > 0) {
-				await sdb.$transaction(
-					futureOccurrences.map((o) =>
-						sdb.recurring_occurrence.update({
-							where: { id: o.id },
-							data: {
-								occurrence_start_at: new Date(o.occurrence_start_at.getTime() + deltaMs),
-								occurrence_end_at: new Date(o.occurrence_end_at.getTime() + deltaMs),
-								...constraintData,
-							},
-						}),
-					),
+			if (!plan) throw new RescheduleRefusal("Recurring plan not found");
+			if (!planEffects(plan.status).createsVisits) {
+				throw new RescheduleRefusal(planInactiveMessage(plan.status));
+			}
+			const occurrence = await tx.recurring_occurrence.findUnique({
+				where: { id: occurrenceId },
+			});
+			if (!occurrence) throw new RescheduleRefusal("Occurrence not found");
+			if (occurrence.status !== "planned") {
+				throw new RescheduleRefusal("Can only reschedule planned occurrences");
+			}
+
+			const tz = plan.timezone;
+			// Surfaces a bad stored timezone as InvalidPlanScheduleError, not a RangeError.
+			planLocalDate(plan, occurrence.occurrence_start_at);
+			// Keep the visit's length when only the start moves.
+			const newEndDate = parsed.new_end_at
+				? new Date(parsed.new_end_at)
+				: new Date(
+						newStartDate.getTime() +
+							(occurrence.occurrence_end_at.getTime() - occurrence.occurrence_start_at.getTime()),
+					);
+
+			const oldWall = localWallTime(occurrence.occurrence_start_at, tz);
+			const newWall = localWallTime(newStartDate, tz);
+			if (parsed.scope === "future" && oldWall.date !== newWall.date) {
+				throw new RescheduleRefusal(
+					"To move every future visit to another day, edit the plan's schedule.",
 				);
 			}
 
-			// Update the rule so newly generated occurrences also inherit the constraint change
-			if (Object.keys(constraintData).length > 0) {
-				await sdb.recurring_rule.updateMany({
+			// Build optional constraint update data
+			const constraintData = {
+				...(parsed.arrival_constraint   !== undefined && { arrival_constraint:   parsed.arrival_constraint }),
+				...(parsed.finish_constraint    !== undefined && { finish_constraint:    parsed.finish_constraint }),
+				...(parsed.arrival_time         !== undefined && { arrival_time:         parsed.arrival_time }),
+				...(parsed.arrival_window_start !== undefined && { arrival_window_start: parsed.arrival_window_start }),
+				...(parsed.arrival_window_end   !== undefined && { arrival_window_end:   parsed.arrival_window_end }),
+				...(parsed.finish_time          !== undefined && { finish_time:          parsed.finish_time }),
+			};
+
+			const effectiveArrival = parsed.arrival_constraint ?? occurrence.arrival_constraint;
+			// A single visit on a fixed "at" arrival must keep arrival_time in step with
+			// its start, because the visit is generated from this field.
+			const targetTimeData =
+				parsed.arrival_time === undefined && effectiveArrival === "at"
+					? { arrival_time: newWall.hhmm }
+					: {};
+
+			// "This & all future": move the rule's start to the requested time, shifting
+			// every set rule time by the same wall-clock delta, then derive each row's
+			// start/end (target included) from that rule on the row's own local date.
+			let shiftedTimes: Record<TimeField, string | null> | null = null;
+			let futureTimes: { startHHMM: string; durationMinutes: number } | null = null;
+			if (parsed.scope === "future") {
+				const rule = plan.rules[0];
+				if (!rule) throw new RescheduleRefusal("Plan has no rules defined");
+				const base = toSlotRule(rule);
+				if (
+					RULE_TIME_FIELDS.some((f) => parsed[f] !== undefined) ||
+					(parsed.arrival_constraint !== undefined &&
+						parsed.arrival_constraint !== base.arrival_constraint) ||
+					(parsed.finish_constraint !== undefined &&
+						parsed.finish_constraint !== base.finish_constraint)
+				) {
+					throw new RescheduleRefusal(
+						"To change the plan's arrival window or finish time, edit the plan's schedule.",
+					);
+				}
+				// Measured from the rule's start, not this visit's: it may have been
+				// moved on its own earlier.
+				const baseStart = visitTimesForRule(base).startHHMM;
+				if (base.arrival_constraint === "anytime" && newWall.hhmm !== baseStart) {
+					throw new RescheduleRefusal(
+						"Visits with an anytime arrival always start at 09:00. To change the time of every future visit, edit the plan's schedule.",
+					);
+				}
+				const delta = wallMinutes(newWall.hhmm) - wallMinutes(baseStart);
+				const shifted = {} as Record<TimeField, string | null>;
+				for (const f of RULE_TIME_FIELDS) {
+					const cur = base[f];
+					if (!cur) {
+						shifted[f] = null;
+						continue;
+					}
+					const m = HHMM_PARTS.exec(cur);
+					if (!m) {
+						throw new InvalidPlanScheduleError(plan.id, new RangeError(`Invalid wall time: ${cur}`));
+					}
+					const next = Number(m[1]) * 60 + Number(m[2]) + delta;
+					if (next < 0 || next > 24 * 60 - 1) {
+						throw new RescheduleRefusal(
+							"That move would push the plan's times past midnight — edit the plan's schedule instead.",
+						);
+					}
+					shifted[f] = `${String(Math.floor(next / 60)).padStart(2, "0")}:${String(next % 60).padStart(2, "0")}`;
+				}
+				const futureRule: SlotRule = { ...base, ...shifted };
+				const times = visitTimesForRule(futureRule);
+				// A `by` deadline clamps its derived start at 09:00, so shifting the
+				// deadline doesn't always move the visit; refuse rather than diverge.
+				if (
+					times.startHHMM !== newWall.hhmm ||
+					(shifted.arrival_window_start &&
+						shifted.arrival_window_end &&
+						shifted.arrival_window_start > shifted.arrival_window_end)
+				) {
+					throw new RescheduleRefusal(
+						"This plan's arrival rule can't move to that time — edit the plan's schedule.",
+					);
+				}
+				shiftedTimes = shifted;
+				futureTimes = times;
+			}
+
+			let targetStart = newStartDate;
+			let targetEnd = newEndDate;
+			if (futureTimes) {
+				targetStart = zonedWallTimeToUtc(newWall.date, futureTimes.startHHMM, tz);
+				targetEnd = new Date(targetStart.getTime() + futureTimes.durationMinutes * 60_000);
+			}
+			const row = await tx.recurring_occurrence.update({
+				where: { id: occurrenceId },
+				data: {
+					occurrence_start_at: targetStart,
+					occurrence_end_at: targetEnd,
+					...(shiftedTimes ?? { ...targetTimeData, ...constraintData }),
+				},
+			});
+
+			let keptVisits = 0;
+			if (shiftedTimes && futureTimes) {
+				const futureOccurrences = await tx.recurring_occurrence.findMany({
+					where: {
+						recurring_plan_id: occurrence.recurring_plan_id,
+						occurrence_start_at: { gt: occurrence.occurrence_start_at },
+						status: "planned",
+						id: { not: occurrenceId },
+					},
+					select: { id: true, occurrence_start_at: true },
+				});
+				// Re-time on each visit's own local date: a fixed UTC delta would drift
+				// an hour across a DST change.
+				for (const o of futureOccurrences) {
+					const start = zonedWallTimeToUtc(
+						toLocalDate(o.occurrence_start_at, tz),
+						futureTimes.startHHMM,
+						tz,
+					);
+					await tx.recurring_occurrence.update({
+						where: { id: o.id },
+						data: {
+							occurrence_start_at: start,
+							occurrence_end_at: new Date(start.getTime() + futureTimes.durationMinutes * 60_000),
+							...shiftedTimes,
+						},
+					});
+				}
+
+				// New occurrences inherit the change through the rule.
+				await tx.recurring_rule.updateMany({
 					where: { recurring_plan_id: occurrence.recurring_plan_id },
-					data: constraintData,
+					data: shiftedTimes,
+				});
+
+				// Visits already made keep their time; the dispatcher is told how many.
+				keptVisits = await tx.recurring_occurrence.count({
+					where: {
+						recurring_plan_id: occurrence.recurring_plan_id,
+						occurrence_start_at: { gt: occurrence.occurrence_start_at },
+						status: "generated",
+					},
 				});
 			}
-		}
+			return { updated: row, before: occurrence, newEndDate, keptVisits };
+		});
 
 		await logActivity({
 			event_type: "recurring_occurrence.rescheduled",
@@ -1735,20 +1947,23 @@ export const rescheduleOccurrence = async (
 			actor_id: context?.techId || context?.dispatcherId,
 			changes: {
 				occurrence_start_at: {
-					old: occurrence.occurrence_start_at,
+					old: before.occurrence_start_at,
 					new: newStartDate,
 				},
 				occurrence_end_at: {
-					old: occurrence.occurrence_end_at,
+					old: before.occurrence_end_at,
 					new: newEndDate,
 				},
-				...parentBreadcrumb("recurring_plan", occurrence.recurring_plan_id),
+				...parentBreadcrumb("recurring_plan", before.recurring_plan_id),
 			},
 			ip_address: context?.ipAddress,
 			user_agent: context?.userAgent,
 		});
 
-		return { err: "", item: updated };
+		return {
+			err: "",
+			item: parsed.scope === "future" ? { ...updated, kept_visits: keptVisits } : updated,
+		};
 	} catch (e) {
 		if (e instanceof ZodError) {
 			log.error({ err: e }, "Reschedule occurrence validation error");
@@ -1759,13 +1974,8 @@ export const rescheduleOccurrence = async (
 			};
 		}
 
-		if (e instanceof Error && "code" in e && (e as any).code === "P2002") {
-			log.error({ err: e }, "Unique constraint violation");
-			return {
-				err: "Cannot reschedule: An occurrence from this recurring plan already exists at this date and time.",
-			};
-		}
-
+		if (e instanceof RescheduleRefusal) return { err: e.message };
+		if (e instanceof InvalidPlanScheduleError) return { err: e.message };
 		log.error({ err: e }, "Reschedule occurrence error");
 		if (isClientMessage(e)) {
 			return { err: e.message };
@@ -1855,6 +2065,7 @@ export const generateVisitFromOccurrence = async (
 			include: {
 				recurring_plan: {
 					include: {
+						client: { select: { name: true } },
 						line_items: {
 							orderBy: { sort_order: "asc" },
 						},
@@ -1882,6 +2093,9 @@ export const generateVisitFromOccurrence = async (
 		}
 
 		const plan = occurrence.recurring_plan;
+		if (!planEffects(plan.status).createsVisits) {
+			return { err: planInactiveMessage(plan.status) };
+		}
 		const rule = plan.rules[0];
 		// Lazy, as in cancelJob: the lifecycle's load graph reaches the email service.
 		const { syncJobFromVisits, runJobChangePostCommit } = await import(
@@ -1889,9 +2103,50 @@ export const generateVisitFromOccurrence = async (
 		);
 		const containerJobId = plan.job_container!.id;
 
-		const { jobChange, ...result } = await sdb.$transaction(async (tx) => {
+		const { jobChange, logRow, assignedLogRow, assignedTechId, ...result } = await sdb.$transaction(async (tx) => {
+			// Same order as transitionRecurringPlan: plan row, then occurrence,
+			// then job. Sharing the plan lock also serialises us behind a
+			// transition, so the status read here is the committed one.
+			const [locked] = await (tx as unknown as Prisma.TransactionClient).$queryRaw<
+				{ status: PlanStatus }[]
+			>`SELECT status::text AS status FROM recurring_plan WHERE id = ${plan.id} FOR SHARE`;
+			if (!locked || !planEffects(locked.status).createsVisits) {
+				throw new PlanTransitionError(planInactiveMessage(locked?.status ?? "Cancelled"));
+			}
+			// A reschedule writes the times under the plan lock, so the read
+			// before it may be stale.
+			const current = await tx.recurring_occurrence.findUnique({
+				where: { id: occurrenceId },
+			});
+			if (!current || current.status !== "planned" || current.job_visit_id) {
+				throw new PlanTransitionError(
+					"Occurrence must be in planned state with no visit generated yet",
+				);
+			}
+			// Read under the share lock: a template edit holds the plan row exclusively,
+			// so this is the committed template and propagation can't miss this visit.
+			const templateLines = await tx.recurring_plan_line_item.findMany({
+				where: { recurring_plan_id: plan.id },
+				orderBy: { sort_order: "asc" },
+			});
+
+			// The visit is created here, so no other writer can reach it before
+			// commit and no visit lock is needed. An inactive or foreign default
+			// tech yields an unassigned visit rather than a failed generation.
+			const defaultTech = plan.default_technician_id
+				? await tx.technician.findFirst({
+						where: {
+							id: plan.default_technician_id,
+							organization_id: organizationId,
+							deactivated_at: null,
+							deleted_at: null,
+						},
+						select: { id: true, name: true },
+					})
+				: null;
+
 			// Calculate subtotal from template line items
-			const subtotal = plan.line_items.reduce(
+			const subtotal = templateLines.reduce(
 				(sum, item) =>
 					sum + Number(item.quantity) * Number(item.unit_price),
 				0,
@@ -1900,24 +2155,27 @@ export const generateVisitFromOccurrence = async (
 			const visit = await tx.job_visit.create({
 				data: {
 					job_id: plan.job_container!.id,
-					scheduled_start_at: occurrence.occurrence_start_at,
-					scheduled_end_at: occurrence.occurrence_end_at,
+					scheduled_start_at: current.occurrence_start_at,
+					scheduled_end_at: current.occurrence_end_at,
 
-					arrival_constraint: occurrence.arrival_constraint,
-					finish_constraint: occurrence.finish_constraint,
-					arrival_time: occurrence.arrival_time,
-					arrival_window_start: occurrence.arrival_window_start,
-					arrival_window_end: occurrence.arrival_window_end,
-					finish_time: occurrence.finish_time,
+					arrival_constraint: current.arrival_constraint,
+					finish_constraint: current.finish_constraint,
+					arrival_time: current.arrival_time,
+					arrival_window_start: current.arrival_window_start,
+					arrival_window_end: current.arrival_window_end,
+					finish_time: current.finish_time,
 
 					status: "Scheduled",
+					...(defaultTech && {
+						visit_techs: { create: [{ tech_id: defaultTech.id }] },
+					}),
 					subtotal: subtotal,
 					tax_rate: plan.job_container!.tax_rate || 0,
 
 					// Copy template line items
 					line_items: {
 						createMany: {
-							data: plan.line_items.map((item, idx) => ({
+							data: templateLines.map((item, idx) => ({
 								name: item.name,
 								description: item.description,
 								quantity: Number(item.quantity),
@@ -1949,6 +2207,20 @@ export const generateVisitFromOccurrence = async (
 				},
 			});
 
+			const claimed = await tx.recurring_occurrence.updateMany({
+				where: { id: occurrenceId, status: "planned", job_visit_id: null },
+				data: {
+					status: "generated",
+					job_visit_id: visit.id,
+					generated_at: new Date(),
+				},
+			});
+			if (claimed.count === 0) {
+				throw new PlanTransitionError(
+					"Occurrence must be in planned state with no visit generated yet",
+				);
+			}
+
 			// Plans carry no snapshot; a container job holding a kept rate taxes its visits with it.
 			const ptx = tx as unknown as Prisma.TransactionClient;
 			if (await holdsKeptRate("job", plan.job_container!.id, ptx)) {
@@ -1959,21 +2231,12 @@ export const generateVisitFromOccurrence = async (
 				context,
 			});
 
-			await tx.recurring_occurrence.update({
-				where: { id: occurrenceId },
-				data: {
-					status: "generated",
-					job_visit_id: visit.id,
-					generated_at: new Date(),
-				},
-			});
-
-			await logActivity({
+			const logRow = await logActivityInTx(ptx, {
 				event_type: "job_visit.generated_from_occurrence",
 				action: "created",
 				entity_type: "job_visit",
 				entity_id: visit.id,
-				organization_id: plan.organization_id,
+				organization_id: organizationId,
 				actor_type: context?.techId
 					? "technician"
 					: context?.dispatcherId
@@ -1990,18 +2253,60 @@ export const generateVisitFromOccurrence = async (
 				ip_address: context?.ipAddress,
 				user_agent: context?.userAgent,
 			});
+			// The assignment is part of the creation entry, as a manual one is its own.
+			let assignedLogRow: Awaited<ReturnType<typeof logActivityInTx>> | null = null;
+			if (defaultTech) {
+				assignedLogRow = await logActivityInTx(ptx, {
+					event_type: "job_visit.technicians_assigned",
+					action: "updated",
+					entity_type: "job_visit",
+					entity_id: visit.id,
+					organization_id: organizationId,
+					actor_type: context?.techId
+						? "technician"
+						: context?.dispatcherId
+							? "dispatcher"
+							: "system",
+					actor_id: context?.techId || context?.dispatcherId,
+					changes: {
+						technicians: { old: [], new: [defaultTech.name] },
+						...parentBreadcrumb("job", containerJobId),
+					},
+					ip_address: context?.ipAddress,
+					user_agent: context?.userAgent,
+				});
+			}
 
 			return {
 				visit_id: visit.id,
 				occurrence_id: occurrenceId,
 				scheduled_start_at: visit.scheduled_start_at,
 				scheduled_end_at: visit.scheduled_end_at,
-				template_version: occurrence.template_version,
+				template_version: current.template_version,
 				jobChange,
+				logRow,
+				assignedLogRow,
+				assignedTechId: defaultTech?.id ?? null,
 			};
 		});
 
 		// Post-commit so a rolled-back generation never messages the customer.
+		emitActivityHints(logRow);
+		if (assignedLogRow) emitActivityHints(assignedLogRow);
+		if (assignedTechId) {
+			try {
+				await notifyVisitAssigned(
+					[assignedTechId],
+					result.visit_id,
+					plan.client?.name ?? "the client",
+					result.scheduled_start_at,
+					organizationId,
+					plan.timezone,
+				);
+			} catch (err) {
+				log.warn({ err, visitId: result.visit_id }, "default technician notice failed");
+			}
+		}
 		void onVisitScheduled(result.visit_id, organizationId);
 		void notifyVisitScheduled(result.visit_id, organizationId);
 		if (jobChange) {

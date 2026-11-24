@@ -247,6 +247,7 @@ export default function ClientDetailsPage() {
 			ConvertedToJob: "bg-success/20 text-success-text border-success/30",
 			Active: "bg-success/20 text-success-text border-success/30",
 			Paused: "bg-warning/20 text-warning-text border-warning/30",
+			Expired: "bg-orange/20 text-orange-text border-orange/30",
 		};
 		return colors[item.status] || "bg-neutral/20 text-text-tertiary border-border-strong/30";
 	};

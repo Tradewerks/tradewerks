@@ -30,8 +30,8 @@ export const invoiceScheduleSchema = z
 		memo_template: z.string().optional().nullable(),
 	})
 	.refine(
-		(d) => d.billing_basis !== "fixed_amount" || (d.fixed_amount != null && d.fixed_amount >= 0),
-		{ message: "fixed_amount is required when billing_basis is 'fixed_amount'", path: ["fixed_amount"] },
+		(d) => d.billing_basis !== "fixed_amount" || (d.fixed_amount != null && d.fixed_amount > 0),
+		{ message: "fixed_amount must be greater than 0 when billing_basis is 'fixed_amount'", path: ["fixed_amount"] },
 	)
 	.refine(
 		(d) =>
@@ -45,6 +45,13 @@ export const invoiceScheduleSchema = z
 	);
 
 export const updateInvoiceScheduleSchema = invoiceScheduleSchema;
+
+const hhmmSchema = z
+	.string()
+	.regex(
+		/^([01]\d|2[0-3]):[0-5]\d$/,
+		"Time must be in HH:MM format",
+	);
 
 export const ArrivalConstraintValues = [
 	"anytime",
@@ -68,7 +75,6 @@ export const createRecurringPlanSchema = z
 
 		starts_at: z.string().datetime("Invalid start date"),
 		ends_at: z.string().datetime("Invalid end date").optional().nullable(),
-		timezone: z.string().optional().default("UTC"),
 		generation_window_days: z
 			.number()
 			.int()
@@ -93,6 +99,7 @@ export const createRecurringPlanSchema = z
 			.optional()
 			.default("on_completion"),
 		auto_invoice: z.boolean().optional().default(false),
+		default_technician_id: z.string().uuid().nullable().optional(),
 
 		rule: z.object({
 			frequency: z.enum(["daily", "weekly", "monthly", "yearly"]),
@@ -106,24 +113,16 @@ export const createRecurringPlanSchema = z
 
 			arrival_constraint: z.enum(ArrivalConstraintValues),
 			finish_constraint: z.enum(FinishConstraintValues),
-			arrival_time: z
-				.string()
-				.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+			arrival_time: hhmmSchema
 				.optional()
 				.nullable(),
-			arrival_window_start: z
-				.string()
-				.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+			arrival_window_start: hhmmSchema
 				.optional()
 				.nullable(),
-			arrival_window_end: z
-				.string()
-				.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+			arrival_window_end: hhmmSchema
 				.optional()
 				.nullable(),
-			finish_time: z
-				.string()
-				.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+			finish_time: hhmmSchema
 				.optional()
 				.nullable(),
 		}),
@@ -310,7 +309,6 @@ export const updateRecurringPlanSchema = z
 
 		starts_at: z.string().datetime("Invalid start date").optional(),
 		ends_at: z.string().datetime("Invalid end date").optional().nullable(),
-		timezone: z.string().optional(),
 		generation_window_days: z.number().int().min(1).max(365).optional(),
 		min_advance_days: z.number().int().min(1).max(90).optional(),
 
@@ -319,10 +317,7 @@ export const updateRecurringPlanSchema = z
 			.enum(["on_completion", "on_schedule_date", "manual"])
 			.optional(),
 		auto_invoice: z.boolean().optional(),
-
-		status: z
-			.enum(["Active", "Paused", "Completed", "Cancelled"])
-			.optional(),
+		default_technician_id: z.string().uuid().nullable().optional(),
 
 		rule: z
 			.object({
@@ -343,29 +338,22 @@ export const updateRecurringPlanSchema = z
 
 				arrival_constraint: z.enum(ArrivalConstraintValues),
 				finish_constraint: z.enum(FinishConstraintValues),
-				arrival_time: z
-					.string()
-					.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+				arrival_time: hhmmSchema
 					.optional()
 					.nullable(),
-				arrival_window_start: z
-					.string()
-					.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+				arrival_window_start: hhmmSchema
 					.optional()
 					.nullable(),
-				arrival_window_end: z
-					.string()
-					.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+				arrival_window_end: hhmmSchema
 					.optional()
 					.nullable(),
-				finish_time: z
-					.string()
-					.regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format")
+				finish_time: hhmmSchema
 					.optional()
 					.nullable(),
 			})
 			.optional(),
 
+		apply_to_scheduled_visits: z.boolean().optional().default(false),
 		line_items: z
 			.array(
 				z.object({
@@ -548,6 +536,7 @@ export const updateRecurringPlanSchema = z
 	}));
 
 export const updateRecurringPlanLineItemsSchema = z.object({
+	apply_to_scheduled_visits: z.boolean().optional().default(false),
 	line_items: z
 		.array(
 			z.object({
@@ -572,9 +561,17 @@ export const updateRecurringPlanLineItemsSchema = z.object({
 		.min(1, "At least one line item is required"),
 });
 
+export const renewRecurringPlanSchema = z.object({
+	ends_at: z.string().datetime().nullable(),
+});
+
+export const cancelRecurringPlanSchema = z.object({
+	reason: z.string().min(1).optional(),
+});
+
 // Occurrence schemas
 export const generateOccurrencesSchema = z.object({
-	days_ahead: z.number().int().min(1).max(365).optional().default(30),
+	days_ahead: z.number().int().min(1).max(365).optional(),
 });
 
 export const skipOccurrenceSchema = z.object({
@@ -587,10 +584,10 @@ export const rescheduleOccurrenceSchema = z.object({
 	scope: z.enum(["this", "future"]).optional(),
 	arrival_constraint:   z.enum(ArrivalConstraintValues).optional(),
 	finish_constraint:    z.enum(FinishConstraintValues).optional(),
-	arrival_time:         z.string().nullable().optional(),
-	arrival_window_start: z.string().nullable().optional(),
-	arrival_window_end:   z.string().nullable().optional(),
-	finish_time:          z.string().nullable().optional(),
+	arrival_time:         hhmmSchema.nullable().optional(),
+	arrival_window_start: hhmmSchema.nullable().optional(),
+	arrival_window_end:   hhmmSchema.nullable().optional(),
+	finish_time:          hhmmSchema.nullable().optional(),
 });
 
 export const bulkSkipOccurrencesSchema = z.object({

@@ -28,6 +28,7 @@ import {
 } from "../services/customerComms/visitEvents.js";
 import { createNotification } from "./notificationsController.js";
 import { emitToOrg } from "../services/socketService.js";
+import { notifyVisitAssigned } from "../services/visitAssignedNotice.js";
 import { recomputeVisitTotals } from "../lib/recomputeDocumentTotals.js";
 import {
 	findForeignInventoryItemIds,
@@ -1289,22 +1290,18 @@ export const patchVisitTechnicians = async (
 
 		// Notify newly assigned technicians
 		if (updated && added) {
-			const clientName = updated.job.client.name;
-			const scheduledAt = updated.scheduled_start_at.toLocaleString("en-US", {
-				weekday: "short", month: "short", day: "numeric",
-				hour: "numeric", minute: "2-digit",
+			const orgRow = await db.organization.findUniqueOrThrow({
+				where: { id: organizationId },
+				select: { timezone: true },
 			});
-			for (const techId of added) {
-				await createNotification({
-					technicianId: techId,
-					type:         "visit_assigned",
-					title:        `New visit assigned: ${clientName}`,
-					body:         `You have been assigned to a visit at ${clientName} on ${scheduledAt}.`,
-					vars:         { client: clientName, at: updated.scheduled_start_at.toISOString() },
-					actionUrl:    `/technician/visits/${visitId}`,
-				}, organizationId);
-			}
-			emitToOrg(organizationId, "job_visit:updated", { visitId: updated.id, organizationId });
+			await notifyVisitAssigned(
+				added,
+				visitId,
+				updated.job.client.name,
+				updated.scheduled_start_at,
+				organizationId,
+				orgRow.timezone,
+			);
 		}
 
 		return { err: "", item: updated };

@@ -571,6 +571,15 @@ export async function createInvoiceRecord(
 		}
 
 		if (payload.visit_billings && payload.visit_billings.length > 0) {
+			// The link row's FK takes only KEY SHARE, which a template
+			// propagation's visit lock doesn't block; without this its "no live
+			// invoice" check could reprice a visit this invoice is billing.
+			const billedVisitIds = [
+				...new Set(payload.visit_billings.map((vb) => vb.visit_id)),
+			].sort();
+			await tx.$queryRaw`
+				SELECT id FROM job_visit WHERE id = ANY(${billedVisitIds}::text[])
+				ORDER BY id FOR SHARE`;
 			await tx.invoice_visit.createMany({
 				data: payload.visit_billings.map((vb) => ({
 					invoice_id: invoice.id,

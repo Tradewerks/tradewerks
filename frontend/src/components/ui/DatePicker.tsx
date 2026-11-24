@@ -17,6 +17,8 @@ type DatePickerProps = {
 	position?: "above" | "below" | "auto";
 	/** portal option for formwizard since it goes off the display */
 	portal?: boolean;
+	/** Days before this are not selectable. */
+	minDate?: Date;
 };
 
 export default function DatePicker({
@@ -30,6 +32,7 @@ export default function DatePicker({
 	align = "left",
 	position = "auto",
 	portal = false,
+	minDate,
 }: DatePickerProps) {
 	const [open, setOpen] = useState(false);
 	const [ready, setReady] = useState(false);
@@ -273,6 +276,7 @@ export default function DatePicker({
 									onChange(date ?? null);
 									setOpen(false);
 								}}
+								disabled={minDate ? { before: minDate } : undefined}
 								className="date-picker-dark"
 							/>
 						</div>

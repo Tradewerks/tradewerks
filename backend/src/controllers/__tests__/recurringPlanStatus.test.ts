@@ -5,7 +5,6 @@ import {
 	cancelRecurringPlan,
 } from "../recurringPlansController.js";
 import { getScopedDb } from "../../lib/context.js";
-import { InvalidTransitionError } from "../../lib/statusTransitions.js";
 
 vi.mock("../../db.js", () => ({ db: {}, generateJobNumber: vi.fn() }));
 vi.mock("../../lib/context.js", () => ({ getScopedDb: vi.fn() }));
@@ -37,10 +36,13 @@ function makeSdb(status: string) {
 		},
 		recurring_rule: { update: vi.fn() },
 		recurring_rule_weekday: { deleteMany: vi.fn(), createMany: vi.fn() },
-		recurring_occurrence: { deleteMany: vi.fn() },
+		// Plan lock + legacy repair (no legacy rows) before the rule is rewritten.
+		$queryRaw: vi.fn().mockResolvedValue([{ id: "plan-1" }]),
+		recurring_occurrence: { deleteMany: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
+		log: { create: vi.fn().mockResolvedValue({ id: "log-1", event_type: "recurring_plan.updated" }) },
 	};
 	const sdb = {
-		recurring_plan: { findFirst: vi.fn().mockResolvedValue(plan) },
+		recurring_plan: { findFirst: vi.fn().mockResolvedValue({ ...plan, job_container: { id: "job-1" } }) },
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		$transaction: vi.fn((cb: any) => cb(tx)),
 	};
@@ -53,7 +55,7 @@ describe("recurring plan status", () => {
 
 	it("refuses to resume a cancelled plan", async () => {
 		const sdb = makeSdb("Cancelled");
-		await expect(resumeRecurringPlan("job-1", "org-1")).rejects.toBeInstanceOf(InvalidTransitionError);
+		expect((await resumeRecurringPlan("job-1", "org-1")).err).toMatch(/cancelled plan/);
 		expect(sdb.$transaction).not.toHaveBeenCalled();
 	});
 

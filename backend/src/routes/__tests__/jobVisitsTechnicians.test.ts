@@ -139,6 +139,8 @@ beforeEach(() => {
         notes: [],
     }));
     fake.job_visit_technician.findMany.mockReset().mockImplementation(async () => rows());
+    // The assignment notice states the time in the org's zone.
+    fake.organization.findUniqueOrThrow.mockResolvedValue({ timezone: "America/Chicago" });
     // The in-tx row locks; only the visit lock's status is read back.
     (db as unknown as { $queryRaw: Fn }).$queryRaw.mockReset().mockImplementation(async () => [{ status }]);
     fake.technician.findMany.mockReset().mockImplementation(async (args: { where: unknown }) =>

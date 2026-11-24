@@ -655,6 +655,36 @@ router.post("/:jobId/recurring-plan/resume", requireModule("recurring_plans"), r
     }
 });
 
+router.post("/:jobId/recurring-plan/renew", requireModule("recurring_plans"), requirePermission("manage_recurring_plans"), async (req, res, next) => {
+    try {
+        const jobId = req.params.jobId as string;
+        const orgId = req.user!.organization_id as string;
+        const context = getUserContext(req);
+        const result = await recurringPlansController.renewRecurringPlan(
+            jobId,
+            req.body,
+            orgId,
+            context,
+        );
+
+        if (result.err) {
+            const statusCode = result.err.includes("not found") ? 404 : 400;
+            return res
+                .status(statusCode)
+                .json(
+                    createErrorResponse(
+                        ErrorCodes.VALIDATION_ERROR,
+                        result.err,
+                    ),
+                );
+        }
+
+        res.json(createSuccessResponse(result.item));
+    } catch (err) {
+        next(err);
+    }
+});
+
 router.post("/:jobId/recurring-plan/cancel", requireModule("recurring_plans"), requirePermission("manage_recurring_plans"), async (req, res, next) => {
     try {
         const jobId = req.params.jobId as string;
@@ -664,6 +694,7 @@ router.post("/:jobId/recurring-plan/cancel", requireModule("recurring_plans"), r
             jobId,
             orgId,
             context,
+            req.body,
         );
 
         if (result.err) {

@@ -20,6 +20,7 @@ import type {
 	RecurringTaxEstimateInput,
 } from "../types/recurringPlans";
 import * as recurringPlanApi from "../api/recurringPlans";
+import { useToast } from "../components/ui/useToast";
 import type { Job } from "../types/jobs";
 
 const useQuery = moduleQuery("recurring_plans");
@@ -247,6 +248,25 @@ export const useCompleteRecurringPlanMutation = (): UseMutationResult<
 	});
 };
 
+export const useRenewRecurringPlanMutation = (): UseMutationResult<
+	RecurringPlan,
+	Error,
+	{ jobId: string; ends_at: string | null }
+> => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({ jobId, ends_at }) => recurringPlanApi.renewRecurringPlan(jobId, ends_at),
+		onSuccess: async (updatedPlan, { jobId }) => {
+			await queryClient.invalidateQueries({ queryKey: ["recurringPlans"] });
+			await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+
+			queryClient.setQueryData(["jobs", jobId, "recurringPlan"], updatedPlan);
+			queryClient.setQueryData(["recurringPlans", updatedPlan.id], updatedPlan);
+		},
+	});
+};
+
 // ============================================
 // OCCURRENCE QUERIES
 // ============================================
@@ -328,17 +348,26 @@ export const useSkipOccurrenceMutation = (): UseMutationResult<
 };
 
 export const useRescheduleOccurrenceMutation = (): UseMutationResult<
-	RecurringOccurrence,
+	recurringPlanApi.RescheduledOccurrence,
 	Error,
 	{ occurrenceId: string; jobId: string; input: RescheduleOccurrenceInput }
 > => {
 	const queryClient = useQueryClient();
+	const toast = useToast();
 
 	return useMutation({
 		mutationFn: ({ occurrenceId, input }) =>
 			recurringPlanApi.rescheduleOccurrence(occurrenceId, input),
 		onSuccess: async (updatedOccurrence, variables) => {
 			const { jobId } = variables;
+			const kept = updatedOccurrence.kept_visits ?? 0;
+			if (kept > 0) {
+				toast.info(
+					kept === 1
+						? "1 visit already scheduled kept its time"
+						: `${kept} visits already scheduled kept their time`,
+				);
+			}
 
 			// Immediately patch the jobs cache so the card appears on the new date
 			// without waiting for the network refetch to complete.

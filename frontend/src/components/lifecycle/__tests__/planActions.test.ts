@@ -5,7 +5,7 @@ import { RecurringPlanStatusValues } from "../../../types/recurringPlans";
 import type { RecurringPlanStatus } from "../../../types/recurringPlans";
 
 const noop = () => {};
-const handlers = { pause: noop, resume: noop, generate: noop, complete: noop, cancel: noop };
+const handlers = { pause: noop, resume: noop, generate: noop, complete: noop, cancel: noop, renew: noop };
 
 const ctx = (over: Record<string, unknown> = {}) => ({
 	status: "Active" as RecurringPlanStatus,
@@ -18,7 +18,7 @@ const ctx = (over: Record<string, unknown> = {}) => ({
 describe("planActions", () => {
 	it("offers the same actions in the same order in every status", () => {
 		const ids = planActions(ctx()).map((a) => a.id);
-		expect(ids).toEqual(["pause", "resume", "generate", "complete", "cancel"]);
+		expect(ids).toEqual(["pause", "resume", "generate", "complete", "cancel", "renew"]);
 
 		for (const status of RecurringPlanStatusValues) {
 			expect(planActions(ctx({ status })).map((a) => a.id)).toEqual(ids);
@@ -67,23 +67,47 @@ describe("planActions", () => {
 	});
 
 	it("refuses everything without manage_recurring_plans", () => {
-		for (const a of planActions(ctx({ canManage: false }))) {
+		for (const a of planActions(ctx({ canManage: false })).filter((x) => x.id !== "renew")) {
 			expect(a.disabled).toBe(true);
 			expect(a.disabledReason).toMatch(/permission/i);
 		}
 	});
 
 	it("refuses everything before the plan has a job container", () => {
-		for (const a of planActions(ctx({ hasJobContainer: false }))) {
+		for (const a of planActions(ctx({ hasJobContainer: false })).filter((x) => x.id !== "renew")) {
 			expect(a.disabled).toBe(true);
 			expect(a.disabledReason).toMatch(/first occurrence/i);
 		}
 	});
 
 	it("checks permission before the job-container gate", () => {
-		for (const a of planActions(ctx({ canManage: false, hasJobContainer: false }))) {
+		for (const a of planActions(ctx({ canManage: false, hasJobContainer: false })).filter((x) => x.id !== "renew")) {
 			expect(a.disabled).toBe(true);
 			expect(a.disabledReason).toMatch(/permission/i);
 		}
+	});
+
+	it("hides Renew outside Expired even for a user who cannot manage plans", () => {
+		const renew = planActions(ctx({ status: "Active", canManage: false })).find(
+			(a) => a.id === "renew"
+		);
+		expect(renew?.hidden).toBe(true);
+		const expired = planActions(ctx({ status: "Expired", canManage: false })).find(
+			(a) => a.id === "renew"
+		);
+		expect(expired?.hidden).toBeFalsy();
+		expect(expired?.disabled).toBe(true);
+	});
+
+	it("explains an Expired plan's Renew refusal by permission, then by job container", () => {
+		const noPerm = planActions(ctx({ status: "Expired", canManage: false })).find(
+			(a) => a.id === "renew"
+		);
+		expect(noPerm?.disabledReason).toMatch(/permission/i);
+		const noJob = planActions(ctx({ status: "Expired", hasJobContainer: false })).find(
+			(a) => a.id === "renew"
+		);
+		expect(noJob?.disabled).toBe(true);
+		expect(noJob?.disabledReason).toMatch(/first occurrence/i);
 	});
 });

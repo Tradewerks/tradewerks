@@ -158,6 +158,23 @@ export const completeRecurringPlan = async (jobId: string): Promise<RecurringPla
 	return response.data.data!;
 };
 
+/** `ends_at: null` renews with no end date. */
+export const renewRecurringPlan = async (
+	jobId: string,
+	ends_at: string | null
+): Promise<RecurringPlan> => {
+	const response = await api.post<ApiResponse<RecurringPlan>>(
+		`/jobs/${jobId}/recurring-plan/renew`,
+		{ ends_at }
+	);
+
+	if (!response.data.success) {
+		throw new Error(response.data.error?.message || "Failed to renew recurring plan");
+	}
+
+	return response.data.data!;
+};
+
 // ============================================
 // OCCURRENCE API
 // ============================================
@@ -201,11 +218,14 @@ export const skipOccurrence = async (
 	return response.data.data!;
 };
 
+/** A "this & all future" move also reports the later visits it left in place. */
+export type RescheduledOccurrence = RecurringOccurrence & { kept_visits?: number };
+
 export const rescheduleOccurrence = async (
 	occurrenceId: string,
 	input: RescheduleOccurrenceInput
-): Promise<RecurringOccurrence> => {
-	const response = await api.put<ApiResponse<RecurringOccurrence>>(
+): Promise<RescheduledOccurrence> => {
+	const response = await api.put<ApiResponse<RescheduledOccurrence>>(
 		`/occurrences/${occurrenceId}/reschedule`,
 		input
 	);

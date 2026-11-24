@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { PLAN_TRANSITIONS } from "../lib/recurringPlanState.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
 import { fillCoords } from "../lib/geocode.js";
 import { db } from "../db.js";
@@ -1471,8 +1472,8 @@ export const cancelJob = async (
 		if (!job) return { err: "Job not found", code: "NOT_FOUND" };
 		if (job.status === "Cancelled") return { err: JOB_ALREADY_CANCELLED, code: "WRONG_STATE" };
 		if (job.status === "Completed") return { err: JOB_COMPLETE, code: "WRONG_STATE" };
-		// The plan would just generate new visits onto a cancelled job.
-		if (job.recurring_plan?.status === "Active")
+		// A plan that can still resume or renew would generate visits onto a cancelled job.
+		if (job.recurring_plan && PLAN_TRANSITIONS[job.recurring_plan.status].length > 0)
 			return { err: "Cancel the recurring plan instead.", code: "WRONG_STATE" };
 
 		const now = new Date();

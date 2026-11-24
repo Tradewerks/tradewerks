@@ -151,10 +151,10 @@ describe("getPageSnapshot", () => {
 		expect(value(res, "Avg. Income")).toBe(500);
 	});
 
-	it("Ending Soon counts live plans ending within 30 days, overdue included", async () => {
+	it("Ending Soon counts live and expired plans ending within 30 days, overdue included", async () => {
 		await getPageSnapshot(ORG, "recurring_plans");
 		const w = mockDb.recurring_plan.count.mock.calls[2][0].where;
-		expect(w.status).toEqual({ in: ["Active", "Paused"] });
+		expect(w.status).toEqual({ in: ["Active", "Paused", "Expired"] });
 		const days = (w.ends_at.lte.getTime() - Date.now()) / 86_400_000;
 		expect(days).toBeGreaterThan(29.9);
 		expect(days).toBeLessThanOrEqual(30);

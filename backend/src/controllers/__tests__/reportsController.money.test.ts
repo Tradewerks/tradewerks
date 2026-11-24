@@ -209,7 +209,7 @@ describe("getRecurringRevenueReport", () => {
 		expect(res.mrr).toBe(0);
 
 		const sql = rawSql(0);
-		expect(sql).toContain("p.status IN ('Cancelled', 'Completed')");
+		expect(sql).toContain("p.status IN ('Cancelled', 'Completed', 'Expired')");
 		expect(sql).toContain("COALESCE(p.ends_at, p.updated_at)");
 	});
 });

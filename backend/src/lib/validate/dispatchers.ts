@@ -27,6 +27,9 @@ export const DispatcherNotificationTypeEnum = z.enum([
 	"customer_message_failed",
 	"sms_registration_update",
 	"customer_sms_reply",
+	"recurring_invoice_created",
+	"recurring_invoice_failed",
+	"recurring_plan_expiring",
 ]);
 
 const reportLayoutSchema = z.record(

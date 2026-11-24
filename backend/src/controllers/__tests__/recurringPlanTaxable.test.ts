@@ -57,8 +57,10 @@ function makeSdb(existing: { id: string }[] = []) {
 		create: vi.fn().mockResolvedValue({}),
 		update: vi.fn().mockResolvedValue({}),
 		delete: vi.fn().mockResolvedValue({}),
+		findMany: vi.fn().mockResolvedValue(existing),
 	};
 	const tx = {
+		$queryRaw: vi.fn().mockResolvedValue([]),
 		inventory_item: {
 			findMany: vi.fn(({ where }: { where: { id: { in: string[] } } }) =>
 				Promise.resolve(
@@ -69,6 +71,7 @@ function makeSdb(existing: { id: string }[] = []) {
 		vehicle: { findMany: vi.fn().mockResolvedValue([]) },
 		recurring_plan_line_item: lineItem,
 		recurring_plan: { findUnique: vi.fn().mockResolvedValue({ ...PLAN, line_items: [] }) },
+		log: { create: vi.fn().mockResolvedValue({ id: "log-1", event_type: "recurring_plan.template_updated" }) },
 	};
 	const sdb = {
 		recurring_plan: {
@@ -283,6 +286,7 @@ describe("updateRecurringPlan line taxable + tax group", () => {
 			create: vi.fn().mockResolvedValue({}),
 			update: vi.fn().mockResolvedValue({}),
 			delete: vi.fn().mockResolvedValue({}),
+			findMany: vi.fn().mockResolvedValue([{ id: LINE }]),
 		};
 		const tx = proxyTx({
 			inventory_item: nonTaxableItems,
@@ -342,8 +346,37 @@ describe("updateRecurringPlan line taxable + tax group", () => {
 	});
 });
 
+const TEMPLATE_LINES = [
+	{
+		name: "Filter",
+		description: null,
+		quantity: 1,
+		unit_price: 10,
+		item_type: "material",
+		taxable: false,
+		tax_group_id: GROUP,
+		inventory_item_id: null,
+	},
+];
+
 function occurrenceSdb(visitCreate: ReturnType<typeof vi.fn>) {
-	const tx = proxyTx({ job_visit: { create: visitCreate } });
+	const tx = proxyTx({
+		job_visit: { create: visitCreate },
+		recurring_occurrence: {
+			updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+			// Re-read under the plan lock.
+			findUnique: vi.fn().mockResolvedValue({
+				id: "occ",
+				status: "planned",
+				job_visit_id: null,
+				occurrence_start_at: new Date(),
+				occurrence_end_at: new Date(),
+			}),
+		},
+	});
+	// The plan-row lock generateVisitFromOccurrence takes before writing.
+	tx.$queryRaw = vi.fn().mockResolvedValue([{ status: "Active" }]);
+	tx.recurring_plan_line_item.findMany = vi.fn().mockResolvedValue(TEMPLATE_LINES);
 	return {
 		tx,
 		sdb: {
@@ -357,20 +390,10 @@ function occurrenceSdb(visitCreate: ReturnType<typeof vi.fn>) {
 					recurring_plan: {
 						id: "plan-1",
 						organization_id: ORG,
+						status: "Active",
 						job_container: { id: "job-1", tax_rate: 0 },
 						rules: [{ arrival_constraint: "anytime", finish_constraint: "when_done" }],
-						line_items: [
-							{
-								name: "Filter",
-								description: null,
-								quantity: 1,
-								unit_price: 10,
-								item_type: "material",
-								taxable: false,
-								tax_group_id: GROUP,
-								inventory_item_id: null,
-							},
-						],
+						line_items: TEMPLATE_LINES,
 					},
 				}),
 			},

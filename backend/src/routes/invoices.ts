@@ -20,7 +20,7 @@ import { onInvoiceSent } from '../services/followupTriggers.js';
 import { buildVisitInvoicePayload, buildRecurringPlanInvoicePayload } from '../services/invoiceGenerator.js';
 import { recipientEmailSchema } from '../lib/validate/shared.js';
 import { overlapCheckSchema, generateInvoiceSchema, createRefundSchema } from '../lib/validate/invoices.js';
-import { advanceNextInvoiceAt, calculateNextInvoiceAt, type ScheduleFrequency } from '../lib/invoiceSchedule.js';
+import { advanceNextInvoiceAt, calculateNextInvoiceAt, notBeforeAfterBilled, scheduleAnchor } from '../lib/invoiceSchedule.js';
 import { Prisma } from '../../generated/prisma/client.js';
 import {
     assertValidInvoiceTransition,
@@ -259,13 +259,38 @@ router.post("/generate", requireModule("recurring_plans"), requirePermission("cr
 
         // Read schedule first — both the payload builder and the CAS guard must
         // use the same last_invoiced_at snapshot to prevent stale-scope bypass.
-        const schedule = await sdb.invoice_schedule.findFirst({ where: { recurring_plan_id: parsed.plan_id } });
+        const schedule = await sdb.invoice_schedule.findFirst({
+            where: { recurring_plan_id: parsed.plan_id },
+            include: { recurring_plan: { select: { timezone: true, starts_at: true } } },
+        });
 
-        const { payload, warnings } = await buildRecurringPlanInvoicePayload(
+        // A second press the same day would otherwise bill the next period early.
+        if (
+            schedule &&
+            schedule.frequency !== "on_visit_completion" &&
+            schedule.next_invoice_at &&
+            schedule.next_invoice_at > new Date()
+        ) {
+            const dueOn = schedule.next_invoice_at.toLocaleDateString("en-US", {
+                timeZone: schedule.recurring_plan.timezone,
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+            });
+            return res.status(400).json(createErrorResponse(
+                ErrorCodes.VALIDATION_ERROR,
+                `The next invoice for this plan isn't due until ${dueOn}.`,
+            ));
+        }
+
+        const { payload, warnings, empty } = await buildRecurringPlanInvoicePayload(
             parsed.plan_id,
             sdb,
             schedule ? { last_invoiced_at: schedule.last_invoiced_at } : undefined,
         );
+        if (empty) {
+            return res.status(400).json(createErrorResponse(ErrorCodes.VALIDATION_ERROR, "Nothing to bill for this period."));
+        }
         if (parsed.memo) payload.memo = parsed.memo;
         if (parsed.payment_terms_days != null) payload.payment_terms_days = parsed.payment_terms_days;
 
@@ -279,28 +304,30 @@ router.post("/generate", requireModule("recurring_plans"), requirePermission("cr
                     const created = await createInvoiceRecord(payload, orgId, context.dispatcherId, tx as unknown as Prisma.TransactionClient);
                     if (schedule && schedule.frequency !== "on_visit_completion") {
                         // Advance from the scheduled anchor date so a late run
-                        // doesn't skip billing periods (advanceNextInvoiceAt vs
-                        // calculateNextInvoiceAt which defaults from=now).
+                        // doesn't skip billing periods.
+                        const billedAt = new Date();
+                        const { timezone, starts_at } = schedule.recurring_plan;
+                        const anchor = scheduleAnchor(schedule, timezone);
+                        // The invoice just created bills today's period.
                         const nextInvoiceAt = schedule.next_invoice_at
-                            ? advanceNextInvoiceAt(
-                                schedule.frequency as ScheduleFrequency,
-                                schedule.day_of_month ?? null,
-                                schedule.day_of_week ?? null,
-                                schedule.generate_days_before ?? 0,
-                                schedule.next_invoice_at,
-                            )
-                            : calculateNextInvoiceAt(
-                                schedule.frequency as ScheduleFrequency,
-                                schedule.day_of_month ?? null,
-                                schedule.day_of_week ?? null,
-                                schedule.generate_days_before ?? 0,
-                            );
+                            ? advanceNextInvoiceAt(anchor, schedule.next_invoice_at)
+                            : calculateNextInvoiceAt(anchor, {
+                                from: billedAt,
+                                notBefore: notBeforeAfterBilled(
+                                    timezone,
+                                    starts_at,
+                                    {
+                                        last_invoiced_at: billedAt,
+                                        generate_days_before: anchor.generateDaysBefore,
+                                    },
+                                ),
+                            });
                         const updateResult = await tx.invoice_schedule.updateMany({
                             where: {
                                 id: schedule.id,
                                 last_invoiced_at: schedule.last_invoiced_at,
                             },
-                            data: { last_invoiced_at: new Date(), next_invoice_at: nextInvoiceAt },
+                            data: { last_invoiced_at: billedAt, next_invoice_at: nextInvoiceAt },
                         });
                         if (updateResult.count === 0) {
                             throw new Error("Invoice generation already in progress for this plan — try again");

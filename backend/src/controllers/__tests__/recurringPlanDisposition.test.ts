@@ -51,8 +51,10 @@ function makeSdb({
 		create: vi.fn().mockResolvedValue({}),
 		update: vi.fn().mockResolvedValue({}),
 		delete: vi.fn().mockResolvedValue({}),
+		findMany: vi.fn().mockResolvedValue(existing),
 	};
 	const tx = {
+		$queryRaw: vi.fn().mockResolvedValue([]),
 		inventory_item: {
 			findMany: vi.fn(({ where }: { where: { id: { in: string[] } } }) =>
 				Promise.resolve(
@@ -69,6 +71,7 @@ function makeSdb({
 		},
 		recurring_plan_line_item: lineItem,
 		recurring_plan: { findUnique: vi.fn().mockResolvedValue({ ...PLAN, line_items: [] }) },
+		log: { create: vi.fn().mockResolvedValue({ id: "log-1", event_type: "recurring_plan.template_updated" }) },
 	};
 	const sdb = {
 		recurring_plan: {

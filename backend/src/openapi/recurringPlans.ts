@@ -10,6 +10,8 @@ import {
 	skipOccurrenceSchema,
 	rescheduleOccurrenceSchema,
 	bulkSkipOccurrencesSchema,
+	renewRecurringPlanSchema,
+	cancelRecurringPlanSchema,
 } from "../lib/validate/recurringPlans.js";
 import { recurringTaxEstimateSchema } from "../lib/validate/recurringTaxEstimate.js";
 import {
@@ -39,7 +41,7 @@ const recurringPlan = z
 		address: z.string(),
 		coords: coords.nullable(),
 		priority,
-		status: z.enum(["Active", "Paused", "Completed", "Cancelled"]),
+		status: z.enum(["Active", "Paused", "Expired", "Completed", "Cancelled"]),
 		starts_at: z.iso.datetime(),
 		ends_at: z.iso.datetime().nullable().describe("Null means indefinite"),
 		timezone: z.string().describe("IANA timezone"),
@@ -203,7 +205,7 @@ authed(
 	{
 		summary: "Generate a plan's occurrences",
 		description:
-			"Requires the `manage_recurring_plans` permission. `jobId` is the plan's job container. Adds occurrences from the plan's rules up to `days_ahead` days out; dates that already have one are skipped. Active plans only.",
+			"Requires the `manage_recurring_plans` permission. `jobId` is the plan's job container. Adds occurrences from the plan's rules up to `days_ahead` days out (default: the plan's generation window); dates that already have one are skipped (`skipped` counts those). Dates whose visit window has already ended are left out and not counted. Active plans only.",
 		request: {
 			params: jobParams,
 			body: {
@@ -298,16 +300,20 @@ const invoiceSchedule = z
 const planStatusAction = (
 	action: string,
 	text: string,
+	request: Parameters<typeof authed>[4]["request"] = { params: jobParams },
 ): Parameters<typeof authed>[4] => ({
 	summary: `${action} a recurring plan`,
-	description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} ${text} The current status isn't checked.`,
-	request: { params: jobParams },
+	description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} ${text} Allowed moves: Active to Paused, Cancelled or Completed; Paused to Active, Cancelled or Completed; Expired to Active (renew) or Cancelled. Asking for the status the plan already has changes nothing.`,
+	request,
 	responses: {
 		200: json(
 			envelope(recurringPlan),
 			"The plan, with the same related records as `PUT /jobs/{jobId}/recurring-plan`",
 		),
-		400: json(errorEnvelope, "The update failed (`VALIDATION_ERROR`)"),
+		400: json(
+			errorEnvelope,
+			"Validation failed, or the plan's status doesn't allow this (`VALIDATION_ERROR`)",
+		),
 		404: noPlan,
 	},
 });
@@ -339,7 +345,7 @@ authed(
 	"manage_recurring_plans",
 	{
 		summary: "Update a recurring plan",
-		description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} Send only the fields to change. \`name\`, \`description\`, \`address\`, \`coords\` and \`priority\` are copied to the job container. A \`rule\` replaces the plan's rule, deletes future \`planned\` occurrences and generates new ones; it is ignored if the plan has no rule. \`line_items\` replaces the list (lines with an \`id\` are updated, lines without are added, missing lines are deleted). \`invoice_schedule\` creates or replaces the schedule, or deactivates it when \`billing_mode\` is \`none\` in the same request. \`status\` is set as sent, with no transition checks or side effects.`,
+		description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} Send only the fields to change. \`name\`, \`description\`, \`address\`, \`coords\` and \`priority\` are copied to the job container. A \`rule\` replaces the plan's rule, deletes future \`planned\` occurrences and generates new ones; it is ignored if the plan has no rule. \`line_items\` replaces the list (lines with an \`id\` are updated, lines without are added, missing lines are deleted). \`invoice_schedule\` creates or replaces the schedule, or deactivates it when \`billing_mode\` is \`none\` (in the same request, or already stored). A new \`ends_at\` re-arms the 30-day ending-soon notice. On an \`Active\` plan, a change to \`rule\`, \`ends_at\`, \`generation_window_days\` or \`min_advance_days\` tops the plan up right after saving, creating any visits now due. \`status\` is ignored; use the pause, resume, renew, cancel and complete actions.`,
 		request: {
 			params: jobParams,
 			body: {
@@ -430,7 +436,7 @@ authed(
 	"manage_recurring_plans",
 	planStatusAction(
 		"Pause",
-		"Sets the status to `Paused`. `POST /jobs/{jobId}/occurrences/generate` refuses paused plans.",
+		"Sets the status to `Paused`. A paused plan generates no occurrences or visits and isn't billed.",
 	),
 	plansOff,
 );
@@ -442,7 +448,7 @@ authed(
 	"manage_recurring_plans",
 	planStatusAction(
 		"Resume",
-		"Sets the status to `Active`, including from `Cancelled` or `Completed`.",
+		"Sets a `Paused` plan back to `Active`. A `next_invoice_at` in the past moves to the next date from today (no catch-up), and occurrences are generated again. An `Expired` plan is renewed with `POST /jobs/{jobId}/recurring-plan/renew`.",
 	),
 	plansOff,
 );
@@ -454,7 +460,30 @@ authed(
 	"manage_recurring_plans",
 	planStatusAction(
 		"Complete",
-		"Sets the status to `Completed`. Future planned occurrences are left as they are (cancel cancels them).",
+		"Sets the status to `Completed`, with the same effects as cancelling; the occurrences' reason is \"Plan completed\".",
+	),
+	plansOff,
+);
+
+authed(
+	"post",
+	"/jobs/{jobId}/recurring-plan/renew",
+	"Recurring Plans",
+	"manage_recurring_plans",
+	planStatusAction(
+		"Renew",
+		"Sets an `Expired` plan back to `Active` with a new `ends_at` (today or later in the plan's timezone, or null for no end), switches its invoice schedule back on unless `billing_mode` is `none`, moves a past `next_invoice_at` to the next date from today (no catch-up), and generates occurrences again.",
+		{
+			params: jobParams,
+			body: {
+				content: {
+					"application/json": {
+						schema: renewRecurringPlanSchema.meta({ id: "RenewRecurringPlan" }),
+						example: { ends_at: "2027-12-31T23:59:59Z" },
+					},
+				},
+			},
+		},
 	),
 	plansOff,
 );
@@ -464,27 +493,21 @@ authed(
 	"/jobs/{jobId}/recurring-plan/cancel",
 	"Recurring Plans",
 	"manage_recurring_plans",
-	{
-		summary: "Cancel a recurring plan",
-		description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} Sets the status to \`Cancelled\` and cancels every future \`planned\` occurrence. Existing visits aren't touched. The current status isn't checked.`,
-		request: { params: jobParams },
-		responses: {
-			200: json(
-				envelope(
-					recurringPlan.omit({
-						client: true,
-						job_container: true,
-						rules: true,
-						line_items: true,
-						occurrences: true,
-					}),
-				),
-				"The plan row, with no related records",
-			),
-			400: json(errorEnvelope, "The update failed (`VALIDATION_ERROR`)"),
-			404: noPlan,
+	planStatusAction(
+		"Cancel",
+		"Sets the status to `Cancelled`. Future `planned` occurrences become `cancelled`, future visits still `Scheduled` are cancelled (the customer gets the cancel notice), started visits are left alone, the invoice schedule is switched off, and the plan's job becomes `Completed` if any visit on it was completed and `Cancelled` otherwise. No proration and no final invoice.",
+		{
+			params: jobParams,
+			body: {
+				content: {
+					"application/json": {
+						schema: cancelRecurringPlanSchema.meta({ id: "CancelRecurringPlan" }),
+						example: { reason: "Customer sold the property" },
+					},
+				},
+			},
 		},
-	},
+	),
 	plansOff,
 );
 
@@ -515,7 +538,7 @@ authed(
 	"manage_recurring_plans",
 	{
 		summary: "Set a plan's invoice schedule",
-		description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} Creates the schedule or replaces it, and makes it active. \`fixed_amount\` is required for \`fixed_amount\` billing, \`day_of_week\` for weekly and biweekly, \`day_of_month\` for monthly and quarterly. \`next_invoice_at\` is recalculated only when the frequency, day or \`generate_days_before\` changes.`,
+		description: `Requires the \`manage_recurring_plans\` permission. ${containerNote} Creates the schedule or replaces it. It is active unless the plan's \`billing_mode\` is \`none\`; invoices are only generated while the plan is \`Active\`. \`fixed_amount\` is required for \`fixed_amount\` billing, \`day_of_week\` for weekly and biweekly, \`day_of_month\` for monthly and quarterly. \`next_invoice_at\` is kept unless the frequency, day or \`generate_days_before\` changes or an inactive schedule with a past \`next_invoice_at\` is switched back on; it is then recalculated from today, never before a period already billed (no catch-up). A plan update that moves \`starts_at\` recalculates it the same way. \`on_visit_completion\` keeps the stored \`next_invoice_at\`.`,
 		request: {
 			params: jobParams,
 			body: {
@@ -772,7 +795,7 @@ authed(
 	{
 		summary: "Reschedule an occurrence",
 		description:
-			"Requires the `manage_recurring_plans` permission. Only `planned` occurrences. Moves it to `new_start_at` (the end time stays as it was unless `new_end_at` is given, and isn't checked to be after the new start) and can change its arrival and finish window. `scope: future` shifts every later planned occurrence of the plan by the same amount.",
+			"Requires the `manage_recurring_plans` permission. Only `planned` occurrences. Moves it to `new_start_at` (the end time stays as it was unless `new_end_at` is given, and isn't checked to be after the new start) and can change its arrival and finish window. `scope: future` shifts every later planned occurrence of the plan by the same amount; its response adds `kept_visits`, the later occurrences that already have a visit and kept their time.",
 		request: {
 			params: occParams,
 			body: {
@@ -791,12 +814,16 @@ authed(
 		},
 		responses: {
 			200: json(
-				envelope(occurrence.omit({ job_visit: true })),
+				envelope(
+					occurrence
+						.omit({ job_visit: true })
+						.extend({ kept_visits: z.number().int().optional() }),
+				),
 				"Rescheduled",
 			),
 			400: json(
 				errorEnvelope,
-				"Validation failed, not planned, another occurrence of the plan is already at that time, or another error with its raw message (`VALIDATION_ERROR`)",
+				"Validation failed, not planned, the plan isn't active, another occurrence of the plan is already at that time, or another error with its raw message (`VALIDATION_ERROR`)",
 			),
 			404: occNotFound,
 		},
@@ -829,7 +856,7 @@ authed(
 			),
 			400: json(
 				errorEnvelope,
-				"Not planned, or a visit already exists for it (`VALIDATION_ERROR`)",
+				"Not planned, a visit already exists for it, or the plan isn't active (\"Plan is paused\", \"Plan has expired\", ...) (`VALIDATION_ERROR`)",
 			),
 			404: occNotFound,
 		},

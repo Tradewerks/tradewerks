@@ -77,13 +77,6 @@ const INVOICE_TRANSITIONS: Record<string, readonly string[]> = {
 	Void:         [],
 };
 
-const RECURRING_PLAN_TRANSITIONS: Record<string, readonly string[]> = {
-	Active:    ["Paused", "Completed", "Cancelled"],
-	Paused:    ["Active", "Completed", "Cancelled"],
-	Completed: [],
-	Cancelled: [],
-};
-
 export class InvalidTransitionError extends Error {
 	status = 422;
 	constructor(from: string, to: string) {
@@ -132,14 +125,6 @@ export function assertValidQuoteTransition(from: string, to: string): void {
 		throw new InvalidTransitionError(from, to);
 	}
 	if (!allowed.includes(to)) {
-		throw new InvalidTransitionError(from, to);
-	}
-}
-
-export function assertValidRecurringPlanTransition(from: string, to: string): void {
-	if (from === to) return;
-	const allowed = RECURRING_PLAN_TRANSITIONS[from];
-	if (!allowed?.includes(to)) {
 		throw new InvalidTransitionError(from, to);
 	}
 }

@@ -43,6 +43,8 @@ const makeTx = (lineItems: LineItem[]) => {
 	const visitLinks: Array<{ visit_id: string; billed_amount: number | null }> = [];
 
 	const tx = {
+		// The billed visits' FOR SHARE lock.
+		$queryRaw: vi.fn().mockResolvedValue([]),
 		client: {
 			findFirst: vi.fn().mockResolvedValue({ id: CLIENT, is_tax_exempt: false, tax_group_id: null }),
 			update: vi.fn(),

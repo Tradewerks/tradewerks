@@ -50,6 +50,9 @@ export type DispatcherNotificationType =
 	| "customer_message_failed"
 	| "sms_registration_update"
 	| "customer_sms_reply"
+	| "recurring_invoice_created"
+	| "recurring_invoice_failed"
+	| "recurring_plan_expiring"
 
 export interface DispatcherNotification {
 	id: string;
@@ -77,6 +80,7 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "visit_delayed", group: "Jobs", permission: "view_jobs", label: "Delayed visits", description: "A visit was marked delayed" },
 	{ type: "tech_running_late", group: "Jobs", permission: "view_jobs", label: "Running late", description: "A technician is likely to miss a visit's arrival time" },
 	{ type: "tech_note_added", group: "Jobs", permission: "view_jobs", label: "Technician notes", description: "A technician added a note to a job" },
+	{ type: "recurring_plan_expiring", group: "Jobs", permission: "view_recurring_plans", label: "Plans ending soon", description: "A recurring plan ends within 30 days" },
 	{ type: "timesheet_issue_reported", group: "Timesheets", permission: "view_timesheet", label: "Time issue reports", description: "A technician reported a problem with their hours" },
 	{ type: "field_purchase_preauth_requested", group: "Purchases", permission: "review_field_purchases", label: "Pre-approval requests", description: "A technician needs approval before a purchase" },
 	{ type: "field_purchase_submitted", group: "Purchases", permission: "review_field_purchases", label: "Purchases submitted", description: "A technician submitted a purchase for review" },
@@ -89,6 +93,8 @@ export const DISPATCHER_NOTIFICATION_OPTIONS: {
 	{ type: "quote_declined", group: "Sales & billing", permission: "view_quotes", label: "Quotes declined", description: "A client declined a quote" },
 	{ type: "followup_email_opened", group: "Sales & billing", permission: "view_followups", label: "Follow-up opens", description: "A client opened a follow-up email" },
 	{ type: "invoice_paid", group: "Sales & billing", permission: "view_invoices", label: "Invoice payments", description: "A payment was recorded on an invoice" },
+	{ type: "recurring_invoice_created", group: "Sales & billing", permission: "view_invoices", label: "Recurring invoices", description: "A recurring plan drafted its scheduled invoice" },
+	{ type: "recurring_invoice_failed", group: "Sales & billing", permission: "view_invoices", label: "Recurring invoice failures", description: "A recurring plan couldn't draft its scheduled invoice" },
 	{ type: "dispute_opened", group: "Sales & billing", permission: "resolve_disputes", label: "Disputes", description: "A dispute was opened on a document" },
 	{ type: "customer_message_failed", group: "Sales & billing", permission: "view_customer_comms", label: "Customer message failures", description: "An automatic message to a customer failed or may not have arrived" },
 	{ type: "sms_registration_update", group: "Sales & billing", permission: "view_customer_comms", label: "Text messaging setup", description: "Your text messaging registration was approved, needs changes, or was suspended" },

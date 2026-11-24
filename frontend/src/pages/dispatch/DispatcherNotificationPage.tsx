@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import {
 	Bell, Clock, CheckCheck, Wrench, MailOpen, Settings, ShoppingCart, Receipt, PenLine, KeyRound,
-	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard, ClockAlert, Percent, Unlink, MailX, MessageSquareText, MessageSquareReply,
+	AlarmClock, Timer, PackageX, Truck, ShieldAlert, MessageSquare, DollarSign, ThumbsUp, ThumbsDown, Gauge, CreditCard, ClockAlert, Percent, Unlink, MailX, MessageSquareText, MessageSquareReply, Repeat, FileWarning, CalendarClock,
 } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
 import { useDispatcherNotificationsQuery, useMarkDispatcherNotificationReadMutation, useMarkAllDispatcherNotificationsReadMutation } from "../../hooks/useNotifications";
@@ -60,6 +60,9 @@ function NotificationIcon({ type }: { type: DispatcherNotificationType }): React
         case "customer_message_failed": return <MailX size={18} className={`${cls} text-error-text`} />;
         case "sms_registration_update": return <MessageSquareText size={18} className={`${cls} text-primary-text`} />;
         case "customer_sms_reply": return <MessageSquareReply size={18} className={`${cls} text-primary-text`} />;
+        case "recurring_invoice_created": return <Repeat size={18} className={`${cls} text-primary-text`} />;
+        case "recurring_invoice_failed": return <FileWarning size={18} className={`${cls} text-error-text`} />;
+        case "recurring_plan_expiring": return <CalendarClock size={18} className={`${cls} text-warning-text`} />;
     }
 }
 
