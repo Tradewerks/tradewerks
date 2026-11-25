@@ -259,7 +259,10 @@ const JOB_LIST_SELECT = (techId?: string) =>
 		completed_at: true,
 		client: { select: { id: true, name: true } },
 		project: { select: { id: true, project_number: true, name: true } },
-		_count: { select: { visits: true } },
+		// Counts only the caller's own visits when assigned-only, like the visits list below.
+		_count: {
+			select: { visits: techId ? { where: visitAssignedWhere(techId) } : true },
+		},
 		// The next open visit, one row: the Schedule column. An assigned-only caller
 		// sees their own visits, as in the unpaged list.
 		visits: {

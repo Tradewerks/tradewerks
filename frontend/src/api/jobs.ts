@@ -184,9 +184,12 @@ export const getClientVisitHistory = async (clientId: string, limit = 5): Promis
  * The server picks the window (org-local yesterday through 14 days out) unless
  * one is passed.
  */
-export const getAssignedVisits = async (range?: { from: string; to: string }): Promise<JobVisit[]> => {
+export const getAssignedVisits = async (
+	range?: { from: string; to: string },
+	opts: { own?: boolean } = {},
+): Promise<JobVisit[]> => {
 	const response = await api.get<ApiResponse<JobVisit[]>>("/job-visits/assigned", {
-		params: range,
+		params: { ...range, ...(opts.own && { own: "1" }) },
 	});
 	return response.data.data || [];
 };

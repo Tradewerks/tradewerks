@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../auth/authStore";
-import { useJobVisitsByTechIdQuery } from "../../hooks/useJobs";
+import { useOwnVisitsQuery } from "../../hooks/useJobs";
 import DynamicMap from "../../components/ui/maps/DynamicMap";
 
 export default function TechnicianMapPage() {
@@ -9,7 +9,7 @@ export default function TechnicianMapPage() {
 	const navigate = useNavigate();
 	const mapContainerRef = useRef<HTMLDivElement>(null!);
 
-	const { data: visits = [] } = useJobVisitsByTechIdQuery(user?.userId ?? "");
+	const { data: visits = [] } = useOwnVisitsQuery(user?.userId ?? "");
 
 	const markers = useMemo(() => {
 		return visits

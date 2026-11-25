@@ -107,16 +107,18 @@ export default function JobsPage() {
 	const CREATE_JOB = usePermission("create_jobs");
 	const MANAGE_RECURRING_PLAN = usePermission("manage_recurring_plans");
 
+	const [viewMode, setViewMode] = useState<JobsView>("jobs");
+
+	// Plans are only listed in the Templates view, so the Jobs view does not download them.
 	const {
 		data: recurringPlans,
 		isLoading: plansLoading,
 		error: plansError,
-	} = useAllRecurringPlansQuery(MANAGE_RECURRING_PLAN);
+	} = useAllRecurringPlansQuery(MANAGE_RECURRING_PLAN && viewMode === "templates");
 	const { mutateAsync: createJob } = useCreateJobMutation();
 	const [isCreateJobModalOpen, setIsCreateJobModalOpen] = useState(false);
 	const [isCreatePlanModalOpen, setIsCreatePlanModalOpen] = useState(false);
 	const [searchInput, setSearchInput] = useState("");
-	const [viewMode, setViewMode] = useState<JobsView>("jobs");
 	const report = usePageReport(
 		viewMode === "templates" ? "recurring_plans" : "jobs",
 		viewMode === "templates" ? "Recurring plans report" : "Jobs report",

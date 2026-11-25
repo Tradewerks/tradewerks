@@ -4,7 +4,7 @@ import { Activity, ArrowUpRight, Briefcase, ChevronDown, Clock, Layers, Route, U
 import type { Technician } from "../../../types/technicians";
 import { TechnicianStatusDotColors, TechnicianStatusLabels } from "../../../types/technicians";
 import type { TechRouteData } from "../../../types/location";
-import type { Client } from "../../../types/clients";
+import type { ClientMapPoint } from "../../../api/clients";
 import { useLiveVisitUpdates } from "../../../hooks/useLiveVisitUpdates";
 import type { FeedEvent } from "../../../types/technicians";
 import { getEventText, getStatusColor, timeAgo } from "./visitFeedUtils";
@@ -22,7 +22,7 @@ export interface MapFilters {
 }
 
 interface MapPanelProps {
-	allClients: Client[];
+	allClients: ClientMapPoint[];
 	allTechnicians: Technician[];
 	drivingRoutes: TechRouteData[];
 	filters: MapFilters;

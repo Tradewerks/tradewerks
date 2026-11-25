@@ -199,4 +199,38 @@ describe("GET /job-visits paged", () => {
 		const bad = await list({ page: "1", sort: "notes" });
 		expect(bad.status).toBe(400);
 	});
+
+	it("multi-word q needs every word to match somewhere", async () => {
+		await list({ page: "1", q: "furnace acme" });
+
+		const outer = findArgs().where.AND.find((c: { AND?: unknown[] }) => c.AND?.length === 6).AND;
+		const and = outer.find((c: { AND?: unknown[] }) => c.AND?.length === 2).AND;
+		expect(and).toHaveLength(2);
+		expect(JSON.stringify(and[1])).toContain("acme");
+		expect(and[1].OR).toHaveLength(3);
+	});
+
+	it("accepts client_id as the client filter", async () => {
+		await list({ page: "1", client_id: "c-2" });
+
+		expect(JSON.stringify(findArgs().where)).toContain(
+			JSON.stringify({ job: { client_id: "c-2" } }),
+		);
+	});
+
+	it("legacy call with a repeated clientId takes the first value, not a 400", async () => {
+		fakeDb.job_visit.findMany.mockResolvedValue([{ id: "v1" }]);
+
+		const r = await list({ clientId: ["a", "b"] } as unknown as Record<string, string>);
+
+		expect(r.status).toBe(200);
+		expect(r.body.data).toEqual([{ id: "v1" }]);
+		expect(JSON.stringify(findArgs().where)).toContain("\"client_id\":\"a\"");
+	});
+
+	it("a paged call with a repeated client filter is a 400", async () => {
+		const r = await list({ page: "1", client_id: ["a", "b"] } as unknown as Record<string, string>);
+
+		expect(r.status).toBe(400);
+	});
 });

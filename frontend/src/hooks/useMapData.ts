@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { useAllClientsQuery } from "./useClients";
+import { useClientMapPointsQuery } from "./useClients";
 import { useLiveTechnicians } from "./useTechnicianMarkers";
 import { useTechRoutes } from "./useTechRoutes";
 import type { StaticMarker, TechRouteData } from "../types/location";
 import type { Technician } from "../types/technicians";
-import type { Client } from "../types/clients";
+import type { ClientMapPoint } from "../api/clients";
 import type { MapFilters } from "../components/ui/maps/MapPanel";
 import { buildTechMarker, hasValidCoords } from "../lib/mapMarkers";
 import { useArrivalBoardQuery } from "./useArrivals";
@@ -16,7 +16,7 @@ interface UseMapDataResult {
 	techRoutes: TechRouteData[];
 	allTechnicians: Technician[];
 	allDrivingRoutes: TechRouteData[];
-	allClients: Client[];
+	allClients: ClientMapPoint[];
 	clientCount: number;
 	isLoading: boolean;
 	filters: MapFilters;
@@ -25,7 +25,7 @@ interface UseMapDataResult {
 
 export function useMapData(): UseMapDataResult {
 	const { technicians, isLoading: techLoading } = useLiveTechnicians();
-	const { data: clients, isLoading: clientsLoading } = useAllClientsQuery();
+	const { data: clients, isLoading: clientsLoading } = useClientMapPointsQuery();
 	const allDrivingRoutes = useTechRoutes(technicians);
 	const canSeeArrivals = usePermission("view_jobs");
 	const { data: arrivalBoard } = useArrivalBoardQuery(canSeeArrivals);

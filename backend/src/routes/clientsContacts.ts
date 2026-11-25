@@ -14,6 +14,7 @@ import { markLegacyList, parseListQuery, sendList, sendListError } from "../lib/
 import { isAddressTaxChoiceRefusal } from "../lib/addressTaxChoice.js";
 import {
 	getAllClients,
+	getClientMapPoints,
 	getClientsPage,
 	parseClientListExtras,
 	CLIENT_LIST_SPEC,
@@ -96,6 +97,16 @@ router.get("/clients", requirePermission("view_clients"), async (req, res, next)
         sendList(res, parsed, rows, total);
     } catch (err) {
         if (sendListError(res, err)) return;
+        next(err);
+    }
+});
+
+// Declared before /clients/:id so "map-points" is not read as an id.
+router.get("/clients/map-points", requirePermission("view_clients"), async (req, res, next) => {
+    try {
+        const points = await getClientMapPoints(req.user!.organization_id as string);
+        res.json(createSuccessResponse(points, { count: points.length }));
+    } catch (err) {
         next(err);
     }
 });

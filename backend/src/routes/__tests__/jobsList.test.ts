@@ -204,10 +204,14 @@ describe("GET /jobs paged", () => {
 		expect(userWhere(args).AND).toContainEqual(scope);
 		expect(userWhere(fake.job.count.mock.calls[0][0]).AND).toContainEqual(scope);
 		expect(args.select.visits.where.visit_techs).toEqual({ some: { tech_id: "t1" } });
+		expect(args.select._count).toEqual({
+			select: { visits: { where: { visit_techs: { some: { tech_id: "t1" } } } } },
+		});
 
 		await call({ page: "1" });
 		const open = fake.job.findMany.mock.calls[1][0];
 		expect(userWhere(open).AND).not.toContainEqual(scope);
 		expect(open.select.visits.where.visit_techs).toBeUndefined();
+		expect(open.select._count).toEqual({ select: { visits: true } });
 	});
 });

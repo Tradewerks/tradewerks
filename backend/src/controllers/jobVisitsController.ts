@@ -42,6 +42,7 @@ import { formatLocalDate, formatLocalTime } from "../lib/formatLocal.js";
 import { visitAssignedWhere, visitClaimableWhere } from "../lib/assignedScope.js";
 import { utcDayRange } from "../lib/dayRange.js";
 import type { ParsedList } from "../lib/listQuery.js";
+import { andOfOrs, containsInsensitive } from "../lib/listSearch.js";
 import {
 	HTTP_TRANSITION_ACTIONS,
 	NEEDS_TECH,
@@ -469,15 +470,11 @@ export const listJobVisits = async (
 			parsed.status ? { status: { in: parsed.status } } : {},
 			parsed.from ? { scheduled_end_at: { gt: parsed.from } } : {},
 			parsed.to ? { scheduled_start_at: { lt: parsed.to } } : {},
-			parsed.q
-				? {
-						OR: [
-							{ name: { contains: parsed.q, mode: "insensitive" } },
-							{ job: { job_number: { contains: parsed.q, mode: "insensitive" } } },
-							{ job: { client: { name: { contains: parsed.q, mode: "insensitive" } } } },
-						],
-					}
-				: {},
+			andOfOrs<Prisma.job_visitWhereInput>(parsed.q, (term) => [
+				{ name: containsInsensitive(term) },
+				{ job: { job_number: containsInsensitive(term) } },
+				{ job: { client: { name: containsInsensitive(term) } } },
+			]) ?? {},
 		],
 	};
 	const [rows, total] = await Promise.all([
@@ -599,6 +596,8 @@ const ASSIGNED_VISIT_SELECT = {
 
 const OWN_VISIT_SELECT = {
 	...ASSIGNED_VISIT_SELECT,
+	// The mileage screen sums it; the caller's own visits only.
+	estimated_drive_miles: true,
 	line_items: {
 		select: { id: true, name: true, quantity: true, unit_price: true, total: true },
 		orderBy: { sort_order: "asc" as const },
@@ -616,6 +615,15 @@ const OWN_VISIT_SELECT = {
 		orderBy: { clocked_in_at: "asc" as const },
 	},
 } satisfies Prisma.job_visitSelect;
+
+// A visit the caller left running, or still clocked into, stays on Mine whatever its
+// scheduled window: the dashboard and the clock-in guard read it, and it would
+// otherwise vanish once its end passed. Past excludes exactly these rows.
+const ACTIVE_STATUSES: visit_status[] = ["Driving", "OnSite", "InProgress", "Paused", "Delayed"];
+const stuckOpenWhere = (techId: string) => [
+	{ status: { in: ACTIVE_STATUSES } },
+	{ time_entries: { some: { tech_id: techId, clocked_out_at: null } } },
+];
 
 /** Org-local yesterday through the end of today + 14 (plan Decision 8). */
 export const defaultAssignedWindow = async (organization_id: string, now = new Date()) => {
@@ -638,7 +646,10 @@ export const getAssignedVisits = async (
 	const range = overlaps(opts.from, opts.to);
 	const [own, claimable] = await Promise.all([
 		sdb.job_visit.findMany({
-			where: { ...range, ...visitAssignedWhere(techId) },
+			where: {
+				...visitAssignedWhere(techId),
+				OR: [range, ...stuckOpenWhere(techId)],
+			},
 			select: OWN_VISIT_SELECT,
 			orderBy: { scheduled_start_at: "asc" },
 		}),
@@ -671,6 +682,7 @@ export const getAssignedPastVisits = async (
 	const closed: visit_status[] = ["Completed", "Cancelled"];
 	const where = {
 		...visitAssignedWhere(techId),
+		NOT: stuckOpenWhere(techId),
 		OR: [
 			{ status: { in: closed } },
 			{

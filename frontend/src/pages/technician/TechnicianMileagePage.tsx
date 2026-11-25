@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, MapPin, Gauge } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
-import { useJobVisitsByTechIdQuery } from "../../hooks/useJobs";
+import { useOwnVisitsQuery } from "../../hooks/useJobs";
 import { FALLBACK_TIMEZONE, startOfWeek, addDays, formatWeekDay, formatWeekRange, isSameDay } from "../../util/util";
 import TechPage from "../../components/technician/TechPage";
 
@@ -13,13 +13,17 @@ export default function TechnicianMileagePage() {
 	const { t } = useTranslation();
 	const { user } = useAuthStore();
 	const tz = user?.orgTimezone ?? FALLBACK_TIMEZONE;
-	const { data: allVisits = [], isLoading } = useJobVisitsByTechIdQuery(user?.userId ?? "");
-
 	const [weekOffset, setWeekOffset] = useState(0);
 
 	const weekStart = addDays(startOfWeek(new Date()), weekOffset * 7);
 	const weekEnd = addDays(weekStart, 6);
 	weekEnd.setHours(23, 59, 59, 999);
+
+	// Only the viewed week is fetched; the upper bound is exclusive, so the next midnight.
+	const { data: allVisits = [], isLoading } = useOwnVisitsQuery(user?.userId ?? "", {
+		from: weekStart.toISOString(),
+		to: new Date(weekEnd.getTime() + 1).toISOString(),
+	});
 
 	const weekVisits = allVisits.filter((v) => {
 		if (v.estimated_drive_miles == null) return false;

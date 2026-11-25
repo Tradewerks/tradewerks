@@ -704,7 +704,8 @@ model client {
   @@index([is_active])
   @@index([is_tax_exempt])
   @@index([created_at])
-  @@index([organization_id])
+  @@index([organization_id, last_activity])
+  @@index([organization_id, name])
 }
 
 model client_external_mapping {
@@ -790,6 +791,7 @@ model request {
   @@index([created_by_dispatcher_id])
   @@index([status, priority]) // Composite for "urgent pending requests"
   @@index([organization_id, created_at])
+  @@index([organization_id, status])
 }
 
 model request_note {
@@ -892,6 +894,8 @@ model quote {
   @@index([request_id, is_active])
   @@index([organization_id, created_at])
   @@index([tax_resolution_id])
+  @@index([organization_id, status])
+  @@index([status, expires_at])
   @@unique([organization_id, quote_number])
 }
 
@@ -1223,8 +1227,8 @@ model job_visit_technician {
   tech        technician @relation(fields: [tech_id], references: [id])
 
   @@id([visit_id, tech_id])
-  @@index([tech_id])
   @@index([visit_id])
+  @@index([tech_id, visit_id])
 }
 
 model visit_tech_time_entry {
@@ -3327,7 +3331,9 @@ model log {
   @@index([timestamp])
   @@index([actor_type, actor_id])
   @@index([actor_type])
-  @@index([organization_id])
+  @@index([organization_id, timestamp])
+  // Plus expression index log_parent_breadcrumb_idx (entity_type, changes #> '{_parent_id,new}'),
+  // SQL-only in migration 20261125120000_data_layer_scale_indexes.
 }
 
 model external_sync_log {
@@ -3458,6 +3464,7 @@ model invoice {
   @@index([adjusts_invoice_id])
   @@index([tax_resolution_id])
   @@index([organization_id, qb_diverged_at])
+  @@index([organization_id, status])
   @@unique([organization_id, invoice_number])
   @@unique([account_id, qb_invoice_id])
   @@unique([account_id, qb_credit_memo_id])

@@ -42,7 +42,10 @@ export const qk = {
 			range
 				? (["jobVisits", "assigned", range] as const)
 				: (["jobVisits", "assigned"] as const),
-		// Under the assigned prefix so the tech socket's invalidation reaches it.
+		// Own visits only (no claimable pool); under the assigned prefix so the tech
+		// socket's invalidation reaches it.
+		assignedOwn: (range?: { from?: string; to?: string }) =>
+			(["jobVisits", "assigned", { scope: "own", ...range }] as const),
 		assignedPast: (limit: number) => ["jobVisits", "assigned", { scope: "past", limit }] as const,
 	},
 	board: {

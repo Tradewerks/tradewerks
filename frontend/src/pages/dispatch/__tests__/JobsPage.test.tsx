@@ -8,9 +8,10 @@ import { useAuthStore } from "../../../auth/authStore";
 import type { ListParams, PagedResult } from "../../../types/paging";
 import type { RecurringPlan } from "../../../types/recurringPlans";
 
-const { state, getJobsPage } = vi.hoisted(() => ({
+const { state, getJobsPage, plansEnabled } = vi.hoisted(() => ({
 	state: { jobs: [] as unknown[], plans: [] as unknown[] },
 	getJobsPage: vi.fn(),
+	plansEnabled: [] as (boolean | undefined)[],
 }));
 
 vi.mock("../../../api/jobs", async (importOriginal) => ({
@@ -21,7 +22,10 @@ vi.mock("../../../hooks/useJobs", () => ({
 	useCreateJobMutation: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock("../../../hooks/useRecurringPlans", () => ({
-	useAllRecurringPlansQuery: () => ({ data: state.plans, isLoading: false, error: null }),
+	useAllRecurringPlansQuery: (enabled?: boolean) => {
+		plansEnabled.push(enabled);
+		return { data: state.plans, isLoading: false, error: null };
+	},
 }));
 vi.mock("../../../hooks/useClients", () => ({
 	useClientByIdQuery: () => ({ data: undefined }),
@@ -260,5 +264,17 @@ describe("JobsPage server paging", () => {
 		renderAt("/dispatch/jobs?view=templates");
 		await screen.findByText("Quarterly filter swap");
 		expect(getJobsPage).not.toHaveBeenCalled();
+	});
+
+	it("the Jobs view does not enable the recurring-plans download; Templates does", async () => {
+		plansEnabled.length = 0;
+		renderAt("/dispatch/jobs");
+		await waitFor(() => expect(getJobsPage).toHaveBeenCalled());
+		expect(plansEnabled.every((e) => e === false)).toBe(true);
+
+		plansEnabled.length = 0;
+		renderAt("/dispatch/jobs?view=templates");
+		await screen.findByText("Quarterly filter swap");
+		expect(plansEnabled).toContain(true);
 	});
 });

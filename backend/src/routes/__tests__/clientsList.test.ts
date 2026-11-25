@@ -223,3 +223,32 @@ describe("GET /clients qb filter", () => {
 		expect(args.select.client_external_mapping).toBeUndefined();
 	});
 });
+
+describe("GET /clients/map-points", () => {
+	const callMap = (u = user) =>
+		callRoute(clientsRouter, "get", "/clients/map-points", { user: u, query: {} });
+
+	it("returns only id, name and coords for every client", async () => {
+		fake.client.findMany.mockReset().mockResolvedValue([
+			{ id: "c1", name: "A", coords: { lat: 1, lon: 2 } },
+		]);
+		const r = await callMap();
+		expect(r.status).toBe(200);
+		expect(r.body.data).toEqual([{ id: "c1", name: "A", coords: { lat: 1, lon: 2 } }]);
+		const args = fake.client.findMany.mock.calls[0][0];
+		expect(args.select).toEqual({ id: true, name: true, coords: true });
+		expect(args.include).toBeUndefined();
+		expect(args.take).toBeUndefined();
+	});
+
+	it("is open to an assigned-only technician with view_clients, org-wide like the list", async () => {
+		const r = await callMap(tech);
+		expect(r.status).toBe(200);
+		expect(JSON.stringify(fake.client.findMany.mock.calls[0][0].where ?? {})).not.toMatch(/visit|assigned/);
+	});
+
+	it("is refused without view_clients", async () => {
+		const r = await callMap({ uid: "x", role: "technician", permissions: [] });
+		expect(r.status).toBe(403);
+	});
+});

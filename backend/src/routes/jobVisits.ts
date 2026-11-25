@@ -13,6 +13,7 @@ import { requireAssigned } from '../lib/requireAssigned.js';
 import { assignedTechId } from '../lib/assignedScope.js';
 import { visit_status } from "../../generated/prisma/client.js";
 import type { ListSpec } from "../lib/listQuery.js";
+import { singleParam } from "../lib/listSearch.js";
 import { ListQueryError, markLegacyList, parseListQuery, sendList, sendListError } from '../lib/listQuery.js';
 import {
     getAllJobVisits,
@@ -82,17 +83,23 @@ router.get("/", requireAnyPermission("view_jobs", "view_visits", "view_assigned_
     try {
         const orgId = req.user!.organization_id as string;
         let parsed;
+        let clientId: string | undefined;
         try {
             parsed = parseListQuery(req.query, VISIT_LIST_SPEC);
-            if (req.query.clientId !== undefined && typeof req.query.clientId !== "string") {
-                throw new ListQueryError("clientId", "clientId must be given once");
+            // client_id is the list convention; clientId stays for existing callers.
+            if (parsed.paged) {
+                clientId = singleParam(req.query, "client_id") ?? singleParam(req.query, "clientId");
             }
         } catch (err) {
             if (sendListError(res, err)) return;
             throw err;
         }
-        const clientId = req.query.clientId as string | undefined;
         if (!parsed.paged) {
+            // Legacy calls are never validated: stray or repeated params are ignored, not a 400.
+            const raw = [req.query.client_id, req.query.clientId].flat().find(
+                (v): v is string => typeof v === "string" && v.trim() !== "",
+            );
+            clientId = raw?.trim();
             markLegacyList(res);
             const visits = await getAllJobVisits(orgId, { clientId, techId: ownVisitsOnly(req) });
             return res.json(createSuccessResponse(visits, { count: visits.length }));
@@ -223,8 +230,11 @@ router.get("/assigned", requireAnyPermission("view_jobs", "view_visits", "view_a
         }
         const visits = await getAssignedVisits(orgId, req.user!.uid as string, {
             ...range,
-            // The Available tab: only callers who can accept a visit see the pool.
-            withClaimable: hasPermission(req, "edit_jobs") || hasPermission(req, "update_visit_status"),
+            // The Available tab: only callers who can accept a visit see the pool; own=1
+            // (dashboard, map, mileage) skips that query.
+            withClaimable:
+                req.query.own !== "1" &&
+                (hasPermission(req, "edit_jobs") || hasPermission(req, "update_visit_status")),
         });
         res.json(createSuccessResponse(visits, { count: visits.length }));
     } catch (err) {

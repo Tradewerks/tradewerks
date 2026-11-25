@@ -129,6 +129,17 @@ export const getAllClients = async (organizationId: string, scope?: ClientReadSc
 	return clients.map(clientWithConsent);
 };
 
+// The map plots every client, so this is deliberately unpaged; id, name and
+// coordinates are all it draws. Clients are org-wide for any view_clients
+// caller (the read scope only trimmed nested jobs and quotes, omitted here).
+export const getClientMapPoints = async (organizationId: string) => {
+	const sdb = getScopedDb(organizationId);
+	return sdb.client.findMany({
+		select: { id: true, name: true, coords: true },
+		orderBy: { name: "asc" },
+	});
+};
+
 export const CLIENT_LIST_SPEC = {
 	sortable: ["name", "created_at", "last_activity"] as const,
 	defaultSort: "last_activity" as const,

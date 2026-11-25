@@ -31,6 +31,14 @@ const invalidateKeys = (qc: QueryClient, keys: readonly (readonly unknown[])[]) 
 	for (const queryKey of keys) qc.invalidateQueries({ queryKey });
 };
 
+// A technician's screens read the assigned windows, the job picker and the open visit
+// detail. The org-wide visit list and the dispatcher's per-tech lists are never mounted
+// there, so a visit event must not refetch them.
+const invalidateTechVisits = (qc: QueryClient) =>
+	qc.invalidateQueries({
+		predicate: ({ queryKey: k }) => k[0] === qk.visits.all[0] && k[1] !== "list" && k[1] !== "tech",
+	});
+
 const recordKeys = (
 	keys: { all: readonly unknown[]; detail: (id: string) => readonly unknown[] },
 	extra: readonly (readonly unknown[])[] = [],
@@ -59,15 +67,15 @@ export const RECORD_INVALIDATIONS: Record<
 	request: recordKeys(qk.requests, [DASHBOARD_TODAY_KEY]),
 	quote: recordKeys(qk.quotes, [DASHBOARD_TODAY_KEY]),
 	invoice: recordKeys(qk.invoices),
-	recurring_plan: recordKeys(qk.recurringPlans, [qk.board.all]),
+	recurring_plan: recordKeys(qk.recurringPlans, [qk.board.all, DASHBOARD_TODAY_KEY]),
 };
 
-// A technician's screens read only visit keys (assigned list, own-tech list,
-// job picker, open detail), all under ["jobVisits"]; only mounted ones refetch.
+// A technician's screens read only visit keys (assigned windows, job picker, open
+// detail), all under ["jobVisits"]; only mounted ones refetch.
 // They never mount the board or job lists, so those are left alone.
 const TECH_RECORD_INVALIDATIONS: Partial<typeof RECORD_INVALIDATIONS> = {
-	visit: (qc) => invalidateKeys(qc, [qk.visits.all]),
-	job: (qc) => invalidateKeys(qc, [qk.visits.all]),
+	visit: invalidateTechVisits,
+	job: invalidateTechVisits,
 };
 
 // Events emitted while disconnected are lost for good; refetch whatever is on screen.
@@ -82,7 +90,7 @@ const RECONNECT_KEYS = [
 	qk.arrivals.all,
 	TECHNICIANS_KEY,
 ] as const;
-const TECH_RECONNECT_KEYS = [qk.visits.all, qk.arrivals.all, TECHNICIANS_KEY] as const;
+const TECH_RECONNECT_KEYS = [qk.arrivals.all, TECHNICIANS_KEY] as const;
 
 export type SocketSyncScope = "dispatch" | "tech";
 
@@ -115,23 +123,31 @@ export function useSocketQuerySync(scope: SocketSyncScope = "dispatch"): void {
 		// ["jobs"] also covers the job page's ["jobs", id, "visits"].
 		const tech = scope === "tech";
 		const jobsAndBoard = tech ? [] : [qk.jobs.all, qk.board.all];
+		const refreshVisits = () =>
+			tech ? invalidateTechVisits(qc) : qc.invalidateQueries({ queryKey: qk.visits.all });
 		const onJobVisitChanged = (_event: JobVisitUpdatedEvent | VisitStatusEvent) => {
-			invalidateKeys(qc, [qk.visits.all, TECHNICIANS_KEY, ...jobsAndBoard]);
+			refreshVisits();
+			invalidateKeys(qc, [TECHNICIANS_KEY, ...jobsAndBoard]);
 		};
 		const onJobUpdated = (_event: JobUpdatedEvent) => {
-			invalidateKeys(qc, [qk.visits.all, ...jobsAndBoard]);
+			refreshVisits();
+			invalidateKeys(qc, jobsAndBoard);
 		};
 		const onJobVisitCreatedOrDeleted = (_event: JobVisitCreatedEvent | JobVisitDeletedEvent) => {
-			invalidateKeys(qc, [qk.visits.all, ...jobsAndBoard]);
+			refreshVisits();
+			invalidateKeys(qc, jobsAndBoard);
 		};
 		const onJobNoteCreated = (_event: JobNoteCreatedEvent) => {
-			qc.invalidateQueries({ queryKey: qk.visits.all });
+			refreshVisits();
 		};
 		const onRecordChanged = (event: RecordChangedEvent) => {
 			const run = (tech && TECH_RECORD_INVALIDATIONS[event.type]) || RECORD_INVALIDATIONS[event.type];
 			run?.(qc, event);
 		};
-		const onReconnect = () => invalidateKeys(qc, tech ? TECH_RECONNECT_KEYS : RECONNECT_KEYS);
+		const onReconnect = () => {
+			invalidateKeys(qc, tech ? TECH_RECONNECT_KEYS : RECONNECT_KEYS);
+			if (tech) invalidateTechVisits(qc);
+		};
 		// Attach/detach moves a job between projects, so jobs refetch too.
 		const onProjectUpdated = (event: ProjectUpdatedEvent) => {
 			qc.invalidateQueries({ queryKey: ["projects"] });

@@ -2,7 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Phone, X, Coffee, LogOut, LogIn, MapPin, Clock } from "lucide-react";
 import { useAuthStore } from "../../auth/authStore";
-import { useJobVisitsByTechIdQuery, useCreateJobNoteMutation } from "../../hooks/useJobs";
+import { useOwnVisitsQuery, useCreateJobNoteMutation } from "../../hooks/useJobs";
 import { 
 	useTechnicianByIdQuery, 
 	useGoAvailableMutation, 
@@ -64,7 +64,7 @@ export default function TechnicianDashboardPage() {
 		data: visits = [],
 		isLoading,
 		error,
-	} = useJobVisitsByTechIdQuery(user?.userId ?? "");
+	} = useOwnVisitsQuery(user?.userId ?? "");
 	const { data: techProfile } = useTechnicianByIdQuery(user?.userId ?? null);
 	const insertNoteMutation = useCreateJobNoteMutation();
 	const goAvailableMutation = useGoAvailableMutation();

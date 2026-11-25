@@ -20,44 +20,56 @@ vi.mock("../../lib/socket", () => ({
 
 import { useSocketQuerySync } from "../useSocketQuerySync";
 
+const SEEDED: [string, unknown[]][] = [
+	["assigned window", ["jobVisits", "assigned", { from: "a", to: "b" }]],
+	["assigned default", ["jobVisits", "assigned"]],
+	["job picker", ["jobVisits", "mine"]],
+	["open detail", ["jobVisits", "v1"]],
+	["org-wide list", ["jobVisits", "list", { page: 1 }]],
+	["dispatcher per-tech list (no tech screen mounts it)", ["jobVisits", "tech", "t9"]],
+	["board", ["board", "a", "b"]],
+	["jobs", ["jobs", "list"]],
+];
+
+// Seeds one query per key, mounts the hook and reports which keys ended up invalidated.
 const mount = (scope: "dispatch" | "tech") => {
 	const qc = new QueryClient();
-	const spy = vi.spyOn(qc, "invalidateQueries");
+	for (const [, key] of SEEDED) qc.setQueryData(key, []);
 	renderHook(() => useSocketQuerySync(scope), {
 		wrapper: ({ children }: { children: React.ReactNode }) => (
 			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
 		),
 	});
-	return () => spy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+	return () =>
+		SEEDED.filter(([, key]) => qc.getQueryState(key)?.isInvalidated).map(([name]) => name);
 };
 
+const TECH_VISIT_KEYS = ["assigned window", "assigned default", "job picker", "open detail"];
+
 describe("useSocketQuerySync tech scope", () => {
-	// ["jobVisits"] prefixes the assigned list, the dashboard/map/mileage
-	// ["jobVisits", "tech", uid], the picker's ["jobVisits", "mine"] and the open detail.
-	test("tech scope invalidates only assigned visits on record:changed visit", () => {
-		const keys = mount("tech");
+	test("tech scope invalidates only assigned windows, the picker and the open detail on record:changed visit", () => {
+		const hit = mount("tech");
 		handlers.get("record:changed")!({ type: "visit", id: "v1", jobId: "j1" });
-		expect(keys()).toEqual([["jobVisits"]]);
+		expect(hit()).toEqual(TECH_VISIT_KEYS);
 	});
 
 	test("tech scope refreshes the open visit detail on record:changed job", () => {
-		const keys = mount("tech");
+		const hit = mount("tech");
 		handlers.get("record:changed")!({ type: "job", id: "j1" });
-		expect(keys()).toEqual([["jobVisits"]]);
+		expect(hit()).toEqual(TECH_VISIT_KEYS);
 	});
 
-	test("tech scope never refetches the board or job lists on legacy visit events", () => {
-		const keys = mount("tech");
+	test("tech scope never refetches the org-wide list, per-tech lists, board or jobs on legacy events", () => {
+		const hit = mount("tech");
 		handlers.get("job_visit:updated")!({ visitId: "v1", organizationId: "o1" });
 		handlers.get("job:updated")!({ jobId: "j1" });
 		managerHandlers.get("reconnect")!();
-		expect(keys().filter((k) => k[0] === "jobs" || k[0] === "board")).toEqual([]);
-		expect(keys()).toEqual(expect.arrayContaining([["jobVisits"]]));
+		expect(hit()).toEqual(TECH_VISIT_KEYS);
 	});
 
-	test("dispatch scope keeps the board and jobs on record:changed visit", () => {
-		const keys = mount("dispatch");
+	test("dispatch scope keeps the board, jobs and every visit key on record:changed visit", () => {
+		const hit = mount("dispatch");
 		handlers.get("record:changed")!({ type: "visit", id: "v1", jobId: "j1" });
-		expect(keys()).toEqual(expect.arrayContaining([["board"], ["jobs"], ["jobVisits"]]));
+		expect(hit()).toEqual(expect.arrayContaining([...TECH_VISIT_KEYS, "org-wide list", "board", "jobs"]));
 	});
 });

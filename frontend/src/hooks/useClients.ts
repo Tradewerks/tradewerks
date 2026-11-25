@@ -32,12 +32,12 @@ import { useToast } from "../components/ui/useToast";
 // CLIENT QUERIES
 // ============================================================================
 
-// legacy-list: every client with its jobs, quotes, requests and plans. Left for the map
-// overlay, which plots every client's coordinates; everything else pages or searches.
-export const useAllClientsQuery = (): UseQueryResult<Client[], Error> => {
+// Every client's id, name and coordinates for the map. Under qk.clients.all so client
+// record changes refresh it, but slim: no jobs, quotes or contacts ride along.
+export const useClientMapPointsQuery = (): UseQueryResult<clientApi.ClientMapPoint[], Error> => {
 	return useQuery({
-		queryKey: ["clients"],
-		queryFn: clientApi.getAllClients,
+		queryKey: [...qk.clients.all, "mapPoints"],
+		queryFn: clientApi.getClientMapPoints,
 	});
 };
 

@@ -242,6 +242,23 @@ export const useAssignedVisitsQuery = (
 	});
 };
 
+/**
+ * The signed-in technician's own visits inside a window (the /assigned default
+ * when none is given), without the claimable pool that shares the endpoint.
+ * Asks for own visits only (own=1), so the claimable pool is never queried here.
+ */
+export const useOwnVisitsQuery = (
+	userId: string,
+	range?: { from: string; to: string },
+): UseQueryResult<JobVisit[], Error> => {
+	return useQuery({
+		queryKey: qk.visits.assignedOwn(range),
+		queryFn: () => jobApi.getAssignedVisits(range, { own: true }),
+		enabled: !!userId,
+		select: (visits) => visits.filter((v) => v.visit_techs?.some((vt) => vt.tech_id === userId)),
+	});
+};
+
 export const PAST_VISITS_PAGE_SIZE = 20;
 
 export const useAssignedPastVisitsQuery = (enabled = true) =>

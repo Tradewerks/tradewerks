@@ -334,6 +334,44 @@ describe("view_assigned_jobs scopes reads to the caller", () => {
 		});
 	});
 
+	const stuck = [
+		{ status: { in: ["Driving", "OnSite", "InProgress", "Paused", "Delayed"] } },
+		{ time_entries: { some: { tech_id: "tech-1", clocked_out_at: null } } },
+	];
+
+	it("Mine keeps a stale active visit and one with an open own time entry, whatever its window", async () => {
+		await callRoute(jobVisitsRouter, "get", "/assigned", { user: tech });
+
+		const own = fakeDb.job_visit.findMany.mock.calls
+			.map(([a]) => a)
+			.find((a) => mentions(a.where, "tech-1"));
+		const branches = clausesWith(own.where, ["OR"]).find((c) =>
+			mentions(c.OR, "time_entries"),
+		)!.OR;
+		expect(branches).toEqual(expect.arrayContaining(stuck));
+		expect(branches.some((c: any) => c.scheduled_end_at && c.scheduled_start_at)).toBe(true);
+	});
+
+	it("Past excludes exactly the rows Mine keeps, so the two stay disjoint", async () => {
+		const where = await pastWhereAt("2026-11-20T15:00:00Z");
+
+		const not = clausesWith(where, ["NOT"])[0].NOT;
+		expect(not).toEqual(stuck);
+		// A stale Paused visit that ended long ago is on Mine, not Past.
+		const isPast = pastRule(where);
+		expect(isPast({ status: "Paused", scheduled_end_at: new Date("2026-01-01T00:00:00Z") })).toBe(true);
+		expect(JSON.stringify(not)).toContain("Paused");
+	});
+
+	it("own=1 skips the claimable pool query; without it the pool is read", async () => {
+		await callRoute(jobVisitsRouter, "get", "/assigned", { user: tech, query: { own: "1" } });
+		expect(fakeDb.job_visit.findMany).toHaveBeenCalledTimes(1);
+
+		fakeDb.job_visit.findMany.mockClear();
+		await callRoute(jobVisitsRouter, "get", "/assigned", { user: tech });
+		expect(fakeDb.job_visit.findMany).toHaveBeenCalledTimes(2);
+	});
+
 	it("GET /job-visits/assigned refuses a range over 62 days", async () => {
 		const r = await callRoute(jobVisitsRouter, "get", "/assigned", {
 			user: tech,

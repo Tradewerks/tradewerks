@@ -58,10 +58,11 @@ export const getClientsPage = async (
 	return pagedResultFrom(response.data, params);
 };
 
-// legacy-list: the unpaged array (every client with its jobs, quotes, requests and
-// plans). Only the map overlay still needs the whole org.
-export const getAllClients = async (): Promise<Client[]> => {
-	const response = await api.get<ApiResponse<Client[]>>("/clients");
+// What the map draws for each client; the endpoint is unpaged (every client is a pin).
+export type ClientMapPoint = Pick<Client, "id" | "name" | "coords">;
+
+export const getClientMapPoints = async (): Promise<ClientMapPoint[]> => {
+	const response = await api.get<ApiResponse<ClientMapPoint[]>>("/clients/map-points");
 	return response.data.data || [];
 };
 

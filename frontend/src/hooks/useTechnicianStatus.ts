@@ -1,9 +1,11 @@
 // frontend/src/hooks/useTechnicianStatus.ts
-import { useJobVisitsByTechIdQuery } from "./useJobs";
+import { useOwnVisitsQuery } from "./useJobs";
 import type { TechnicianStatus } from "../lib/visitActionConstraints";
 
 export function useTechnicianStatus(techId: string): TechnicianStatus {
-	const { data: visits = [] } = useJobVisitsByTechIdQuery(techId);
+	// techId is always the signed-in technician (technician screens only); the bounded
+	// /assigned read also carries their stale active and open-clock visits.
+	const { data: visits = [] } = useOwnVisitsQuery(techId);
 	// empty techId: query is disabled via enabled:!!techId, visits defaults to []
 
 	const drivingVisit = visits.find((v) => v.status === "Driving");

@@ -51,7 +51,9 @@ describe("record:changed drives scoped invalidation", () => {
 	test("record:changed recurring_plan also invalidates the board's occurrences", () => {
 		const { keys } = mount();
 		handlers.get("record:changed")!({ type: "recurring_plan", id: "p1" });
-		expect(keys()).toEqual(expect.arrayContaining([["recurringPlans"], ["board"]]));
+		expect(keys()).toEqual(
+			expect.arrayContaining([["recurringPlans"], ["board"], ["reports", "dashboard-today"]]),
+		);
 	});
 
 	test("record:changed quote invalidates the quotes prefix and that quote, and not jobs", () => {
