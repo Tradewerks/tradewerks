@@ -1,7 +1,14 @@
-﻿import { useState, useRef, useEffect } from "react";
+﻿import { useState, useRef, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, MoreVertical, Upload, Download } from "lucide-react";
-import { useAllClientsQuery, useCreateClientMutation } from "../../hooks/useClients";
+import { useCreateClientMutation } from "../../hooks/useClients";
+import { getClientsPage, type ClientListExtras } from "../../api/clients";
+import { usePagedList } from "../../hooks/usePagedList";
+import { useListPaging } from "../../hooks/useListPaging";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { qk } from "../../lib/queryKeys";
+import ReportPagination from "../../components/reports/ReportPagination";
+import type { ListParams } from "../../types/paging";
 import CreateClient from "../../components/clients/CreateClient";
 import ClientCard from "../../components/clients/ClientCard";
 import LoadSvg from "../../assets/icons/loading.svg?react";
@@ -19,16 +26,26 @@ import PageReportButton from "../../components/reports/PageReportButton";
 import PageReportKpis from "../../components/reports/PageReportKpis";
 import { usePageReport } from "../../components/reports/usePageReport";
 
+const STATUS_LABELS: Record<string, string> = { active: "Active", inactive: "Inactive" };
+const TAX_LABELS: Record<string, string> = { exempt: "Exempt", taxable: "Taxable" };
+
+// Repeated (?status=a&status=b, what the filter writes) or comma-joined; values the
+// server would refuse (an old bookmark) are dropped rather than sent.
+const knownValues = (sp: URLSearchParams, key: string, known: Record<string, string>) =>
+	sp.getAll(key).flatMap((v) =>
+		v
+			.split(",")
+			.map((s) => s.trim())
+			.filter((s) => s in known)
+	);
+
 export default function ClientsPage() {
 	const [pageSearchParams, setPageSearchParams] = useSearchParams();
-	const {
-		data: clients,
-		isLoading: isFetchLoading,
-		error: fetchError,
-	} = useAllClientsQuery();
 	const { mutateAsync: createClient } = useCreateClientMutation();
 	const [searchInput, setSearchInput] = useState("");
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
+	const { removeTerm: removeStatus } = useMultiSearch("status");
+	const { removeTerm: removeTax } = useMultiSearch("tax");
 	const [viewMode, setViewMode] = useState<"card" | "list">("card");
 	const [isModalOpen, setIsModalOpen] = useState(false);
 	const [showActionsMenu, setShowActionsMenu] = useState(false);
@@ -50,47 +67,40 @@ export default function ClientsPage() {
 		}
 	}, [showActionsMenu]);
 
-	const statusFilter = pageSearchParams.get("status");
-
-	const clearStatus = () => {
-		const next = new URLSearchParams(pageSearchParams);
-		next.delete("status");
-		setPageSearchParams(next);
-	};
-
+	const statusFilter = knownValues(pageSearchParams, "status", STATUS_LABELS);
 	// Same split as the report popover's Tax Status breakdown, so its slices drill here.
-	const taxFilter = pageSearchParams.get("tax");
-
-	const clearTax = () => {
-		const next = new URLSearchParams(pageSearchParams);
-		next.delete("tax");
-		setPageSearchParams(next);
-	};
+	const taxFilter = knownValues(pageSearchParams, "tax", TAX_LABELS);
 
 	const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
+	// Chips and the text being typed go to the server as one string it splits into words.
+	const q = useDebouncedValue([...terms, searchInput.trim()].filter(Boolean).join(" "));
 
-	const filteredClients = clients
-		?.filter((c) => {
-			if (activeTerms.length > 0) {
-				const matches = activeTerms.every((t) => {
-					const lower = t.toLowerCase();
-					return (
-						c.name.toLowerCase().includes(lower) ||
-						(c.address?.toLowerCase().includes(lower) ?? false)
-					);
-				});
-				if (!matches) return false;
-			}
-			if (statusFilter === "active" && !c.is_active) return false;
-			if (statusFilter === "inactive" && c.is_active) return false;
-			if (taxFilter === "exempt" && !c.is_tax_exempt) return false;
-			if (taxFilter === "taxable" && c.is_tax_exempt) return false;
-			return true;
-		})
-		.sort((a, b) => {
-			if (a.is_active === b.is_active) return 0;
-			return a.is_active ? -1 : 1;
-		});
+	// Both values (or none) is no filter, so only a lone value is sent.
+	const tax = taxFilter.length === 1 ? (taxFilter[0] as ClientListExtras["tax"]) : undefined;
+	const filters = useMemo(
+		() => ({
+			q: q || undefined,
+			status: statusFilter.length ? statusFilter : undefined,
+			tax,
+		}),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[q, statusFilter.join(","), tax]
+	);
+
+	const { page, limit, paginationProps } = useListPaging(filters);
+	const params: ListParams = { page, limit, q: filters.q, status: filters.status };
+	const {
+		data,
+		isLoading: isFetchLoading,
+		isFetching,
+		error: fetchError,
+	} = usePagedList(
+		[...qk.clients.list(), { tax }],
+		(p) => getClientsPage(p, { tax }),
+		params
+	);
+	const clients = data?.rows;
+	const total = data?.total ?? 0;
 
 	return (
 		<div className="text-text-primary">
@@ -187,20 +197,16 @@ export default function ClientsPage() {
 			{/* Single Filter Bar with Chips */}
 			<FilterChips
 				filters={[
-					statusFilter
-						? {
-								label: `Status: ${statusFilter === "active" ? "Active" : "Inactive"}`,
-								color: "green" as const,
-								onRemove: clearStatus,
-						  }
-						: null,
-					taxFilter
-						? {
-								label: `Tax: ${taxFilter === "exempt" ? "Exempt" : "Taxable"}`,
-								color: "blue" as const,
-								onRemove: clearTax,
-						  }
-						: null,
+					...statusFilter.map((s) => ({
+						label: `Status: ${STATUS_LABELS[s]}`,
+						color: "green" as const,
+						onRemove: () => removeStatus(s),
+					})),
+					...taxFilter.map((t) => ({
+						label: `Tax: ${TAX_LABELS[t]}`,
+						color: "blue" as const,
+						onRemove: () => removeTax(t),
+					})),
 					...terms.map((term) => ({
 						label: `Search: "${term}"`,
 						color: "purple" as const,
@@ -208,7 +214,7 @@ export default function ClientsPage() {
 						highlighted: duplicateTerm === term,
 					})),
 				]}
-				resultCount={filteredClients?.length ?? 0}
+				resultCount={total}
 				onClearAll={() => {
 					setSearchInput("");
 					const next = new URLSearchParams(pageSearchParams);
@@ -241,11 +247,11 @@ export default function ClientsPage() {
 			)}
 
 			{/* Empty State */}
-			{!isFetchLoading && !fetchError && filteredClients?.length === 0 && (
+			{!isFetchLoading && !fetchError && clients?.length === 0 && (
 				<div className="w-full h-[400px] flex flex-col justify-center items-center">
 					<BoxSvg className="w-15 h-15 mb-1" />
 					<h1 className="text-center text-xl mt-1">
-						{activeTerms.length > 0
+						{activeTerms.length > 0 || statusFilter.length > 0 || taxFilter.length > 0
 							? "No clients found."
 							: "No clients yet."}
 					</h1>
@@ -260,8 +266,8 @@ export default function ClientsPage() {
 			{/* Client Cards */}
 			{!isFetchLoading &&
 				!fetchError &&
-				filteredClients &&
-				filteredClients.length > 0 && (
+				clients &&
+				clients.length > 0 && (
 					<div
 						className={
 							viewMode === "card"
@@ -269,7 +275,7 @@ export default function ClientsPage() {
 								: "flex flex-col gap-2"
 						}
 					>
-						{filteredClients.map((client) => (
+						{clients.map((client) => (
 							<ClientCard
 								key={client.id}
 								client={client}
@@ -279,6 +285,8 @@ export default function ClientsPage() {
 						))}
 					</div>
 				)}
+
+			<ReportPagination {...paginationProps(total, isFetching)} />
 
 			<CreateClient
 				isModalOpen={isModalOpen}

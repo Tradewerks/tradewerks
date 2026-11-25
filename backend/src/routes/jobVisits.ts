@@ -11,9 +11,12 @@ import { REFUSAL_STATUS } from '../lib/refusalStatus.js';
 import { requirePermission, requireAnyPermission, hasPermission } from '../lib/requirePermissions.js';
 import { requireAssigned } from '../lib/requireAssigned.js';
 import { assignedTechId } from '../lib/assignedScope.js';
-import { ListQueryError, parseListQuery, sendList, sendListError } from '../lib/listQuery.js';
+import { visit_status } from "../../generated/prisma/client.js";
+import type { ListSpec } from "../lib/listQuery.js";
+import { ListQueryError, markLegacyList, parseListQuery, sendList, sendListError } from '../lib/listQuery.js';
 import {
     getAllJobVisits,
+    listJobVisits,
     getMyJobsForPurchase,
     getJobVisitById,
     getJobVisitsByDateRange,
@@ -61,6 +64,13 @@ const sendTransitionResult = (
     return res.status(status).json(createErrorResponse(code, result.err));
 };
 
+const VISIT_LIST_SPEC = {
+    sortable: ["scheduled_start_at", "status"] as const,
+    defaultSort: "scheduled_start_at" as const,
+    defaultDir: "asc" as const,
+    statuses: Object.values(visit_status),
+} satisfies ListSpec<"scheduled_start_at" | "status", visit_status>;
+
 const router = Router();
 
 const assignedVisit = requireAssigned("visit", ["edit_jobs"], "id");
@@ -71,8 +81,27 @@ const ownVisitsOnly = (req: Request) => assignedTechId(req);
 router.get("/", requireAnyPermission("view_jobs", "view_visits", "view_assigned_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const visits = await getAllJobVisits(orgId, { techId: ownVisitsOnly(req) });
-        res.json(createSuccessResponse(visits, { count: visits.length }));
+        let parsed;
+        try {
+            parsed = parseListQuery(req.query, VISIT_LIST_SPEC);
+            if (req.query.clientId !== undefined && typeof req.query.clientId !== "string") {
+                throw new ListQueryError("clientId", "clientId must be given once");
+            }
+        } catch (err) {
+            if (sendListError(res, err)) return;
+            throw err;
+        }
+        const clientId = req.query.clientId as string | undefined;
+        if (!parsed.paged) {
+            markLegacyList(res);
+            const visits = await getAllJobVisits(orgId, { clientId, techId: ownVisitsOnly(req) });
+            return res.json(createSuccessResponse(visits, { count: visits.length }));
+        }
+        const { rows, total } = await listJobVisits(orgId, parsed, {
+            clientId,
+            techId: ownVisitsOnly(req),
+        });
+        sendList(res, parsed, rows, total);
     } catch (err) {
         next(err);
     }

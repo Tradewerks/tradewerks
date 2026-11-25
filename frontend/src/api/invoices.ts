@@ -1,5 +1,7 @@
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
+import type { ListParams, PagedResult } from "../types/paging";
+import { pagedResultFrom } from "../hooks/usePagedList";
 import type {
 	Invoice,
 	CreateInvoiceInput,
@@ -19,9 +21,57 @@ import type {
 // INVOICE API
 // ============================================================================
 
-export const getAllInvoices = async (): Promise<Invoice[]> => {
-	const response = await api.get<ApiResponse<Invoice[]>>("/invoices");
-	return response.data.data || [];
+export interface InvoiceListExtras {
+	client_id?: string;
+	qb?: "tax_mismatch" | "attention";
+}
+
+// The server's slim list row: no line items, payments, notes or job links.
+export type InvoiceListRow = Pick<
+	Invoice,
+	| "id"
+	| "invoice_number"
+	| "status"
+	| "client_id"
+	| "memo"
+	| "issue_date"
+	| "due_date"
+	| "total"
+	| "amount_paid"
+	| "balance_due"
+	| "qb_sync_status"
+	| "qb_diverged_at"
+	| "qb_diverged_reason"
+	| "account_id"
+> & { client?: { id: string; name: string } | null };
+
+export const getInvoicesPage = async (
+	params: ListParams,
+	extras: InvoiceListExtras = {}
+): Promise<PagedResult<InvoiceListRow>> => {
+	const response = await api.get<ApiResponse<InvoiceListRow[]>>("/invoices", {
+		params: {
+			...params,
+			status: params.status?.join(","),
+			client_id: extras.client_id,
+			qb: extras.qb,
+		},
+	});
+	return pagedResultFrom(response.data, params);
+};
+
+export interface InvoicesSummary {
+	outstanding: { amount: number; count: number };
+	overdue: { amount: number; count: number };
+	paid: { amount: number; count: number };
+	qbTaxMismatchCount: number;
+	qbAttentionCount: number;
+}
+
+export const getInvoicesSummary = async (): Promise<InvoicesSummary> => {
+	const response = await api.get<ApiResponse<InvoicesSummary>>("/invoices/summary");
+	if (!response.data.data) throw new Error("Invoice summary unavailable");
+	return response.data.data;
 };
 
 export const getInvoiceById = async (id: string): Promise<Invoice> => {

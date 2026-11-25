@@ -259,7 +259,20 @@ router.get("/customers", async (req, res, next) => {
 		if (!response) {
 			return res.status(500).json(createErrorResponse(ErrorCodes.SERVER_ERROR, "Could not get QB Customers"));
 		}
-		return res.json(createSuccessResponse(response));
+		if (req.query.exclude_existing !== "1" || !response.length) {
+			return res.json(createSuccessResponse(response));
+		}
+		// The import list hides QB customers that already exist here by name.
+		const names = response.map((c) => c.DisplayName).filter(Boolean);
+		const existing = await getScopedDb(orgId).client.findMany({
+			where: { name: { in: names, mode: "insensitive" } },
+			select: { name: true },
+		});
+		const taken = new Set(existing.map((c) => c.name.toLowerCase()));
+		const fresh = response.filter(
+			(c) => !taken.has(c.DisplayName?.toLowerCase()),
+		);
+		return res.json(createSuccessResponse(fresh));
 	} catch (e) {
 		next(e);
 	}

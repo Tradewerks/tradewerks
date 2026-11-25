@@ -1,15 +1,29 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import InvoicesPage from "../InvoicesPage";
-import type { Invoice } from "../../../types/invoices";
+import type { InvoiceListRow } from "../../../api/invoices";
+import type { ListParams, PagedResult } from "../../../types/paging";
 
-let invoices: Invoice[] = [];
+const { getInvoicesPage } = vi.hoisted(() => ({ getInvoicesPage: vi.fn() }));
 
+vi.mock("../../../api/invoices", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../api/invoices")>()),
+	getInvoicesPage,
+}));
 vi.mock("../../../hooks/useInvoices", () => ({
-	useAllInvoicesQuery: () => ({ data: invoices, isLoading: false, error: null }),
+	// The server counts these for the whole org; the page only shows them.
+	useInvoicesSummaryQuery: () => ({
+		data: {
+			outstanding: { amount: 0, count: 0 },
+			overdue: { amount: 0, count: 0 },
+			paid: { amount: 0, count: 0 },
+			qbTaxMismatchCount: 1,
+			qbAttentionCount: 4,
+		},
+	}),
 }));
 vi.mock("../../../hooks/useClients", () => ({
 	useClientByIdQuery: () => ({ data: undefined }),
@@ -40,56 +54,62 @@ const mk = (n: string, extra: Record<string, unknown>) =>
 		due_date: "2026-12-01T00:00:00.000Z",
 		qb_sync_status: "synced",
 		...extra,
-	}) as unknown as Invoice;
+	}) as unknown as InvoiceListRow;
+
+const answer = (rows: InvoiceListRow[]) =>
+	getInvoicesPage.mockImplementation(
+		(params: ListParams): Promise<PagedResult<InvoiceListRow>> =>
+			Promise.resolve({ rows, total: rows.length, page: params.page, limit: params.limit })
+	);
+
+const markerRows = () => [
+	mk("F-1", { qb_sync_status: "failed" }),
+	mk("T-1", { qb_sync_status: "tax_mismatch" }),
+	mk("D-1", { qb_diverged_at: "2026-11-01T00:00:00.000Z", qb_diverged_reason: "refund_not_in_qb" }),
+];
 
 const renderPage = (url = "/dispatch/invoices") =>
 	render(
-		<QueryClientProvider client={new QueryClient()}>
+		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
 			<MemoryRouter initialEntries={[url]}>
 				<InvoicesPage />
 			</MemoryRouter>
 		</QueryClientProvider>
 	);
 
-const setAll = () => {
-	invoices = [
-		mk("F-1", { qb_sync_status: "failed" }),
-		mk("T-1", { qb_sync_status: "tax_mismatch" }),
-		mk("D-1", { qb_diverged_at: "2026-11-01T00:00:00.000Z", qb_diverged_reason: "refund_not_in_qb" }),
-		mk("V-1", {
-			status: "Void",
-			qb_diverged_at: "2026-11-01T00:00:00.000Z",
-			qb_diverged_reason: "qb_payment_delete_failed",
-		}),
-		mk("OK-1", {}),
-		mk("OLD-1", { qb_sync_status: "failed", account_id: "realm-old" }),
-	];
-};
+beforeEach(() => {
+	getInvoicesPage.mockReset();
+});
 
 describe("InvoicesPage — QuickBooks filter", () => {
-	it('the QuickBooks filter "Needs attention" shows failed, tax_mismatch and diverged invoices in the current realm only', async () => {
-		setAll();
+	it('the QuickBooks filter "Needs attention" asks the server for the attention view and shows what it returns', async () => {
+		answer(markerRows());
 		const user = userEvent.setup();
 		renderPage();
+		await screen.findByText("F-1");
 		await user.click(screen.getByRole("button", { name: /QuickBooks: needs attention \(4\)/ }));
-		for (const n of ["F-1", "T-1", "D-1", "V-1"]) expect(screen.getByText(n)).toBeInTheDocument();
-		expect(screen.queryByText("OK-1")).toBeNull();
-		expect(screen.queryByText("OLD-1")).toBeNull();
+		await waitFor(() =>
+			expect(getInvoicesPage).toHaveBeenLastCalledWith(
+				expect.objectContaining({ page: 1 }),
+				expect.objectContaining({ qb: "attention" })
+			)
+		);
+		expect(screen.getByText("QuickBooks: needs attention")).toBeInTheDocument();
 	});
 
-	it('a failed invoice row shows the QuickBooks warning marker with the tooltip "Not in QuickBooks — retry from the invoice"', () => {
-		setAll();
+	it('a failed invoice row shows the QuickBooks warning marker with the tooltip "Not in QuickBooks — retry from the invoice"', async () => {
+		answer(markerRows());
 		renderPage();
-		const row = screen.getByText("F-1").closest("tr") as HTMLElement;
+		const row = (await screen.findByText("F-1")).closest("tr") as HTMLElement;
 		expect(
 			within(row).getByTitle("Not in QuickBooks — retry from the invoice")
 		).toBeInTheDocument();
 	});
 
-	it("the QuickBooks marker is named for screen readers, like the tax marker", () => {
-		setAll();
+	it("the QuickBooks marker is named for screen readers, like the tax marker", async () => {
+		answer(markerRows());
 		renderPage();
-		const failed = screen.getByText("F-1").closest("tr") as HTMLElement;
+		const failed = (await screen.findByText("F-1")).closest("tr") as HTMLElement;
 		const diverged = screen.getByText("D-1").closest("tr") as HTMLElement;
 		expect(
 			within(failed).getByLabelText("Not in QuickBooks — retry from the invoice")
@@ -99,11 +119,13 @@ describe("InvoicesPage — QuickBooks filter", () => {
 		).toBeInTheDocument();
 	});
 
-	it("existing ?qb=tax_mismatch links still filter to tax mismatches", () => {
-		setAll();
+	it("existing ?qb=tax_mismatch links still filter to tax mismatches", async () => {
+		answer([mk("T-1", { qb_sync_status: "tax_mismatch" })]);
 		renderPage("/dispatch/invoices?qb=tax_mismatch");
-		expect(screen.getByText("T-1")).toBeInTheDocument();
-		expect(screen.queryByText("F-1")).toBeNull();
-		expect(screen.queryByText("D-1")).toBeNull();
+		await screen.findByText("T-1");
+		expect(getInvoicesPage).toHaveBeenCalledWith(
+			expect.objectContaining({ page: 1 }),
+			expect.objectContaining({ qb: "tax_mismatch" })
+		);
 	});
 });

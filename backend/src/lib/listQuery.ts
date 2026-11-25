@@ -35,6 +35,8 @@ export interface ParsedList<S, St> {
 	q?: string;
 	status?: St[];
 	from?: Date;
+	// Exclusive upper bound: filter with `lt`. A date-only `to` is already
+	// advanced to the next UTC midnight.
 	to?: Date;
 }
 
@@ -79,21 +81,46 @@ function positiveInt(query: Query, field: string, fallback: number): number {
 // Date-only or full ISO; a bare Date.parse would accept "1" or "March".
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
 
-function isoDate(query: Query, field: string): Date | undefined {
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// A date-only upper bound means "through that day", so it becomes the start of
+// the next UTC day; callers filter with `lt`.
+function isoDate(
+	query: Query,
+	field: string,
+	endOfDay = false,
+): Date | undefined {
 	const raw = single(query, field)?.trim();
 	if (!raw) return undefined;
 	const d = new Date(raw);
 	if (!ISO_DATE.test(raw) || Number.isNaN(d.getTime())) {
 		throw new ListQueryError(field, `${field} must be an ISO date`);
 	}
-	return d;
+	return endOfDay && DATE_ONLY.test(raw)
+		? new Date(d.getTime() + DAY_MS)
+		: d;
 }
+
+export const isPagedRequest = (query: Query): boolean => "page" in query;
 
 export function parseListQuery<S extends string, St extends string>(
 	query: Query,
 	spec: ListSpec<S, St>,
 ): ParsedList<S, St> {
-	const paged = "page" in query;
+	const paged = isPagedRequest(query);
+	// A legacy call (no `page`) is not validated at all: existing callers send
+	// stray params (sort=desc, limit=500) and must keep getting the old array.
+	if (!paged) {
+		return {
+			paged,
+			page: 1,
+			take: spec.defaultLimit ?? DEFAULT_LIMIT,
+			skip: 0,
+			sort: spec.defaultSort,
+			dir: spec.defaultDir,
+		};
+	}
 	const page = positiveInt(query, "page", 1);
 	const take = positiveInt(
 		query,
@@ -154,10 +181,13 @@ export function parseListQuery<S extends string, St extends string>(
 	}
 
 	const from = isoDate(query, "from");
-	const to = isoDate(query, "to");
-	if (from && to && from > to) {
+	const toRaw = isoDate(query, "to");
+	// Compared before the date-only advance, so to=2026-11-24 is not "after"
+	// from=2026-11-24T10:00 by virtue of the extra day.
+	if (from && toRaw && from > toRaw) {
 		throw new ListQueryError("to", "to must not be before from");
 	}
+	const to = isoDate(query, "to", true);
 
 	return {
 		paged,

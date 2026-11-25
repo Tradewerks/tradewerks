@@ -62,6 +62,9 @@ import {
 	keptFamily,
 } from "../lib/addressTaxChoice.js";
 import { isClientMessage } from "../types/responses.js";
+import { priority as Priority, quote_status as QuoteStatus } from "../../generated/prisma/enums.js";
+import { type ListSpec, type ParsedList } from "../lib/listQuery.js";
+import { andOfOrs, containsInsensitive, enumListParam, singleParam } from "../lib/listSearch.js";
 
 // Matches the frontend's isQuoteEditable.
 const EDITABLE_QUOTE_STATUSES: ReadonlySet<string> = new Set(["Draft", "Issued", "Sent", "Viewed"]);
@@ -97,6 +100,104 @@ async function lockQuoteTaxSnapshot(
 	return lockDocumentTaxSnapshot("quote", quoteId, organizationId, tx, lockedAt);
 }
 
+export const QUOTE_LIST_SPEC = {
+	sortable: [
+		"created_at",
+		"quote_number",
+		"total",
+		"expires_at",
+		"status",
+		"priority",
+		"client",
+	] as const,
+	defaultSort: "created_at" as const,
+	defaultDir: "desc" as const,
+	statuses: Object.values(QuoteStatus),
+} satisfies ListSpec<string, quote_status>;
+
+type QuoteListQuery = ParsedList<
+	(typeof QUOTE_LIST_SPEC.sortable)[number],
+	quote_status
+>;
+
+// Beyond the shared contract: the Quotes page also filters by priority, client
+// and request, and tells us whether the caller chose a sort (none = status order).
+export const parseQuoteListExtras = (query: Request["query"]) => ({
+	priority: enumListParam(query, "priority", Object.values(Priority)),
+	client_id: singleParam(query, "client_id"),
+	request_id: singleParam(query, "request_id"),
+	// Pickers ask for live quotes only; the Quotes page lists every one.
+	activeOnly: singleParam(query, "active") === "true",
+	explicitSort: singleParam(query, "sort") !== undefined,
+});
+
+// The list row never reads a dispute flag, so none is selected.
+const QUOTE_LIST_SELECT = {
+	id: true,
+	quote_number: true,
+	title: true,
+	status: true,
+	priority: true,
+	// The table's Property column.
+	address: true,
+	total: true,
+	client_id: true,
+	request_id: true,
+	expires_at: true,
+	created_at: true,
+	updated_at: true,
+	client: { select: { id: true, name: true } },
+} satisfies Prisma.quoteSelect;
+
+// No chosen sort: status in lifecycle order, newest first within a status.
+const quoteOrderBy = (
+	parsed: QuoteListQuery,
+	explicitSort: boolean,
+): Prisma.quoteOrderByWithRelationInput[] => {
+	if (!explicitSort) return [{ status: "asc" }, { created_at: "desc" }, { id: "asc" }];
+	const primary: Prisma.quoteOrderByWithRelationInput =
+		parsed.sort === "client" ? { client: { name: parsed.dir } } : { [parsed.sort]: parsed.dir };
+	// id breaks ties so a page boundary never repeats or drops a row.
+	return [primary, { id: "asc" }];
+};
+
+export const getQuotesPage = async (
+	organizationId: string,
+	parsed: QuoteListQuery,
+	extras: ReturnType<typeof parseQuoteListExtras>,
+) => {
+	const sdb = getScopedDb(organizationId);
+	const where: Prisma.quoteWhereInput = {
+		...(parsed.status && { status: { in: parsed.status } }),
+		...(extras.priority && { priority: { in: extras.priority } }),
+		...(extras.client_id && { client_id: extras.client_id }),
+		...(extras.request_id && { request_id: extras.request_id }),
+		...(extras.activeOnly && { is_active: true }),
+		...((parsed.from || parsed.to) && {
+			created_at: {
+				...(parsed.from && { gte: parsed.from }),
+				...(parsed.to && { lt: parsed.to }),
+			},
+		}),
+		...andOfOrs<Prisma.quoteWhereInput>(parsed.q, (term) => [
+			{ quote_number: containsInsensitive(term) },
+			{ title: containsInsensitive(term) },
+			{ client: { name: containsInsensitive(term) } },
+			{ address: containsInsensitive(term) },
+		]),
+	};
+	const [rows, total] = await Promise.all([
+		sdb.quote.findMany({
+			where,
+			select: QUOTE_LIST_SELECT,
+			orderBy: quoteOrderBy(parsed, extras.explicitSort),
+			skip: parsed.skip,
+			take: parsed.take,
+		}),
+		sdb.quote.count({ where }),
+	]);
+	return { rows, total };
+};
 
 export const getAllQuotes = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);

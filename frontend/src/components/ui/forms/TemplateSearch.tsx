@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Search, X, BookOpen, Check, ChevronRight, Users, Trash2 } from "lucide-react";
 
 export interface TemplateSearchClient {
@@ -45,6 +45,11 @@ interface TemplateSearchProps {
 	selectedIds?: readonly string[];
 	onToggleSelect?: (id: string) => void;
 	emptyHint?: string;
+	// For a caller whose results come from a server search: the typed text.
+	onQueryChange?: (query: string) => void;
+	// Same for the client filter: `clients` is then the server's suggestions for the
+	// typed text, so the filter shows even while that list is empty.
+	onClientQueryChange?: (query: string) => void;
 }
 
 function DeleteButton({
@@ -112,6 +117,8 @@ export function TemplateSearch({
 	selectedIds,
 	onToggleSelect,
 	emptyHint = "No existing entries to use as a template",
+	onQueryChange,
+	onClientQueryChange,
 }: TemplateSearchProps) {
 	const isMultiSelect = selectedIds !== undefined;
 	const selectedSet = useMemo(
@@ -120,6 +127,15 @@ export function TemplateSearch({
 	);
 	const [query, setQuery] = useState("");
 	const [clientQuery, setClientQuery] = useState("");
+	useEffect(() => {
+		onQueryChange?.(query);
+	}, [query, onQueryChange]);
+	useEffect(() => {
+		onClientQueryChange?.(clientQuery);
+	}, [clientQuery, onClientQueryChange]);
+	// A server-searched `clients` list narrows as the text changes, so the picked
+	// client's name is kept from the moment of the pick.
+	const [pickedClient, setPickedClient] = useState<TemplateSearchClient | null>(null);
 
 	// Uncontrolled fallback — used when parent does not pass clientFilter props
 	const [internalClientFilter, setInternalClientFilter] = useState("");
@@ -140,13 +156,16 @@ export function TemplateSearch({
 
 	const filteredClients = useMemo(() => {
 		const q = clientQuery.toLowerCase().trim();
-		if (!q) return clients;
+		// A server-searched list is already the match for what was typed.
+		if (!q || onClientQueryChange) return clients;
 		return clients.filter((c) => c.name.toLowerCase().includes(q));
-	}, [clients, clientQuery]);
+	}, [clients, clientQuery, onClientQueryChange]);
 
 	const activeClientName = useMemo(
-		() => clients.find((c) => c.id === clientFilter)?.name ?? "",
-		[clients, clientFilter]
+		() =>
+			clients.find((c) => c.id === clientFilter)?.name ??
+			(pickedClient?.id === clientFilter ? pickedClient.name : ""),
+		[clients, clientFilter, pickedClient]
 	);
 
 	const filtered = useMemo(() => {
@@ -237,7 +256,7 @@ export function TemplateSearch({
 						</button>
 					)}
 
-					{clients.length > 0 &&
+					{(clients.length > 0 || onClientQueryChange) &&
 						(!scopeToggle || !scopeToggle.isThisScope) && (
 							<div className="relative flex-shrink-0 w-44">
 								{clientFilter ? (
@@ -303,6 +322,7 @@ export function TemplateSearch({
 																}
 																type="button"
 																onClick={() => {
+																	setPickedClient(c);
 																	setClientFilter(
 																		c.id
 																	);

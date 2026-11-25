@@ -61,6 +61,9 @@ import {
 } from "../lib/addressTaxChoice.js";
 import { assertTaxGroupsInOrg, findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import { jobAssignedWhere, noteAssignedWhere, visitAssignedWhere } from "../lib/assignedScope.js";
+import { type ListSpec, type ParsedList } from "../lib/listQuery.js";
+import { andOfOrs, containsInsensitive, enumListParam, singleParam } from "../lib/listSearch.js";
+import { job_status as JobStatus, priority as Priority } from "../../generated/prisma/enums.js";
 import {
 	dropClientTaxTotals,
 	getEffectiveTaxMode,
@@ -126,12 +129,15 @@ export async function techOnNote(orgId: string, techId: string, noteId: string) 
 
 // With techId, only jobs that tech is on a visit of, carrying only that tech's
 // visits: a teammate's visit on the same job brings its own line items.
-export const getAllJobs = async (organizationId: string, techId?: string) => {
+export const getAllJobs = async (organizationId: string, techId?: string, clientId?: string) => {
 	const now = new Date();
 	const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
 	const sdb = getScopedDb(organizationId);
 	return await sdb.job.findMany({
-		where: techId ? jobAssignedWhere(techId) : undefined,
+		where: {
+			...(techId ? jobAssignedWhere(techId) : {}),
+			...(clientId ? { client_id: clientId } : {}),
+		},
 		include: {
 			client: {
 				select: {
@@ -206,6 +212,137 @@ export const getAllJobs = async (organizationId: string, techId?: string) => {
 		},
 		orderBy: { created_at: "desc" },
 	});
+};
+
+export const JOB_LIST_SPEC = {
+	sortable: [
+		"created_at",
+		"job_number",
+		"name",
+		"status",
+		"priority",
+		"client",
+		"total",
+	] as const,
+	defaultSort: "created_at" as const,
+	defaultDir: "desc" as const,
+	statuses: Object.values(JobStatus),
+} satisfies ListSpec<string, JobStatus>;
+
+type JobListQuery = ParsedList<(typeof JOB_LIST_SPEC.sortable)[number], JobStatus>;
+
+// Beyond the shared contract: the Jobs page also filters by priority and client;
+// the pickers narrow to one client or to jobs no project owns; view=templates is
+// the recurring containers; explicitSort tells us whether the caller chose a sort.
+export const parseJobListExtras = (query: Request["query"]) => ({
+	priority: enumListParam(query, "priority", Object.values(Priority)),
+	client_id: singleParam(query, "client_id"),
+	unattached: singleParam(query, "unattached") === "true",
+	templates: singleParam(query, "view") === "templates",
+	explicitSort: singleParam(query, "sort") !== undefined,
+});
+
+const JOB_LIST_SELECT = (techId?: string) =>
+	({
+		id: true,
+		job_number: true,
+		name: true,
+		status: true,
+		priority: true,
+		// The table's Property column and the Total column.
+		address: true,
+		client_id: true,
+		recurring_plan_id: true,
+		estimated_total: true,
+		actual_total: true,
+		created_at: true,
+		completed_at: true,
+		client: { select: { id: true, name: true } },
+		project: { select: { id: true, project_number: true, name: true } },
+		_count: { select: { visits: true } },
+		// The next open visit, one row: the Schedule column. An assigned-only caller
+		// sees their own visits, as in the unpaged list.
+		visits: {
+			where: {
+				status: { in: ["Scheduled", "InProgress"] },
+				...(techId ? visitAssignedWhere(techId) : {}),
+			},
+			orderBy: { scheduled_start_at: "asc" },
+			take: 1,
+			select: { id: true, scheduled_start_at: true, status: true },
+		},
+	}) satisfies Prisma.jobSelect;
+
+// No chosen sort: by status, newest first. The page used to order by next visit, but
+// that has no column to sort on.
+const jobOrderBy = (
+	parsed: JobListQuery,
+	explicitSort: boolean,
+): Prisma.jobOrderByWithRelationInput[] => {
+	if (!explicitSort) return [{ status: "asc" }, { created_at: "desc" }, { id: "asc" }];
+	const primary: Prisma.jobOrderByWithRelationInput =
+		parsed.sort === "client"
+			? { client: { name: parsed.dir } }
+			: parsed.sort === "total"
+				? { estimated_total: { sort: parsed.dir, nulls: "last" } }
+				: { [parsed.sort]: parsed.dir };
+	// id breaks ties so a page boundary never repeats or drops a row.
+	return [primary, { id: "asc" }];
+};
+
+export const getJobsPage = async (
+	organizationId: string,
+	parsed: JobListQuery,
+	extras: ReturnType<typeof parseJobListExtras>,
+	techId?: string,
+) => {
+	const sdb = getScopedDb(organizationId);
+	// One AND list: the word clauses must not replace the scope and date ones.
+	const wordClauses = andOfOrs<Prisma.jobWhereInput>(parsed.q, (term) => [
+		{ job_number: containsInsensitive(term) },
+		{ name: containsInsensitive(term) },
+		{ client: { name: containsInsensitive(term) } },
+		{ address: containsInsensitive(term) },
+	]);
+	const where: Prisma.jobWhereInput = {
+		AND: [
+			...(techId ? [jobAssignedWhere(techId)] : []),
+			// Jobs with a visit running inside [from, to).
+			...(parsed.from || parsed.to
+				? [
+						{
+							visits: {
+								some: {
+									// A cancelled visit is not work in the range; an assigned-only caller
+									// only counts their own visits.
+									status: { not: "Cancelled" as const },
+									...(techId ? visitAssignedWhere(techId) : {}),
+									...(parsed.to && { scheduled_start_at: { lt: parsed.to } }),
+									...(parsed.from && { scheduled_end_at: { gt: parsed.from } }),
+								},
+							},
+						},
+					]
+				: []),
+			...(wordClauses?.AND ?? []),
+		],
+		...(parsed.status && { status: { in: parsed.status } }),
+		...(extras.priority && { priority: { in: extras.priority } }),
+		...(extras.client_id && { client_id: extras.client_id }),
+		...(extras.unattached && { project_id: null }),
+		...(extras.templates && { recurring_plan_id: { not: null } }),
+	};
+	const [rows, total] = await Promise.all([
+		sdb.job.findMany({
+			where,
+			select: JOB_LIST_SELECT(techId),
+			orderBy: jobOrderBy(parsed, extras.explicitSort),
+			skip: parsed.skip,
+			take: parsed.take,
+		}),
+		sdb.job.count({ where }),
+	]);
+	return { rows, total };
 };
 
 // With techId: null unless that tech is on the job, and only their visits and

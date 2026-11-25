@@ -8,6 +8,7 @@ import {
 import { Request } from "express";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { Prisma } from "../../generated/prisma/client.js";
+import { priority as Priority, request_status as RequestStatus } from "../../generated/prisma/enums.js";
 import { log } from "../services/appLogger.js";
 import { isClientMessage } from "../types/responses.js";
 import { getScopedDb, type UserContext } from "../lib/context.js";
@@ -16,6 +17,8 @@ import { formatZodError } from "../lib/validate/shared.js";
 import { assertValidRequestTransition, InvalidTransitionError } from "../lib/statusTransitions.js";
 import { onRequestCreated } from "../services/followupTriggers.js";
 import { jobAssignedWhere } from "../lib/assignedScope.js";
+import { type ListSpec, type ParsedList } from "../lib/listQuery.js";
+import { andOfOrs, containsInsensitive, enumListParam, singleParam } from "../lib/listSearch.js";
 
 export const getAllRequests = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);
@@ -46,6 +49,87 @@ export const getAllRequests = async (organizationId: string) => {
 		},
 		orderBy: { created_at: "desc" },
 	});
+};
+
+export const REQUEST_LIST_SPEC = {
+	sortable: ["created_at", "updated_at", "priority", "status", "title", "client"] as const,
+	defaultSort: "created_at" as const,
+	defaultDir: "desc" as const,
+	statuses: Object.values(RequestStatus),
+} satisfies ListSpec<string, RequestStatus>;
+
+type RequestListQuery = ParsedList<
+	(typeof REQUEST_LIST_SPEC.sortable)[number],
+	RequestStatus
+>;
+
+// Beyond the shared contract: the Requests page also filters by priority and client,
+// and tells us whether the caller chose a sort (none means the triage order).
+export const parseRequestListExtras = (query: Request["query"]) => ({
+	priority: enumListParam(query, "priority", Object.values(Priority)),
+	client_id: singleParam(query, "client_id"),
+	explicitSort: singleParam(query, "sort") !== undefined,
+});
+
+const REQUEST_LIST_SELECT = {
+	id: true,
+	title: true,
+	status: true,
+	priority: true,
+	// The table's Property column.
+	address: true,
+	client_id: true,
+	created_at: true,
+	updated_at: true,
+	client: { select: { id: true, name: true } },
+	_count: { select: { quotes: true } },
+} satisfies Prisma.requestSelect;
+
+// No chosen sort: New first, Emergency first within a status, as the page always sorted.
+const requestOrderBy = (
+	parsed: RequestListQuery,
+	explicitSort: boolean,
+): Prisma.requestOrderByWithRelationInput[] => {
+	if (!explicitSort) return [{ status: "asc" }, { priority: "desc" }, { id: "asc" }];
+	const primary: Prisma.requestOrderByWithRelationInput =
+		parsed.sort === "client" ? { client: { name: parsed.dir } } : { [parsed.sort]: parsed.dir };
+	// id breaks ties so a page boundary never repeats or drops a row.
+	return [primary, { id: "asc" }];
+};
+
+export const getRequestsPage = async (
+	organizationId: string,
+	parsed: RequestListQuery,
+	extras: ReturnType<typeof parseRequestListExtras>,
+) => {
+	const sdb = getScopedDb(organizationId);
+	const where: Prisma.requestWhereInput = {
+		...(parsed.status && { status: { in: parsed.status } }),
+		...(extras.priority && { priority: { in: extras.priority } }),
+		...(extras.client_id && { client_id: extras.client_id }),
+		...((parsed.from || parsed.to) && {
+			created_at: {
+				...(parsed.from && { gte: parsed.from }),
+				...(parsed.to && { lt: parsed.to }),
+			},
+		}),
+		...andOfOrs<Prisma.requestWhereInput>(parsed.q, (term) => [
+			{ title: containsInsensitive(term) },
+			{ client: { name: containsInsensitive(term) } },
+			{ address: containsInsensitive(term) },
+		]),
+	};
+	const [rows, total] = await Promise.all([
+		sdb.request.findMany({
+			where,
+			select: REQUEST_LIST_SELECT,
+			orderBy: requestOrderBy(parsed, extras.explicitSort),
+			skip: parsed.skip,
+			take: parsed.take,
+		}),
+		sdb.request.count({ where }),
+	]);
+	return { rows, total };
 };
 
 export const getRequestById = async (requestId: string, organizationId: string) => {

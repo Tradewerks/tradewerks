@@ -9,7 +9,8 @@ import {
 } from "../../types/project";
 import { type Priority, PriorityValues, PriorityLabels } from "../../types/common";
 import type { GeocodeResult } from "../../types/location";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import type { Client } from "../../types/clients";
+import ClientPicker from "../clients/ClientPicker";
 import { useActiveDispatchersQuery } from "../../hooks/useDispatchers";
 import Dropdown from "../ui/Dropdown";
 import AddressForm from "../ui/AddressForm";
@@ -85,7 +86,6 @@ export default function CreateProjectModal({
     const [errors, setErrors] = useState<ZodError | null>(null);
     const [submitError, setSubmitError] = useState("");
 
-    const { data: clients } = useAllClientsQuery();
     const { data: dispatchers } = useActiveDispatchersQuery();
 
     const {
@@ -96,21 +96,6 @@ export default function CreateProjectModal({
         goToStep,
         reset: resetWizard,
     } = useStepWizard<Step>({ totalSteps: 2 as Step, initialStep: 1 as Step });
-
-    const clientDropdownEntries = useMemo(() => {
-        if (clients?.length) {
-            return clients.map((c) => (
-                <option value={c.id} key={c.id}>
-                    {c.name}
-                </option>
-            ));
-        }
-        return (
-            <option disabled value="">
-                No clients found
-            </option>
-        );
-    }, [clients]);
 
     const managerDropdownEntries = useMemo(() => {
         const entries = [
@@ -181,24 +166,19 @@ export default function CreateProjectModal({
     );
     const handleClearAddress = useCallback(() => setGeoData(undefined), []);
 
-    const handleClientChange = useCallback(
-        (v: string) => {
-            setClientId(v);
-            const client = clients?.find((c) => c.id === v);
-            if (
-                client?.address &&
-                Number.isFinite(client.coords?.lat) &&
-                Number.isFinite(client.coords?.lon) &&
-                (client.coords.lat !== 0 || client.coords.lon !== 0)
-            ) {
-                setGeoData({
-                    address: client.address,
-                    coords: { lat: client.coords.lat, lon: client.coords.lon },
-                });
-            }
-        },
-        [clients],
-    );
+    const handleClientPick = useCallback((client: Client) => {
+        if (
+            client.address &&
+            Number.isFinite(client.coords?.lat) &&
+            Number.isFinite(client.coords?.lon) &&
+            (client.coords.lat !== 0 || client.coords.lon !== 0)
+        ) {
+            setGeoData({
+                address: client.address,
+                coords: { lat: client.coords.lat, lon: client.coords.lon },
+            });
+        }
+    }, []);
 
     const invokeCreate = async () => {
         if (isLoading) return;
@@ -286,11 +266,10 @@ export default function CreateProjectModal({
                         <div className="grid grid-cols-2 gap-2 lg:gap-3 min-w-0">
                             <div className="min-w-0">
                                 <label className={LABEL}>Client *</label>
-                                <Dropdown
-                                    entries={clientDropdownEntries}
+                                <ClientPicker
                                     value={clientId}
-                                    onChange={handleClientChange}
-                                    placeholder="Select client"
+                                    onChange={setClientId}
+                                    onPick={handleClientPick}
                                     disabled={isLoading}
                                     error={errors?.issues.some((e) => e.path[0] === "client_id")}
                                 />
@@ -439,9 +418,8 @@ export default function CreateProjectModal({
         geoData,
         isLoading,
         errors,
-        clientDropdownEntries,
         managerDropdownEntries,
-        handleClientChange,
+        handleClientPick,
         handleChangeAddress,
         handleClearAddress,
     ]);

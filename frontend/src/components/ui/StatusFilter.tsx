@@ -34,7 +34,7 @@ export default function StatusFilter(props: StatusFilterProps) {
 }
 
 function UrlStatusFilter({ paramKey, ...rest }: StatusFilterUrlProps) {
-	const { terms, addTerm, removeTerm, clearAll } = useMultiSearch(paramKey);
+	const { terms, addTerm, removeTerm, clearAll } = useMultiSearch(paramKey, { splitCommas: true });
 
 	const handleChange = (newValue: string | null) => {
 		if (!newValue) {

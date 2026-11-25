@@ -1,5 +1,12 @@
 ﻿import AdaptableTable from "../../components/AdaptableTable";
-import { useAllJobsQuery, useCreateJobMutation } from "../../hooks/useJobs";
+import { useCreateJobMutation } from "../../hooks/useJobs";
+import { getJobsPage } from "../../api/jobs";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useListPaging, dateRangeToParams } from "../../hooks/useListPaging";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { qk } from "../../lib/queryKeys";
+import ReportPagination from "../../components/reports/ReportPagination";
+import type { ListParams, SortDir } from "../../types/paging";
 import { useAllRecurringPlansQuery } from "../../hooks/useRecurringPlans";
 import { useClientByIdQuery } from "../../hooks/useClients";
 import { JobStatusValues, JobStatusColors, type JobStatus } from "../../types/jobs";
@@ -13,13 +20,13 @@ import { addSpacesToCamelCase, formatDate, formatCurrency } from "../../util/uti
 import SearchBar from "../../components/ui/SearchBar";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import FilterChips from "../../components/ui/FilterChips";
+import { useDateRangeChip } from "../../hooks/useDateRangeChip";
 import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
 import SortControl from "../../components/ui/SortControl";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
 import {
 	parseDateRangeFromParams,
-	matchesDateRange,
 	overlapsDateRange,
 	type DateRangeOption,
 } from "../../util/dateRangeUtils";
@@ -29,15 +36,6 @@ import { usePermission } from "../../hooks/usePermission";
 import PageReportButton from "../../components/reports/PageReportButton";
 import PageReportKpis from "../../components/reports/PageReportKpis";
 import { usePageReport } from "../../components/reports/usePageReport";
-import type { SortDir } from "../../util/sortUtil";
-import {
-	withDir,
-	compareByOrder,
-	compareDateNullsLast,
-	comparePriority,
-	compareString,
-	compareNumber
-} from "../../util/sortUtil";
 import { PriorityLabels, PriorityValues, PriorityColors, type Priority } from "../../types/common";
 
 const jobStatusOptions = JobStatusValues.map((s) => ({
@@ -72,46 +70,33 @@ const jobPriorityOptions = PriorityValues.map((s) => ({
 const sortLabels: Record<string, string> = {
 	priority: "Priority",
 	status: "Status",
-	date: "Date",
 	client: "Client",
 	jobNumber: "Job #",
 	total: "Total",
 };
 
-// Plain-text columns sorted with a generic localeCompare — no domain-specific
-// order needed (unlike priority/status). Allowlisted so a stray `sort` value
-// from the URL can't index an arbitrary JobRow field.
-const SORTABLE_STRING_FIELDS = ["client", "jobNumber"] as const;
-type SortableStringField = (typeof SORTABLE_STRING_FIELDS)[number];
-function isSortableStringField(value: string | null): value is SortableStringField {
-	return (SORTABLE_STRING_FIELDS as readonly string[]).includes(value ?? "");
-}
-
-// Column ids whose displayed value isn't the sortable one — the real value
-// lives on a `_raw*`/underlying field (formatted currency string vs the raw
-// number, a schedule-status blurb vs the raw date). Clicking these headers
-// sorts by, and highlights in sync with, the aliased key instead.
-const COLUMN_SORT_KEY: Record<string, string> = {
-	schedule: "date",
+// The page's sort keys to the server's sortable columns. A key not listed here
+// (an old bookmark, or the retired Date sort) is dropped from the chip and header,
+// not sent to be refused: the server has no column holding a job's next visit.
+const SERVER_SORT: Record<string, string> = {
+	priority: "priority",
+	status: "status",
+	client: "client",
+	jobNumber: "job_number",
+	total: "total",
 };
 
 type JobRow = {
 	id: string;
-	isRecurring: string;
 	client: string;
 	jobNumber: string;
 	property: string;
 	schedule: string;
 	status: string;
 	priority: Priority;
-	total: number;
+	total: string;
 	_rawStatus: string;
-	_rawPriority: Priority,
-	_rawTotal: number;
-	_scheduleDate: string;
-	_rawJobNumber: string;
-	_clientId: string;
-	_jobId: string;
+	_rawPriority: Priority;
 };
 
 export default function JobsPage() {
@@ -122,7 +107,6 @@ export default function JobsPage() {
 	const CREATE_JOB = usePermission("create_jobs");
 	const MANAGE_RECURRING_PLAN = usePermission("manage_recurring_plans");
 
-	const { data: jobs, isLoading: jobsLoading, error: jobsError } = useAllJobsQuery();
 	const {
 		data: recurringPlans,
 		isLoading: plansLoading,
@@ -140,30 +124,73 @@ export default function JobsPage() {
 		{ allowed: viewMode !== "templates" || MANAGE_RECURRING_PLAN },
 	);
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
+	// The search chips and the text being typed go to the server as one string it splits into words.
+	const q = useDebouncedValue([...terms, searchInput.trim()].filter(Boolean).join(" "));
 	const { removeTerm: removeStatus } = useMultiSearch("status");
+	const dateChip = useDateRangeChip("date");
 	const { removeTerm: removePriority } = useMultiSearch("priority");
-	// Collision-free memo key (["ab"] vs ["a","b"] must differ)
-	const termsKey = JSON.stringify(terms);
 	const [showActionsMenu, setShowActionsMenu] = useState(false);
 	const menuRef = useRef<HTMLDivElement>(null);
 
 	const queryParams = new URLSearchParams(location.search);
 	const clientFilter = queryParams.get("client");
-	const statusFilter = queryParams.getAll("status");
+	// Repeated (?status=A&status=B, what the filter writes) or comma-joined.
+	const flat = (key: string) =>
+		queryParams.getAll(key).flatMap((v) => v.split(",").map((s) => s.trim()).filter(Boolean));
+	const statusFilter = flat("status");
 	const statusKey = statusFilter.join(",");
-	const priorityFilter = queryParams.getAll("priority");
+	const priorityFilter = flat("priority");
 	const priorityKey = priorityFilter.join(",");
 	const viewParam = queryParams.get("view") as JobsView | null;
 	const dateParamKey = queryParams.get("date");
 	const dateParamFrom = queryParams.get("dateFrom");
 	const dateParamTo = queryParams.get("dateTo");
-	const sortParam = queryParams.get("sort");
+	const rawSort = queryParams.get("sort");
+	const sortParam = rawSort && SERVER_SORT[rawSort] ? rawSort : null;
 	const dirParam = queryParams.get("dir");
 
 	const { data: filterClient } = useClientByIdQuery(clientFilter);
 
-	const isFetchLoading = jobsLoading || (MANAGE_RECURRING_PLAN && plansLoading);
-	const fetchError = jobsError || (MANAGE_RECURRING_PLAN ? plansError : null);
+	const filters = useMemo(() => {
+		const dp = new URLSearchParams();
+		if (dateParamKey) dp.set("date", dateParamKey);
+		if (dateParamFrom) dp.set("dateFrom", dateParamFrom);
+		if (dateParamTo) dp.set("dateTo", dateParamTo);
+		const range = dateRangeToParams(parseDateRangeFromParams(dp, "date"));
+		const sort = sortParam ? SERVER_SORT[sortParam] : undefined;
+		return {
+			sort,
+			dir: sort ? ((dirParam === "asc" ? "asc" : "desc") as SortDir) : undefined,
+			q: q || undefined,
+			status: statusFilter.length ? statusFilter : undefined,
+			...range,
+			priority: priorityFilter.length ? priorityFilter : undefined,
+			client_id: clientFilter ?? undefined,
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [q, statusKey, priorityKey, clientFilter, sortParam, dirParam, dateParamKey, dateParamFrom, dateParamTo]);
+
+	const { page, limit, paginationProps } = useListPaging(filters);
+	const { priority, client_id, ...listFilters } = filters;
+	const params: ListParams = { page, limit, ...listFilters };
+	// Not usePagedList: the Templates view lists plans, so the jobs request waits for the Jobs view.
+	const {
+		data,
+		isLoading: jobsLoading,
+		isFetching,
+		error: jobsError,
+	} = useQuery({
+		queryKey: [...qk.jobs.list(), { priority, client_id }, params],
+		queryFn: () => getJobsPage(params, { priority, client_id }),
+		placeholderData: keepPreviousData,
+		enabled: (viewParam ?? "jobs") === "jobs",
+	});
+	const total = data?.total ?? 0;
+
+	const isFetchLoading =
+		viewMode === "templates" ? MANAGE_RECURRING_PLAN && plansLoading : jobsLoading;
+	const fetchError =
+		viewMode === "templates" ? (MANAGE_RECURRING_PLAN ? plansError : null) : jobsError;
 
 	// Close menu on outside click
 	useEffect(() => {
@@ -183,7 +210,7 @@ export default function JobsPage() {
 		setViewMode(viewParam || "jobs");
 	}, [viewParam]);
 
-	const display = useMemo(() => {
+	const templatesDisplay = useMemo(() => {
 		const _dp = new URLSearchParams();
 		if (dateParamKey) _dp.set("date", dateParamKey);
 		if (dateParamFrom) _dp.set("dateFrom", dateParamFrom);
@@ -192,304 +219,168 @@ export default function JobsPage() {
 
 		const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
 
-		if (viewMode === "templates") {
-			// TEMPLATES VIEW - Show only recurring plan templates
-			let templatesData =
-				recurringPlans?.map((plan) => {
-					const upcomingOccurrences = (plan.occurrences || [])
-						.filter(
-							(occ) =>
-								new Date(occ.occurrence_start_at) >
-									new Date() &&
-								(occ.status === "planned" ||
-									occ.status === "generated")
-						)
-						.sort(
-							(a, b) =>
-								new Date(
-									a.occurrence_start_at
-								).getTime() -
-								new Date(
-									b.occurrence_start_at
-								).getTime()
-						);
-
-					let scheduleDisplay = "No occurrences";
-					let scheduleDate: Date | null = null;
-
-					if (upcomingOccurrences.length > 0) {
-						const nextOccurrence = upcomingOccurrences[0];
-						scheduleDisplay = `NEXT\n${formatDate(
-							nextOccurrence.occurrence_start_at
-						)}`;
-						scheduleDate = new Date(
-							nextOccurrence.occurrence_start_at
-						);
-					} else if (plan.status === "Completed") {
-						scheduleDisplay = "COMPLETED";
-					} else if (plan.status === "Cancelled") {
-						scheduleDisplay = "CANCELLED";
-					} else if (plan.status === "Expired") {
-						scheduleDisplay = "EXPIRED";
-					}
-
-					const templateTotal =
-						plan.line_items?.reduce(
-							(sum, item) =>
-								sum +
-								item.quantity * item.unit_price,
-							0
-						) || 0;
-
-					return {
-						id: plan.id,
-						client: plan.client?.name || "Unknown Client",
-						title: plan.name,
-						property: plan.address || "No address",
-						schedule: scheduleDisplay,
-						status: addSpacesToCamelCase(plan.status),
-						templateTotal: formatCurrency(templateTotal),
-						_rawStatus: plan.status,
-						_scheduleDate: scheduleDate,
-						_clientId: plan.client_id,
-						_recurringPlanId: plan.id,
-						_startsAt: new Date(plan.starts_at),
-						_endsAt: plan.ends_at ? new Date(plan.ends_at) : null,
-					};
-				}) || [];
-
-			if (clientFilter) {
-				templatesData = templatesData.filter(
-					(item) => item._clientId === clientFilter
+	// TEMPLATES VIEW - Show only recurring plan templates
+	let templatesData =
+		recurringPlans?.map((plan) => {
+			const upcomingOccurrences = (plan.occurrences || [])
+				.filter(
+					(occ) =>
+						new Date(occ.occurrence_start_at) >
+							new Date() &&
+						(occ.status === "planned" ||
+							occ.status === "generated")
+				)
+				.sort(
+					(a, b) =>
+						new Date(
+							a.occurrence_start_at
+						).getTime() -
+						new Date(
+							b.occurrence_start_at
+						).getTime()
 				);
+
+			let scheduleDisplay = "No occurrences";
+			let scheduleDate: Date | null = null;
+
+			if (upcomingOccurrences.length > 0) {
+				const nextOccurrence = upcomingOccurrences[0];
+				scheduleDisplay = `NEXT\n${formatDate(
+					nextOccurrence.occurrence_start_at
+				)}`;
+				scheduleDate = new Date(
+					nextOccurrence.occurrence_start_at
+				);
+			} else if (plan.status === "Completed") {
+				scheduleDisplay = "COMPLETED";
+			} else if (plan.status === "Cancelled") {
+				scheduleDisplay = "CANCELLED";
+			} else if (plan.status === "Expired") {
+				scheduleDisplay = "EXPIRED";
 			}
 
-			if (statusFilter.length > 0) {
-				templatesData = templatesData.filter(
-					(item) => statusFilter.includes(item._rawStatus)
+			const templateTotal =
+				plan.line_items?.reduce(
+					(sum, item) =>
+						sum +
+						item.quantity * item.unit_price,
+					0
+				) || 0;
+
+			return {
+				id: plan.id,
+				client: plan.client?.name || "Unknown Client",
+				title: plan.name,
+				property: plan.address || "No address",
+				schedule: scheduleDisplay,
+				status: addSpacesToCamelCase(plan.status),
+				templateTotal: formatCurrency(templateTotal),
+				_rawStatus: plan.status,
+				_scheduleDate: scheduleDate,
+				_clientId: plan.client_id,
+				_recurringPlanId: plan.id,
+				_startsAt: new Date(plan.starts_at),
+				_endsAt: plan.ends_at ? new Date(plan.ends_at) : null,
+			};
+		}) || [];
+
+	if (clientFilter) {
+		templatesData = templatesData.filter(
+			(item) => item._clientId === clientFilter
+		);
+	}
+
+	if (statusFilter.length > 0) {
+		templatesData = templatesData.filter(
+			(item) => statusFilter.includes(item._rawStatus)
+		);
+	}
+
+	if (activeTerms.length > 0) {
+		templatesData = templatesData.filter((item) =>
+			activeTerms.every((term) => {
+				const lower = term.toLowerCase();
+				return (
+					item.title?.toLowerCase().includes(lower) ||
+					item.client?.toLowerCase().includes(lower) ||
+					item.property?.toLowerCase().includes(lower) ||
+					item.status?.toLowerCase().includes(lower)
+				);
+			})
+		);
+	}
+
+	if (dateRange.option !== "all") {
+		// A plan's date is when it's in effect, not its next visit: "Today" means
+		// every plan running today.
+		templatesData = templatesData.filter((item) =>
+			overlapsDateRange(item._startsAt, item._endsAt, dateRange)
+		);
+	}
+
+	return templatesData
+		.sort((a, b) => {
+			// Sort by status
+			const statusDiff =
+				RecurringPlanStatusValues.indexOf(
+					a._rawStatus as RecurringPlanStatus
+				) -
+				RecurringPlanStatusValues.indexOf(
+					b._rawStatus as RecurringPlanStatus
+				);
+			if (statusDiff !== 0) return statusDiff;
+
+			// Then by schedule date (nulls last)
+			if (a._scheduleDate && b._scheduleDate) {
+				return (
+					a._scheduleDate.getTime() -
+					b._scheduleDate.getTime()
 				);
 			}
+			if (a._scheduleDate) return -1;
+			if (b._scheduleDate) return 1;
 
-			if (activeTerms.length > 0) {
-				templatesData = templatesData.filter((item) =>
-					activeTerms.every((term) => {
-						const lower = term.toLowerCase();
-						return (
-							item.title?.toLowerCase().includes(lower) ||
-							item.client?.toLowerCase().includes(lower) ||
-							item.property?.toLowerCase().includes(lower) ||
-							item.status?.toLowerCase().includes(lower)
-						);
-					})
-				);
-			}
+			return 0;
+		})
+		.map(
+			({
+				_scheduleDate,
+				_clientId,
+				_recurringPlanId,
+				...rest
+			}) => rest
+		);
 
-			if (dateRange.option !== "all") {
-				// A plan's date is when it's in effect, not its next visit: "Today" means
-				// every plan running today.
-				templatesData = templatesData.filter((item) =>
-					overlapsDateRange(item._startsAt, item._endsAt, dateRange)
-				);
-			}
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [recurringPlans, searchInput, terms, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo]);
 
-			return templatesData
-				.sort((a, b) => {
-					// Sort by status
-					const statusDiff =
-						RecurringPlanStatusValues.indexOf(
-							a._rawStatus as RecurringPlanStatus
-						) -
-						RecurringPlanStatusValues.indexOf(
-							b._rawStatus as RecurringPlanStatus
-						);
-					if (statusDiff !== 0) return statusDiff;
+	const jobsDisplay = useMemo(
+		() =>
+			(data?.rows ?? []).map((j) => {
+				let scheduleDisplay = "No visits";
+				if (j.status === "Completed") {
+					if (j.completed_at) scheduleDisplay = `COMPLETED\n${formatDate(j.completed_at)}`;
+				} else if (j.visits?.[0]) {
+					scheduleDisplay = formatDate(j.visits[0].scheduled_start_at);
+				}
+				const name = `${j.job_number}\n${j.name}`;
+				return {
+					id: j.id,
+					jobNumber: j.recurring_plan_id ? `🔄 ${name}` : name,
+					client: j.client?.name || "Unknown Client",
+					property: j.address || "No address",
+					schedule: scheduleDisplay,
+					status: addSpacesToCamelCase(j.status),
+					priority: PriorityLabels[j.priority] || j.priority,
+					total: formatCurrency(Number(j.estimated_total || j.actual_total || 0)),
+					_rawStatus: j.status,
+					_rawPriority: j.priority,
+				};
+			}),
+		[data]
+	);
 
-					// Then by schedule date (nulls last)
-					if (a._scheduleDate && b._scheduleDate) {
-						return (
-							a._scheduleDate.getTime() -
-							b._scheduleDate.getTime()
-						);
-					}
-					if (a._scheduleDate) return -1;
-					if (b._scheduleDate) return 1;
-
-					return 0;
-				})
-				.map(
-					({
-						_scheduleDate,
-						_clientId,
-						_recurringPlanId,
-						...rest
-					}) => rest
-				);
-		} else {
-			// JOBS VIEW - Show all job containers (one-time + recurring)
-			let jobsData =
-				jobs?.map((j) => {
-					const allVisits = (j.visits || []).sort(
-						(a, b) =>
-							new Date(a.scheduled_start_at).getTime() -
-							new Date(b.scheduled_start_at).getTime()
-					);
-
-					let scheduleDisplay = "No visits";
-					let scheduleDate: Date | null = null;
-
-					if (j.status === "Completed") {
-						const completedVisits = allVisits
-							.filter((v) => v.status === "Completed")
-							.sort(
-								(a, b) =>
-									new Date(
-										b.actual_end_at ||
-											b.scheduled_end_at
-									).getTime() -
-									new Date(
-										a.actual_end_at ||
-											a.scheduled_end_at
-									).getTime()
-							);
-
-						if (completedVisits.length > 0) {
-							const lastVisit = completedVisits[0];
-							const completedDate =
-								lastVisit.actual_end_at ||
-								lastVisit.scheduled_end_at;
-							scheduleDisplay = `COMPLETED\n${formatDate(completedDate)}`;
-							scheduleDate = new Date(completedDate);
-						}
-					} else {
-						const scheduledVisits = allVisits.filter(
-							(v) =>
-								v.status === "Scheduled" ||
-								v.status === "InProgress"
-						);
-
-						if (scheduledVisits.length > 0) {
-							const nextVisit = scheduledVisits[0];
-							scheduleDisplay = formatDate(
-								nextVisit.scheduled_start_at
-							);
-							scheduleDate = new Date(
-								nextVisit.scheduled_start_at
-							);
-						}
-					}
-
-					return {
-						id: j.id,
-						isRecurring: !!j.recurring_plan_id,
-						jobNumber: `${j.job_number}\n${j.name}`,
-						client: j.client?.name || "Unknown Client",
-						property: j.address || "No address",
-						schedule: scheduleDisplay,
-						status: addSpacesToCamelCase(j.status),
-						priority: PriorityLabels[j.priority] || j.priority,
-						total: formatCurrency(
-							Number(
-								j.estimated_total ||
-									j.actual_total ||
-									0
-							)
-						),
-						_rawStatus: j.status,
-						_rawPriority: j.priority,
-						_rawTotal: Number(
-							j.estimated_total || j.actual_total || 0
-						),
-						_scheduleDate: scheduleDate,
-						_rawJobNumber: j.job_number,
-						_clientId: j.client_id,
-						_jobId: j.id,
-					};
-				}) || [];
-
-			if (clientFilter) {
-				jobsData = jobsData.filter(
-					(item) => item._clientId === clientFilter
-				);
-			}
-
-			if (statusFilter.length > 0) {
-				jobsData = jobsData.filter(
-					(item) => statusFilter.includes(item._rawStatus)
-				);
-			}
-
-			if (priorityFilter.length > 0) {
-				jobsData = jobsData.filter(
-					(item) => priorityFilter.includes(item._rawPriority)
-				);
-			}
-
-			if (activeTerms.length > 0) {
-				jobsData = jobsData.filter((item) =>
-					activeTerms.every((term) => {
-						const lower = term.toLowerCase();
-						return (
-							item.jobNumber?.toLowerCase().includes(lower) ||
-							item.client?.toLowerCase().includes(lower) ||
-							item.status?.toLowerCase().includes(lower) ||
-							item.property?.toLowerCase().includes(lower)
-						);
-					})
-				);
-			}
-
-			if (dateRange.option !== "all") {
-				jobsData = jobsData.filter((item) =>
-					matchesDateRange(item._scheduleDate, dateRange)
-				);
-			}
-
-			type JobRow = (typeof jobsData)[number];
-			const dir: SortDir = dirParam === "asc" ? "asc" : "desc";
-			const comparator: (a: JobRow, b: JobRow) => number =
-				sortParam === "priority"
-					? withDir((a, b) => comparePriority(a._rawPriority, b._rawPriority), dir)
-					: sortParam === "status"
-					? withDir((a, b) => compareByOrder(a._rawStatus, b._rawStatus, JobStatusValues), dir)
-					: sortParam === "date"
-					? (a, b) => compareDateNullsLast(dir)(a._scheduleDate, b._scheduleDate)
-					: sortParam === "total"
-					? withDir((a, b) => compareNumber(a._rawTotal, b._rawTotal), dir)
-					: isSortableStringField(sortParam)
-					? withDir((a, b) => compareString(a[sortParam], b[sortParam]), dir)
-					: (a, b) => {
-							// default: status, then schedule date (nulls last)
-							const statusDiff =
-								JobStatusValues.indexOf(a._rawStatus as JobStatus) -
-								JobStatusValues.indexOf(b._rawStatus as JobStatus);
-							if (statusDiff !== 0) return statusDiff;
-							if (a._scheduleDate && b._scheduleDate)
-								return a._scheduleDate.getTime() - b._scheduleDate.getTime();
-							if (a._scheduleDate) return -1;
-							if (b._scheduleDate) return 1;
-							return 0;
-					  };
-
-			return jobsData
-				.sort(comparator)
-				.map(
-					({
-						_rawTotal,
-						_scheduleDate,
-						_rawJobNumber,
-						_clientId,
-						_jobId,
-						isRecurring,
-						...rest
-					}) => ({
-						...rest,
-						jobNumber: isRecurring
-							? `🔄 ${rest.jobNumber}`
-							: rest.jobNumber,
-					})
-				);
-		}
-	}, [jobs, recurringPlans, searchInput, termsKey, clientFilter, statusKey, priorityKey, viewMode, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam]);
+	const display = viewMode === "templates" ? templatesDisplay : jobsDisplay;
 
 	const handleViewModeChange = (mode: JobsView) => {
 		setViewMode(mode);
@@ -538,7 +429,7 @@ export default function JobsPage() {
 	};
 
 	const handleSortChange = (col: string) => {
-		const key = COLUMN_SORT_KEY[col] ?? col;
+		const key = col;
 		const next = new URLSearchParams(location.search);
 		if (next.get("sort") === key) {
 				next.set("dir", next.get("dir") === "asc" ? "desc" : "asc");
@@ -651,12 +542,11 @@ export default function JobsPage() {
 								options={[
 									{ value: "priority", label: "Priority" },
 									{ value: "status", label: "Status" },
-									{ value: "date", label: "Date" },
 									{ value: "jobNumber", label: "Job #"},
 									{ value: "client", label: "Client"},
 									{ value: "total", label: "Total"}
 								]}
-								defaultDirByField={{ priority: "desc", status: "asc", date: "desc", total: "desc" }}
+								defaultDirByField={{ priority: "desc", status: "asc", total: "desc" }}
 							/>
 						)}
 					</div>
@@ -688,6 +578,7 @@ export default function JobsPage() {
 						classes: PriorityColors[pri as Priority],
 						onRemove: () => removePriority(pri),
 					})),
+					dateChip,
 					sortParam
 						? {
 								label: `Sort: ${sortLabels[sortParam] ?? sortParam} (${dirParam === "asc" ? "asc" : "desc"})`,
@@ -696,7 +587,7 @@ export default function JobsPage() {
 						  }
 						: null,
 				]}
-				resultCount={display.length}
+				resultCount={viewMode === "jobs" ? total : display.length}
 				onClearAll={clearAllFilters}
 			/>
 
@@ -768,13 +659,13 @@ export default function JobsPage() {
 							client: true,
 							jobNumber: true,
 							total: true,
-							schedule: true,
 						}
 					}
-					sortKey={sortParam === "date" ? "schedule" : (sortParam ?? "")}
+					sortKey={sortParam ?? ""}
 					sortDir={dirParam === "asc" ? "asc" : "desc"}
 					onSortChange={handleSortChange}
 				/>
+				{viewMode === "jobs" && <ReportPagination {...paginationProps(total, isFetching)} />}
 			</div>
 
 			<CreateJob

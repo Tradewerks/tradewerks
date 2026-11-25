@@ -1,9 +1,9 @@
 import { Link } from "react-router-dom";
 import { MapPin, Clock, Briefcase } from "lucide-react";
-import type { Client } from "../../types/clients";
+import type { ClientListRow } from "../../api/clients";
 
 interface ClientCardProps {
-	client: Client;
+	client: ClientListRow;
 	to: string;
 	viewMode?: "card" | "list";
 }
@@ -45,7 +45,7 @@ function formatLastActivity(raw: unknown) {
 export default function ClientCard({ client, to, viewMode = "card" }: ClientCardProps) {
 	const displayName = capitalizeWords(client.name);
 	const lastActivityText = formatLastActivity(client.last_activity);
-	const jobsCount = client.jobs?.length ?? 0;
+	const jobsCount = client._count?.jobs ?? 0;
 	const address = client.address || "No address provided";
 
 	if (viewMode === "list") {

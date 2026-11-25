@@ -1,5 +1,7 @@
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
+import type { ListParams, PagedResult } from "../types/paging";
+import { pagedResultFrom } from "../hooks/usePagedList";
 import type {
 	Request,
 	CreateRequestInput,
@@ -14,9 +16,30 @@ import type {
 // REQUEST API
 // ============================================================================
 
-export const getAllRequests = async (): Promise<Request[]> => {
-	const response = await api.get<ApiResponse<Request[]>>("/requests");
-	return response.data.data || [];
+export interface RequestListExtras {
+	priority?: string[];
+	client_id?: string;
+}
+
+// The server's slim list row: no description, coords, quote or job bodies, notes.
+export type RequestListRow = Pick<
+	Request,
+	"id" | "client_id" | "title" | "status" | "priority" | "address" | "created_at" | "updated_at"
+> & { client?: { id: string; name: string }; _count?: { quotes: number } };
+
+export const getRequestsPage = async (
+	params: ListParams,
+	extras: RequestListExtras = {}
+): Promise<PagedResult<RequestListRow>> => {
+	const response = await api.get<ApiResponse<RequestListRow[]>>("/requests", {
+		params: {
+			...params,
+			status: params.status?.join(","),
+			priority: extras.priority?.join(","),
+			client_id: extras.client_id,
+		},
+	});
+	return pagedResultFrom(response.data, params);
 };
 
 export const getRequestById = async (id: string): Promise<Request> => {

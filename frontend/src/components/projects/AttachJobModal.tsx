@@ -1,4 +1,5 @@
-import { useAllJobsQuery } from "../../hooks/useJobs";
+import { useJobSearchQuery } from "../../hooks/useJobs";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { JobStatusColors, JobStatusLabels, type JobStatus } from "../../types/jobs";
 import type { Project } from "../../types/project";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
@@ -7,7 +8,7 @@ import {
 	type TemplateSearchClient,
 	type TemplateSearchResult,
 } from "../ui/forms/TemplateSearch";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface attachJobProps {
     isModalOpen: boolean;
@@ -22,27 +23,33 @@ export default function AttachJobModal({isModalOpen, setIsModalOpen, project, at
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState("");
 
-    const {data: jobs, isLoading: jobsLoading} = useAllJobsQuery();
+    const [search, setSearch] = useState("");
+    const debouncedSearch = useDebouncedValue(search);
+    // Server search (first 20): the unattached filter and client scope are applied there.
+    const {data: jobs, isLoading: jobsLoading} = useJobSearchQuery(debouncedSearch, {
+        enabled: isModalOpen,
+        unattached: true,
+        clientId: clientOnly ? project.client_id : undefined,
+    });
 
     const eligible = useMemo(() => {
         const attached = new Set(project.jobs.map((j) => j.id));
+        return (jobs?.rows ?? []).filter((job) => !attached.has(job.id));
+    }, [jobs, project]);
 
-        return (jobs ?? []).filter((job) => {
-            if (job.project_id) return false;
-            if (attached.has(job.id)) return false;
-            if (clientOnly && job.client_id !== project.client_id) return false;
-            return true;
-        });
-    }, [jobs, project, clientOnly]);
+    // Every job id seen in results to its client, so the scope toggle can prune picks the
+    // current results no longer show.
+    const selectedClientRef = useRef(new Map<string, string>());
+    useEffect(() => {
+        for (const j of eligible) selectedClientRef.current.set(j.id, j.client_id);
+    }, [eligible]);
 
     const templateResults = useMemo((): TemplateSearchResult[] => {
         return eligible.map((j) => ({
             id: j.id,
             title: j.name,
             subtitle: j.job_number,
-            detail: j.description
-                ? j.description.slice(0, 80) + (j.description.length > 80 ? "…" : "")
-                : undefined,
+            detail: j.address || undefined,
             badge: JobStatusLabels[j.status as JobStatus] ?? j.status,
             badgeColor: JobStatusColors[j.status as JobStatus],
             value:
@@ -69,19 +76,11 @@ export default function AttachJobModal({isModalOpen, setIsModalOpen, project, at
         if (!isModalOpen) {
             setSelectedJobs([]);
             setClientOnly(true);
+            setSearch("");
             setSubmitError("");
             setIsSubmitting(false);
         }
     }, [isModalOpen]);
-
-    useEffect(() => {
-        setSelectedJobs((prev) => {
-            const stillEligible = prev.filter((id) =>
-                eligible.some((job) => job.id === id)
-            );
-            return stillEligible.length === prev.length ? prev : stillEligible;
-        });
-    }, [eligible]);
 
     const handleToggleSelect = useCallback((id: string) => {
         setSelectedJobs((prev) =>
@@ -141,13 +140,22 @@ export default function AttachJobModal({isModalOpen, setIsModalOpen, project, at
                         isLoading={jobsLoading}
                         selectedIds={selectedJobs}
                         onToggleSelect={handleToggleSelect}
+                        onQueryChange={setSearch}
                         onSelect={() => {}}
                         onClose={() => setIsModalOpen(false)}
                         scopeToggle={{
                             thisLabel: "This client",
                             anyLabel: "All clients",
                             isThisScope: clientOnly,
-                            onToggle: () => setClientOnly((v) => !v),
+                            onToggle: () => {
+                                // Narrowing to this client drops picks that belong to others.
+                                if (!clientOnly) {
+                                    setSelectedJobs((prev) =>
+                                        prev.filter((id) => selectedClientRef.current.get(id) === project.client_id)
+                                    );
+                                }
+                                setClientOnly((v) => !v);
+                            },
                         }}
                         emptyHint={
                             clientOnly

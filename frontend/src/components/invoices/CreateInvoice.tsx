@@ -1,7 +1,8 @@
 ﻿import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { InvoiceStatusLabels, type InvoiceStatus, type CreateInvoiceInput, type CreateInvoiceLineItemInput } from "../../types/invoices";
 import { type LineItemType, type BaseLineItem } from "../../types/common";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import { useSelectedClient } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
 import { useAllJobsQuery } from "../../hooks/useJobs";
 import { useCreateInvoiceMutation, useInvoicesByClientIdQuery, useOverlapCheckMutation } from "../../hooks/useInvoices";
 import { useJobVisitsByJobIdQuery } from "../../hooks/useJobs";
@@ -104,8 +105,10 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 	const [submitError, setSubmitError] = useState<string | null>(null);
 
 	// ── Queries ───────────────────────────────────────────────────────────
-	const { data: clients } = useAllClientsQuery();
-	const { data: allJobs = [] } = useAllJobsQuery();
+	const selectedClient = useSelectedClient(clientId, isModalOpen);
+	// legacy-list: the picker imports line items from the client's jobs and visits, which the
+	// slim shape and GET /clients/:id/jobs omit. Only that client's jobs, only while open.
+	const { data: allJobs = [] } = useAllJobsQuery({ enabled: isModalOpen && !!clientId, clientId });
 	const { data: clientInvoices = [] } = useInvoicesByClientIdQuery(clientId);
 	const { data: initialJobVisits = [] } = useJobVisitsByJobIdQuery(initialJobId ?? "");
 	const { mutateAsync: insertInvoice } = useCreateInvoiceMutation();
@@ -123,11 +126,8 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		useQBInvoicePrefillQuery(selectedQBInvoice);
 	// Guards the prefill effect so editing the seeded form doesn't re-seed.
 	const appliedPrefillRef = useRef<string | null>(null);
-	const clientExempt = useMemo(
-		() => clients?.find((c) => c.id === clientId)?.is_tax_exempt ?? false,
-		[clients, clientId]
-	);
-	const clientTaxGroupId = clients?.find((c) => c.id === clientId)?.tax_group_id ?? null;
+	const clientExempt = selectedClient?.is_tax_exempt ?? false;
+	const clientTaxGroupId = selectedClient?.tax_group_id ?? null;
 
 	// ── Hooks ─────────────────────────────────────────────────────────────
 	const {
@@ -709,21 +709,6 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 	};
 
 	// ── Dropdown entries ──────────────────────────────────────────────────
-	const clientDropdownEntries = useMemo(() => {
-		if (clients?.length) {
-			return clients.map((c) => (
-				<option value={c.id} key={c.id}>
-					{c.name}
-				</option>
-			));
-		}
-		return (
-			<option disabled value="">
-				No clients found
-			</option>
-		);
-	}, [clients]);
-
 	const paymentTermsEntries = useMemo(
 		() => (
 			<>
@@ -878,8 +863,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 							<label className={LABEL}>
 								Client *
 							</label>
-							<Dropdown
-								entries={clientDropdownEntries}
+							<ClientPicker
 								value={clientId}
 								onChange={(v) => {
 									setClientId(v);
@@ -888,7 +872,6 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 									setVisitBillings(new Map());
 									markDirty();
 								}}
-								placeholder="Select client"
 								disabled={isLoading || !!defaultClientId}
 							/>
 						</div>
@@ -1471,11 +1454,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 									Client
 								</span>
 								<span className="text-text-primary font-medium">
-									{clients?.find(
-										(c) =>
-											c.id ===
-											clientId
-									)?.name ?? "—"}
+									{selectedClient?.name ?? "—"}
 								</span>
 							</div>
 							{memo && (
@@ -1597,7 +1576,6 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		jobBillingMap,
 		visitBillingMap,
 		isLoading,
-		clientDropdownEntries,
 		paymentTermsEntries,
 		toggleJobLinked,
 		toggleJobExpanded,
@@ -1627,7 +1605,7 @@ const CreateInvoice = ({ isModalOpen, setIsModalOpen, defaultClientId, initialVi
 		undoDiscount,
 		setLineItemTaxGroup,
 		setAllLineItemsTaxGroup,
-		clients,
+		selectedClient,
 		defaultClientId,
 		importSources,
 		handleImportAll,

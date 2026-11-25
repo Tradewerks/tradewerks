@@ -1,7 +1,7 @@
 import axios, { isAxiosError } from "axios";
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
-import type { BoardResponse } from "../types/board";
+import type { BoardResponse, BoardVisit } from "../types/board";
 import { conflictFromResponse } from "../lib/apiErrors";
 import type {
 	CreateJobInput,
@@ -17,7 +17,7 @@ import type {
 	ClockOutResult,
 	VisitStatusEvent,
 } from "../types/jobs";
-import type { PagedResult } from "../types/paging";
+import type { ListParams, PagedResult } from "../types/paging";
 import { pagedResultFrom } from "../hooks/usePagedList";
 
 
@@ -25,9 +25,58 @@ import { pagedResultFrom } from "../hooks/usePagedList";
 // JOB API
 // ============================================
 
-export const getAllJobs = async (): Promise<Job[]> => {
-	const response = await api.get<ApiResponse<Job[]>>("/jobs");
+// legacy-list: CreateInvoice links a client's jobs with their visits and line items,
+// which the slim paged shape omits.
+export const getAllJobs = async (clientId?: string): Promise<Job[]> => {
+	const response = await api.get<ApiResponse<Job[]>>("/jobs", {
+		params: clientId ? { client_id: clientId } : undefined,
+	});
 	return response.data.data || [];
+};
+
+// The server's slim list row: no description, coords, visit techs or line items.
+export type JobListRow = Pick<
+	Job,
+	| "id"
+	| "job_number"
+	| "name"
+	| "status"
+	| "priority"
+	| "address"
+	| "client_id"
+	| "recurring_plan_id"
+	| "estimated_total"
+	| "actual_total"
+	| "created_at"
+	| "completed_at"
+> & {
+	client?: { id: string; name: string };
+	project?: { id: string; project_number: string; name: string } | null;
+	_count?: { visits: number };
+	// The next open visit, at most one.
+	visits?: { id: string; scheduled_start_at: Date | string; status: string }[];
+};
+
+export interface JobListExtras {
+	priority?: string[];
+	client_id?: string;
+	unattached?: boolean;
+}
+
+export const getJobsPage = async (
+	params: ListParams,
+	extras: JobListExtras = {}
+): Promise<PagedResult<JobListRow>> => {
+	const response = await api.get<ApiResponse<JobListRow[]>>("/jobs", {
+		params: {
+			...params,
+			status: params.status?.join(","),
+			priority: extras.priority?.join(","),
+			client_id: extras.client_id,
+			unattached: extras.unattached ? "true" : undefined,
+		},
+	});
+	return pagedResultFrom(response.data, params);
 };
 
 export const getJobById = async (id: string): Promise<Job> => {
@@ -91,9 +140,12 @@ export const cancelJob = async (jobId: string, reason: string): Promise<Job> => 
 // JOB VISIT API
 // ============================================
 
-export const getAllJobVisits = async (): Promise<JobVisit[]> => {
-	const response = await api.get<ApiResponse<JobVisit[]>>("/job-visits");
-	return response.data.data || [];
+/** One page of the org-wide visit list, in the board's slim shape (no line items). */
+export const listJobVisits = async (params: ListParams): Promise<PagedResult<BoardVisit>> => {
+	const response = await api.get<ApiResponse<BoardVisit[]>>("/job-visits", {
+		params: { ...params, status: params.status?.join(",") },
+	});
+	return pagedResultFrom(response.data, params);
 };
 
 /** One row per job the caller is on, carrying the visit a charge would land on. */
@@ -107,20 +159,23 @@ export interface MyJobOption {
 }
 
 /**
- * The technician's own work, thin. `getAllJobVisits` returns every visit in the org
- * with client, line items and time entries attached - far too much to send a phone
- * to populate one dropdown.
+ * The technician's own work, thin: the org-wide visit list carries client, line
+ * items and time entries, far too much to send a phone to populate one dropdown.
  */
 export const getMyJobs = async (): Promise<MyJobOption[]> => {
 	const response = await api.get<ApiResponse<MyJobOption[]>>("/job-visits/mine");
 	return response.data.data || [];
 };
 
+// legacy-list: the history card reads notes, which the slim paged shape omits.
+// The legacy array is oldest first, so newest-first and the cap happen here.
 export const getClientVisitHistory = async (clientId: string, limit = 5): Promise<JobVisit[]> => {
 	const response = await api.get<ApiResponse<JobVisit[]>>("/job-visits", {
-		params: { client_id: clientId, limit, sort: "desc" },
+		params: { clientId },
 	});
-	return response.data.data || [];
+	return (response.data.data || [])
+		.sort((a, b) => new Date(b.scheduled_start_at).getTime() - new Date(a.scheduled_start_at).getTime())
+		.slice(0, limit);
 };
 
 /**

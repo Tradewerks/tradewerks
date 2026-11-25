@@ -67,8 +67,12 @@ export const sendInvoiceEmailViaQB = async (invoiceId: string, sendTo: string)=>
     return response.data.data!;
 }
 
-export const getQBCustomers = async (): Promise<QBCustomerLite[]> => {
-    const response = await api.get<ApiResponse<QBCustomerLite[]>>("integrations/quickbooks/customers");
+export const getQBCustomers = async (
+    opts: { excludeExisting?: boolean } = {},
+): Promise<QBCustomerLite[]> => {
+    const response = await api.get<ApiResponse<QBCustomerLite[]>>("integrations/quickbooks/customers", {
+        params: opts.excludeExisting ? { exclude_existing: "1" } : undefined,
+    });
     if (response.data.error) throw new Error(response.data.error?.message || "Failed to get QB customers");
     return response.data.data!;
 }

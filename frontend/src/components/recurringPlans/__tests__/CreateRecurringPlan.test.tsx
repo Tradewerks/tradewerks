@@ -16,7 +16,13 @@ vi.mock("../../../hooks/useRecurringPlans", () => ({
 	useDebouncedRecurringTaxEstimate: () => ({ data: undefined }),
 }));
 vi.mock("../../../hooks/useClients", () => ({
-	useAllClientsQuery: () => ({ data: [{ id: "11111111-1111-4111-8111-111111111111", name: "Acme" }] }),
+	useClientByIdQuery: () => ({ data: undefined }),
+	useClientSearchQuery: () => ({
+		data: { rows: [{ id: "11111111-1111-4111-8111-111111111111", name: "Acme" }] },
+	}),
+	useFetchClient: () => vi.fn(),
+	useClientFilterSearch: () => ({ clients: [], onClientQueryChange: () => {} }),
+	useClientNames: () => ({}),
 }));
 vi.mock("../../../hooks/forms/useDrafts", () => ({
 	useDraftsByTypeQuery: () => ({ data: [] }),
@@ -75,7 +81,8 @@ describe("CreateRecurringPlan", () => {
 		render(<CreateRecurringPlan isModalOpen setIsModalOpen={vi.fn()} />);
 
 		await user.type(screen.getByPlaceholderText(/plan name/i), "Quarterly PM");
-		await user.selectOptions(screen.getAllByRole("combobox")[0], "11111111-1111-4111-8111-111111111111");
+		await user.click(screen.getByLabelText("Client"));
+		await user.click(await screen.findByText("Acme"));
 		await user.type(screen.getByPlaceholderText("Plan Description"), "Filter swap");
 		await user.click(screen.getByText("pick address"));
 		await user.click(screen.getByRole("button", { name: /next/i }));

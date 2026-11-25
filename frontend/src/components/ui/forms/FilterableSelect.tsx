@@ -20,6 +20,9 @@ interface FilterableSelectProps {
     className?: string;
     ariaLabel?: string;
     maxLength?: number;
+    error?: boolean;
+    onFocus?: () => void;
+    onBlur?: () => void;
 }
 
 const PANEL_MAX_HEIGHT = 224;
@@ -46,6 +49,9 @@ export default function FilterableSelect({
     className,
     ariaLabel,
     maxLength,
+    error = false,
+    onFocus,
+    onBlur,
 }: FilterableSelectProps) {
     const [open, setOpen] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -100,9 +106,16 @@ export default function FilterableSelect({
                 maxLength={maxLength}
                 aria-label={ariaLabel ?? label}
                 onChange={(e) => onChange(e.target.value)}
-                onFocus={() => setOpen(true)}
-                onBlur={() => setTimeout(() => setOpen(false), 120)}
-                className={INPUT}
+                onFocus={() => {
+                    setOpen(true);
+                    onFocus?.();
+                }}
+                onBlur={() => {
+                    setTimeout(() => setOpen(false), 120);
+                    onBlur?.();
+                }}
+                aria-invalid={error || undefined}
+                className={error ? INPUT.replace("border-border-input", "border-error") : INPUT}
             />
             {open &&
                 panelStyle &&

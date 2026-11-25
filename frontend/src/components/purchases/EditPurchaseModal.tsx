@@ -10,7 +10,7 @@ import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { useEffect, useMemo, useState } from "react";
 import SupplierFormModal from "../suppliers/SupplierFormModal";
 import FilterableSelect, { type FilterableOption } from "../ui/forms/FilterableSelect";
-import { useAllJobsQuery, useJobVisitsByJobIdQuery } from "../../hooks/useJobs";
+import { useJobOptions, useJobVisitsByJobIdQuery } from "../../hooks/useJobs";
 import { useVehiclesQuery } from "../../hooks/useVehicles";
 import { useSuppliers } from "../../hooks/useSuppliers";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
@@ -58,20 +58,14 @@ const blankLine = (): PurchaseLineDraft => ({
     job_visit_id: null,
 });
 
-interface JobOption {
-    id: string;
-    label: string;
-}
-
 interface PurchaseLineRowProps {
     draft: PurchaseLineDraft;
-    jobs: JobOption[];
     vehicles: { id: string; name: string }[];
     onChange: (patch: Partial<PurchaseLineDraft>) => void;
     onRemove: () => void;
 }
 
-function PurchaseLineRow({ draft, jobs, vehicles, onChange, onRemove }: PurchaseLineRowProps) {
+function PurchaseLineRow({ draft, vehicles, onChange, onRemove }: PurchaseLineRowProps) {
     const { data: visits } = useJobVisitsByJobIdQuery(draft.job_id ?? "");
     const lineTotal = (Number(draft.quantity) || 0) * (Number(draft.unit_price) || 0);
 
@@ -87,7 +81,11 @@ function PurchaseLineRow({ draft, jobs, vehicles, onChange, onRemove }: Purchase
         [catalogResults],
     );
     const [jobQuery, setJobQuery] = useState("");
-    const selectedJob = jobs.find((j) => j.id === draft.job_id);
+    const { options: jobOptions, selectedLabel: selectedJobLabel } = useJobOptions(
+        jobQuery,
+        draft.job_id,
+        draft.disposition === "non_stock",
+    );
 
     const [priceFocused, setPriceFocused] = useState(false);
 
@@ -213,8 +211,9 @@ function PurchaseLineRow({ draft, jobs, vehicles, onChange, onRemove }: Purchase
                         <FilterableSelect
                             label="Job"
                             placeholder="Search jobs…"
-                            value={selectedJob ? selectedJob.label : jobQuery}
-                            options={jobs}
+                            value={selectedJobLabel ?? jobQuery}
+                            options={jobOptions}
+                            preFiltered
                             onChange={(text) => {
                                 setJobQuery(text);
                                 if (draft.job_id) onChange({ job_id: null, job_visit_id: null });
@@ -313,11 +312,6 @@ export default function EditPurchaseModal ({ isModalOpen, setIsModalOpen, purcha
         setSaveError(null);
     }, [isModalOpen, purchase?.id]);
 
-    const { data: jobsData } = useAllJobsQuery();
-    const jobOptions = useMemo<JobOption[]>(
-        () => (jobsData ?? []).map((j) => ({ id: j.id, label: `#${j.job_number} — ${j.name}` })),
-        [jobsData],
-    );
     const { data: vehiclesData } = useVehiclesQuery();
     const vehicles = useMemo(() => vehiclesData ?? [], [vehiclesData]);
 
@@ -526,7 +520,6 @@ export default function EditPurchaseModal ({ isModalOpen, setIsModalOpen, purcha
                         <PurchaseLineRow
                             key={l.key}
                             draft={l}
-                            jobs={jobOptions}
                             vehicles={vehicles}
                             onChange={(patch) => updateLine(l.key, patch)}
                             onRemove={() => removeLine(l.key)}
@@ -569,7 +562,6 @@ export default function EditPurchaseModal ({ isModalOpen, setIsModalOpen, purcha
         handleSupplierQueryChange,
         purchasedAt,
         lines,
-        jobOptions,
         vehicles,
         taxGroupId,
         taxGroups,

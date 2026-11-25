@@ -1,7 +1,14 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+	keepPreviousData,
+	useMutation,
+	useQuery as useBareQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
+import { qk } from "../lib/queryKeys";
+import type { ListParams } from "../types/paging";
 import { moduleQuery } from "./moduleQuery";
 import {
-	getAllQuotes,
+	getQuotesPage,
 	getQuoteById,
 	getQuotesByClientId,
 	getQuotesByRequestId,
@@ -36,10 +43,26 @@ const useQuery = moduleQuery("quotes");
 // Queries
 // ============================================================================
 
-export const useAllQuotesQuery = () => {
-	return useQuery({
-		queryKey: ["quotes"],
-		queryFn: getAllQuotes,
+const QUOTE_SEARCH_LIMIT = 20;
+
+/** Org-wide quote search for pickers: first page only, newest first, slim rows. */
+export const useQuoteSearchQuery = (
+	q: string,
+	opts: { enabled?: boolean; clientId?: string } = {}
+) => {
+	const params: ListParams = {
+		page: 1,
+		limit: QUOTE_SEARCH_LIMIT,
+		sort: "created_at",
+		dir: "desc",
+		...(q.trim().length >= 2 && { q: q.trim() }),
+	};
+	const extras = { client_id: opts.clientId, active: true };
+	return useBareQuery({
+		queryKey: [...qk.quotes.list(), params, extras],
+		queryFn: () => getQuotesPage(params, extras),
+		enabled: opts.enabled ?? true,
+		placeholderData: keepPreviousData,
 	});
 };
 

@@ -1,5 +1,8 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+	keepPreviousData,
 	useMutation,
+	useQueries,
 	useQuery,
 	useQueryClient,
 	type UseMutationResult,
@@ -20,16 +23,114 @@ import type {
 	UpdateClientNoteInput,
 } from "../types/clients";
 import * as clientApi from "../api/clients";
+import type { ListParams } from "../types/paging";
+import { qk } from "../lib/queryKeys";
+import { useDebouncedValue } from "./useDebouncedValue";
+import { useToast } from "../components/ui/useToast";
 
 // ============================================================================
 // CLIENT QUERIES
 // ============================================================================
 
+// legacy-list: every client with its jobs, quotes, requests and plans. Left for the map
+// overlay, which plots every client's coordinates; everything else pages or searches.
 export const useAllClientsQuery = (): UseQueryResult<Client[], Error> => {
 	return useQuery({
 		queryKey: ["clients"],
 		queryFn: clientApi.getAllClients,
 	});
+};
+
+const CLIENT_SEARCH_LIMIT = 20;
+
+/** Org-wide client search for pickers: first page only, A-Z, slim rows. */
+export const useClientSearchQuery = (q: string, opts: { enabled?: boolean } = {}) => {
+	const params: ListParams = {
+		page: 1,
+		limit: CLIENT_SEARCH_LIMIT,
+		sort: "name",
+		dir: "asc",
+		...(q.trim() && { q: q.trim() }),
+	};
+	return useQuery({
+		queryKey: [...qk.clients.list(), params],
+		queryFn: () => clientApi.getClientsPage(params),
+		enabled: opts.enabled ?? true,
+		placeholderData: keepPreviousData,
+	});
+};
+
+/**
+ * The client filter of a "start from existing" panel: suggestions come from a server
+ * search of what the user has typed, and nothing is fetched until they type.
+ */
+export const useClientFilterSearch = (enabled: boolean) => {
+	const [text, setText] = useState("");
+	const q = useDebouncedValue(text.trim());
+	const { data } = useClientSearchQuery(q, { enabled: enabled && q !== "" });
+	const clients = useMemo(
+		() => (q === "" ? [] : (data?.rows ?? []).map((c) => ({ id: c.id, name: c.name }))),
+		[data, q]
+	);
+	return { clients, onClientQueryChange: setText };
+};
+
+/** Names (by id) for a set of client ids (a draft list's rows), one cached lookup each. */
+export const useClientNames = (ids: (string | null | undefined)[], enabled: boolean) => {
+	// Keyed by content: callers pass a fresh array every render.
+	const idKey = [...new Set(ids.filter((id): id is string => !!id))].join(",");
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	const unique = useMemo(() => (idKey ? idKey.split(",") : []), [idKey]);
+	// A plain record so react-query's structural sharing keeps its identity between renders.
+	return useQueries({
+		queries: unique.map((id) => ({
+			queryKey: ["clients", id],
+			queryFn: () => clientApi.getClientById(id),
+			enabled,
+		})),
+		combine: (results) =>
+			Object.fromEntries(
+				results.flatMap((r, i) => (r.data ? [[unique[i], r.data.name] as const] : []))
+			) as Record<string, string>,
+	});
+};
+
+/** Reads a client from the cache or fetches it: for prefilling a form at the moment of a pick. */
+export const useFetchClient = () => {
+	const queryClient = useQueryClient();
+	return useCallback(
+		(id: string) =>
+			queryClient.fetchQuery({
+				queryKey: ["clients", id],
+				queryFn: () => clientApi.getClientById(id),
+				staleTime: 30_000,
+			}),
+		[queryClient]
+	);
+};
+
+/**
+ * The client a form is filling in, for its tax settings; a failed load is told, not
+ * hidden. Told once per error and only while the form is open: not for a background
+ * refetch with the modal closed, nor again for an error already cached at mount.
+ */
+export const useSelectedClient = (clientId: string, open: boolean) => {
+	const toast = useToast();
+	const query = useClientByIdQuery(clientId || null);
+	const queryClient = useQueryClient();
+	const message = query.error?.message;
+	// By message: a refetch that fails the same way is the same news. The observer
+	// shows "pending" while it refetches, so the cached error is read from the cache.
+	const told = useRef<string | undefined>(
+		(queryClient.getQueryState(["clients", clientId])?.error as Error | null)?.message
+	);
+	useEffect(() => {
+		if (!open || !message || told.current === message) return;
+		told.current = message;
+		toast.error(`Could not load the client's details: ${message}`);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [message, open]);
+	return query.data;
 };
 
 export const useClientByIdQuery = (

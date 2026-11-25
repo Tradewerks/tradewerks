@@ -15,6 +15,9 @@ import {
 import { documentErrorResponse } from "../lib/documentErrorResponse.js";
 import {
 	getAllQuotes,
+	getQuotesPage,
+	parseQuoteListExtras,
+	QUOTE_LIST_SPEC,
 	getQuoteById,
 	getQuoteDetail,
 	insertQuote,
@@ -36,6 +39,7 @@ import { onQuoteSent } from "../services/followupTriggers.js";
 import { getUserContext } from "../lib/context.js";
 import * as quoteNotesController from "../controllers/quoteNotesController.js";
 import { requirePermission } from "../lib/requirePermissions.js";
+import { markLegacyList, parseListQuery, sendList, sendListError } from "../lib/listQuery.js";
 import { acknowledgeTaxReviewRoute } from "./tax.js";
 import {
 	getEntityHistory,
@@ -55,8 +59,22 @@ const router = Router();
 router.get("/", requirePermission("view_quotes"), async (req, res, next) => {
 	try {
 		const orgId = req.user!.organization_id as string;
-		const quotes = await getAllQuotes(orgId);
-		res.json(createSuccessResponse(quotes, { count: quotes.length }));
+		let parsed, extras;
+		try {
+			parsed = parseListQuery(req.query, QUOTE_LIST_SPEC);
+			// Legacy calls are not validated, so stray params must not reach the extras.
+			extras = parsed.paged ? parseQuoteListExtras(req.query) : undefined;
+		} catch (err) {
+			if (sendListError(res, err)) return;
+			throw err;
+		}
+		if (!parsed.paged) {
+			markLegacyList(res);
+			const quotes = await getAllQuotes(orgId);
+			return res.json(createSuccessResponse(quotes, { count: quotes.length }));
+		}
+		const { rows, total } = await getQuotesPage(orgId, parsed, extras!);
+		sendList(res, parsed, rows, total);
 	} catch (err) {
 		next(err);
 	}

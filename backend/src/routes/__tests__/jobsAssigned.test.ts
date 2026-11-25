@@ -9,6 +9,9 @@ vi.mock("../../lib/context.js", () => ({
 }));
 vi.mock("../../controllers/jobsController.js", () => ({
 	getAllJobs: vi.fn(),
+	getJobsPage: vi.fn(),
+	parseJobListExtras: vi.fn(),
+	JOB_LIST_SPEC: { sortable: ["created_at"], defaultSort: "created_at", defaultDir: "desc" },
 	getJobById: vi.fn(async () => ({ id: "j1" })),
 	insertJob: vi.fn(),
 	updateJob: vi.fn(),

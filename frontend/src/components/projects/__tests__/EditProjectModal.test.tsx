@@ -8,7 +8,9 @@ const CLIENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const DISPATCHER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 vi.mock("../../../hooks/useClients", () => ({
-	useAllClientsQuery: () => ({ data: [{ id: CLIENT_ID, name: "Acme HVAC" }] }),
+	useClientByIdQuery: () => ({ data: { id: CLIENT_ID, name: "Acme HVAC" } }),
+	useClientSearchQuery: () => ({ data: { rows: [{ id: CLIENT_ID, name: "Acme HVAC" }] } }),
+	useFetchClient: () => vi.fn(),
 }));
 
 vi.mock("../../../hooks/useDispatchers", () => ({

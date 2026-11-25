@@ -14,6 +14,7 @@ import { usePermission } from "../../hooks/usePermission";
 import { Plus, Briefcase } from "lucide-react";
 import PageControls from "../../components/ui/PageControls";
 import FilterChips from "../../components/ui/FilterChips";
+import { useDateRangeChip } from "../../hooks/useDateRangeChip";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { 
     ProjectStatusValues, 
@@ -94,6 +95,8 @@ export default function ProjectsPage() {
 
     const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
     const { removeTerm: removeStatus } = useMultiSearch("status");
+    const dateChip = useDateRangeChip("date", "Created Date");
+    const targetDateChip = useDateRangeChip("targetDate", "Target Date");
     const { removeTerm: removePriority } = useMultiSearch("priority");
     // Terms can contain any character, so a delimiter-free join could collide; JSON is unambiguous.
     const termsKey = JSON.stringify(terms);
@@ -350,6 +353,8 @@ export default function ProjectsPage() {
                         classes: PriorityColors[pri as Priority],
                         onRemove: () => removePriority(pri),
                     })),
+                    dateChip,
+                    targetDateChip,
                     sortParam
                         ? {
                             label: `Sort: ${sortLabels[sortParam] ?? sortParam} (${dirParam === "asc" ? "asc" : "desc"})`,

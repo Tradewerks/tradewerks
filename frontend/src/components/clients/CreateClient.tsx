@@ -8,7 +8,6 @@ import AddressForm from "../ui/AddressForm";
 import ToggleSwitch from "../ui/ToggleSwitch";
 import { X } from "lucide-react";
 import { useQBCustomerQuery, useQBMappedCustomersQuery, useQBStatusQuery } from "../../hooks/useQuickbooks";
-import { useAllClientsQuery } from "../../hooks/useClients";
 import { TemplateSearch, type TemplateSearchResult } from "../ui/forms/TemplateSearch";
 
 interface CreateClientProps {
@@ -32,27 +31,18 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 	const [isTaxExempt, setIsTaxExempt] = useState(false);
 
 	const { data: qbStatus } = useQBStatusQuery();
+	// The server already drops QB customers whose name matches a client here.
 	const { data: customers, isLoading: loadingCustomers } = useQBCustomerQuery(
 		qbStatus?.connected,
+		true,
 	);
 	const { data: mappedCustomers } = useQBMappedCustomersQuery(qbStatus?.connected);
 	const mappedIds = mappedCustomers?.map((m) => m.external_id);
-	const { data: existingClients } = useAllClientsQuery();
-
-	const existingNames = useMemo(
-		() => new Set(existingClients?.map((c) => c.name.toLowerCase()) ?? []),
-		[existingClients],
-	);
-
 	const selectedCustomer = customers?.find((c) => c.Id === selectedQBId);
 
 	const templateResults = useMemo((): TemplateSearchResult[] => {
 		return (customers ?? [])
-			.filter(
-				(c) =>
-					!mappedIds?.includes(c.Id) &&
-					!existingNames.has(c.DisplayName.toLowerCase()),
-			)
+			.filter((c) => !mappedIds?.includes(c.Id))
 			.map((c) => ({
 				id: c.Id,
 				title: c.DisplayName,
@@ -62,7 +52,7 @@ const CreateClient = ({ isModalOpen, setIsModalOpen, createClient }: CreateClien
 						.filter(Boolean)
 						.join(", ") || undefined,
 			}));
-	}, [customers, mappedIds, existingNames]);
+	}, [customers, mappedIds]);
 
 	const handleChangeAddress = (result: GeocodeResult) => {
 		setGeoData({ address: result.address, coords: result.coords });

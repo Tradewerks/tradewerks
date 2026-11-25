@@ -1,5 +1,7 @@
 import { api } from "./axiosClient";
 import type { ApiResponse } from "../types/api";
+import type { ListParams, PagedResult } from "../types/paging";
+import { pagedResultFrom } from "../hooks/usePagedList";
 import type {
 	Quote,
 	CreateQuoteInput,
@@ -18,9 +20,45 @@ import type {
 // QUOTE API
 // ============================================================================
 
-export const getAllQuotes = async (): Promise<Quote[]> => {
-	const response = await api.get<ApiResponse<Quote[]>>("/quotes");
-	return response.data.data || [];
+export interface QuoteListExtras {
+	priority?: string[];
+	client_id?: string;
+	request_id?: string;
+	active?: boolean;
+}
+
+// The server's slim list row: no line items, request or job bodies, notes.
+export type QuoteListRow = Pick<
+	Quote,
+	| "id"
+	| "quote_number"
+	| "title"
+	| "status"
+	| "priority"
+	| "address"
+	| "total"
+	| "client_id"
+	| "request_id"
+	| "expires_at"
+	| "created_at"
+	| "updated_at"
+> & { client?: { id: string; name: string } };
+
+export const getQuotesPage = async (
+	params: ListParams,
+	extras: QuoteListExtras = {}
+): Promise<PagedResult<QuoteListRow>> => {
+	const response = await api.get<ApiResponse<QuoteListRow[]>>("/quotes", {
+		params: {
+			...params,
+			status: params.status?.join(","),
+			priority: extras.priority?.join(","),
+			client_id: extras.client_id,
+			request_id: extras.request_id,
+			active: extras.active ? "true" : undefined,
+		},
+	});
+	return pagedResultFrom(response.data, params);
 };
 
 export const getQuoteById = async (id: string): Promise<Quote> => {

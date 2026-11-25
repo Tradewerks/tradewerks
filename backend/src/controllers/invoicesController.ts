@@ -10,7 +10,7 @@ import {
 import { findForeignTaxGroupIds } from "../lib/taxHelpers.js";
 import { resolveDocumentLineage } from "../lib/documentLineage.js";
 import { centsToDollars, formatCurrency, toCents } from "../lib/money.js";
-import { isQBConnected, getOrgRealmId } from "../services/quickbooksService.js";
+import { isQBConnected, getOrgRealmId, getQBStatus } from "../services/quickbooksService.js";
 import { mirrorInvoiceVoidToQuickBooks, pushInvoiceDetached } from "../services/qb/qbInvoices.js"
 import { confirmQuickBooksTax } from "../services/qb/qbAstAuthority.js";
 import {
@@ -22,6 +22,9 @@ import {
 	type CreateRefundInput,
 } from "../lib/validate/invoices.js";
 import { Request } from "express";
+import { invoice_status as InvoiceStatus } from "../../generated/prisma/enums.js";
+import { type ListSpec, type ParsedList } from "../lib/listQuery.js";
+import { andOfOrs, containsInsensitive, enumListParam, singleParam } from "../lib/listSearch.js";
 import { logActivity, buildChanges } from "../services/logger.js";
 import { parentBreadcrumb } from "./logsController.js";
 import { Prisma } from "../../generated/prisma/client.js";
@@ -61,6 +64,222 @@ import { holdsKeptRate } from "../lib/recomputeDocumentTotals.js";
 // ============================================================================
 // INVOICE CRUD
 // ============================================================================
+
+export const INVOICE_LIST_SPEC = {
+	sortable: [
+		"issue_date",
+		"due_date",
+		"invoice_number",
+		"total",
+		"balance_due",
+		"status",
+		"client",
+		"memo",
+	] as const,
+	defaultSort: "issue_date" as const,
+	defaultDir: "desc" as const,
+	statuses: Object.values(InvoiceStatus),
+} satisfies ListSpec<string, InvoiceStatus>;
+
+type InvoiceListQuery = ParsedList<
+	(typeof INVOICE_LIST_SPEC.sortable)[number],
+	InvoiceStatus
+>;
+
+const QB_FILTERS = ["tax_mismatch", "attention"] as const;
+
+// Beyond the shared contract: the page also filters by client and by the
+// QuickBooks attention views, and tells us whether the caller chose a sort.
+export const parseInvoiceListExtras = (query: Request["query"]) => ({
+	client_id: singleParam(query, "client_id"),
+	qb: enumListParam(query, "qb", QB_FILTERS)?.[0],
+	explicitSort: singleParam(query, "sort") !== undefined,
+});
+
+const INVOICE_LIST_SELECT = {
+	id: true,
+	invoice_number: true,
+	status: true,
+	client_id: true,
+	// The page's Subject column.
+	memo: true,
+	issue_date: true,
+	due_date: true,
+	total: true,
+	amount_paid: true,
+	balance_due: true,
+	qb_sync_status: true,
+	qb_diverged_at: true,
+	qb_diverged_reason: true,
+	account_id: true,
+	client: { select: { id: true, name: true } },
+} satisfies Prisma.invoiceSelect;
+
+// A QuickBooks flag left by a previously connected company says nothing about
+// the current one, so these views only count rows from the connected realm.
+const qbViewWhere = (
+	status: { connected: boolean; realmId: string | null },
+	view: (typeof QB_FILTERS)[number],
+): Prisma.invoiceWhereInput => {
+	if (!status.connected || !status.realmId) return { id: { in: [] } };
+	return view === "tax_mismatch"
+		? { account_id: status.realmId, qb_sync_status: "tax_mismatch" }
+		: {
+				account_id: status.realmId,
+				// A diverged Void invoice still needs a person, so there is deliberately no status exclusion.
+				OR: [
+					{ qb_sync_status: { in: ["failed", "tax_mismatch"] } },
+					{ qb_diverged_at: { not: null } },
+				],
+			};
+};
+
+// Within each of the two default segments: status order, then soonest due (undated last).
+const DEFAULT_ORDER: Prisma.invoiceOrderByWithRelationInput[] = [
+	{ status: "asc" },
+	{ due_date: { sort: "asc", nulls: "last" } },
+	{ issue_date: "desc" },
+	{ id: "asc" },
+];
+
+const CLOSED: ("Paid" | "Void")[] = ["Paid", "Void"];
+// Overdue / not overdue as explicit complements: a NOT() of the conjunction would
+// drop rows with no due_date (NULL compares as unknown).
+const overdueClause = (now: Date): Prisma.invoiceWhereInput => ({
+	status: { notIn: CLOSED },
+	due_date: { lt: now },
+});
+const notOverdueClause = (now: Date): Prisma.invoiceWhereInput => ({
+	OR: [{ status: { in: CLOSED } }, { due_date: null }, { due_date: { gte: now } }],
+});
+
+const invoiceOrderBy = (
+	parsed: InvoiceListQuery,
+	explicitSort: boolean,
+): Prisma.invoiceOrderByWithRelationInput[] => {
+	if (!explicitSort) return DEFAULT_ORDER;
+	const { sort, dir } = parsed;
+	const primary: Prisma.invoiceOrderByWithRelationInput =
+		sort === "client"
+			? { client: { name: dir } }
+			: sort === "issue_date" || sort === "due_date"
+				? { [sort]: { sort: dir, nulls: "last" } }
+				: { [sort]: dir };
+	// id breaks ties so a page boundary never repeats or drops a row.
+	return [primary, { id: "asc" }];
+};
+
+export const getInvoicesPage = async (
+	organizationId: string,
+	parsed: InvoiceListQuery,
+	extras: ReturnType<typeof parseInvoiceListExtras>,
+) => {
+	const sdb = getScopedDb(organizationId);
+	const qbWhere = extras.qb
+		? qbViewWhere(await getQBStatus(organizationId), extras.qb)
+		: undefined;
+	const where: Prisma.invoiceWhereInput = {
+		...(parsed.status && { status: { in: parsed.status } }),
+		...(extras.client_id && { client_id: extras.client_id }),
+		...((parsed.from || parsed.to) && {
+			issue_date: {
+				...(parsed.from && { gte: parsed.from }),
+				...(parsed.to && { lt: parsed.to }),
+			},
+		}),
+		...qbWhere,
+		...andOfOrs<Prisma.invoiceWhereInput>(parsed.q, (term) => [
+			{ invoice_number: containsInsensitive(term) },
+			{ client: { name: containsInsensitive(term) } },
+			{ memo: containsInsensitive(term) },
+		]),
+	};
+	if (extras.explicitSort) {
+		const [rows, total] = await Promise.all([
+			sdb.invoice.findMany({
+				where,
+				select: INVOICE_LIST_SELECT,
+				orderBy: invoiceOrderBy(parsed, true),
+				skip: parsed.skip,
+				take: parsed.take,
+			}),
+			sdb.invoice.count({ where }),
+		]);
+		return { rows, total };
+	}
+	// Default order puts overdue invoices ahead of everything, whatever their status.
+	// That is not one orderBy, so the page is cut from the overdue set first and
+	// topped up from the rest, with one `now` so the two sets never overlap.
+	const now = new Date();
+	const overdueWhere: Prisma.invoiceWhereInput = { AND: [where, overdueClause(now)] };
+	const restWhere: Prisma.invoiceWhereInput = { AND: [where, notOverdueClause(now)] };
+	const [total, overdueCount] = await Promise.all([
+		sdb.invoice.count({ where }),
+		sdb.invoice.count({ where: overdueWhere }),
+	]);
+	const overdueTake = Math.max(0, Math.min(parsed.take, overdueCount - parsed.skip));
+	const restTake = parsed.take - overdueTake;
+	const [overdueRows, restRows] = await Promise.all([
+		overdueTake > 0
+			? sdb.invoice.findMany({
+					where: overdueWhere,
+					select: INVOICE_LIST_SELECT,
+					orderBy: DEFAULT_ORDER,
+					skip: parsed.skip,
+					take: overdueTake,
+				})
+			: [],
+		restTake > 0
+			? sdb.invoice.findMany({
+					where: restWhere,
+					select: INVOICE_LIST_SELECT,
+					orderBy: DEFAULT_ORDER,
+					skip: Math.max(0, parsed.skip - overdueCount),
+					take: restTake,
+				})
+			: [],
+	]);
+	return { rows: [...overdueRows, ...restRows], total };
+};
+
+/**
+ * The page's header cards and QuickBooks banners, which used to be summed over
+ * the whole array. Outstanding and Overdue are balances, Paid is billed total.
+ */
+export const getInvoicesSummary = async (organizationId: string) => {
+	const sdb = getScopedDb(organizationId);
+	const now = new Date();
+	const qbStatus = await getQBStatus(organizationId);
+	// Void is excluded here (the old page summed its balance_due too): voiding only
+	// stamps voided_at and leaves balance_due, so counting it would overstate what is owed.
+	const open: Prisma.invoiceWhereInput = { status: { notIn: CLOSED } };
+	const [outstanding, overdue, paid, qbTaxMismatchCount, qbAttentionCount] = await Promise.all([
+		sdb.invoice.aggregate({
+			where: { ...open, OR: [{ due_date: null }, { due_date: { gte: now } }] },
+			_sum: { balance_due: true },
+			_count: true,
+		}),
+		sdb.invoice.aggregate({
+			where: { ...open, ...overdueClause(now) },
+			_sum: { balance_due: true },
+			_count: true,
+		}),
+		sdb.invoice.aggregate({
+			where: { status: "Paid" },
+			_sum: { total: true },
+			_count: true,
+		}),
+		sdb.invoice.count({ where: qbViewWhere(qbStatus, "tax_mismatch") }),
+		sdb.invoice.count({ where: qbViewWhere(qbStatus, "attention") }),
+	]);
+	return {
+		outstanding: { amount: Number(outstanding._sum.balance_due ?? 0), count: outstanding._count },
+		overdue: { amount: Number(overdue._sum.balance_due ?? 0), count: overdue._count },
+		paid: { amount: Number(paid._sum.total ?? 0), count: paid._count },
+		qbTaxMismatchCount,
+		qbAttentionCount,
+	};
+};
 
 export const getAllInvoices = async (organizationId: string) => {
 	const sdb = getScopedDb(organizationId);

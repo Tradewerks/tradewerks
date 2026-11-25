@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import type { ZodError } from "zod";
 import { CreateRequestSchema, type CreateRequestInput } from "../../types/requests";
 import { type Priority, PriorityValues } from "../../types/common";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import { useClientFilterSearch, useClientNames } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
 import {
 	useDraftsByTypeQuery,
 	useCreateDraftMutation,
@@ -20,7 +21,6 @@ import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
-	type TemplateSearchClient,
 } from "../ui/forms/TemplateSearch";
 import { errorMessage } from "../../util/util";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -64,7 +64,6 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 	const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
-	const { data: clients } = useAllClientsQuery();
 	const { data: drafts = [] } = useDraftsByTypeQuery("request");
 	const createDraftMutation = useCreateDraftMutation();
 	const updateDraftMutation = useUpdateDraftMutation();
@@ -209,10 +208,13 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 		[currentDraftId, deleteDraftMutation]
 	);
 
-	const templateClients = useMemo((): TemplateSearchClient[] => {
-		if (!clients) return [];
-		return clients.map((c) => ({ id: c.id, name: c.name }));
-	}, [clients]);
+	const { clients: templateClients, onClientQueryChange } = useClientFilterSearch(
+		sourceMode !== null,
+	);
+	const draftClientNames = useClientNames(
+		drafts.map((d) => d.client_id),
+		sourceMode === "draft",
+	);
 
 	const draftResults = useMemo((): TemplateSearchResult[] => {
 		return drafts.map((d: DraftSummary) => ({
@@ -236,26 +238,9 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 			createdAt: d.created_at,
 			isDeletable: true,
 			clientId: d.client_id ?? undefined,
-			clientName: d.client_id
-				? templateClients.find((c) => c.id === d.client_id)?.name
-				: undefined,
+			clientName: d.client_id ? draftClientNames[d.client_id] : undefined,
 		}));
-	}, [drafts, templateClients]);
-
-	const clientDropdownEntries = useMemo(() => {
-		if (clients?.length) {
-			return clients.map((c) => (
-				<option value={c.id} key={c.id}>
-					{c.name}
-				</option>
-			));
-		}
-		return (
-			<option disabled value="">
-				No clients found
-			</option>
-		);
-	}, [clients]);
+	}, [drafts, draftClientNames]);
 
 	const invokeCreate = async () => {
 		if (isLoading) return;
@@ -350,6 +335,7 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 					}
 					clientFilter={sourceClientFilter}
 					onClientFilterChange={setSourceClientFilter}
+					onClientQueryChange={onClientQueryChange}
 				/>
 			);
 		}
@@ -379,14 +365,12 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 						<label className="block mb-0.5 lg:mb-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
 							Client *
 						</label>
-						<Dropdown
-							entries={clientDropdownEntries}
+						<ClientPicker
 							value={clientId}
 							onChange={(v) => {
 								setClientId(v);
 								markDirty();
 							}}
-							placeholder="Select client"
 							disabled={isLoading}
 							error={errors?.issues.some(
 								(e) => e.path[0] === "client_id"
@@ -622,7 +606,7 @@ const CreateRequest = ({ isModalOpen, setIsModalOpen, createRequest }: CreateReq
 		priority,
 		description,
 		isLoading,
-		clientDropdownEntries,
+		onClientQueryChange,
 		geoData,
 		errors,
 		source,

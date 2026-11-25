@@ -1,18 +1,23 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import JobsPage from "../JobsPage";
 import { useAuthStore } from "../../../auth/authStore";
-import type { Job } from "../../../types/jobs";
+import type { ListParams, PagedResult } from "../../../types/paging";
 import type { RecurringPlan } from "../../../types/recurringPlans";
 
-const { state } = vi.hoisted(() => ({
+const { state, getJobsPage } = vi.hoisted(() => ({
 	state: { jobs: [] as unknown[], plans: [] as unknown[] },
+	getJobsPage: vi.fn(),
 }));
 
+vi.mock("../../../api/jobs", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../api/jobs")>()),
+	getJobsPage,
+}));
 vi.mock("../../../hooks/useJobs", () => ({
-	useAllJobsQuery: () => ({ data: state.jobs, isLoading: false, error: null }),
 	useCreateJobMutation: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock("../../../hooks/useRecurringPlans", () => ({
@@ -37,11 +42,27 @@ const job = {
 	address: "12 Job Street",
 	status: "Scheduled",
 	priority: "High",
-	client: { name: "Acme" },
+	client: { id: "c1", name: "Acme" },
 	client_id: "c1",
 	visits: [],
 	estimated_total: 100,
-} as unknown as Job;
+	created_at: "2026-06-01T00:00:00Z",
+};
+
+const jobRow = (n: number, status = "Scheduled") => ({
+	...job,
+	id: `job-${n}`,
+	job_number: `J-${n}`,
+	name: `Job ${n}`,
+	status,
+});
+
+const pageOf = (params: ListParams, rows: unknown[]): PagedResult<unknown> => ({
+	rows,
+	total: 120,
+	page: params.page,
+	limit: params.limit,
+});
 
 const plan = {
 	id: "plan-1",
@@ -65,16 +86,24 @@ const plan = {
 	line_items: [],
 } as unknown as RecurringPlan;
 
-const renderAt = (url: string) =>
-	render(
-		<MemoryRouter initialEntries={[url]}>
-			<Routes>
-				<Route path="/dispatch/jobs" element={<JobsPage />} />
-			</Routes>
-		</MemoryRouter>,
+const renderAt = (url: string) => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(
+		<QueryClientProvider client={client}>
+			<MemoryRouter initialEntries={[url]}>
+				<Routes>
+					<Route path="/dispatch/jobs" element={<JobsPage />} />
+				</Routes>
+			</MemoryRouter>
+		</QueryClientProvider>,
 	);
+};
 
 beforeEach(() => {
+	getJobsPage.mockReset();
+	getJobsPage.mockImplementation((params: ListParams) =>
+		Promise.resolve(pageOf(params, state.jobs)),
+	);
 	state.jobs = [job];
 	state.plans = [plan];
 	useAuthStore
@@ -159,5 +188,77 @@ describe("JobsPage report (recurring plans get their own)", () => {
 			expect(screen.getByText(label)).toBeInTheDocument();
 		}
 		expect(screen.queryByText("Tomorrow")).toBeNull();
+	});
+});
+
+describe("JobsPage server paging", () => {
+	it("changing page requests page 2 and keeps page 1 as placeholder", async () => {
+		let release!: (v: PagedResult<unknown>) => void;
+		getJobsPage.mockImplementation((params: ListParams) =>
+			params.page === 1
+				? Promise.resolve(pageOf(params, [jobRow(1)]))
+				: new Promise((res) => (release = res)),
+		);
+		renderAt("/dispatch/jobs");
+		await screen.findByText("Job 1");
+
+		fireEvent.click(screen.getByLabelText("Next page"));
+
+		await waitFor(() =>
+			expect(getJobsPage).toHaveBeenLastCalledWith(
+				expect.objectContaining({ page: 2 }),
+				expect.anything(),
+			),
+		);
+		// Page 2 is still in flight: page 1's rows stay on screen.
+		expect(screen.getByText("Job 1")).toBeTruthy();
+
+		await act(async () => release(pageOf({ page: 2, limit: 50 }, [jobRow(51)])));
+		await screen.findByText("Job 51");
+		expect(screen.queryByText("Job 1")).toBeNull();
+	});
+
+	it("status in the URL pre-selects the filter", async () => {
+		getJobsPage.mockImplementation((params: ListParams) =>
+			Promise.resolve(pageOf(params, [jobRow(1, "InProgress")])),
+		);
+		renderAt("/dispatch/jobs?status=InProgress&status=Scheduled");
+		await screen.findByText("Job 1");
+
+		expect(getJobsPage).toHaveBeenCalledWith(
+			expect.objectContaining({ page: 1, status: ["InProgress", "Scheduled"] }),
+			expect.anything(),
+		);
+		expect(screen.getByText("Status: In Progress")).toBeTruthy();
+		expect(screen.getByText("Status: Scheduled")).toBeTruthy();
+	});
+
+	it("sends every search chip as one space-joined q", async () => {
+		renderAt("/dispatch/jobs?search=acme&search=main");
+		await waitFor(() =>
+			expect(getJobsPage).toHaveBeenLastCalledWith(
+				expect.objectContaining({ q: "acme main" }),
+				expect.anything(),
+			),
+		);
+	});
+
+	it("maps the Job # sort to job_number", async () => {
+		renderAt("/dispatch/jobs?sort=jobNumber&dir=asc");
+		await screen.findByText("Furnace tune-up");
+		expect(getJobsPage.mock.calls[0][0]).toMatchObject({ sort: "job_number", dir: "asc" });
+	});
+
+	it("drops the retired Date sort from the request and the chips", async () => {
+		renderAt("/dispatch/jobs?sort=date&dir=asc");
+		await waitFor(() => expect(getJobsPage).toHaveBeenCalled());
+		expect(getJobsPage.mock.calls[0][0].sort).toBeUndefined();
+		expect(screen.queryByText(/^Sort:/)).toBeNull();
+	});
+
+	it("does not fetch jobs in the Templates view", async () => {
+		renderAt("/dispatch/jobs?view=templates");
+		await screen.findByText("Quarterly filter swap");
+		expect(getJobsPage).not.toHaveBeenCalled();
 	});
 });

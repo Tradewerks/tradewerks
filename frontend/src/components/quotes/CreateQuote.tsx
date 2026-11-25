@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useCallback } from "react";
+﻿import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ZodError } from "zod";
 import {
@@ -6,8 +6,12 @@ import {
 	type CreateQuoteInput,
 	type CreateQuoteLineItemInput,
 } from "../../types/quotes";
-import { useAllClientsQuery } from "../../hooks/useClients";
-import { useAllQuotesQuery } from "../../hooks/useQuotes";
+import { useSelectedClient, useClientFilterSearch, useClientNames } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
+import { useQuoteSearchQuery } from "../../hooks/useQuotes";
+import { getQuoteById } from "../../api/quotes";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useToast } from "../ui/useToast";
 import {
 	useDraftsByTypeQuery,
 	useCreateDraftMutation,
@@ -33,7 +37,6 @@ import FinancialSummary from "../ui/forms/FinancialSummary";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
-	type TemplateSearchClient,
 } from "../ui/forms/TemplateSearch";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
@@ -90,8 +93,15 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 	const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
-	const { data: clients } = useAllClientsQuery();
-	const { data: allQuotes = [] } = useAllQuotesQuery();
+	const toast = useToast();
+	const copyLoadingRef = useRef(false);
+	const [sourceSearch, setSourceSearch] = useState("");
+	const debouncedSourceSearch = useDebouncedValue(sourceSearch);
+	// Start-from-a-quote is a server search (first 20), not every quote in the org.
+	const { data: sourceQuotes } = useQuoteSearchQuery(debouncedSourceSearch, {
+		enabled: sourceMode === "existing",
+		clientId: sourceClientFilter || undefined,
+	});
 	const { data: drafts = [] } = useDraftsByTypeQuery("quote");
 	const createDraftMutation = useCreateDraftMutation();
 	const updateDraftMutation = useUpdateDraftMutation();
@@ -103,11 +113,9 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 	const { data: defaultTaxGroup } = useDefaultTaxGroup();
 	const autoModeState = useAutoTaxMode();
 	const autoMode = autoModeState === true;
-	const clientExempt = useMemo(
-		() => clients?.find((c) => c.id === clientId)?.is_tax_exempt ?? false,
-		[clients, clientId]
-	);
-	const clientTaxGroupId = clients?.find((c) => c.id === clientId)?.tax_group_id ?? null;
+	const selectedClient = useSelectedClient(clientId, isModalOpen);
+	const clientExempt = selectedClient?.is_tax_exempt ?? false;
+	const clientTaxGroupId = selectedClient?.tax_group_id ?? null;
 
 	const {
 		activeLineItems,
@@ -253,9 +261,19 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 	const handleClearAddress = () => setGeoData(undefined);
 
 	const handleSelectTemplate = useCallback(
-		(quoteId: string) => {
-			const source = allQuotes.find((q) => q.id === quoteId);
-			if (!source) return;
+		async (quoteId: string) => {
+			if (copyLoadingRef.current) return;
+			copyLoadingRef.current = true;
+			// The list rows are slim; description, coordinates and line items come from the quote.
+			let source;
+			try {
+				source = await getQuoteById(quoteId);
+			} catch (err) {
+				toast.error(err instanceof Error ? err.message : "Failed to load that quote");
+				return;
+			} finally {
+				copyLoadingRef.current = false;
+			}
 
 			setTitle(source.title);
 			setDescription(source.description);
@@ -294,20 +312,15 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 			setSourceMode(null);
 			goToStep(1 as Step);
 		},
-		[allQuotes, seedLineItems, resetLineItems, setFinancialOriginals, goToStep]
+		[toast, seedLineItems, resetLineItems, setFinancialOriginals, goToStep]
 	);
 
 	const templateResults = useMemo((): TemplateSearchResult[] => {
-		return allQuotes
-			.filter((q) => q.is_active)
+		return (sourceQuotes?.rows ?? [])
 			.map((q) => ({
 				id: q.id,
 				title: q.title,
 				subtitle: q.quote_number,
-				detail: q.description
-					? q.description.slice(0, 80) +
-						(q.description.length > 80 ? "…" : "")
-					: undefined,
 				badge: QuoteStatusLabels[q.status] ?? q.status,
 				badgeColor: QuoteStatusColors[
 					q.status as keyof typeof QuoteStatusColors
@@ -320,7 +333,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 				clientId: q.client_id,
 				clientName: q.client?.name,
 			}));
-	}, [allQuotes]);
+	}, [sourceQuotes]);
 
 	const handleSelectDraft = useCallback(
 		async (draftId: string) => {
@@ -456,10 +469,13 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 		[currentDraftId, deleteDraftMutation]
 	);
 
-	const templateClients = useMemo((): TemplateSearchClient[] => {
-		if (!clients) return [];
-		return clients.map((c) => ({ id: c.id, name: c.name }));
-	}, [clients]);
+	const { clients: templateClients, onClientQueryChange } = useClientFilterSearch(
+		sourceMode !== null,
+	);
+	const draftClientNames = useClientNames(
+		drafts.map((d) => d.client_id),
+		sourceMode === "draft",
+	);
 
 	const draftResults = useMemo((): TemplateSearchResult[] => {
 		return drafts.map((d: DraftSummary) => ({
@@ -483,26 +499,9 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 			createdAt: d.created_at,
 			isDeletable: true,
 			clientId: d.client_id ?? undefined,
-			clientName: d.client_id
-				? templateClients.find((c) => c.id === d.client_id)?.name
-				: undefined,
+			clientName: d.client_id ? draftClientNames[d.client_id] : undefined,
 		}));
-	}, [drafts, templateClients]);
-
-	const clientDropdownEntries = useMemo(() => {
-		if (clients?.length) {
-			return clients.map((c) => (
-				<option value={c.id} key={c.id}>
-					{c.name}
-				</option>
-			));
-		}
-		return (
-			<option disabled value="">
-				No clients found
-			</option>
-		);
-	}, [clients]);
+	}, [drafts, draftClientNames]);
 
 	const invokeCreate = async () => {
 		if (isLoading) return;
@@ -619,6 +618,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 						}
 						clientFilter={sourceClientFilter}
 						onClientFilterChange={setSourceClientFilter}
+						onClientQueryChange={onClientQueryChange}
 					/>
 				);
 			}
@@ -628,8 +628,10 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 					clients={templateClients}
 					onSelect={handleSelectTemplate}
 					onClose={() => setSourceMode(null)}
+					onQueryChange={setSourceSearch}
 					clientFilter={sourceClientFilter}
 					onClientFilterChange={setSourceClientFilter}
+					onClientQueryChange={onClientQueryChange}
 				/>
 			);
 		}
@@ -659,16 +661,12 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 								<label className={LABEL}>
 									Client *
 								</label>
-								<Dropdown
-									entries={
-										clientDropdownEntries
-									}
+								<ClientPicker
 									value={clientId}
 									onChange={(v) => {
 										setClientId(v);
 										markDirty();
 									}}
-									placeholder="Select client"
 									disabled={isLoading}
 									error={errors?.issues.some(
 										(e) =>
@@ -862,7 +860,7 @@ const CreateQuote = ({ isModalOpen, setIsModalOpen, createQuote }: CreateQuotePr
 		priority,
 		description,
 		isLoading,
-		clientDropdownEntries,
+		onClientQueryChange,
 		geoData,
 		errors,
 		activeLineItems,

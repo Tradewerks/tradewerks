@@ -19,13 +19,6 @@ import * as requestApi from "../api/requests";
 // REQUEST QUERIES
 // ============================================================================
 
-export const useAllRequestsQuery = (): UseQueryResult<Request[], Error> => {
-	return useQuery({
-		queryKey: ["requests"],
-		queryFn: requestApi.getAllRequests,
-	});
-};
-
 export const useRequestByIdQuery = (
 	id: string | null | undefined,
 	options?: { enabled?: boolean }

@@ -13,6 +13,17 @@ import { getOrgRealmId } from "../services/quickbooksService.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { getEffectiveTaxMode } from "../services/tax/taxMode.js";
 import { jobAssignedWhere } from "../lib/assignedScope.js";
+import type { Request } from "express";
+import {
+	type ListSpec,
+	type ParsedList,
+	ListQueryError,
+} from "../lib/listQuery.js";
+import {
+	andOfOrs,
+	containsInsensitive,
+	singleParam,
+} from "../lib/listSearch.js";
 import {
 	AddressTaxChoiceError,
 	addressMoves,
@@ -116,6 +127,148 @@ export const getAllClients = async (organizationId: string, scope?: ClientReadSc
 		orderBy: { last_activity: "desc" },
 	});
 	return clients.map(clientWithConsent);
+};
+
+export const CLIENT_LIST_SPEC = {
+	sortable: ["name", "created_at", "last_activity"] as const,
+	defaultSort: "last_activity" as const,
+	defaultDir: "desc" as const,
+	statuses: ["active", "inactive"] as const,
+} satisfies ListSpec<string, "active" | "inactive">;
+
+type ClientListQuery = ParsedList<
+	(typeof CLIENT_LIST_SPEC.sortable)[number],
+	"active" | "inactive"
+>;
+
+// Beyond the shared contract: the Clients page filters on tax status, and tells
+// us whether the caller chose a sort (none means active first, then recent).
+export const parseClientListExtras = (query: Request["query"]) => {
+	const tax = singleParam(query, "tax");
+	if (tax !== undefined && tax !== "exempt" && tax !== "taxable") {
+		throw new ListQueryError("tax", "tax must be exempt or taxable");
+	}
+	const qb = singleParam(query, "qb");
+	if (qb !== undefined && qb !== "synced" && qb !== "not_synced") {
+		throw new ListQueryError("qb", "qb must be synced or not_synced");
+	}
+	// The QuickBooks sync screen also wants each row's linked customer id.
+	const withQb = singleParam(query, "with_qb") === "1";
+	const explicitSort = singleParam(query, "sort") !== undefined;
+	return { tax, qb, withQb, explicitSort };
+};
+
+// Counts only: the card and pickers need how many, not which. The legacy list
+// trims jobs to the caller's assigned ones and hides quotes without
+// view_quotes; the counts follow the same rules so
+// a slim row never reveals more than the full one did.
+const clientListSelect = (scope: ClientReadScope, qbRealm?: string) =>
+	({
+		id: true,
+		name: true,
+		is_active: true,
+		is_tax_exempt: true,
+		address: true,
+		last_activity: true,
+		created_at: true,
+		...(qbRealm !== undefined && {
+			client_external_mapping: {
+				where: { provider: "quickbooks", account_id: qbRealm },
+				take: 1,
+				select: { external_id: true },
+			},
+		}),
+		contacts: {
+			where: { is_primary: true },
+			take: 1,
+			select: {
+				is_primary: true,
+				contact: {
+					select: { id: true, name: true, email: true, phone: true },
+				},
+			},
+		},
+		_count: {
+			select: {
+				jobs: scope.assignedTechId
+					? { where: jobAssignedWhere(scope.assignedTechId) }
+					: true,
+				...(scope.quotes && { quotes: true }),
+				requests: true,
+			},
+		},
+	}) satisfies Prisma.clientSelect;
+
+const clientOrderBy = (
+	parsed: ClientListQuery,
+	explicitSort: boolean,
+): Prisma.clientOrderByWithRelationInput[] => {
+	if (!explicitSort) {
+		return [
+			{ is_active: "desc" },
+			{ last_activity: "desc" },
+			{ id: "asc" },
+		];
+	}
+	// id breaks ties so a page boundary never repeats or drops a row.
+	return [{ [parsed.sort]: parsed.dir }, { id: "asc" }];
+};
+
+export const getClientsPage = async (
+	organizationId: string,
+	parsed: ClientListQuery,
+	extras: ReturnType<typeof parseClientListExtras>,
+	scope: ClientReadScope,
+) => {
+	const sdb = getScopedDb(organizationId);
+	// Both statuses (or none) is no filter.
+	const onlyOne = parsed.status?.length === 1 ? parsed.status[0] : undefined;
+	// Linked to a QuickBooks customer in the org's current realm, as
+	// /quickbooks/customers/mappings reads it; a client linked under an old
+	// realm is not synced.
+	const wantsQb = extras.qb || extras.withQb;
+	const realm = wantsQb ? await getOrgRealmId(organizationId) : undefined;
+	const mapping = {
+		provider: "quickbooks",
+		account_id: realm,
+	};
+	const where: Prisma.clientWhereInput = {
+		...(onlyOne && { is_active: onlyOne === "active" }),
+		...(extras.tax && { is_tax_exempt: extras.tax === "exempt" }),
+		...(extras.qb && {
+			client_external_mapping:
+				extras.qb === "synced" ? { some: mapping } : { none: mapping },
+		}),
+		...andOfOrs<Prisma.clientWhereInput>(parsed.q, (term) => [
+			{ name: containsInsensitive(term) },
+			{ address: containsInsensitive(term) },
+			{
+				contacts: {
+					some: {
+						is_primary: true,
+						contact: {
+							OR: [
+								{ name: containsInsensitive(term) },
+								{ email: containsInsensitive(term) },
+								{ phone: containsInsensitive(term) },
+							],
+						},
+					},
+				},
+			},
+		]),
+	};
+	const [rows, total] = await Promise.all([
+		sdb.client.findMany({
+			where,
+			select: clientListSelect(scope, extras.withQb ? realm : undefined),
+			orderBy: clientOrderBy(parsed, extras.explicitSort),
+			skip: parsed.skip,
+			take: parsed.take,
+		}),
+		sdb.client.count({ where }),
+	]);
+	return { rows, total };
 };
 
 export const getClientById = async (id: string, organizationId: string, scope?: ClientReadScope) => {

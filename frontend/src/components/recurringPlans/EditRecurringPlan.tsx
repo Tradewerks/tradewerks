@@ -15,7 +15,7 @@ import {
 	PriorityValues,
 	type Priority,
 } from "../../types/common";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import { useClientByIdQuery } from "../../hooks/useClients";
 import { useActiveTechniciansQuery, useAllTechniciansQuery } from "../../hooks/useTechnicians";
 import { useToast } from "../ui/useToast";
 import {
@@ -90,7 +90,10 @@ const toNumberOrEmpty = (val: number | null | undefined): number | "" => {
 
 const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringPlanProps) => {
 	const updateMutation = useUpdateRecurringPlanMutation();
-	const { data: clients } = useAllClientsQuery();
+	// Only for a plan whose own payload carries no client name.
+	const { data: fallbackClient } = useClientByIdQuery(plan.client_id || null, {
+		enabled: !!plan.client_id && !plan.client?.name,
+	});
 	const { data: activeTechnicians } = useActiveTechniciansQuery();
 	const { data: allTechnicians } = useAllTechniciansQuery();
 	const toast = useToast();
@@ -679,11 +682,7 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 								</label>
 								<div className="border border-border px-2.5 h-[34px] w-full rounded bg-surface/50 text-text-tertiary text-sm flex items-center min-w-0 truncate">
 									{plan.client?.name ||
-										clients?.find(
-											(c) =>
-												c.id ===
-												clientId
-										)?.name ||
+										fallbackClient?.name ||
 										"Unknown Client"}
 								</div>
 								<p className="text-[10px] text-text-muted mt-0.5 leading-tight">
@@ -947,8 +946,7 @@ const EditRecurringPlan = ({ isModalOpen, setIsModalOpen, plan }: EditRecurringP
 		isLoading,
 		errors,
 		plan,
-		clients,
-		clientId,
+		fallbackClient,
 		geoData,
 		fields,
 		toggleWeekday,

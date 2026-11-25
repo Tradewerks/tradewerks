@@ -1,7 +1,14 @@
 ﻿import AdaptableTable from "../../components/AdaptableTable";
-import { useAllInvoicesQuery } from "../../hooks/useInvoices";
+import { useInvoicesSummaryQuery } from "../../hooks/useInvoices";
+import { getInvoicesPage } from "../../api/invoices";
+import { usePagedList } from "../../hooks/usePagedList";
+import { useListPaging, dateRangeToParams } from "../../hooks/useListPaging";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { qk } from "../../lib/queryKeys";
+import ReportPagination from "../../components/reports/ReportPagination";
+import type { ListParams, SortDir } from "../../types/paging";
 import { useClientByIdQuery } from "../../hooks/useClients";
-import { InvoiceStatusValues, InvoiceStatusColors, InvoiceStatusLabels, type InvoiceStatus, type Invoice, isOverdue } from "../../types/invoices";
+import { InvoiceStatusValues, InvoiceStatusColors, InvoiceStatusLabels, type InvoiceStatus, isOverdue } from "../../types/invoices";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Plus, MoreVertical, FileText, Upload, AlertCircle, CloudOff } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -9,11 +16,12 @@ import { formatDate, formatCurrency } from "../../util/util";
 import CreateInvoice from "../../components/invoices/CreateInvoice";
 import SearchBar from "../../components/ui/SearchBar";
 import FilterChips from "../../components/ui/FilterChips";
+import { useDateRangeChip } from "../../hooks/useDateRangeChip";
 import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
 import SortControl from "../../components/ui/SortControl";
-import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRangeUtils";
+import { parseDateRangeFromParams } from "../../util/dateRangeUtils";
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
@@ -21,8 +29,6 @@ import { useQBStatusQuery } from "../../hooks/useQuickbooks";
 import PageReportButton from "../../components/reports/PageReportButton";
 import PageReportKpis from "../../components/reports/PageReportKpis";
 import { usePageReport } from "../../components/reports/usePageReport";
-import type { SortDir } from "../../util/sortUtil";
-import { withDir, compareByOrder, compareDateNullsLast, compareString, compareNumber } from "../../util/sortUtil";
 import { isCurrentQbRealm } from "../../lib/qbRealm";
 
 const invoiceStatusOptions = InvoiceStatusValues.map((s) => ({
@@ -41,6 +47,19 @@ const sortLabels: Record<string, string> = {
 	balance: "Balance",
 };
 
+// The page's sort keys to the server's sortable columns. A key not listed here
+// (an old bookmark) is dropped from the chip and header, not sent to be refused.
+const SERVER_SORT: Record<string, string> = {
+	status: "status",
+	issued: "issue_date",
+	date: "due_date",
+	client: "client",
+	invoiceNumber: "invoice_number",
+	subject: "memo",
+	total: "total",
+	balance: "balance_due",
+};
+
 // "dueDate" is the displayed column; the existing "date" sort key already
 // drives it (shared with the SortControl "Due Date" option).
 const COLUMN_SORT_KEY: Record<string, string> = {
@@ -52,24 +71,9 @@ const qbMarkerLabel = (diverged: boolean) =>
 		? "QuickBooks doesn't match — open the invoice"
 		: "Not in QuickBooks — retry from the invoice";
 
-// A diverged Void invoice still needs a person, so there is deliberately no status exclusion.
-function qbNeedsAttention(
-	inv: Invoice,
-	qbStatus: { connected: boolean; realmId?: string } | null | undefined,
-): boolean {
-	return (
-		isCurrentQbRealm(inv.account_id, qbStatus) &&
-		(inv.qb_sync_status === "failed" ||
-			inv.qb_sync_status === "tax_mismatch" ||
-			!!inv.qb_diverged_at)
-	);
-}
-
 export default function InvoicesPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { data: invoices, isLoading, error } = useAllInvoicesQuery();
-
 	const [searchInput, setSearchInput] = useState("");
 	const [showActionsMenu, setShowActionsMenu] = useState(false);
 	const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -77,17 +81,20 @@ export default function InvoicesPage() {
 
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
 	const { removeTerm: removeStatus } = useMultiSearch("status");
-	// Collision-free memo key (["ab"] vs ["a","b"] must differ)
-	const termsKey = JSON.stringify(terms);
+	const dateChip = useDateRangeChip("date");
 
 	const queryParams = new URLSearchParams(location.search);
 	const clientFilter = queryParams.get("client");
-	const statusFilter = queryParams.getAll("status");
+	// Repeated (?status=A&status=B, what the filter writes) or comma-joined.
+	const statusFilter = queryParams
+		.getAll("status")
+		.flatMap((v) => v.split(",").map((x) => x.trim()).filter(Boolean));
 	const statusKey = statusFilter.join(",");
 	const dateParamKey = queryParams.get("date");
 	const dateParamFrom = queryParams.get("dateFrom");
 	const dateParamTo = queryParams.get("dateTo");
-	const sortParam = queryParams.get("sort");
+	const rawSort = queryParams.get("sort");
+	const sortParam = rawSort && SERVER_SORT[rawSort] ? rawSort : null;
 	const dirParam = queryParams.get("dir");
 	const taxMismatchOnly = queryParams.get("qb") === "tax_mismatch";
 	const attentionOnly = queryParams.get("qb") === "attention";
@@ -96,6 +103,11 @@ export default function InvoicesPage() {
 	const CREATE_INVOICE = usePermission("create_invoices");
 	const report = usePageReport("invoices", "Invoices report");
 
+	const { data: summary, isError: summaryError } = useInvoicesSummaryQuery();
+	// Until the totals arrive (or if they fail) the cards say so instead of showing a false zero.
+	const money = (n: number | undefined) => (n === undefined ? "—" : formatCurrency(n));
+	const countText = (n: number | undefined) =>
+		n === undefined ? (summaryError ? "Couldn't load" : "—") : `${n} invoices`;
 	const { data: filterClient } = useClientByIdQuery(clientFilter ?? "");
 	const { data: qbStatus } = useQBStatusQuery();
 
@@ -119,35 +131,49 @@ export default function InvoicesPage() {
 		}
 	}, [showActionsMenu]);
 
-	const overdueCount = useMemo(() => {
-		if (!invoices) return 0;
-		return invoices.filter(isOverdue).length;
-	}, [invoices]);
+	const taxMismatchCount = summary?.qbTaxMismatchCount ?? 0;
+	const attentionCount = summary?.qbAttentionCount ?? 0;
 
-	const taxMismatchCount = useMemo(() => {
-		if (!invoices) return 0;
-		return invoices.filter(
-			(i) =>
-				i.qb_sync_status === "tax_mismatch" && isCurrentQbRealm(i.account_id, qbStatus),
-		).length;
-	}, [invoices, qbStatus]);
+	// Chips and the text being typed go to the server as one string it splits into words.
+	const q = useDebouncedValue([...terms, searchInput.trim()].filter(Boolean).join(" "));
 
-	const attentionCount = useMemo(() => {
-		if (!invoices || !qbStatus?.connected) return 0;
-		return invoices.filter((i) => qbNeedsAttention(i, qbStatus)).length;
-	}, [invoices, qbStatus]);
+	const filters = useMemo(() => {
+		const dp = new URLSearchParams();
+		if (dateParamKey) dp.set("date", dateParamKey);
+		if (dateParamFrom) dp.set("dateFrom", dateParamFrom);
+		if (dateParamTo) dp.set("dateTo", dateParamTo);
+		const range = dateRangeToParams(parseDateRangeFromParams(dp, "date"));
+		const sort = sortParam ? SERVER_SORT[sortParam] : undefined;
+		return {
+			sort,
+			dir: sort ? ((dirParam === "asc" ? "asc" : "desc") as SortDir) : undefined,
+			q: q || undefined,
+			status: statusFilter.length ? statusFilter : undefined,
+			...range,
+			client_id: clientFilter ?? undefined,
+			qb: (taxMismatchOnly ? "tax_mismatch" : attentionOnly ? "attention" : undefined) as "tax_mismatch" | "attention" | undefined,
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [q, statusKey, clientFilter, sortParam, dirParam, dateParamKey, dateParamFrom, dateParamTo, taxMismatchOnly, attentionOnly]);
 
-	const display = useMemo(() => {
-		const _dp = new URLSearchParams();
-		if (dateParamKey) _dp.set("date", dateParamKey);
-		if (dateParamFrom) _dp.set("dateFrom", dateParamFrom);
-		if (dateParamTo) _dp.set("dateTo", dateParamTo);
-		const dateRange = parseDateRangeFromParams(_dp, "date");
+	const { page, limit, paginationProps } = useListPaging(filters);
+	const { client_id, qb, ...listFilters } = filters;
+	const params: ListParams = { page, limit, ...listFilters };
+	const {
+		data,
+		isLoading,
+		isFetching,
+		error,
+	} = usePagedList(
+		[...qk.invoices.list(), { client_id, qb }],
+		(p) => getInvoicesPage(p, { client_id, qb }),
+		params
+	);
+	const total = data?.total ?? 0;
 
-		const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
-
-		let data =
-			invoices?.map((inv) => {
+	const display = useMemo(
+		() =>
+			(data?.rows ?? []).map((inv) => {
 				const overdue = isOverdue(inv);
 				const clientName = inv.client?.name || "Unknown Client";
 
@@ -176,11 +202,7 @@ export default function InvoicesPage() {
 					total: formatCurrency(total),
 					balance: balanceDue > 0 ? formatCurrency(balanceDue) : "—",
 					_rawStatus: inv.status,
-					_rawTotal: total,
-					_rawBalance: balanceDue,
-					_rawDueDate: inv.due_date ? new Date(inv.due_date) : null,
 					_isOverdue: overdue,
-					_clientId: inv.client_id,
 					_qbTaxMismatch:
 						inv.qb_sync_status === "tax_mismatch" &&
 						isCurrentQbRealm(inv.account_id, qbStatus),
@@ -188,82 +210,10 @@ export default function InvoicesPage() {
 						!!inv.qb_diverged_at && isCurrentQbRealm(inv.account_id, qbStatus),
 					_qbFailed:
 						inv.qb_sync_status === "failed" && isCurrentQbRealm(inv.account_id, qbStatus),
-					_qbAttention: qbNeedsAttention(inv, qbStatus),
-					_issueDate: inv.issue_date
-						? new Date(inv.issue_date)
-						: null,
 				};
-			}) ?? [];
-
-		if (clientFilter) data = data.filter((item) => item._clientId === clientFilter);
-		if (taxMismatchOnly) data = data.filter((item) => item._qbTaxMismatch);
-		if (attentionOnly) data = data.filter((item) => item._qbAttention);
-		if (statusFilter.length > 0) data = data.filter((item) => statusFilter.includes(item._rawStatus));
-		if (dateRange.option !== "all")
-			data = data.filter((item) => matchesDateRange(item._issueDate, dateRange));
-		if (activeTerms.length > 0) {
-			data = data.filter((item) =>
-				activeTerms.every((term) => {
-					const q = term.toLowerCase();
-					return (
-						item.client.toLowerCase().includes(q) ||
-						item.invoiceNumber.toLowerCase().includes(q) ||
-						item.subject.toLowerCase().includes(q) ||
-						item.status.toLowerCase().includes(q)
-					);
-				})
-			);
-		}
-
-		type InvoiceRow = (typeof data)[number];
-		const dir: SortDir = dirParam === "asc" ? "asc" : "desc";
-		const comparator: (a: InvoiceRow, b: InvoiceRow) => number =
-			sortParam === "status"
-				? withDir((a, b) => compareByOrder(a._rawStatus, b._rawStatus, InvoiceStatusValues), dir)
-				: sortParam === "issued"
-				? (a, b) => compareDateNullsLast(dir)(a._issueDate, b._issueDate)
-				: sortParam === "date"
-				? (a, b) => compareDateNullsLast(dir)(a._rawDueDate, b._rawDueDate)
-				: sortParam === "client"
-				? withDir((a, b) => compareString(a.client, b.client), dir)
-				: sortParam === "invoiceNumber"
-				? withDir((a, b) => compareString(a.invoiceNumber, b.invoiceNumber), dir)
-				: sortParam === "subject"
-				? withDir((a, b) => compareString(a.subject, b.subject), dir)
-				: sortParam === "total"
-				? withDir((a, b) => compareNumber(a._rawTotal, b._rawTotal), dir)
-				: sortParam === "balance"
-				? withDir((a, b) => compareNumber(a._rawBalance, b._rawBalance), dir)
-				: (a, b) => {
-					// default: status, then schedule date (nulls last)
-					if (a._isOverdue && !b._isOverdue) return -1;
-					if (!a._isOverdue && b._isOverdue) return 1;
-					const statusDiff =
-						InvoiceStatusValues.indexOf(
-							a._rawStatus as InvoiceStatus
-						) -
-						InvoiceStatusValues.indexOf(
-							b._rawStatus as InvoiceStatus
-						);
-					if (statusDiff !== 0) return statusDiff;
-					if (a._rawDueDate && b._rawDueDate)
-						return (
-							a._rawDueDate.getTime() -
-							b._rawDueDate.getTime()
-						);
-					if (a._rawDueDate) return -1;
-					if (b._rawDueDate) return 1;
-					return (
-						(b._issueDate?.getTime() ?? 0) -
-						(a._issueDate?.getTime() ?? 0)
-					);
-				};
-
-		return (
-			data
-				.sort(comparator)
-		);
-	}, [invoices, searchInput, termsKey, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam, taxMismatchOnly, attentionOnly, qbStatus]);
+			}),
+		[data, qbStatus]
+	);
 
 	const removeClientFilter = () => {
 		const newParams = new URLSearchParams(location.search);
@@ -316,21 +266,6 @@ export default function InvoicesPage() {
 		}
 		navigate(`/dispatch/invoices?${next.toString()}`);
 	};
-
-	const totals = useMemo(() => {
-		if (!invoices) return { outstanding: 0, overdue: 0, paid: 0 };
-		return invoices.reduce(
-			(acc, inv) => {
-				const balance = Number(inv.balance_due ?? 0);
-				const total = Number(inv.total ?? 0);
-				if (inv.status === "Paid") acc.paid += total;
-				else if (isOverdue(inv)) acc.overdue += balance;
-				else acc.outstanding += balance;
-				return acc;
-			},
-			{ outstanding: 0, overdue: 0, paid: 0 }
-		);
-	}, [invoices]);
 
 	const hasActiveFilters = taxMismatchOnly || attentionOnly || clientFilter || terms.length > 0 || statusFilter.length > 0 || (dateParamKey && dateParamKey !== "all");
 
@@ -398,16 +333,10 @@ export default function InvoicesPage() {
 						Outstanding
 					</p>
 					<p className="text-xl font-bold text-primary-text tabular-nums">
-						{formatCurrency(totals.outstanding)}
+						{money(summary?.outstanding.amount)}
 					</p>
 					<p className="text-xs text-text-muted mt-0.5">
-						{invoices?.filter(
-							(i) =>
-								i.status !== "Paid" &&
-								i.status !== "Void" &&
-								!isOverdue(i)
-						).length ?? 0}{" "}
-						invoices
+						{countText(summary?.outstanding.count)}
 					</p>
 				</div>
 				<div className="p-4 bg-base border border-error-border rounded-lg">
@@ -415,10 +344,10 @@ export default function InvoicesPage() {
 						Overdue
 					</p>
 					<p className="text-xl font-bold text-error-text tabular-nums">
-						{formatCurrency(totals.overdue)}
+						{money(summary?.overdue.amount)}
 					</p>
 					<p className="text-xs text-text-muted mt-0.5">
-						{overdueCount} invoices
+						{countText(summary?.overdue.count)}
 					</p>
 				</div>
 				<div className="p-4 bg-base border border-border-subtle rounded-lg">
@@ -426,12 +355,10 @@ export default function InvoicesPage() {
 						Paid (All Time)
 					</p>
 					<p className="text-xl font-bold text-success-text tabular-nums">
-						{formatCurrency(totals.paid)}
+						{money(summary?.paid.amount)}
 					</p>
 					<p className="text-xs text-text-muted mt-0.5">
-						{invoices?.filter((i) => i.status === "Paid")
-							.length ?? 0}{" "}
-						invoices
+						{countText(summary?.paid.count)}
 					</p>
 				</div>
 			</div>
@@ -539,6 +466,7 @@ export default function InvoicesPage() {
 						onRemove: () => removeTerm(term),
 						highlighted: duplicateTerm === term,
 					})),
+					dateChip,
 					sortParam
 						? {
 								label: `Sort: ${sortLabels[sortParam] ?? sortParam} (${dirParam === "asc" ? "asc" : "desc"})`,
@@ -547,13 +475,13 @@ export default function InvoicesPage() {
 							}
 						: null,
 				]}
-				resultCount={display.length}
+				resultCount={total}
 				onClearAll={clearAllFilters}
 			/>
 
 			{/* Table */}
 			<div className="shadow-sm border border-border-subtle p-3 bg-base rounded-lg overflow-hidden text-left">
-				{display.length === 0 && !isLoading && !error ? (
+				{total === 0 && !isLoading && !error ? (
 					<div className="text-center py-16">
 						<FileText
 							size={48}
@@ -643,6 +571,7 @@ export default function InvoicesPage() {
 						onSortChange={handleSortChange}
 					/>
 				)}
+				<ReportPagination {...paginationProps(total, isFetching)} />
 			</div>
 		</div>
 	);

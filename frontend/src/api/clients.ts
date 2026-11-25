@@ -16,12 +16,50 @@ import type {
 	UpdateClientNoteInput,
 } from "../types/clients";
 import type { Project } from "../types/project";
+import type { ListParams, PagedResult } from "../types/paging";
+import { pagedResultFrom } from "../hooks/usePagedList";
 
 
 // ============================================================================
 // CLIENT API
 // ============================================================================
 
+export interface ClientListExtras {
+	tax?: "exempt" | "taxable";
+	// Linked to a QuickBooks customer or not; withQb adds the linked customer id to each row.
+	qb?: "synced" | "not_synced";
+	withQb?: boolean;
+}
+
+// The server's slim list row: counts instead of job/quote/request bodies, and only
+// the primary contact. `quotes` is absent without view_quotes.
+export type ClientListRow = Pick<
+	Client,
+	"id" | "name" | "address" | "is_active" | "is_tax_exempt" | "created_at" | "last_activity"
+> & {
+	contacts?: { is_primary: boolean; contact: { id: string; name: string; email: string | null; phone: string | null } }[];
+	_count?: { jobs: number; quotes?: number; requests: number };
+	client_external_mapping?: { external_id: string }[];
+};
+
+export const getClientsPage = async (
+	params: ListParams,
+	extras: ClientListExtras = {}
+): Promise<PagedResult<ClientListRow>> => {
+	const response = await api.get<ApiResponse<ClientListRow[]>>("/clients", {
+		params: {
+			...params,
+			status: params.status?.join(","),
+			tax: extras.tax,
+			qb: extras.qb,
+			with_qb: extras.withQb ? "1" : undefined,
+		},
+	});
+	return pagedResultFrom(response.data, params);
+};
+
+// legacy-list: the unpaged array (every client with its jobs, quotes, requests and
+// plans). Only the map overlay still needs the whole org.
 export const getAllClients = async (): Promise<Client[]> => {
 	const response = await api.get<ApiResponse<Client[]>>("/clients");
 	return response.data.data || [];

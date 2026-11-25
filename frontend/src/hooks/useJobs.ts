@@ -26,16 +26,60 @@ import * as jobApi from "../api/jobs";
 import type { MyJobOption } from "../api/jobs";
 import type { BoardResponse } from "../types/board";
 import { qk } from "../lib/queryKeys";
+import type { ListParams } from "../types/paging";
+import { useDebouncedValue } from "./useDebouncedValue";
 
 // ============================================
 // JOB QUERIES
 // ============================================
 
-export const useAllJobsQuery = (): UseQueryResult<Job[], Error> => {
+// legacy-list: only CreateInvoice still reads the whole set (see api getAllJobs).
+export const useAllJobsQuery = (
+	opts: { enabled?: boolean; clientId?: string } = {}
+): UseQueryResult<Job[], Error> => {
 	return useQuery({
-		queryKey: ["jobs"],
-		queryFn: jobApi.getAllJobs,
+		queryKey: opts.clientId ? [...qk.jobs.all, "legacy", opts.clientId] : ["jobs"],
+		queryFn: () => jobApi.getAllJobs(opts.clientId),
+		enabled: opts.enabled ?? true,
 	});
+};
+
+const JOB_SEARCH_LIMIT = 20;
+
+/** Org-wide job search for pickers: first page only, newest first, slim rows. */
+export const useJobSearchQuery = (
+	q: string,
+	opts: { enabled?: boolean; clientId?: string; unattached?: boolean } = {}
+) => {
+	const params: ListParams = {
+		page: 1,
+		limit: JOB_SEARCH_LIMIT,
+		sort: "created_at",
+		dir: "desc",
+		...(q.trim().length >= 2 && { q: q.trim() }),
+	};
+	const extras: jobApi.JobListExtras = {
+		client_id: opts.clientId,
+		unattached: opts.unattached,
+	};
+	return useQuery({
+		queryKey: [...qk.jobs.list(), params, extras],
+		queryFn: () => jobApi.getJobsPage(params, extras),
+		enabled: opts.enabled ?? true,
+		placeholderData: keepPreviousData,
+	});
+};
+
+/** Typeahead options for a job field; the chosen job's label survives the search narrowing. */
+export const useJobOptions = (text: string, selectedId: string | null, enabled = true) => {
+	const q = useDebouncedValue(text.trim());
+	const { data } = useJobSearchQuery(q, { enabled });
+	const { data: selected } = useJobByIdQuery(selectedId ?? "");
+	const label = (j: { job_number: string; name: string }) => `#${j.job_number} — ${j.name}`;
+	return {
+		options: (data?.rows ?? []).map((j) => ({ id: j.id, label: label(j) })),
+		selectedLabel: selected ? label(selected) : undefined,
+	};
 };
 
 export const useJobByIdQuery = (
@@ -169,10 +213,23 @@ export const useDeleteJobMutation = (): UseMutationResult<
 // JOB VISIT QUERIES
 // ============================================
 
-export const useAllJobVisitsQuery = (): UseQueryResult<JobVisit[], Error> => {
+const VISIT_SEARCH_LIMIT = 20;
+
+/** Org-wide visit search for pickers: first page only, newest first, slim rows. */
+export const useJobVisitSearchQuery = (q: string, enabled = true, clientId?: string) => {
+	const params: ListParams = {
+		page: 1,
+		limit: VISIT_SEARCH_LIMIT,
+		sort: "scheduled_start_at",
+		dir: "desc",
+		...(q.trim().length >= 2 && { q: q.trim() }),
+		...(clientId && { clientId }),
+	};
 	return useQuery({
-		queryKey: ["jobVisits"],
-		queryFn: jobApi.getAllJobVisits,
+		queryKey: [...qk.visits.list(), params],
+		queryFn: () => jobApi.listJobVisits(params),
+		enabled,
+		placeholderData: keepPreviousData,
 	});
 };
 
@@ -202,8 +259,8 @@ export const useAssignedPastVisitsQuery = (enabled = true) =>
 	});
 
 /**
- * The caller's own jobs, for pickers. Separate from `useAllJobVisitsQuery`, which
- * pulls the whole organization's visit history and is far too heavy for a phone.
+ * The caller's own jobs, for pickers. Separate from the org-wide visit list,
+ * which is far too heavy for a phone.
  */
 export const useMyJobsQuery = (enabled = true): UseQueryResult<MyJobOption[], Error> => {
 	return useQuery({

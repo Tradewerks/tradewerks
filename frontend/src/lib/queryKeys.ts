@@ -37,6 +37,7 @@ export const qk = {
 	visits: {
 		all: ["jobVisits"] as const,
 		detail: (id: string) => ["jobVisits", id] as const,
+		list: () => ["jobVisits", "list"] as const,
 		assigned: (range?: { from?: string; to?: string }) =>
 			range
 				? (["jobVisits", "assigned", range] as const)

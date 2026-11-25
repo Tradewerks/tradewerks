@@ -6,6 +6,9 @@ import {
 } from "../types/responses.js";
 import {
     getAllRequests,
+    getRequestsPage,
+    parseRequestListExtras,
+    REQUEST_LIST_SPEC,
     getRequestById,
     insertRequest,
     updateRequest,
@@ -13,6 +16,7 @@ import {
 } from "../controllers/requestsController.js";
 import { getUserContext } from '../lib/context.js';
 import * as requestNotesController from '../controllers/requestNotesController.js';
+import { markLegacyList, parseListQuery, sendList, sendListError } from '../lib/listQuery.js';
 import { requirePermission } from '../lib/requirePermissions.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 
@@ -22,8 +26,22 @@ router.get("/", requirePermission("view_requests"), async (req, res, next) => {
     // requireRole("dispatcher"),           temp removal until further implementation
     try {
         const orgId = req.user!.organization_id as string;
-        const requests = await getAllRequests(orgId);
-        res.json(createSuccessResponse(requests, { count: requests.length }));
+        let parsed, extras;
+        try {
+            parsed = parseListQuery(req.query, REQUEST_LIST_SPEC);
+            // Legacy calls are not validated, so stray params must not reach the extras.
+            extras = parsed.paged ? parseRequestListExtras(req.query) : undefined;
+        } catch (err) {
+            if (sendListError(res, err)) return;
+            throw err;
+        }
+        if (!parsed.paged) {
+            markLegacyList(res);
+            const requests = await getAllRequests(orgId);
+            return res.json(createSuccessResponse(requests, { count: requests.length }));
+        }
+        const { rows, total } = await getRequestsPage(orgId, parsed, extras!);
+        sendList(res, parsed, rows, total);
     } catch (err) {
         next(err);
     }

@@ -12,8 +12,15 @@ import {
 	type LineItemDisposition,
 } from "../../types/common";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
-import { useAllJobVisitsQuery, useJobByIdQuery } from "../../hooks/useJobs";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import {
+	useJobByIdQuery,
+	useJobVisitSearchQuery,
+	useJobVisitsByJobIdQuery,
+} from "../../hooks/useJobs";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { getJobVisitById } from "../../api/jobs";
+import { useToast } from "../ui/useToast";
+import { useClientFilterSearch } from "../../hooks/useClients";
 import {
 	useDraftsByTypeQuery,
 	useCreateDraftMutation,
@@ -37,7 +44,6 @@ import { createStepRouter } from "../../hooks/forms/useZodStepRouting";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
-	type TemplateSearchClient,
 	type TemplateSearchScopeToggle,
 } from "../ui/forms/TemplateSearch";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
@@ -107,8 +113,17 @@ const CreateJobVisit = ({
 	const [isDirty, setIsDirty] = useState(false);
 
 	const { data: technicians } = useActiveTechniciansQuery();
-	const { data: allVisits = [] } = useAllJobVisitsQuery();
-	const { data: clients } = useAllClientsQuery();
+	const toast = useToast();
+	const copyLoadingRef = useRef(false);
+	const [sourceSearch, setSourceSearch] = useState("");
+	const debouncedSourceSearch = useDebouncedValue(sourceSearch);
+	const { data: thisJobVisits = [] } = useJobVisitsByJobIdQuery(jobId);
+	// "Any job" is a server search (first 20), not every visit in the org.
+	const { data: anyJobVisits } = useJobVisitSearchQuery(
+		debouncedSourceSearch,
+		sourceMode === "existing" && visitScope === "any-job",
+		sourceClientFilter || undefined
+	);
 	const { data: drafts = [] } = useDraftsByTypeQuery("job_visit", jobId);
 	const createDraftMutation = useCreateDraftMutation();
 	const updateDraftMutation = useUpdateDraftMutation();
@@ -316,9 +331,19 @@ const CreateJobVisit = ({
 	);
 
 	const handleTemplateSelect = useCallback(
-		(visitId: string) => {
-			const source = allVisits.find((v) => v.id === visitId);
-			if (!source) return;
+		async (visitId: string) => {
+			if (copyLoadingRef.current) return;
+			copyLoadingRef.current = true;
+			// The list rows are slim; line items come from the visit itself.
+			let source;
+			try {
+				source = await getJobVisitById(visitId);
+			} catch (err) {
+				toast.error(err instanceof Error ? err.message : "Failed to load that visit");
+				return;
+			} finally {
+				copyLoadingRef.current = false;
+			}
 
 			setName(source.name ?? "");
 			setDescription(source.description ?? "");
@@ -350,7 +375,7 @@ const CreateJobVisit = ({
 			setConstraintSeed({ key: constraintResetKeyRef.current }); // clear all initial* props → use defaults
 			wizard.goToStep(1 as Step);
 		},
-		[allVisits, lineItems, wizard]
+		[lineItems, wizard, toast]
 	);
 
 	const handleSelectDraft = useCallback(
@@ -525,13 +550,13 @@ const CreateJobVisit = ({
 
 	const templateResults = useMemo((): TemplateSearchResult[] => {
 		const source =
-			visitScope === "this-job"
-				? allVisits.filter((v) => v.job_id === jobId)
-				: allVisits;
+			visitScope === "this-job" ? thisJobVisits : (anyJobVisits?.rows ?? []);
 
 		return source
 			.filter((v) => v.status !== "Cancelled")
 			.map((v) => ({
+				clientId: visitScope === "any-job" ? v.job?.client?.id : undefined,
+				clientName: visitScope === "any-job" ? v.job?.client?.name : undefined,
 				id: v.id,
 				title: v.name ?? "",
 				subtitle:
@@ -547,11 +572,11 @@ const CreateJobVisit = ({
 					v.status as keyof typeof VisitStatusColors
 				],
 				createdAt:
-					v.created_at != null
+					"created_at" in v && v.created_at != null
 						? new Date(v.created_at).toISOString()
 						: undefined,
 			}));
-	}, [allVisits, visitScope, jobId]);
+	}, [thisJobVisits, anyJobVisits, visitScope]);
 
 	const scopeToggle: TemplateSearchScopeToggle = useMemo(
 		() => ({
@@ -566,10 +591,9 @@ const CreateJobVisit = ({
 		[visitScope]
 	);
 
-	const templateClients = useMemo((): TemplateSearchClient[] => {
-		if (!clients) return [];
-		return clients.map((c) => ({ id: c.id, name: c.name }));
-	}, [clients]);
+	const { clients: templateClients, onClientQueryChange } = useClientFilterSearch(
+		sourceMode === "existing" && visitScope === "any-job",
+	);
 
 	const draftResults = useMemo((): TemplateSearchResult[] => {
 		return drafts.map((d: DraftSummary) => ({
@@ -790,14 +814,16 @@ const CreateJobVisit = ({
 			return (
 				<TemplateSearch
 					heading="Start from existing visit"
-					placeholder="Search by name or description..."
+					placeholder="Search by visit name, job number or client..."
 					results={templateResults}
 					clients={templateClients}
 					onSelect={handleTemplateSelect}
 					onClose={() => setSourceMode(null)}
+					onQueryChange={setSourceSearch}
 					scopeToggle={scopeToggle}
 					clientFilter={sourceClientFilter}
 					onClientFilterChange={setSourceClientFilter}
+					onClientQueryChange={onClientQueryChange}
 				/>
 			);
 		}
@@ -1051,6 +1077,7 @@ const CreateJobVisit = ({
 		sourceClientFilter,
 		templateResults,
 		templateClients,
+		onClientQueryChange,
 		handleTemplateSelect,
 		scopeToggle,
 		wizard.currentStep,

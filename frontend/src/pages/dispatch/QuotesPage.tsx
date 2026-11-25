@@ -1,8 +1,15 @@
 ﻿import AdaptableTable from "../../components/AdaptableTable";
-import { useAllQuotesQuery, useCreateQuoteMutation } from "../../hooks/useQuotes";
+import { useCreateQuoteMutation } from "../../hooks/useQuotes";
+import { getQuotesPage } from "../../api/quotes";
+import { usePagedList } from "../../hooks/usePagedList";
+import { useListPaging, dateRangeToParams } from "../../hooks/useListPaging";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { qk } from "../../lib/queryKeys";
+import ReportPagination from "../../components/reports/ReportPagination";
+import type { ListParams, SortDir } from "../../types/paging";
 import { useClientByIdQuery } from "../../hooks/useClients";
 import { useRequestByIdQuery } from "../../hooks/useRequests";
-import { QuoteStatusValues, QuoteStatusLabels, QuoteStatusColors, type Quote, type QuoteStatus } from "../../types/quotes";
+import { QuoteStatusValues, QuoteStatusLabels, QuoteStatusColors, type QuoteStatus } from "../../types/quotes";
 import { useState, useMemo } from "react";
 import { Plus } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -10,10 +17,11 @@ import CreateQuote from "../../components/quotes/CreateQuote";
 import { formatDate, formatCurrency } from "../../util/util";
 import SearchBar from "../../components/ui/SearchBar";
 import FilterChips from "../../components/ui/FilterChips";
+import { useDateRangeChip } from "../../hooks/useDateRangeChip";
 import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
-import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRangeUtils";
+import { parseDateRangeFromParams } from "../../util/dateRangeUtils";
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
@@ -21,15 +29,6 @@ import PageReportButton from "../../components/reports/PageReportButton"
 import PageReportKpis from "../../components/reports/PageReportKpis"
 import { usePageReport } from "../../components/reports/usePageReport"
 import SortControl from "../../components/ui/SortControl";
-import type { SortDir } from "../../util/sortUtil";
-import {
-	withDir,
-	compareByOrder,
-	compareDateNullsLast,
-	comparePriority,
-	compareString,
-	compareNumber
-} from "../../util/sortUtil";
 import { PriorityLabels, PriorityValues, PriorityColors, type Priority } from "../../types/common";
 
 
@@ -52,6 +51,17 @@ const sortLabels: Record<string, string> = {
 	total: "Total",
 };
 
+// The page's sort keys to the server's sortable columns. A key not listed here
+// (an old bookmark) is dropped from the chip and header, not sent to be refused.
+const SERVER_SORT: Record<string, string> = {
+	date: "created_at",
+	priority: "priority",
+	status: "status",
+	client: "client",
+	quoteNumber: "quote_number",
+	total: "total",
+};
+
 // "created" and "quoteNumber" columns aren't the raw sortable value directly —
 // "created" is already driven by "date"; "quoteNumber" sorts on the raw
 // `quote_number` field (the column also embeds the title on a second line).
@@ -62,29 +72,28 @@ const COLUMN_SORT_KEY: Record<string, string> = {
 export default function QuotesPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { data: quotes, isLoading: isFetchLoading, error: fetchError } = useAllQuotesQuery();
 	const { mutateAsync: createQuote } = useCreateQuoteMutation();
 	const [isModalOpen, setIsModalOpen] = useState(false);
 	const [searchInput, setSearchInput] = useState("");
 
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
 	const { removeTerm: removeStatus } = useMultiSearch("status");
+	const dateChip = useDateRangeChip("date");
 	const { removeTerm: removePriority } = useMultiSearch("priority");
-	// Collision-free memo key (["ab"] vs ["a","b"] must differ)
-	const termsKey = JSON.stringify(terms);
 
 	const queryParams = new URLSearchParams(location.search);
 	const clientFilter = queryParams.get("client");
 	const requestFilter = queryParams.get("request");
-	// Dashboard links use the comma form (status=Sent,Viewed); the chips write repeated params.
-	const statusFilter = queryParams.getAll("status").flatMap((v) => v.split(",")).filter(Boolean);
-	const statusKey = statusFilter.join(",");
-	const priorityFilter = queryParams.getAll("priority");
-	const priorityKey = priorityFilter.join(",");
+	// Repeated (?status=A&status=B, what the filter writes) or comma-joined (dashboard link).
+	const flat = (key: string) =>
+		queryParams.getAll(key).flatMap((v) => v.split(",").map((s) => s.trim()).filter(Boolean));
+	const statusFilter = flat("status");
+	const priorityFilter = flat("priority");
 	const dateParamKey = queryParams.get("date");
 	const dateParamFrom = queryParams.get("dateFrom");
 	const dateParamTo = queryParams.get("dateTo");
-	const sortParam = queryParams.get("sort");
+	const rawSort = queryParams.get("sort");
+	const sortParam = rawSort && SERVER_SORT[rawSort] ? rawSort : null;
 	const dirParam = queryParams.get("dir");
 
 	// permissions
@@ -94,89 +103,47 @@ export default function QuotesPage() {
 	const { data: filterClient } = useClientByIdQuery(clientFilter);
 	const { data: filterRequest } = useRequestByIdQuery(requestFilter);
 
-	const display = useMemo(() => {
-		const _dp = new URLSearchParams();
-		if (dateParamKey) _dp.set("date", dateParamKey);
-		if (dateParamFrom) _dp.set("dateFrom", dateParamFrom);
-		if (dateParamTo) _dp.set("dateTo", dateParamTo);
-		const dateRange = parseDateRangeFromParams(_dp, "date");
+	// Chips and the text being typed go to the server as one string it splits into words.
+	const q = useDebouncedValue([...terms, searchInput.trim()].filter(Boolean).join(" "));
 
-		if (!quotes) return [];
+	const filters = useMemo(() => {
+		const dp = new URLSearchParams();
+		if (dateParamKey) dp.set("date", dateParamKey);
+		if (dateParamFrom) dp.set("dateFrom", dateParamFrom);
+		if (dateParamTo) dp.set("dateTo", dateParamTo);
+		const range = dateRangeToParams(parseDateRangeFromParams(dp, "date"));
+		const sort = sortParam ? SERVER_SORT[sortParam] : undefined;
+		return {
+			sort,
+			dir: sort ? ((dirParam === "asc" ? "asc" : "desc") as SortDir) : undefined,
+			q: q || undefined,
+			status: statusFilter.length ? statusFilter : undefined,
+			...range,
+			priority: priorityFilter.length ? priorityFilter : undefined,
+			client_id: clientFilter ?? undefined,
+			request_id: requestFilter ?? undefined,
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [q, statusFilter.join(","), priorityFilter.join(","), clientFilter, requestFilter, sortParam, dirParam, dateParamKey, dateParamFrom, dateParamTo]);
 
-		const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
+	const { page, limit, paginationProps } = useListPaging(filters);
+	const { priority, client_id, request_id, ...listFilters } = filters;
+	const params: ListParams = { page, limit, ...listFilters };
+	const {
+		data,
+		isLoading: isFetchLoading,
+		isFetching,
+		error: fetchError,
+	} = usePagedList(
+		[...qk.quotes.list(), { priority, client_id, request_id }],
+		(p) => getQuotesPage(p, { priority, client_id, request_id }),
+		params
+	);
+	const total = data?.total ?? 0;
 
-		let filtered: Quote[] = quotes;
-
-		if (clientFilter) {
-			filtered = quotes.filter((q) => q.client_id === clientFilter);
-		}
-
-		if (requestFilter) {
-			filtered = filtered.filter((q) => q.request_id === requestFilter);
-		}
-
-		if (statusFilter.length > 0) {
-			filtered = filtered.filter((q) => statusFilter.includes(q.status));
-		}
-
-		if (priorityFilter.length > 0) {
-			filtered = filtered.filter((q) => priorityFilter.includes(q.priority));
-		}
-
-		if (activeTerms.length > 0) {
-			filtered = filtered.filter((q) =>
-				activeTerms.every((term) => {
-					const lower = term.toLowerCase();
-					const clientName = q.client?.name?.toLowerCase() || "";
-					const title = q.title?.toLowerCase() || "";
-					const quoteNumber = q.quote_number?.toLowerCase() || "";
-					const status = q.status?.toLowerCase() || "";
-					const address = q.address?.toLowerCase() || "";
-					const priority = q.priority?.toLowerCase() || "";
-					return (
-						title.includes(lower) ||
-						clientName.includes(lower) ||
-						quoteNumber.includes(lower) ||
-						status.includes(lower) ||
-						address.includes(lower) ||
-						priority.includes(lower)
-					);
-				})
-			);
-		}
-
-		if (dateRange.option !== "all") {
-			filtered = filtered.filter((q) =>
-				matchesDateRange(q.created_at ? new Date(q.created_at) : null, dateRange)
-			);
-		}
-
-		const dir: SortDir = dirParam === "asc" ? "asc" : "desc";
-		const comparator: (a: Quote, b: Quote) => number =
-			sortParam === "priority"
-				? withDir((a, b) => comparePriority(a.priority, b.priority), dir)
-				: sortParam === "status"
-				? withDir((a, b) => compareByOrder(a.status, b.status, QuoteStatusValues), dir)
-				: sortParam === "date"
-				? (a, b) => compareDateNullsLast(dir)(a.created_at, b.created_at)
-				: sortParam === "client"
-				? withDir((a, b) => compareString(a.client?.name, b.client?.name), dir)
-				: sortParam === "quoteNumber"
-				? withDir((a, b) => compareString(a.quote_number, b.quote_number), dir)
-				: sortParam === "total"
-				? withDir((a, b) => compareNumber(Number(a.total), Number(b.total)), dir)
-				: (a, b) => {
-					const statusDiff =
-					QuoteStatusValues.indexOf(a.status as QuoteStatus) -
-					QuoteStatusValues.indexOf(b.status as QuoteStatus);
-				if (statusDiff !== 0) return statusDiff;
-
-				return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-			}
-		return filtered
-			.slice()
-			.sort(comparator)
-			.map((q) => ({
+	const display = useMemo(
+		() =>
+			(data?.rows ?? []).map((q) => ({
 				id: q.id,
 				client: q.client?.name || "Unknown Client",
 				quoteNumber: `${q.quote_number}\n${q.title}`,
@@ -187,8 +154,9 @@ export default function QuotesPage() {
 				total: formatCurrency(Number(q.total)),
 				_rawStatus: q.status,
 				_rawPriority: q.priority,
-			}));
-	}, [quotes, searchInput, termsKey, clientFilter, requestFilter, statusKey, priorityKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam]);
+			})),
+		[data]
+	);
 
 	const removeFilter = (filterType: "client" | "request") => {
 		const newParams = new URLSearchParams(location.search);
@@ -305,6 +273,7 @@ export default function QuotesPage() {
 						classes: PriorityColors[pri as Priority],
 						onRemove: () => removePriority(pri),
 					})),
+					dateChip,
 					sortParam
 						? {
 								label: `Sort: ${sortLabels[sortParam] ?? sortParam} (${dirParam === "asc" ? "asc" : "desc"})`,
@@ -313,7 +282,7 @@ export default function QuotesPage() {
 						  }
 						: null,
 				]}
-				resultCount={display.length}
+				resultCount={total}
 				onClearAll={clearAllFilters}
 			/>
 
@@ -357,6 +326,7 @@ export default function QuotesPage() {
 					sortDir={dirParam === "asc" ? "asc" : "desc"}
 					onSortChange={handleSortChange}
 				/>
+				<ReportPagination {...paginationProps(total, isFetching)} />
 			</div>
 
 			<CreateQuote

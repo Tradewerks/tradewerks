@@ -16,12 +16,16 @@ import { isAddressTaxChoiceRefusal } from '../lib/addressTaxChoice.js';
 import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../controllers/logsController.js';
 import {
     getAllJobs,
+    getJobsPage,
+    parseJobListExtras,
+    JOB_LIST_SPEC,
     getJobById,
     insertJob,
     updateJob,
     deleteJob,
     cancelJob,
 } from "../controllers/jobsController.js";
+import { markLegacyList, parseListQuery, sendList, sendListError } from "../lib/listQuery.js";
 import { cancelJobSchema } from "../lib/validate/jobs.js";
 import {
     getJobNotes,
@@ -44,8 +48,30 @@ const router = Router();
 router.get("/", requireAnyPermission("view_jobs", "view_assigned_jobs", "view_all_jobs"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const jobs = await getAllJobs(orgId, assignedTechId(req));
-        res.json(createSuccessResponse(jobs, { count: jobs.length }));
+        const techId = assignedTechId(req);
+        let parsed, extras;
+        try {
+            parsed = parseListQuery(req.query, JOB_LIST_SPEC);
+            // Legacy calls are not validated, so stray params must not reach the extras.
+            extras = parsed.paged ? parseJobListExtras(req.query) : undefined;
+        } catch (err) {
+            if (sendListError(res, err)) return;
+            throw err;
+        }
+        if (!parsed.paged) {
+            markLegacyList(res);
+            // Legacy calls are unvalidated: only a plain string client_id counts.
+            const clientId =
+                typeof req.query.client_id === "string" && req.query.client_id
+                    ? req.query.client_id
+                    : undefined;
+            const jobs = clientId
+                ? await getAllJobs(orgId, techId, clientId)
+                : await getAllJobs(orgId, techId);
+            return res.json(createSuccessResponse(jobs, { count: jobs.length }));
+        }
+        const { rows, total } = await getJobsPage(orgId, parsed, extras!, techId);
+        sendList(res, parsed, rows, total);
     } catch (err) {
         next(err);
     }

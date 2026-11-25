@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useCallback } from "react";
+﻿import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { ZodError } from "zod";
 import {
 	CreateJobSchema,
@@ -12,11 +12,15 @@ import {
 	type Priority,
 	PriorityValues,
 } from "../../types/common";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import { useSelectedClient, useClientFilterSearch, useClientNames } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
 import { useTaxGroups } from "../../hooks/useTaxGroups";
 import { rateToPercentInput } from "../../lib/formatTax";
 import { formatCurrency } from "../../util/util";
-import { useAllJobsQuery } from "../../hooks/useJobs";
+import { useJobSearchQuery } from "../../hooks/useJobs";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { getJobById } from "../../api/jobs";
+import { useToast } from "../ui/useToast";
 import { useAllInventoryQuery } from "../../hooks/useInventory";
 import {
 	useDraftsByTypeQuery,
@@ -38,7 +42,6 @@ import FinancialSummary from "../ui/forms/FinancialSummary";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
-	type TemplateSearchClient,
 } from "../ui/forms/TemplateSearch";
 import { useStepWizard } from "../../hooks/forms/useStepWizard";
 import { useLineItems } from "../../hooks/forms/useLineItems";
@@ -88,8 +91,15 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 	const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
-	const { data: clients } = useAllClientsQuery();
-	const { data: allJobs = [] } = useAllJobsQuery();
+	const toast = useToast();
+	const copyLoadingRef = useRef(false);
+	const [sourceSearch, setSourceSearch] = useState("");
+	const debouncedSourceSearch = useDebouncedValue(sourceSearch);
+	// Start-from-existing is a server search (first 20), not every job in the org.
+	const { data: sourceJobs } = useJobSearchQuery(debouncedSourceSearch, {
+		enabled: sourceMode === "existing",
+		clientId: sourceClientFilter || undefined,
+	});
 	const { data: inventoryItems = [] } = useAllInventoryQuery();
 	const { data: drafts = [] } = useDraftsByTypeQuery("job");
 	const createDraftMutation = useCreateDraftMutation();
@@ -118,10 +128,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 	const autoModeLoaded = useAutoTaxMode();
 	const autoMode = autoModeLoaded === true;
 
-	const selectedClient = useMemo(
-		() => clients?.find((c) => c.id === clientId) ?? null,
-		[clients, clientId],
-	);
+	const selectedClient = useSelectedClient(clientId, isModalOpen);
 	const clientExempt = selectedClient?.is_tax_exempt ?? false;
 	const clientTaxGroupId = selectedClient?.tax_group_id ?? null;
 
@@ -267,9 +274,19 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 	const handleClearAddress = () => setGeoData(undefined);
 
 	const handleSelectTemplate = useCallback(
-		(jobId: string) => {
-			const source = allJobs.find((j) => j.id === jobId);
-			if (!source) return;
+		async (jobId: string) => {
+			if (copyLoadingRef.current) return;
+			copyLoadingRef.current = true;
+			// The list rows are slim; description, coordinates and line items come from the job.
+			let source;
+			try {
+				source = await getJobById(jobId);
+			} catch (err) {
+				toast.error(err instanceof Error ? err.message : "Failed to load that job");
+				return;
+			} finally {
+				copyLoadingRef.current = false;
+			}
 
 			setName(source.name);
 			setDescription(source.description);
@@ -316,7 +333,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 			setSourceMode(null);
 			goToStep(1 as Step);
 		},
-		[allJobs, seedLineItems, resetLineItems, setFinancialOriginals, goToStep]
+		[toast, seedLineItems, resetLineItems, setFinancialOriginals, goToStep]
 	);
 
 	const handleSelectDraft = useCallback(
@@ -448,16 +465,13 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 	);
 
 	const templateResults = useMemo((): TemplateSearchResult[] => {
-		return allJobs
+		return (sourceJobs?.rows ?? [])
 			.filter((j) => j.status !== "Cancelled")
 			.map((j) => ({
 				id: j.id,
 				title: j.name,
 				subtitle: j.job_number,
-				detail: j.description
-					? j.description.slice(0, 80) +
-						(j.description.length > 80 ? "…" : "")
-					: undefined,
+				detail: j.address || undefined,
 				badge: j.status,
 				badgeColor: JobStatusColors[
 					j.status as keyof typeof JobStatusColors
@@ -470,12 +484,15 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 				clientId: j.client_id,
 				clientName: j.client?.name,
 			}));
-	}, [allJobs]);
+	}, [sourceJobs]);
 
-	const templateClients = useMemo((): TemplateSearchClient[] => {
-		if (!clients) return [];
-		return clients.map((c) => ({ id: c.id, name: c.name }));
-	}, [clients]);
+	const { clients: templateClients, onClientQueryChange } = useClientFilterSearch(
+		sourceMode !== null,
+	);
+	const draftClientNames = useClientNames(
+		drafts.map((d) => d.client_id),
+		sourceMode === "draft",
+	);
 
 	const draftResults = useMemo((): TemplateSearchResult[] => {
 		return drafts.map((d: DraftSummary) => ({
@@ -499,26 +516,9 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 			createdAt: d.created_at,
 			isDeletable: true,
 			clientId: d.client_id ?? undefined,
-			clientName: d.client_id
-				? templateClients.find((c) => c.id === d.client_id)?.name
-				: undefined,
+			clientName: d.client_id ? draftClientNames[d.client_id] : undefined,
 		}));
-	}, [drafts, templateClients]);
-
-	const clientDropdownEntries = useMemo(() => {
-		if (clients?.length) {
-			return clients.map((c) => (
-				<option value={c.id} key={c.id}>
-					{c.name}
-				</option>
-			));
-		}
-		return (
-			<option disabled value="">
-				No clients found
-			</option>
-		);
-	}, [clients]);
+	}, [drafts, draftClientNames]);
 
 	const invokeCreate = async () => {
 		if (isLoading) return;
@@ -631,6 +631,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 						}
 						clientFilter={sourceClientFilter}
 						onClientFilterChange={setSourceClientFilter}
+						onClientQueryChange={onClientQueryChange}
 					/>
 				);
 			}
@@ -640,8 +641,10 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 					clients={templateClients}
 					onSelect={handleSelectTemplate}
 					onClose={() => setSourceMode(null)}
+					onQueryChange={setSourceSearch}
 					clientFilter={sourceClientFilter}
 					onClientFilterChange={setSourceClientFilter}
+					onClientQueryChange={onClientQueryChange}
 				/>
 			);
 		}
@@ -671,20 +674,17 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 								<label className={LABEL}>
 									Client *
 								</label>
-								<Dropdown
-									entries={
-										clientDropdownEntries
-									}
+								<ClientPicker
 									value={clientId}
 									onChange={(v) => {
 										setClientId(v);
 										markDirty();
-										const client = clients?.find((c) => c.id === v);
-										if (client?.address && Number.isFinite(client.coords?.lat) && Number.isFinite(client.coords?.lon)) {
+									}}
+									onPick={(client) => {
+										if (client.address && Number.isFinite(client.coords?.lat) && Number.isFinite(client.coords?.lon)) {
 											setGeoData({ address: client.address, coords: { lat: client.coords.lat, lon: client.coords.lon } });
 										}
 									}}
-									placeholder="Select client"
 									disabled={isLoading}
 									error={errors?.issues.some(
 										(e) =>
@@ -851,7 +851,7 @@ const CreateJob = ({ isModalOpen, setIsModalOpen, createJob }: CreateJobProps) =
 		priority,
 		description,
 		isLoading,
-		clientDropdownEntries,
+		onClientQueryChange,
 		geoData,
 		errors,
 		activeLineItems,

@@ -3,6 +3,7 @@ import type { Response } from "express";
 import {
 	ListQueryError,
 	markLegacyList,
+	isPagedRequest,
 	parseListQuery,
 	sendList,
 	sendListError,
@@ -77,11 +78,11 @@ describe("parseListQuery", () => {
 	});
 
 	it("rejects a status not in the spec", () => {
-		expect(parseListQuery({ status: "Sent,Viewed" }, spec).status).toEqual([
+		expect(parseListQuery({ page: "1", status: "Sent,Viewed" }, spec).status).toEqual([
 			"Sent",
 			"Viewed",
 		]);
-		const e = caught(() => parseListQuery({ status: "Sent,Paid" }, spec));
+		const e = caught(() => parseListQuery({ page: "1", status: "Sent,Paid" }, spec));
 		expect(e).toBeInstanceOf(ListQueryError);
 		expect(e.field).toBe("status");
 	});
@@ -113,26 +114,56 @@ describe("parseListQuery", () => {
 		expect(p.take).toBe(20);
 		expect(p.dir).toBe("asc");
 		expect(p.q).toBeUndefined();
-		expect(parseListQuery({ q: "  ab " }, spec).q).toBe("ab");
+		expect(parseListQuery({ page: "1", q: "  ab " }, spec).q).toBe("ab");
 	});
 
 	it("rejects page 0, a bad date, and from after to", () => {
 		expect(caught(() => parseListQuery({ page: "0" }, spec)).field).toBe(
 			"page",
 		);
-		expect(caught(() => parseListQuery({ from: "nope" }, spec)).field).toBe(
+		expect(caught(() => parseListQuery({ page: "1", from: "nope" }, spec)).field).toBe(
 			"from",
 		);
 		expect(
 			caught(() =>
-				parseListQuery({ from: "2026-02-01", to: "2026-01-01" }, spec),
+				parseListQuery({ page: "1", from: "2026-02-01", to: "2026-01-01" }, spec),
 			).field,
 		).toBe("to");
 		const ok = parseListQuery(
-			{ from: "2026-01-01", to: "2026-02-01" },
+			{ page: "1", from: "2026-01-01", to: "2026-02-01" },
 			spec,
 		);
 		expect(ok.from?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+	});
+
+	it("date-only to is exclusive of the next day", () => {
+		const p = parseListQuery({ page: "1", from: "2026-11-24", to: "2026-11-24" }, spec);
+		expect(p.from?.toISOString()).toBe("2026-11-24T00:00:00.000Z");
+		expect(p.to?.toISOString()).toBe("2026-11-25T00:00:00.000Z");
+		expect(
+			parseListQuery({ page: "1", to: "2026-12-31" }, spec).to?.toISOString(),
+		).toBe("2027-01-01T00:00:00.000Z");
+	});
+
+	it("rejects a date-only to that is a day before from", () => {
+		expect(
+			caught(() =>
+				parseListQuery({ page: "1", from: "2026-11-25", to: "2026-11-24" }, spec),
+			).field,
+		).toBe("to");
+	});
+
+	it("a legacy call (no page) skips validation and returns defaults", () => {
+		const p = parseListQuery({ sort: "desc", limit: "500", q: "x" }, spec);
+		expect(p.paged).toBe(false);
+		expect(p.sort).toBe(spec.defaultSort);
+		expect(isPagedRequest({ sort: "desc" })).toBe(false);
+		expect(isPagedRequest({ page: "" })).toBe(true);
+	});
+
+	it("a full ISO to is kept as the exclusive bound", () => {
+		const p = parseListQuery({ page: "1", to: "2026-11-24T10:00:00Z" }, spec);
+		expect(p.to?.toISOString()).toBe("2026-11-24T10:00:00.000Z");
 	});
 });
 
@@ -179,7 +210,7 @@ describe("sendList / markLegacyList", () => {
 describe("sendListError", () => {
 	it("answers a ListQueryError with 400 and keeps the field", () => {
 		const res = fakeRes();
-		const err = caught(() => parseListQuery({ sort: "nope" }, spec));
+		const err = caught(() => parseListQuery({ page: "1", sort: "nope" }, spec));
 		expect(sendListError(res as unknown as Response, err)).toBe(true);
 		expect(res.code).toBe(400);
 		expect(res.body).toMatchObject({

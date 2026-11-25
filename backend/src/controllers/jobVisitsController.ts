@@ -41,6 +41,7 @@ import { applyOdometerIncrement, fetchRouteDistanceMiles } from "../lib/vehicleM
 import { formatLocalDate, formatLocalTime } from "../lib/formatLocal.js";
 import { visitAssignedWhere, visitClaimableWhere } from "../lib/assignedScope.js";
 import { utcDayRange } from "../lib/dayRange.js";
+import type { ParsedList } from "../lib/listQuery.js";
 import {
 	HTTP_TRANSITION_ACTIONS,
 	NEEDS_TECH,
@@ -450,6 +451,47 @@ const BOARD_VISIT_SELECT = {
 		},
 	},
 } satisfies Prisma.job_visitSelect;
+
+export type VisitListParsed = ParsedList<"scheduled_start_at" | "status", visit_status>;
+
+// One page of the visits list in the board's slim shape. from/to is the board's
+// overlap, so a long visit spanning the range is still listed.
+export const listJobVisits = async (
+	organization_id: string,
+	parsed: VisitListParsed,
+	filters: { clientId?: string; techId?: string },
+) => {
+	const sdb = getScopedDb(organization_id);
+	const where: Prisma.job_visitWhereInput = {
+		AND: [
+			filters.clientId ? { job: { client_id: filters.clientId } } : {},
+			assignedTo(filters.techId),
+			parsed.status ? { status: { in: parsed.status } } : {},
+			parsed.from ? { scheduled_end_at: { gt: parsed.from } } : {},
+			parsed.to ? { scheduled_start_at: { lt: parsed.to } } : {},
+			parsed.q
+				? {
+						OR: [
+							{ name: { contains: parsed.q, mode: "insensitive" } },
+							{ job: { job_number: { contains: parsed.q, mode: "insensitive" } } },
+							{ job: { client: { name: { contains: parsed.q, mode: "insensitive" } } } },
+						],
+					}
+				: {},
+		],
+	};
+	const [rows, total] = await Promise.all([
+		sdb.job_visit.findMany({
+			where,
+			select: BOARD_VISIT_SELECT,
+			orderBy: [{ [parsed.sort]: parsed.dir }, { id: "asc" }],
+			skip: parsed.skip,
+			take: parsed.take,
+		}),
+		sdb.job_visit.count({ where }),
+	]);
+	return { rows, total };
+};
 
 // What the occurrence cards and popups read: slot times and constraints, the
 // plan's label fields and the job container it is filed under.

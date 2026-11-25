@@ -6,6 +6,7 @@ import {
     createSuccessResponse,
     createErrorResponse,
 } from "../types/responses.js";
+import { markLegacyList, parseListQuery, sendList, sendListError } from '../lib/listQuery.js';
 import { getUserContext, getScopedDb } from '../lib/context.js';
 import { hasPermission, requirePermission, requirePermissionForBody } from '../lib/requirePermissions.js';
 import { acknowledgeTaxReviewRoute } from './tax.js';
@@ -48,8 +49,32 @@ const taxRefusalResponse = (refusal: TaxRefusal) =>
 router.get("/", requirePermission("view_invoices"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const invoices = await invoicesController.getAllInvoices(orgId);
-        res.json(createSuccessResponse(invoices, { count: invoices.length }));
+        let parsed, extras;
+        try {
+            parsed = parseListQuery(req.query, invoicesController.INVOICE_LIST_SPEC);
+            // Legacy calls are not validated, so stray params must not reach the extras.
+            extras = parsed.paged ? invoicesController.parseInvoiceListExtras(req.query) : undefined;
+        } catch (err) {
+            if (sendListError(res, err)) return;
+            throw err;
+        }
+        if (!parsed.paged) {
+            markLegacyList(res);
+            const invoices = await invoicesController.getAllInvoices(orgId);
+            return res.json(createSuccessResponse(invoices, { count: invoices.length }));
+        }
+        const { rows, total } = await invoicesController.getInvoicesPage(orgId, parsed, extras!);
+        sendList(res, parsed, rows, total);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Before "/:id", which would take "summary" as an id.
+router.get("/summary", requirePermission("view_invoices"), async (req, res, next) => {
+    try {
+        const orgId = req.user!.organization_id as string;
+        res.json(createSuccessResponse(await invoicesController.getInvoicesSummary(orgId)));
     } catch (err) {
         next(err);
     }

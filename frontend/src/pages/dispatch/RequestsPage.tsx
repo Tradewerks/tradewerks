@@ -1,7 +1,14 @@
 ﻿import AdaptableTable from "../../components/AdaptableTable";
-import { useAllRequestsQuery, useCreateRequestMutation } from "../../hooks/useRequests";
+import { useCreateRequestMutation } from "../../hooks/useRequests";
+import { getRequestsPage } from "../../api/requests";
+import { usePagedList } from "../../hooks/usePagedList";
+import { useListPaging, dateRangeToParams } from "../../hooks/useListPaging";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { qk } from "../../lib/queryKeys";
+import ReportPagination from "../../components/reports/ReportPagination";
+import type { ListParams, SortDir } from "../../types/paging";
 import { useClientByIdQuery } from "../../hooks/useClients";
-import { RequestStatusValues, RequestStatusLabels, RequestStatusColors, type Request, type RequestStatus } from "../../types/requests";
+import { RequestStatusValues, RequestStatusLabels, RequestStatusColors, type RequestStatus } from "../../types/requests";
 import { PriorityLabels, PriorityValues, PriorityColors, type Priority } from "../../types/common";
 import { useState, useMemo } from "react";
 import { Plus } from "lucide-react";
@@ -10,10 +17,11 @@ import CreateRequest from "../../components/requests/CreateRequest";
 import { formatDate } from "../../util/util";
 import SearchBar from "../../components/ui/SearchBar";
 import FilterChips from "../../components/ui/FilterChips";
+import { useDateRangeChip } from "../../hooks/useDateRangeChip";
 import PageControls from "../../components/ui/PageControls";
 import StatusFilter from "../../components/ui/StatusFilter";
 import DateRangeFilter from "../../components/ui/DateRangeFilter";
-import { parseDateRangeFromParams, matchesDateRange } from "../../util/dateRangeUtils";
+import { parseDateRangeFromParams } from "../../util/dateRangeUtils";
 import PageHeader from "../../components/ui/PageHeader";
 import { useMultiSearch } from "../../hooks/useMultiSearch";
 import { usePermission } from "../../hooks/usePermission";
@@ -21,14 +29,6 @@ import PageReportButton from "../../components/reports/PageReportButton";
 import PageReportKpis from "../../components/reports/PageReportKpis";
 import { usePageReport } from "../../components/reports/usePageReport";
 import SortControl from "../../components/ui/SortControl";
-import type { SortDir } from "../../util/sortUtil";
-import {
-	withDir,
-	compareByOrder,
-	compareDateNullsLast,
-	comparePriority,
-	compareString
-} from "../../util/sortUtil";
 
 const requestStatusOptions = RequestStatusValues.map((s) => ({
 	value: s,
@@ -48,6 +48,16 @@ const sortLabels: Record<string, string> = {
 	title: "Title",
 };
 
+// The page's sort keys to the server's sortable columns. A key not listed here
+// (an old bookmark) is dropped from the chip and header, not sent to be refused.
+const SERVER_SORT: Record<string, string> = {
+	date: "created_at",
+	priority: "priority",
+	status: "status",
+	client: "client",
+	title: "title",
+};
+
 // Display column ids whose value isn't the sortable one — "created" shows a
 // formatted date but the real value is `created_at` (already driven by the
 // existing "date" sort key).
@@ -58,11 +68,6 @@ const COLUMN_SORT_KEY: Record<string, string> = {
 export default function RequestsPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const {
-		data: requests,
-		isLoading: isFetchLoading,
-		error: fetchError,
-	} = useAllRequestsQuery();
 	const { mutateAsync: createRequest } = useCreateRequestMutation();
 	const [isModalOpen, setIsModalOpen] = useState(false);
 	const [searchInput, setSearchInput] = useState("");
@@ -73,98 +78,65 @@ export default function RequestsPage() {
 
 	const { terms, addTerm, removeTerm, duplicateTerm } = useMultiSearch("search");
 	const { removeTerm: removeStatus } = useMultiSearch("status");
+	const dateChip = useDateRangeChip("date");
 	const { removeTerm: removePriority } = useMultiSearch("priority");
-	// Collision-free memo key (["ab"] vs ["a","b"] must differ)
-	const termsKey = JSON.stringify(terms);
 
 	const queryParams = new URLSearchParams(location.search);
 	const clientFilter = queryParams.get("client");
-	const statusFilter = queryParams.getAll("status");
-	const statusKey = statusFilter.join(",");
-	const priorityFilter = queryParams.getAll("priority");
-	const priorityKey = priorityFilter.join(",");
-	const dateParamKey = queryParams.get("date");
-	const dateParamFrom = queryParams.get("dateFrom");
-	const dateParamTo = queryParams.get("dateTo");
-	const sortParam = queryParams.get("sort");
+	// Repeated (?status=A&status=B, what the filter writes) or comma-joined.
+	const flat = (key: string) =>
+		queryParams.getAll(key).flatMap((v) => v.split(",").map((s) => s.trim()).filter(Boolean));
+	const statusFilter = flat("status");
+	const priorityFilter = flat("priority");
+	const rawSort = queryParams.get("sort");
+	const sortParam = rawSort && SERVER_SORT[rawSort] ? rawSort : null;
 	const dirParam = queryParams.get("dir");
+	const dateOption = queryParams.get("date");
+	const dateFrom = queryParams.get("dateFrom");
+	const dateTo = queryParams.get("dateTo");
 
 	const { data: filterClient } = useClientByIdQuery(clientFilter);
 
-	const display = useMemo(() => {
-		const _dp = new URLSearchParams();
-		if (dateParamKey) _dp.set("date", dateParamKey);
-		if (dateParamFrom) _dp.set("dateFrom", dateParamFrom);
-		if (dateParamTo) _dp.set("dateTo", dateParamTo);
-		const dateRange = parseDateRangeFromParams(_dp, "date");
+	// Chips and the text being typed go to the server as one string it splits into words.
+	const q = useDebouncedValue([...terms, searchInput.trim()].filter(Boolean).join(" "));
 
-		if (!requests) return [];
+	const filters = useMemo(() => {
+		const dp = new URLSearchParams();
+		if (dateOption) dp.set("date", dateOption);
+		if (dateFrom) dp.set("dateFrom", dateFrom);
+		if (dateTo) dp.set("dateTo", dateTo);
+		const range = dateRangeToParams(parseDateRangeFromParams(dp, "date"));
+		const sort = sortParam ? SERVER_SORT[sortParam] : undefined;
+		return {
+			sort,
+			dir: sort ? ((dirParam === "asc" ? "asc" : "desc") as SortDir) : undefined,
+			q: q || undefined,
+			status: statusFilter.length ? statusFilter : undefined,
+			...range,
+			priority: priorityFilter.length ? priorityFilter : undefined,
+			client_id: clientFilter ?? undefined,
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [q, statusFilter.join(","), priorityFilter.join(","), clientFilter, sortParam, dirParam, dateOption, dateFrom, dateTo]);
 
-		const activeTerms = searchInput.trim() ? [...terms, searchInput.trim()] : terms;
+	const { page, limit, paginationProps } = useListPaging(filters);
+	const { priority, client_id, ...listFilters } = filters;
+	const params: ListParams = { page, limit, ...listFilters };
+	const {
+		data,
+		isLoading: isFetchLoading,
+		isFetching,
+		error: fetchError,
+	} = usePagedList(
+		[...qk.requests.list(), { priority, client_id }],
+		(p) => getRequestsPage(p, { priority, client_id }),
+		params
+	);
+	const total = data?.total ?? 0;
 
-		let filtered: Request[] = requests;
-
-		if (clientFilter) {
-			filtered = requests.filter((r) => r.client_id === clientFilter);
-		}
-
-		if (statusFilter.length > 0) {
-			filtered = filtered.filter((r) => statusFilter.includes(r.status));
-		}
-
-		if (priorityFilter.length > 0) {
-			filtered = filtered.filter((r) => priorityFilter.includes(r.priority));
-		}
-
-		if (activeTerms.length > 0) {
-			filtered = filtered.filter((r) =>
-				activeTerms.every((term) => {
-					const lower = term.toLowerCase();
-					const clientName = r.client?.name?.toLowerCase() || "";
-					const title = r.title?.toLowerCase() || "";
-					const status = r.status?.toLowerCase() || "";
-					const address = r.address?.toLowerCase() || "";
-					const priority = r.priority?.toLowerCase() || "";
-					return (
-						title.includes(lower) ||
-						clientName.includes(lower) ||
-						status.includes(lower) ||
-						address.includes(lower) ||
-						priority.includes(lower)
-					);
-				})
-			);
-		}
-
-		if (dateRange.option !== "all") {
-			filtered = filtered.filter((r) =>
-				matchesDateRange(r.created_at ? new Date(r.created_at) : null, dateRange)
-			);
-		}
-
-		const dir: SortDir = dirParam === "asc" ? "asc" : "desc";
-		const comparator: (a: Request, b: Request) => number =
-			sortParam === "priority"
-				? withDir((a, b) => comparePriority(a.priority, b.priority), dir)
-				: sortParam === "status"
-				? withDir((a, b) => compareByOrder(a.status, b.status, RequestStatusValues), dir)
-				: sortParam === "date"
-				? (a, b) => compareDateNullsLast(dir)(a.created_at, b.created_at)
-				: sortParam === "client"
-				? withDir((a, b) => compareString(a.client?.name, b.client?.name), dir)
-				: sortParam === "title"
-				? withDir((a, b) => compareString(a.title, b.title), dir)
-				: (a, b) => {
-					// default: status, then priority (Emergency first)
-					const statusDiff = compareByOrder(a.status, b.status, RequestStatusValues);
-					if (statusDiff !== 0) return statusDiff;
-					return comparePriority(b.priority, a.priority);
-				};
-
-		return filtered
-			.slice()
-			.sort(comparator)
-			.map((r) => ({
+	const display = useMemo(
+		() =>
+			(data?.rows ?? []).map((r) => ({
 				id: r.id,
 				client: r.client?.name || "Unknown Client",
 				title: r.title,
@@ -174,8 +146,9 @@ export default function RequestsPage() {
 				status: RequestStatusLabels[r.status] || r.status,
 				_rawStatus: r.status,
 				_rawPriority: r.priority,
-			}));
-	}, [requests, searchInput, termsKey, clientFilter, statusKey, dateParamKey, dateParamFrom, dateParamTo, sortParam, dirParam, priorityKey]);
+			})),
+		[data]
+	);
 
 	const removeFilter = (filterType: "client") => {
 		const newParams = new URLSearchParams(location.search);
@@ -290,6 +263,7 @@ export default function RequestsPage() {
 						classes: PriorityColors[pri as Priority],
 						onRemove: () => removePriority(pri),
 					})),
+					dateChip,
 					sortParam
 						? {
 								label: `Sort: ${sortLabels[sortParam] ?? sortParam} (${dirParam === "asc" ? "asc" : "desc"})`,
@@ -298,7 +272,7 @@ export default function RequestsPage() {
 						  }
 						: null,
 				]}
-				resultCount={display.length}
+				resultCount={total}
 				onClearAll={clearAllFilters}
 			/>
 
@@ -337,6 +311,7 @@ export default function RequestsPage() {
 					sortDir={dirParam === "asc" ? "asc" : "desc"}
 					onSortChange={handleSortChange}
 				/>
+				<ReportPagination {...paginationProps(total, isFetching)} />
 			</div>
 
 			<CreateRequest

@@ -7,9 +7,16 @@ import {
 	sendResultErr,
 } from "../types/responses.js";
 import { getUserContext } from "../lib/context.js";
+import { QB_ENABLED } from "../services/quickbooksService.js";
+import { getEntitlements } from "../services/entitlementService.js";
+import { isAccessAllowed } from "../lib/entitlements/resolve.js";
+import { markLegacyList, parseListQuery, sendList, sendListError } from "../lib/listQuery.js";
 import { isAddressTaxChoiceRefusal } from "../lib/addressTaxChoice.js";
 import {
 	getAllClients,
+	getClientsPage,
+	parseClientListExtras,
+	CLIENT_LIST_SPEC,
 	getClientById,
 	insertClient,
 	updateClient,
@@ -46,6 +53,13 @@ import { getEntityHistory, parseHistoryLimit, INVALID_HISTORY_LIMIT } from '../c
 
 const router = Router();
 
+const qbReadable = async (orgId: string) =>
+    QB_ENABLED &&
+    isAccessAllowed(
+        (await getEntitlements(orgId)).modules.quickbooks ?? "not_in_plan",
+        "read",
+    );
+
 // view_clients alone (the default Technician role holds it) must not open up
 // job totals or quotes: those need their own permissions.
 const clientReadScope = (req: Request) => ({
@@ -60,9 +74,28 @@ const clientReadScope = (req: Request) => ({
 router.get("/clients", requirePermission("view_clients"), async (req, res, next) => {
     try {
         const orgId = req.user!.organization_id as string;
-        const clients = await getAllClients(orgId, clientReadScope(req));
-        res.json(createSuccessResponse(clients, { count: clients.length }));
+        const parsed = parseListQuery(req.query, CLIENT_LIST_SPEC);
+        if (!parsed.paged) {
+            // Legacy calls are not validated, so stray params never reach the extras.
+            markLegacyList(res);
+            const clients = await getAllClients(orgId, clientReadScope(req));
+            return res.json(createSuccessResponse(clients, { count: clients.length }));
+        }
+        const parsedExtras = parseClientListExtras(req.query);
+        // The QuickBooks columns sit behind the same gates as /integrations/quickbooks.
+        const extras =
+            (parsedExtras.qb || parsedExtras.withQb) && !(await qbReadable(orgId))
+                ? { ...parsedExtras, qb: undefined, withQb: false }
+                : parsedExtras;
+        const { rows, total } = await getClientsPage(
+            orgId,
+            parsed,
+            extras,
+            clientReadScope(req),
+        );
+        sendList(res, parsed, rows, total);
     } catch (err) {
+        if (sendListError(res, err)) return;
         next(err);
     }
 });

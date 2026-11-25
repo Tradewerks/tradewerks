@@ -43,7 +43,7 @@ import {
     getQBUnsynced,
     syncQBUnsynced,
 } from "../api/quickbooks";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { moduleQuery } from "./moduleQuery";
 import { useEffect, useState } from "react";
 import type { ImportQBItemResult, QBProfitAndLossQuery, QBReportQuery, QBReportTypeId } from "../types/quickbooks";
@@ -92,11 +92,12 @@ export const useSyncedClientFilter = () => {
     return { enabled, setEnabled, mappedCount: mappedCustomers.length, customer };
 };
 
-export const useQBCustomerQuery = (enabled = true) => {
+/** `excludeExisting` hides QB customers whose name matches a client here (the import list). */
+export const useQBCustomerQuery = (enabled = true, excludeExisting = false) => {
     const queryClient = useQueryClient();
     const query = useQuery({
-        queryKey: ["qbCustomers"],
-        queryFn: getQBCustomers,
+        queryKey: excludeExisting ? ["qbCustomers", { excludeExisting }] : ["qbCustomers"],
+        queryFn: () => getQBCustomers({ excludeExisting }),
         enabled,
         retry: false,
     });
@@ -528,13 +529,20 @@ export const useImportQBInvoicesMutation = () => {
     });
 };
 
-export const useQBClientSyncMutation = () => {
+/** What a client sync changes: QB's customers, the mapping list, and the paged clients (synced state). */
+export const invalidateQBClientSync = (queryClient: QueryClient) => {
+    queryClient.invalidateQueries({ queryKey: ["qbCustomers"] });
+    queryClient.invalidateQueries({ queryKey: ["qbMappedCustomers"] });
+    queryClient.invalidateQueries({ queryKey: qk.clients.all });
+};
+
+/** A bulk caller passes `invalidate: false` and calls invalidateQBClientSync once when its batch settles. */
+export const useQBClientSyncMutation = ({ invalidate = true } = {}) => {
     const queryClient = useQueryClient();
     return useMutation<{ synced: boolean; qb_customer_id: string }, Error, { client_id: string }>({
         mutationFn: ({ client_id }) => syncClientToQB(client_id),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ["qbCustomers"]});
-            queryClient.invalidateQueries({ queryKey: ["qbMappedCustomers"]});
+            if (invalidate) invalidateQBClientSync(queryClient);
         }
     })
 };

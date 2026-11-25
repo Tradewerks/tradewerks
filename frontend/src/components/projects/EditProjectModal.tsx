@@ -1,4 +1,4 @@
-import { useAllClientsQuery } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
 import { useActiveDispatchersQuery } from "../../hooks/useDispatchers";
 import { FormWizardContainer } from "../ui/forms/FormWizardContainer";
 import { FormErrorBanner } from "../ui/forms/FormErrorBanner";
@@ -49,9 +49,6 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
     const [errors, setErrors] = useState<ZodError | null>(null);
     const [submitError, setSubmitError] = useState("");
 
-
-    const { data: clients } = useAllClientsQuery();
-    const clientList = useMemo(() => (clients ?? []), [clients]);
 
     const { data: dispatchers } = useActiveDispatchersQuery();
     const dispatcherList = useMemo(() => (dispatchers ?? []), [dispatchers]);
@@ -160,17 +157,12 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
                     <div className="grid grid-cols-2 gap-2 lg:gap-3 min-w-0">
                         <div className="min-w-0">
                             <label className={LABEL}>Client</label>
-                            <select
+                            <ClientPicker
                                 value={client}
-                                onChange={(e) => setClient(e.target.value)}
-                                className={INPUT}
+                                onChange={setClient}
+                                placeholder="Select a client…"
                                 disabled={isLoading}
-                            >
-                                <option value="" disabled>Select a client…</option>
-                                {clientList.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.name}</option>
-                                ))}
-                            </select>
+                            />
                             <ErrorDisplay path="client_id" />
                         </div>
                         <div className="min-w-0">
@@ -302,7 +294,6 @@ export default function EditProjectModal ({isModalOpen, setIsModalOpen, project,
                 isLoading,
                 errors,
                 submitError,
-                clientList,
                 dispatcherList,
             ]
         );

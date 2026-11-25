@@ -15,7 +15,8 @@ import {
 	PriorityValues,
 	type Priority,
 } from "../../types/common";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import { useClientFilterSearch, useClientNames } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
 import { useActiveTechniciansQuery } from "../../hooks/useTechnicians";
 import { useAuthStore } from "../../auth/authStore";
 import {
@@ -52,7 +53,6 @@ import { useAutoTaxMode } from "../../hooks/useAutoTaxMode";
 import {
 	TemplateSearch,
 	type TemplateSearchResult,
-	type TemplateSearchClient,
 } from "../ui/forms/TemplateSearch";
 
 type Step = 1 | 2 | 3 | 4 | 5;
@@ -128,7 +128,6 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 	const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 	const [isDirty, setIsDirty] = useState(false);
 
-	const { data: clients } = useAllClientsQuery();
 	const { data: technicians } = useActiveTechniciansQuery();
 	const orgTimezone = useAuthStore((s) => s.user?.orgTimezone);
 	const createMutation = useCreateRecurringPlanMutation();
@@ -567,10 +566,12 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		[currentDraftId, deleteDraftMutation]
 	);
 
-	const templateClients = useMemo((): TemplateSearchClient[] => {
-		if (!clients) return [];
-		return clients.map((c) => ({ id: c.id, name: c.name }));
-	}, [clients]);
+	const { clients: templateClients, onClientQueryChange } =
+		useClientFilterSearch(isDraftPanelOpen);
+	const draftClientNames = useClientNames(
+		drafts.map((d) => d.client_id),
+		isDraftPanelOpen,
+	);
 
 	const draftResults = useMemo((): TemplateSearchResult[] => {
 		return drafts.map((d: DraftSummary) => ({
@@ -590,26 +591,9 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 			createdAt: d.created_at,
 			isDeletable: true,
 			clientId: d.client_id ?? undefined,
-			clientName: d.client_id
-				? templateClients.find((c) => c.id === d.client_id)?.name
-				: undefined,
+			clientName: d.client_id ? draftClientNames[d.client_id] : undefined,
 		}));
-	}, [drafts, templateClients]);
-
-	const clientDropdownEntries = useMemo(() => {
-		if (clients?.length) {
-			return clients.map((c) => (
-				<option value={c.id} key={c.id}>
-					{c.name}
-				</option>
-			));
-		}
-		return (
-			<option disabled value="">
-				No clients found
-			</option>
-		);
-	}, [clients]);
+	}, [drafts, draftClientNames]);
 
 	const invokeCreate = async () => {
 		if (isLoading) return;
@@ -811,6 +795,7 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 					}
 					clientFilter={sourceClientFilter}
 					onClientFilterChange={setSourceClientFilter}
+					onClientQueryChange={onClientQueryChange}
 				/>
 			);
 		}
@@ -842,16 +827,12 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 								<label className="block mb-0.5 lg:mb-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
 									Client *
 								</label>
-								<Dropdown
-									entries={
-										clientDropdownEntries
-									}
+								<ClientPicker
 									value={clientId}
 									onChange={(v) => {
 										setClientId(v);
 										markDirty();
 									}}
-									placeholder="Select client"
 									disabled={isLoading}
 									error={errors?.issues.some(
 										(e) =>
@@ -1077,7 +1058,7 @@ const CreateRecurringPlan = ({ isModalOpen, setIsModalOpen }: CreateRecurringPla
 		priority,
 		description,
 		isLoading,
-		clientDropdownEntries,
+		onClientQueryChange,
 		geoData,
 		errors,
 		scheduleState,

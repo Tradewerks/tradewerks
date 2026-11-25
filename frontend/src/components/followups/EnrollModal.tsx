@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ZodError } from "zod";
 import { Loader2, X } from "lucide-react";
 import FullPopup from "../ui/FullPopup";
-import { useAllClientsQuery } from "../../hooks/useClients";
+import ClientPicker from "../clients/ClientPicker";
 import { useSequencesQuery } from "../../hooks/useFollowups";
 import { EnrollSchema, type EnrollInput } from "../../types/followups";
 import { LABEL, INPUT } from "./shared";
@@ -15,7 +15,6 @@ interface EnrollModalProps {
 }
 
 export default function EnrollModal({ isModalOpen, onClose, isPending, onSubmit }: EnrollModalProps) {
-	const { data: clients } = useAllClientsQuery();
 	const { data: sequences } = useSequencesQuery();
 
 	const [clientId, setClientId] = useState("");
@@ -87,19 +86,12 @@ export default function EnrollModal({ isModalOpen, onClose, isPending, onSubmit 
 			<div className="px-4 sm:px-5 pt-3 sm:pt-4 pb-4 space-y-4">
 				<div>
 					<label className={LABEL}>Client *</label>
-					<select
+					<ClientPicker
 						value={clientId}
-						onChange={(e) => setClientId(e.target.value)}
-						className={INPUT}
+						onChange={setClientId}
+						placeholder="─Select a client─"
 						disabled={isPending}
-					>
-						<option value="">─Select a client─</option>
-						{(clients ?? []).map((c) => (
-							<option key={c.id} value={c.id}>
-								{c.name}
-							</option>
-						))}
-					</select>
+					/>
 					{fieldErrors("client_id").map((err) => (
 						<p className="mt-1 text-xs text-error-text" key={err.message}>
 							{err.message}

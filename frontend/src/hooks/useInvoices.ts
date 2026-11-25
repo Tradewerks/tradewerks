@@ -20,15 +20,17 @@ import type {
 	OverlapWarning,
 } from "../types/invoices";
 import * as invoiceApi from "../api/invoices";
+import { qk } from "../lib/queryKeys";
 
 // ============================================================================
 // INVOICE QUERIES
 // ============================================================================
 
-export const useAllInvoicesQuery = (): UseQueryResult<Invoice[], Error> => {
+// Under the invoices prefix so every invoice mutation and the record:changed socket refresh it.
+export const useInvoicesSummaryQuery = (): UseQueryResult<invoiceApi.InvoicesSummary, Error> => {
 	return useQuery({
-		queryKey: ["invoices"],
-		queryFn: invoiceApi.getAllInvoices,
+		queryKey: [...qk.invoices.all, "summary"],
+		queryFn: invoiceApi.getInvoicesSummary,
 	});
 };
 

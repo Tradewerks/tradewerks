@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { DropdownFilter } from "../StatusFilter";
+import { MemoryRouter, useLocation } from "react-router-dom";
+import StatusFilter, { DropdownFilter } from "../StatusFilter";
 
 const options = [
 	{ value: "a", label: "Alpha" },
@@ -88,5 +89,23 @@ describe("DropdownFilter close-on-select (U6)", () => {
 		openMenu();
 		fireEvent.mouseDown(document.body);
 		expect(screen.queryByRole("listbox")).toBeNull();
+	});
+});
+
+describe("StatusFilter url mode with a comma-joined param", () => {
+	it("pre-selects every part and rewrites to repeated params on the next pick", () => {
+		const Where = () => <div data-testid="where">{useLocation().search}</div>;
+		render(
+			<MemoryRouter initialEntries={["/x?status=a,b&page=2"]}>
+				<StatusFilter paramKey="status" placeholder="Status" options={[...options, { value: "d", label: "Delta" }]} hideAll />
+				<Where />
+			</MemoryRouter>,
+		);
+		expect(screen.getByRole("button", { name: "Status (2)" })).toBeInTheDocument();
+		openMenu();
+		fireEvent.click(screen.getByRole("option", { name: /Gamma/ }));
+		const sp = new URLSearchParams(screen.getByTestId("where").textContent ?? "");
+		expect(sp.getAll("status")).toEqual(["a", "b", "c"]);
+		expect(sp.get("page")).toBe("2");
 	});
 });
